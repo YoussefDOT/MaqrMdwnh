@@ -12,7 +12,8 @@ const gameState = {
     keys: {},
     isDragging: false,
     dragStart: { x: 0, y: 0 },
-    selectedUser: null // For login selection
+    selectedUser: null, // For login selection
+    positionInitialized: false // To prevent resets
 };
 
 // Constants - Colors from provided palette
@@ -146,27 +147,89 @@ function startGame(userData) {
     setupControls();
     setupLogout();
     listenToPlayers();
-    // initializePlayerPosition() is now called inside listenToPlayers after first data load
+    
+    // Position will be initialized via listenToPlayers or the explicit call
+    // But we'll wait a bit for listenToPlayers to get the current state
+    setTimeout(() => {
+        if (!gameState.positionInitialized) {
+            initializePlayerPosition();
+        }
+    }, 500);
+    
     gameLoop();
 }
 
-let isFirstLoad = true;
+function resizeCanvas() {
+    if (!gameState.canvas) return;
+    gameState.canvas.width = window.innerWidth;
+    gameState.canvas.height = window.innerHeight;
+}
 
-function initializePlayerPosition(firebaseData) {
+window.addEventListener('resize', resizeCanvas);
+
+function setupControls() {
+    window.addEventListener('keydown', (e) => {
+        gameState.keys[e.key.toLowerCase()] = true;
+    });
+
+    window.addEventListener('keyup', (e) => {
+        gameState.keys[e.key.toLowerCase()] = false;
+    });
+
+    const canvas = gameState.canvas;
+    canvas.addEventListener('mousedown', (e) => {
+        gameState.isDragging = true;
+        gameState.dragStart = { x: e.clientX, y: e.clientY };
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (gameState.isDragging) {
+            const dx = e.clientX - gameState.dragStart.x;
+            const dy = e.clientY - gameState.dragStart.y;
+            gameState.camera.x += dx;
+            gameState.camera.y += dy;
+            gameState.dragStart = { x: e.clientX, y: e.clientY };
+        }
+    });
+
+    canvas.addEventListener('mouseup', () => gameState.isDragging = false);
+    canvas.addEventListener('mouseleave', () => gameState.isDragging = false);
+}
+
+function setupLogout() {
+    document.getElementById('logout-btn').addEventListener('click', () => {
+        window.location.reload();
+    });
+}
+
+function initializePlayerPosition() {
+    if (gameState.positionInitialized) return;
+    
     const player = gameState.players[gameState.userId];
-    if (!player) return;
-
-    // Use positions from Firebase if they exist, otherwise spawn randomly
-    if (firebaseData && typeof firebaseData.x === 'number' && typeof firebaseData.y === 'number') {
-        player.x = firebaseData.x;
-        player.y = firebaseData.y;
-    } else {
+    
+    // Check if we have a non-zero position in player object
+    const hasValidPos = player && (player.x !== 0 || player.y !== 0);
+    
+    if (!hasValidPos) {
         const spawnX = (Math.random() - 0.5) * SPAWN_RADIUS;
         const spawnY = (Math.random() - 0.5) * SPAWN_RADIUS;
-        player.x = spawnX;
-        player.y = spawnY;
+        
+        if (player) {
+            player.x = spawnX;
+            player.y = spawnY;
+        } else {
+            // Create a dummy local player if not loaded yet
+            gameState.players[gameState.userId] = {
+                userId: gameState.userId,
+                username: gameState.currentUser,
+                x: spawnX,
+                y: spawnY
+            };
+        }
         updatePlayerPosition(spawnX, spawnY);
     }
+    
+    gameState.positionInitialized = true;
 }
 
 function listenToPlayers() {
@@ -175,27 +238,11 @@ function listenToPlayers() {
     onValue(usersRef, (snapshot) => {
         const users = snapshot.val();
         if (users) {
-            // Handle first load of current player position
-            if (isFirstLoad && users[gameState.userId]) {
-                // Ensure the player object exists locally first
-                const userData = users[gameState.userId];
-                gameState.players[gameState.userId] = {
-                    userId: gameState.userId,
-                    username: userData.username,
-                    channelName: userData.channelName,
-                    avatar: userData.avatar,
-                    x: userData.x || 0,
-                    y: userData.y || 0
-                };
-                
-                initializePlayerPosition(userData);
-                isFirstLoad = false;
-            }
-
             for (const [userId, userData] of Object.entries(users)) {
+                const isCurrentUser = userId === gameState.userId;
+                
                 if (userData.status === 'in-voice') {
-                    const isCurrentUser = userId === gameState.userId;
-                    
+                    // If player doesn't exist locally, create them
                     if (!gameState.players[userId]) {
                         gameState.players[userId] = {
                             userId,
@@ -205,19 +252,32 @@ function listenToPlayers() {
                             x: userData.x || 0,
                             y: userData.y || 0
                         };
+                        
+                        if (isCurrentUser && (userData.x !== undefined && userData.x !== null)) {
+                            gameState.positionInitialized = true;
+                        }
                     } else {
+                        // Update existing player info
                         const player = gameState.players[userId];
                         player.username = userData.username;
                         player.channelName = userData.channelName;
                         player.avatar = userData.avatar;
                         
-                        // Only update position from Firebase if NOT the current user
+                        // ONLY update position if NOT the current user
+                        // OR if the current user hasn't been initialized locally yet
                         if (!isCurrentUser) {
                             player.x = userData.x || 0;
                             player.y = userData.y || 0;
+                        } else if (!gameState.positionInitialized) {
+                            if (userData.x !== undefined && userData.x !== null && (userData.x !== 0 || userData.y !== 0)) {
+                                player.x = userData.x;
+                                player.y = userData.y;
+                                gameState.positionInitialized = true;
+                            }
                         }
                     }
                     
+                    // Preload avatar if not in cache
                     if (userData.avatar && !gameState.avatarCache[userId]) {
                         const img = new Image();
                         img.crossOrigin = "anonymous";
@@ -229,20 +289,16 @@ function listenToPlayers() {
                             gameState.avatarCache[userId] = 'failed';
                         };
                     }
-                } else {
-                    // Only remove if it's not the current user
-                    if (userId !== gameState.userId) {
-                        delete gameState.players[userId];
-                    }
+                } else if (!isCurrentUser) {
+                    // Player is offline, remove them (but never remove current user)
+                    delete gameState.players[userId];
                 }
             }
 
-            // Cleanup players
+            // Cleanup any players who are no longer in the snapshot at all
             Object.keys(gameState.players).forEach(id => {
-                // NEVER delete the current user locally during a sync update
-                if (id === gameState.userId) return;
-
-                if (!users[id] || users[id].status !== 'in-voice') {
+                const isCurrentUser = id === gameState.userId;
+                if (!isCurrentUser && (!users[id] || users[id].status !== 'in-voice')) {
                     delete gameState.players[id];
                 }
             });
