@@ -61,8 +61,8 @@ const BASE_BG_HEIGHT = 2210;
 const BASE_TABLE_WIDTH = 1460;
 const BASE_TABLE_HEIGHT = 510;
 
-// Visual Scaling
-const ASSET_SCALE = 0.33;
+// Visual Scaling (Set to 1.0 to match real asset size)
+const ASSET_SCALE = 1.0;
 
 const BG_WIDTH = BASE_BG_WIDTH * ASSET_SCALE;
 const BG_HEIGHT = BASE_BG_HEIGHT * ASSET_SCALE;
