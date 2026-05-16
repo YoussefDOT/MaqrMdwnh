@@ -56,8 +56,8 @@ const MOVE_SPEED = 5;
 const SPAWN_RADIUS = 100;
 
 // Asset Base Dimensions
-const BASE_BG_WIDTH = 2390;
-const BASE_BG_HEIGHT = 1750;
+const BASE_BG_WIDTH = 3160;
+const BASE_BG_HEIGHT = 2210;
 const BASE_TABLE_WIDTH = 1460;
 const BASE_TABLE_HEIGHT = 510;
 
