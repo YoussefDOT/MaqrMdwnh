@@ -146,68 +146,25 @@ function startGame(userData) {
     setupControls();
     setupLogout();
     listenToPlayers();
-    initializePlayerPosition();
+    // initializePlayerPosition() is now called inside listenToPlayers after first data load
     gameLoop();
 }
 
-function resizeCanvas() {
-    if (!gameState.canvas) return;
-    gameState.canvas.width = window.innerWidth;
-    gameState.canvas.height = window.innerHeight;
-}
+let isFirstLoad = true;
 
-window.addEventListener('resize', resizeCanvas);
-
-function setupControls() {
-    window.addEventListener('keydown', (e) => {
-        gameState.keys[e.key.toLowerCase()] = true;
-    });
-
-    window.addEventListener('keyup', (e) => {
-        gameState.keys[e.key.toLowerCase()] = false;
-    });
-
-    const canvas = gameState.canvas;
-    canvas.addEventListener('mousedown', (e) => {
-        gameState.isDragging = true;
-        gameState.dragStart = { x: e.clientX, y: e.clientY };
-    });
-
-    canvas.addEventListener('mousemove', (e) => {
-        if (gameState.isDragging) {
-            const dx = e.clientX - gameState.dragStart.x;
-            const dy = e.clientY - gameState.dragStart.y;
-            gameState.camera.x += dx;
-            gameState.camera.y += dy;
-            gameState.dragStart = { x: e.clientX, y: e.clientY };
-        }
-    });
-
-    canvas.addEventListener('mouseup', () => gameState.isDragging = false);
-    canvas.addEventListener('mouseleave', () => gameState.isDragging = false);
-}
-
-function setupLogout() {
-    document.getElementById('logout-btn').addEventListener('click', () => {
-        window.location.reload();
-    });
-}
-
-function initializePlayerPosition() {
-    // We already have the player data from listenToPlayers (which is called before this in startGame)
+function initializePlayerPosition(firebaseData) {
     const player = gameState.players[gameState.userId];
-    
-    // If player has no position in Firebase (x/y are 0 or undefined), then set random position
-    if (!player || (player.x === 0 && player.y === 0)) {
+    if (!player) return;
+
+    // Use positions from Firebase if they exist, otherwise spawn randomly
+    if (firebaseData && typeof firebaseData.x === 'number' && typeof firebaseData.y === 'number') {
+        player.x = firebaseData.x;
+        player.y = firebaseData.y;
+    } else {
         const spawnX = (Math.random() - 0.5) * SPAWN_RADIUS;
         const spawnY = (Math.random() - 0.5) * SPAWN_RADIUS;
-        
-        // Update local state first to prevent jump
-        if (player) {
-            player.x = spawnX;
-            player.y = spawnY;
-        }
-        
+        player.x = spawnX;
+        player.y = spawnY;
         updatePlayerPosition(spawnX, spawnY);
     }
 }
@@ -218,11 +175,27 @@ function listenToPlayers() {
     onValue(usersRef, (snapshot) => {
         const users = snapshot.val();
         if (users) {
+            // Handle first load of current player position
+            if (isFirstLoad && users[gameState.userId]) {
+                // Ensure the player object exists locally first
+                const userData = users[gameState.userId];
+                gameState.players[gameState.userId] = {
+                    userId: gameState.userId,
+                    username: userData.username,
+                    channelName: userData.channelName,
+                    avatar: userData.avatar,
+                    x: userData.x || 0,
+                    y: userData.y || 0
+                };
+                
+                initializePlayerPosition(userData);
+                isFirstLoad = false;
+            }
+
             for (const [userId, userData] of Object.entries(users)) {
                 if (userData.status === 'in-voice') {
                     const isCurrentUser = userId === gameState.userId;
                     
-                    // If player doesn't exist locally, create them
                     if (!gameState.players[userId]) {
                         gameState.players[userId] = {
                             userId,
@@ -233,22 +206,18 @@ function listenToPlayers() {
                             y: userData.y || 0
                         };
                     } else {
-                        // Update existing player info
                         const player = gameState.players[userId];
                         player.username = userData.username;
                         player.channelName = userData.channelName;
                         player.avatar = userData.avatar;
                         
-                        // ONLY update position if NOT the current user
-                        // This prevents the "reset" or "jitter" when the local move is pushed to Firebase
-                        // and then sent back to us.
+                        // Only update position from Firebase if NOT the current user
                         if (!isCurrentUser) {
                             player.x = userData.x || 0;
                             player.y = userData.y || 0;
                         }
                     }
                     
-                    // Preload avatar if not in cache
                     if (userData.avatar && !gameState.avatarCache[userId]) {
                         const img = new Image();
                         img.crossOrigin = "anonymous";
@@ -261,13 +230,18 @@ function listenToPlayers() {
                         };
                     }
                 } else {
-                    // Player is offline, remove them
-                    delete gameState.players[userId];
+                    // Only remove if it's not the current user
+                    if (userId !== gameState.userId) {
+                        delete gameState.players[userId];
+                    }
                 }
             }
 
-            // Cleanup any players who are no longer in the snapshot at all
+            // Cleanup players
             Object.keys(gameState.players).forEach(id => {
+                // NEVER delete the current user locally during a sync update
+                if (id === gameState.userId) return;
+
                 if (!users[id] || users[id].status !== 'in-voice') {
                     delete gameState.players[id];
                 }
