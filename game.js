@@ -373,10 +373,14 @@ class FocusAudioEngine {
         update(ref(database), updates);
     }
 
-    stopAll() {
+    stopAll({ clearActive = false } = {}) {
         for (const name of Object.keys(this.sounds)) {
             this.stopSound(name);
-            this.sounds[name].active = false;
+            if (clearActive) {
+                this.sounds[name].active = false;
+                const el = document.querySelector(`.sound-item[data-sound="${name}"]`);
+                if (el) el.classList.remove('active');
+            }
         }
     }
 }
