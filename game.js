@@ -1971,13 +1971,24 @@ function drawBreakDoor() {
     const open = isBreakActive();
 
     ctx.save();
-    ctx.fillStyle = '#2d160d';
-    ctx.fillRect(-DOOR_HALF_WIDTH, y - DOOR_HALF_HEIGHT, DOOR_WIDTH, DOOR_HALF_HEIGHT * 2);
-    ctx.strokeStyle = open ? '#3bb9ab' : '#f04e3a';
-    ctx.lineWidth = 4;
-    ctx.strokeRect(-DOOR_HALF_WIDTH, y - DOOR_HALF_HEIGHT, DOOR_WIDTH, DOOR_HALF_HEIGHT * 2);
-    ctx.fillStyle = open ? 'rgba(59, 185, 171, 0.28)' : 'rgba(240, 78, 58, 0.25)';
-    ctx.fillRect(-DOOR_HALF_WIDTH + 5, y - DOOR_HALF_HEIGHT + 5, DOOR_WIDTH - 10, DOOR_HALF_HEIGHT * 2 - 10);
+    ctx.imageSmoothingEnabled = false;
+    if (open) {
+        ctx.fillStyle = 'rgba(49, 178, 255, 0.22)';
+        ctx.fillRect(-DOOR_HALF_WIDTH, y - 8, DOOR_WIDTH, 16);
+        ctx.fillStyle = 'rgba(132, 218, 255, 0.38)';
+        for (let x = -DOOR_HALF_WIDTH; x < DOOR_HALF_WIDTH; x += 24) {
+            ctx.fillRect(x, y - 2, 14, 4);
+        }
+    } else {
+        ctx.fillStyle = '#111111';
+        ctx.fillRect(-DOOR_HALF_WIDTH, y - 6, DOOR_WIDTH, 12);
+        for (let x = -DOOR_HALF_WIDTH; x < DOOR_HALF_WIDTH; x += 28) {
+            ctx.fillStyle = '#f4c82b';
+            ctx.fillRect(x, y - 6, 14, 12);
+            ctx.fillStyle = '#111111';
+            ctx.fillRect(x + 14, y - 6, 14, 12);
+        }
+    }
 
     const player = gameState.players[gameState.userId];
     if (player && Math.hypot(player.x, player.y - y) < 190) {
@@ -1998,17 +2009,15 @@ function drawRaceButton() {
     const enabled = isBreakActive();
 
     ctx.save();
+    ctx.imageSmoothingEnabled = false;
     ctx.translate(RACE_BUTTON.x, RACE_BUTTON.y);
-    ctx.shadowBlur = active ? 24 : 10;
-    ctx.shadowColor = enabled ? 'rgba(244, 200, 43, 0.45)' : 'rgba(0, 0, 0, 0.35)';
-    ctx.beginPath();
-    ctx.arc(0, 0, RACE_BUTTON.radius, 0, Math.PI * 2);
+    ctx.shadowBlur = active ? 18 : 8;
+    ctx.shadowColor = enabled ? 'rgba(244, 200, 43, 0.5)' : 'rgba(0, 0, 0, 0.35)';
     ctx.fillStyle = enabled ? '#f4c82b' : '#6b5b45';
-    ctx.fill();
+    drawPixelDiamond(ctx, 0, 0, 72, 8);
     ctx.shadowBlur = 0;
-    ctx.lineWidth = 6;
-    ctx.strokeStyle = active ? '#ffffff' : '#2b2418';
-    ctx.stroke();
+    ctx.fillStyle = active ? '#ffffff' : '#2b2418';
+    drawPixelDiamondOutline(ctx, 0, 0, 80, 8);
 
     ctx.fillStyle = '#262626';
     ctx.font = 'bold 24px Rubik';
@@ -2018,6 +2027,21 @@ function drawRaceButton() {
     ctx.font = 'bold 16px Rubik';
     ctx.fillText('3 لفات', 0, 24);
     ctx.restore();
+}
+
+function drawPixelDiamond(ctx, x, y, radius, block) {
+    for (let row = -radius; row <= radius; row += block) {
+        const width = radius * 2 - Math.abs(row) * 2;
+        ctx.fillRect(x - width / 2, y + row, width, block);
+    }
+}
+
+function drawPixelDiamondOutline(ctx, x, y, radius, block) {
+    for (let row = -radius; row <= radius; row += block) {
+        const width = radius * 2 - Math.abs(row) * 2;
+        ctx.fillRect(x - width / 2 - block, y + row, block, block);
+        ctx.fillRect(x + width / 2, y + row, block, block);
+    }
 }
 
 function drawRacePrompt() {
@@ -2041,6 +2065,7 @@ function renderRace() {
     const localCar = gameState.race.localCar;
     if (!ctx || !canvas || !session || !localCar) return;
 
+    ctx.imageSmoothingEnabled = false;
     ctx.fillStyle = '#1f4f3a';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -2058,7 +2083,7 @@ function renderRace() {
     cars[gameState.userId] = localCar;
     Object.entries(cars).forEach(([userId, car]) => {
         const participant = session.participants && session.participants[userId];
-        drawRaceCar(car, participant ? participant.index || 0 : 0, userId === gameState.userId);
+        drawRaceCar(car, participant ? participant.index || 0 : 0, userId === gameState.userId, userId, participant);
     });
 
     const now = Date.now();
@@ -2088,44 +2113,23 @@ function renderRace() {
 function drawRaceTrack() {
     const ctx = gameState.ctx;
     ctx.save();
+    ctx.imageSmoothingEnabled = false;
 
-    ctx.fillStyle = '#6aa84f';
-    ctx.beginPath();
-    ctx.ellipse(0, 0, RACE_TRACK.outerRx + 90, RACE_TRACK.outerRy + 65, 0, 0, Math.PI * 2);
-    ctx.fill();
+    drawPixelOval(ctx, 0, 0, RACE_TRACK.outerRx + 104, RACE_TRACK.outerRy + 72, 24, '#6aa84f');
+    drawPixelGrassTiles(ctx, RACE_TRACK.outerRx + 130, RACE_TRACK.outerRy + 90);
 
-    ctx.fillStyle = '#5b6268';
-    ctx.beginPath();
-    ctx.ellipse(0, 0, RACE_TRACK.outerRx, RACE_TRACK.outerRy, 0, 0, Math.PI * 2);
-    ctx.fill();
+    drawPixelOval(ctx, 0, 0, RACE_TRACK.outerRx, RACE_TRACK.outerRy, 18, '#596168');
+    drawPixelOval(ctx, 0, 0, RACE_TRACK.outerRx - 38, RACE_TRACK.outerRy - 26, 18, '#707982');
 
-    ctx.strokeStyle = '#dfe6e9';
-    ctx.lineWidth = 10;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, RACE_TRACK.outerRx - 38, RACE_TRACK.outerRy - 24, 0, 0, Math.PI * 2);
-    ctx.stroke();
+    drawPixelOvalOutline(ctx, 0, 0, RACE_TRACK.outerRx - 34, RACE_TRACK.outerRy - 22, 18, 10, '#e6edf0');
 
-    ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
-    ctx.lineWidth = 4;
-    ctx.setLineDash([28, 26]);
-    ctx.beginPath();
-    ctx.ellipse(0, 0, (RACE_TRACK.outerRx + RACE_TRACK.innerRx) / 2, (RACE_TRACK.outerRy + RACE_TRACK.innerRy) / 2, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    drawPixelDashedOval(ctx, 0, 0, (RACE_TRACK.outerRx + RACE_TRACK.innerRx) / 2, (RACE_TRACK.outerRy + RACE_TRACK.innerRy) / 2);
 
-    ctx.fillStyle = '#3f7f43';
-    ctx.beginPath();
-    ctx.ellipse(0, 0, RACE_TRACK.innerRx, RACE_TRACK.innerRy, 0, 0, Math.PI * 2);
-    ctx.fill();
+    drawPixelOval(ctx, 0, 0, RACE_TRACK.innerRx, RACE_TRACK.innerRy, 18, '#3f7f43');
+    drawPixelGrassTiles(ctx, RACE_TRACK.innerRx - 20, RACE_TRACK.innerRy - 20);
 
-    ctx.strokeStyle = '#2f3438';
-    ctx.lineWidth = 8;
-    ctx.beginPath();
-    ctx.ellipse(0, 0, RACE_TRACK.outerRx, RACE_TRACK.outerRy, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.ellipse(0, 0, RACE_TRACK.innerRx, RACE_TRACK.innerRy, 0, 0, Math.PI * 2);
-    ctx.stroke();
+    drawPixelOvalOutline(ctx, 0, 0, RACE_TRACK.outerRx, RACE_TRACK.outerRy, 18, 8, '#2f3438');
+    drawPixelOvalOutline(ctx, 0, 0, RACE_TRACK.innerRx, RACE_TRACK.innerRy, 18, 8, '#2f3438');
 
     const finishY = RACE_TRACK.outerRy - 64;
     ctx.fillStyle = '#ffffff';
@@ -2140,28 +2144,70 @@ function drawRaceTrack() {
     ctx.restore();
 }
 
-function drawRaceCar(car, index, isLocal) {
+function drawPixelOval(ctx, x, y, rx, ry, block, color) {
+    ctx.fillStyle = color;
+    for (let yy = -ry; yy <= ry; yy += block) {
+        const ratio = 1 - Math.pow(yy / ry, 2);
+        const width = Math.floor((rx * Math.sqrt(Math.max(0, ratio)) * 2) / block) * block;
+        ctx.fillRect(x - width / 2, y + yy, width, block);
+    }
+}
+
+function drawPixelOvalOutline(ctx, x, y, rx, ry, block, thickness, color) {
+    ctx.fillStyle = color;
+    for (let yy = -ry; yy <= ry; yy += block) {
+        const outerRatio = 1 - Math.pow(yy / ry, 2);
+        const innerRatio = 1 - Math.pow(yy / Math.max(1, ry - thickness), 2);
+        const outerW = Math.floor((rx * Math.sqrt(Math.max(0, outerRatio)) * 2) / block) * block;
+        const innerW = Math.floor(((rx - thickness) * Math.sqrt(Math.max(0, innerRatio)) * 2) / block) * block;
+        ctx.fillRect(x - outerW / 2, y + yy, Math.max(0, (outerW - innerW) / 2), block);
+        ctx.fillRect(x + innerW / 2, y + yy, Math.max(0, (outerW - innerW) / 2), block);
+    }
+}
+
+function drawPixelDashedOval(ctx, x, y, rx, ry) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.48)';
+    for (let i = 0; i < 48; i += 2) {
+        const angle = (i / 48) * Math.PI * 2;
+        const px = x + Math.cos(angle) * rx;
+        const py = y + Math.sin(angle) * ry;
+        ctx.save();
+        ctx.translate(px, py);
+        ctx.rotate(angle + Math.PI / 2);
+        ctx.fillRect(-18, -3, 36, 6);
+        ctx.restore();
+    }
+}
+
+function drawPixelGrassTiles(ctx, rx, ry) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.08)';
+    for (let i = 0; i < 34; i++) {
+        const x = ((i * 137) % Math.floor(rx * 2)) - rx;
+        const y = ((i * 91) % Math.floor(ry * 2)) - ry;
+        if (Math.pow(x / rx, 2) + Math.pow(y / ry, 2) <= 1) {
+            ctx.fillRect(x, y, 10, 10);
+        }
+    }
+}
+
+function drawRaceCar(car, index, isLocal, userId, participant) {
     const ctx = gameState.ctx;
     if (!car) return;
     const palette = ['#086fb6', '#f04e3a', '#f4c82b', '#3bb9ab', '#ffffff', '#262626'];
     const color = palette[index % palette.length];
 
     ctx.save();
+    ctx.imageSmoothingEnabled = false;
     ctx.translate(car.x, car.y);
     ctx.rotate(car.angle);
-    ctx.shadowBlur = isLocal ? 18 : 8;
-    ctx.shadowColor = isLocal ? 'rgba(8, 111, 182, 0.65)' : 'rgba(0, 0, 0, 0.4)';
+    ctx.shadowBlur = isLocal ? 8 : 0;
+    ctx.shadowColor = isLocal ? 'rgba(8, 111, 182, 0.65)' : 'transparent';
     ctx.fillStyle = color;
-    drawRoundedRectPath(ctx, -26, -16, 52, 32, 8);
-    ctx.fill();
+    drawPixelCarBody(ctx, color);
     ctx.shadowBlur = 0;
-
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
-    drawRoundedRectPath(ctx, -4, -12, 18, 24, 5);
-    ctx.fill();
-    ctx.fillStyle = '#111';
-    ctx.fillRect(18, -10, 7, 20);
     ctx.restore();
+
+    drawRaceAvatarBadge(userId, participant, car.x, car.y - 44, isLocal);
 
     ctx.save();
     ctx.fillStyle = 'white';
@@ -2171,6 +2217,56 @@ function drawRaceCar(car, index, isLocal) {
     ctx.shadowColor = 'black';
     ctx.fillText(car.username || 'لاعب', car.x, car.y - 34);
     ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+function drawPixelCarBody(ctx, color) {
+    ctx.fillStyle = '#111111';
+    ctx.fillRect(-28, -16, 56, 32);
+    ctx.fillStyle = color;
+    ctx.fillRect(-24, -14, 44, 28);
+    ctx.fillRect(20, -8, 10, 16);
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+    ctx.fillRect(-4, -10, 16, 20);
+    ctx.fillStyle = '#26313a';
+    ctx.fillRect(-18, -18, 12, 6);
+    ctx.fillRect(-18, 12, 12, 6);
+    ctx.fillRect(14, -18, 12, 6);
+    ctx.fillRect(14, 12, 12, 6);
+    ctx.fillStyle = '#f8f6d8';
+    ctx.fillRect(27, -8, 5, 5);
+    ctx.fillRect(27, 3, 5, 5);
+}
+
+function drawRaceAvatarBadge(userId, participant, x, y, isLocal) {
+    const ctx = gameState.ctx;
+    const img = gameState.avatarCache[userId];
+    if (!img && participant && participant.avatar) {
+        const avatar = new Image();
+        avatar.crossOrigin = "anonymous";
+        avatar.src = participant.avatar;
+        avatar.onload = () => { gameState.avatarCache[userId] = avatar; };
+        avatar.onerror = () => { gameState.avatarCache[userId] = 'failed'; };
+    }
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.fillStyle = isLocal ? '#f4c82b' : '#ffffff';
+    ctx.fillRect(x - 18, y - 18, 36, 36);
+    ctx.fillStyle = '#111111';
+    ctx.fillRect(x - 14, y - 14, 28, 28);
+
+    if (img && img !== 'failed') {
+        ctx.drawImage(img, x - 12, y - 12, 24, 24);
+    } else {
+        ctx.fillStyle = '#086fb6';
+        ctx.fillRect(x - 12, y - 12, 24, 24);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 14px Rubik';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText((participant?.username || '?').charAt(0).toUpperCase(), x, y + 1);
+    }
     ctx.restore();
 }
 
