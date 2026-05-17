@@ -24,7 +24,8 @@ class FocusAudioEngine {
         this.buffers = {
             timeBreak: null,
             timeReturn: null,
-            kidnap: null
+            kidnap: null,
+            yipee: null
         };
     }
 
@@ -48,6 +49,7 @@ class FocusAudioEngine {
             this.buffers.timeBreak = await loadBuffer('Sound/TimeBreak.mp3');
             this.buffers.timeReturn = await loadBuffer('Sound/TimeReturn.mp3');
             this.buffers.kidnap = await loadBuffer('Sound/LaptopGrab.mp3');
+            this.buffers.yipee = await loadBuffer('Sound/Yipee.mp3');
         } catch(e) {
             console.log("Failed to load Web Audio sound effects:", e);
         }
@@ -364,7 +366,8 @@ const gameState = {
     sounds: {
         kidnap: new Audio('Sound/LaptopGrab.mp3'),
         timeBreak: new Audio('Sound/TimeBreak.mp3'),
-        timeReturn: new Audio('Sound/TimeReturn.mp3')
+        timeReturn: new Audio('Sound/TimeReturn.mp3'),
+        yipee: new Audio('Sound/Yipee.mp3')
     },
     canvas: null,
     ctx: null,
@@ -412,13 +415,15 @@ const gameState = {
 gameState.sounds.kidnap.preload = 'auto';
 gameState.sounds.timeBreak.preload = 'auto';
 gameState.sounds.timeReturn.preload = 'auto';
+gameState.sounds.yipee.preload = 'auto';
 
 // Constants
 const COLORS = {
     black: '#000000',
     snow: '#faf9f7',
     raisin: '#262626',
-    blue: '#086fb6'
+    blue: '#086fb6',
+    red: '#e1352e'
 };
 
 const PLAYER_SIZE = 70;
@@ -667,6 +672,8 @@ function startGame(userData) {
             if (gameState.pomodoro.active && gameState.pomodoro.phase === 'work') {
                 const panel = document.getElementById('focus-sounds-panel');
                 if (panel) panel.classList.add('active');
+                const taskPanel = document.getElementById('current-task-panel');
+                if (taskPanel) taskPanel.classList.add('active');
             }
 
             if (activeLaptopId !== null) {
@@ -693,10 +700,26 @@ function startGame(userData) {
         });
     });
 
-    // Background interval to keep Pomodoro ticking and transition correctly even if requestAnimationFrame throttles/pauses
-    setInterval(() => {
+    // Background interval using Web Worker to bypass tab throttling completely
+    const timerWorkerCode = `
+        let intervalId = null;
+        self.onmessage = function(e) {
+            if (e.data === 'start') {
+                if (intervalId) clearInterval(intervalId);
+                intervalId = setInterval(() => self.postMessage('tick'), 500);
+            } else if (e.data === 'stop') {
+                clearInterval(intervalId);
+                intervalId = null;
+            }
+        };
+    `;
+    const timerWorkerBlob = new Blob([timerWorkerCode], { type: 'application/javascript' });
+    const timerWorkerUrl = URL.createObjectURL(timerWorkerBlob);
+    const timerWorker = new Worker(timerWorkerUrl);
+    timerWorker.onmessage = () => {
         updatePomodoro();
-    }, 500);
+    };
+    timerWorker.postMessage('start');
 
     gameLoop();
 }
@@ -811,6 +834,20 @@ function setupFocusPanelUI() {
             gameState.focusAudioEngine.updateOverallVolume(e.target.value);
         });
     }
+    
+    const taskInput = document.getElementById('current-task-input');
+    if (taskInput) {
+        let taskTimeout;
+        taskInput.addEventListener('input', (e) => {
+            clearTimeout(taskTimeout);
+            taskTimeout = setTimeout(() => {
+                if (!gameState.userId) return;
+                const updates = {};
+                updates[`users/${gameState.userId}/currentTask`] = e.target.value;
+                update(ref(database), updates);
+            }, 500);
+        });
+    }
 }
 
 function setupPomodoroUI() {
@@ -842,6 +879,37 @@ function setupPomodoroUI() {
     cancelBtn.addEventListener('click', () => {
         modal.classList.remove('active');
     });
+
+    const testBtn = document.getElementById('pomodoro-test');
+    if (testBtn) {
+        testBtn.addEventListener('click', () => {
+            modal.classList.remove('active');
+            if (Notification.permission !== "granted" && Notification.permission !== "denied") Notification.requestPermission();
+            const laptop = gameState.lastActiveLaptop;
+            if (!laptop || laptop.claimedBy) return;
+            
+            gameState.pomodoro.active = true;
+            gameState.pomodoro.laptopId = laptop.id;
+            gameState.pomodoro.workDuration = 10 / 60; // 10 seconds
+            gameState.pomodoro.breakDuration = 10 / 60; // 10 seconds
+            gameState.pomodoro.sessionsLeft = 2;
+            gameState.pomodoro.totalSessions = 2;
+            gameState.pomodoro.phase = 'wait';
+            
+            const updates = {};
+            updates[`pomodoro/${laptop.id}`] = {
+                claimedBy: gameState.userId,
+                phase: 'wait',
+                endTime: 0,
+                workDuration: 10 / 60,
+                breakDuration: 10 / 60,
+                sessionsLeft: 2,
+                totalSessions: 2
+            };
+            update(ref(database), updates);
+            startKidnapAnimation(laptop);
+        });
+    }
 
     confirmBtn.addEventListener('click', () => {
         const getVal = (type, defaultVal) => {
@@ -888,6 +956,46 @@ function setupPomodoroUI() {
     });
 }
 
+function showSuccessModal(totalSessions, workDuration) {
+    const modal = document.getElementById('success-modal');
+    if (!modal) return;
+    
+    const totalMins = Math.floor(totalSessions * workDuration);
+    document.getElementById('success-total-time').textContent = `${totalMins} دقيقة`;
+    document.getElementById('success-sessions-count').textContent = totalSessions;
+    
+    const localPlayer = gameState.players[gameState.userId];
+    const nameEl = document.getElementById('success-name');
+    const avatarImg = document.getElementById('success-avatar-img');
+    const avatarText = document.getElementById('success-avatar-text');
+    
+    if (localPlayer) {
+        nameEl.textContent = localPlayer.username;
+        if (localPlayer.avatar) {
+            avatarImg.src = localPlayer.avatar;
+            avatarImg.style.display = 'block';
+            avatarText.style.display = 'none';
+        } else {
+            avatarImg.style.display = 'none';
+            avatarText.style.display = 'block';
+            avatarText.textContent = localPlayer.username.charAt(0).toUpperCase();
+        }
+    }
+    
+    modal.classList.add('active');
+    
+    const closeBtn = document.getElementById('success-close');
+    closeBtn.onclick = () => {
+        modal.classList.remove('active');
+    };
+    
+    if (gameState.focusAudioEngine) {
+        gameState.focusAudioEngine.playEffect('yipee');
+    } else {
+        playSoundRobust(gameState.sounds.yipee);
+    }
+}
+
 function startPomodoroPhase(phase) {
     gameState.pomodoro.phase = phase;
     gameState.pomodoro.transitioning = false;
@@ -912,6 +1020,8 @@ function startPomodoroPhase(phase) {
     if (phase === 'work') {
         const panel = document.getElementById('focus-sounds-panel');
         if (panel) panel.classList.add('active');
+        const taskPanel = document.getElementById('current-task-panel');
+        if (taskPanel) taskPanel.classList.add('active');
         
         if (gameState.focusAudioEngine) {
             gameState.focusAudioEngine.fadeToMaster(0.5, 2.0);
@@ -997,6 +1107,16 @@ function listenToPlayers() {
                         player.username = userData.username;
                         player.channelName = userData.channelName;
                         player.avatar = userData.avatar;
+                        player.currentTask = userData.currentTask || "";
+                        
+                        if (isCurrentUser) {
+                            const taskInput = document.getElementById('current-task-input');
+                            if (taskInput && !gameState.taskInputInitialized) {
+                                taskInput.value = userData.currentTask || "";
+                                gameState.taskInputInitialized = true;
+                            }
+                        }
+
                         if (!isCurrentUser) { 
                             const player = gameState.players[userId];
                             player.x = userData.x || 0; 
@@ -1329,8 +1449,8 @@ function render() {
     }
 
     drawDustParticles();
-    drawTimers();
     drawPlayers(false); 
+    drawTimers();
 
     if (gameState.assets.shadow.complete) {
         ctx.drawImage(gameState.assets.shadow, -BG_WIDTH / 2, -BG_HEIGHT / 2, BG_WIDTH, BG_HEIGHT);
@@ -1529,17 +1649,41 @@ function updatePomodoro() {
             }
             const panel = document.getElementById('focus-sounds-panel');
             if (panel) panel.classList.remove('active');
+            const taskPanel = document.getElementById('current-task-panel');
+            if (taskPanel) taskPanel.classList.remove('active');
+            const taskInput = document.getElementById('current-task-input');
+            if (taskInput) taskInput.blur();
             
-            if (gameState.focusAudioEngine) {
-                gameState.focusAudioEngine.playEffect('timeBreak');
+            if (gameState.pomodoro.sessionsLeft <= 1) {
+                // END SESSION
+                gameState.pomodoro.active = false;
+                const updates = {};
+                updates[`pomodoro/${gameState.pomodoro.laptopId}`] = null;
+                update(ref(database), updates);
+                gameState.pomodoro.laptopId = null;
+                if (Notification.permission === "granted") {
+                    new Notification("مدونة ستوديو", { body: "لقد أتممت جميع جلسات العمل بنجاح!" });
+                }
+                
+                // STOP ALL FOCUS SOUNDS
+                if (gameState.focusAudioEngine) {
+                    gameState.focusAudioEngine.stopAll();
+                }
+                gameState.pomodoro.transitioning = false;
+                showSuccessModal(gameState.pomodoro.totalSessions, gameState.pomodoro.workDuration);
             } else {
-                playSoundRobust(gameState.sounds.timeBreak);
+                // GO TO BREAK
+                if (gameState.focusAudioEngine) {
+                    gameState.focusAudioEngine.playEffect('timeBreak');
+                } else {
+                    playSoundRobust(gameState.sounds.timeBreak);
+                }
+                if (Notification.permission === "granted") {
+                    new Notification("مدونة ستوديو", { body: "انتهت جلسة العمل! وقت الراحة." });
+                }
+                
+                startPomodoroPhase('break');
             }
-            if (Notification.permission === "granted") {
-                new Notification("مدونة ستوديو", { body: "انتهت جلسة العمل! وقت الراحة." });
-            }
-            
-            startPomodoroPhase('break');
         }
     } else if (gameState.pomodoro.phase === 'break') {
         largeTimer.classList.add('hidden');
@@ -1567,6 +1711,10 @@ function updatePomodoro() {
                 }
                 const panel = document.getElementById('focus-sounds-panel');
                 if (panel) panel.classList.remove('active');
+                const taskPanel = document.getElementById('current-task-panel');
+                if (taskPanel) taskPanel.classList.remove('active');
+                const taskInput = document.getElementById('current-task-input');
+                if (taskInput) taskInput.blur();
                 
                 gameState.pomodoro.transitioning = false;
             } else {
@@ -1620,38 +1768,76 @@ function drawTimers() {
         ctx.shadowBlur = 10;
         ctx.shadowColor = 'rgba(0,0,0,0.5)';
         
-        ctx.fillStyle = laptop.phase === 'work' ? COLORS.blue : '#3bb9ab';
+        ctx.fillStyle = laptop.phase === 'work' ? COLORS.red : '#3bb9ab';
         
-        const bx = laptop.x - textWidth/2 - 12;
-        const by = laptop.y - 70;
-        const bw = textWidth + 24;
-        const bh = 26;
-        const br = 13;
+        let renderY = laptop.y - 70;
+        let renderX = laptop.x;
+        const player = Object.values(gameState.players).find(p => p.userId === laptop.claimedBy);
+        if (player) {
+            renderX = player.x;
+            renderY = player.y - PLAYER_SIZE / 2 - 20;
+        }
         
-        ctx.beginPath();
-        ctx.moveTo(bx + br, by);
-        ctx.lineTo(bx + bw - br, by);
-        ctx.quadraticCurveTo(bx + bw, by, bx + bw, by + br);
-        ctx.lineTo(bx + bw, by + bh - br);
-        ctx.quadraticCurveTo(bx + bw, by + bh, bx + bw - br, by + bh);
-        ctx.lineTo(bx + br, by + bh);
-        ctx.quadraticCurveTo(bx, by + bh, bx, by + bh - br);
-        ctx.lineTo(bx, by + br);
-        ctx.quadraticCurveTo(bx, by, bx + br, by);
-        ctx.fill();
+        const taskText = (player && player.currentTask) ? `أعمل على ${player.currentTask}` : '';
+        
+        ctx.font = 'bold 12px Rubik';
+        const taskWidth = taskText ? ctx.measureText(taskText).width : 0;
+        
+        ctx.font = 'bold 14px Rubik';
+        const timerWidth = ctx.measureText(timeStr).width;
+        
+        const timerH = 26;
+        const taskH = 24;
+        const gap = 4;
+        
+        const totalHeight = taskText ? (taskH + gap + timerH) : timerH;
+        const startY = renderY - (totalHeight - timerH);
+        
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = 'rgba(0,0,0,0.5)';
+        ctx.fillStyle = laptop.phase === 'work' ? COLORS.red : '#3bb9ab';
+        
+        const drawRoundedRect = (x, y, w, h, r) => {
+            ctx.beginPath();
+            ctx.moveTo(x + r, y);
+            ctx.lineTo(x + w - r, y);
+            ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+            ctx.lineTo(x + w, y + h - r);
+            ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+            ctx.lineTo(x + r, y + h);
+            ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+            ctx.lineTo(x, y + r);
+            ctx.quadraticCurveTo(x, y, x + r, y);
+            ctx.fill();
+        };
+
+        if (taskText) {
+            const bx = renderX - taskWidth/2 - 12;
+            drawRoundedRect(bx, startY, taskWidth + 24, taskH, 12);
+            
+            ctx.shadowBlur = 0;
+            ctx.fillStyle = 'white';
+            ctx.font = 'bold 12px Rubik';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(taskText, renderX, startY + taskH / 2);
+            
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'rgba(0,0,0,0.5)';
+            ctx.fillStyle = laptop.phase === 'work' ? COLORS.red : '#3bb9ab';
+        }
+        
+        const timerY = taskText ? startY + taskH + gap : startY;
+        const bx = renderX - timerWidth/2 - 12;
+        drawRoundedRect(bx, timerY, timerWidth + 24, timerH, 13);
         
         ctx.shadowBlur = 0;
         ctx.fillStyle = 'white';
         ctx.font = 'bold 14px Rubik';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(timeStr, laptop.x, laptop.y - 57);
+        ctx.fillText(timeStr, renderX, timerY + timerH / 2);
         ctx.textBaseline = 'alphabetic';
-        
-        // Draw tiny icon above
-        ctx.fillStyle = 'rgba(255,255,255,0.9)';
-        ctx.font = '12px Rubik';
-        ctx.fillText(laptop.phase === 'work' ? '💻' : '☕', laptop.x, laptop.y - 80);
     });
 }
 
@@ -1830,9 +2016,4 @@ function drawPlayers(onlyLocal = false) {
 
 if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', init); } else { init(); }
 
-// Background timer to ensure pomodoro logic runs when the browser throttles gameLoop
-setInterval(() => {
-    if (document.hidden) {
-        updatePomodoro();
-    }
-}, 1000);
+// EOF
