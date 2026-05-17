@@ -127,8 +127,27 @@
                 <button id="pomodoro-confirm" class="btn-primary" style="width: 100%; font-size: 20px; padding: 15px;">أنا لها</button>
             </div>
             <button id="pomodoro-cancel" class="btn-cancel" style="margin-top: 15px; background: none; border: none; color: #888; cursor: pointer; text-decoration: underline;">تراجع</button>
-            <button id="pomodoro-test" class="btn-cancel" style="margin-top: 5px; background: none; border: none; color: #aaa; cursor: pointer; text-decoration: underline;">وضع الاختبار (10ث عمل، 10ث راحة، 3 جلسات)</button>
+            <button id="pomodoro-test" class="btn-cancel" style="margin-top: 5px; background: none; border: none; color: #aaa; cursor: pointer; text-decoration: underline;">وضع الاختبار (10ث عمل، 3د راحة، 3 جلسات)</button>
         </div>
+    </div>
+
+    <!-- لوحة سباق الاستراحة -->
+    <div id="race-panel" class="race-panel hidden">
+        <div class="race-card">
+            <div class="race-kicker">لعبة الاستراحة</div>
+            <h2 id="race-title">سباق السيارات</h2>
+            <div id="race-player-list" class="race-player-list"></div>
+            <div id="race-status" class="race-status"></div>
+            <div class="race-actions">
+                <button id="race-start" class="btn-primary">ابدأ السباق</button>
+                <button id="race-return" class="btn-secondary">عودة</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="race-hud" class="race-hud hidden">
+        <span id="race-lap">لفة 1 من 3</span>
+        <span id="race-time">00:00.000</span>
     </div>
 
     <!-- نافذة الإنجاز (أحسنتم) -->

@@ -37,7 +37,7 @@ class FocusAudioEngine {
         this.masterGain.gain.setValueAtTime(1.0 * this.overallVolume, this.ctx.currentTime);
         this.masterGain.connect(this.ctx.destination);
         this.loadSoundEffects();
-        
+
         const resumeCtx = () => {
             if (this.ctx && this.ctx.state === 'suspended') {
                 this.ctx.resume().then(() => {
@@ -133,7 +133,7 @@ class FocusAudioEngine {
         }
 
         const sound = this.sounds[name];
-        if (sound.nodes) return; 
+        if (sound.nodes) return;
 
         const gainNode = this.ctx.createGain();
         gainNode.connect(this.masterGain);
@@ -192,22 +192,22 @@ class FocusAudioEngine {
             filter.type = 'bandpass';
             filter.frequency.setValueAtTime(400, this.ctx.currentTime);
             filter.Q.setValueAtTime(2.0, this.ctx.currentTime);
-            
+
             const lfo = this.ctx.createOscillator();
             lfo.frequency.setValueAtTime(0.08, this.ctx.currentTime);
-            
+
             const lfoGain = this.ctx.createGain();
             lfoGain.gain.setValueAtTime(250, this.ctx.currentTime);
-            
+
             lfo.connect(lfoGain);
             lfoGain.connect(filter.frequency);
-            
+
             source.connect(filter);
             filter.connect(gainNode);
-            
+
             source.start();
             lfo.start();
-            
+
             secondaryNodes.push(filter, lfo, lfoGain);
         } else if (name === 'plane') {
             source = this.createBrownNoiseNode();
@@ -216,25 +216,25 @@ class FocusAudioEngine {
             filter.frequency.setValueAtTime(150, this.ctx.currentTime);
             source.connect(filter);
             filter.connect(gainNode);
-            
+
             const osc1 = this.ctx.createOscillator();
             osc1.frequency.setValueAtTime(60, this.ctx.currentTime);
             const osc1Gain = this.ctx.createGain();
             osc1Gain.gain.setValueAtTime(0.15, this.ctx.currentTime);
             osc1.connect(osc1Gain);
             osc1Gain.connect(gainNode);
-            
+
             const osc2 = this.ctx.createOscillator();
             osc2.frequency.setValueAtTime(90, this.ctx.currentTime);
             const osc2Gain = this.ctx.createGain();
             osc2Gain.gain.setValueAtTime(0.08, this.ctx.currentTime);
             osc2.connect(osc2Gain);
             osc2Gain.connect(gainNode);
-            
+
             source.start();
             osc1.start();
             osc2.start();
-            
+
             secondaryNodes.push(filter, osc1, osc1Gain, osc2, osc2Gain);
         }
 
@@ -326,7 +326,7 @@ class FocusAudioEngine {
     applyState(mixState) {
         if (!mixState) return;
         this.init();
-        
+
         // Restore overall mix volume
         if (mixState.overallVolume !== undefined) {
             this.overallVolume = mixState.overallVolume;
@@ -341,7 +341,7 @@ class FocusAudioEngine {
             if (this.sounds[name]) {
                 this.sounds[name].active = config.active;
                 this.sounds[name].volume = config.volume !== undefined ? config.volume : 0.5;
-                
+
                 const el = document.querySelector(`.sound-item[data-sound="${name}"]`);
                 if (el) {
                     if (config.active) el.classList.add('active');
@@ -390,7 +390,7 @@ const gameState = {
     currentUser: null,
     userId: null,
     players: {},
-    avatarCache: {}, 
+    avatarCache: {},
     assets: {
         bg: new Image(),
         shadow: new Image(),
@@ -420,11 +420,21 @@ const gameState = {
     windSpeedMultiplier: 1.0,
     focusFogAlpha: 0.0,
     focusAudioEngine: null,
-    
+    activeRaceButton: false,
+    race: {
+        session: null,
+        active: false,
+        localCar: null,
+        returnPoint: null,
+        localResultSent: false,
+        finishReturnTimer: null,
+        lastSync: 0
+    },
+
     // Animation State
     anim: {
         active: false,
-        phase: 'none', 
+        phase: 'none',
         progress: 0,
         laptop: null,
         startPos: { x: 0, y: 0 },
@@ -435,7 +445,7 @@ const gameState = {
     pomodoro: {
         active: false,
         laptopId: null,
-        phase: 'none', 
+        phase: 'none',
         endTime: 0,
         sessionsLeft: 0,
         workDuration: 25,
@@ -477,13 +487,30 @@ const BG_WIDTH = BASE_BG_WIDTH * BG_SCALE;
 const BG_HEIGHT = BASE_BG_HEIGHT * BG_SCALE;
 const TABLE_WIDTH = BASE_TABLE_WIDTH * TABLE_SCALE;
 const TABLE_HEIGHT = BASE_TABLE_HEIGHT * TABLE_SCALE;
+const ROOM_COUNT = 2;
+const WORLD_HEIGHT = BG_HEIGHT * ROOM_COUNT;
+const ROOM_SEAM_Y = BG_HEIGHT / 2;
+const BREAK_ROOM_CENTER_Y = BG_HEIGHT;
+const DOOR_WIDTH = 260;
+const DOOR_HALF_WIDTH = DOOR_WIDTH / 2;
+const DOOR_HALF_HEIGHT = 52;
+const RACE_BUTTON = { x: 0, y: BREAK_ROOM_CENTER_Y + 110, radius: 72 };
+const RACE_JOIN_RADIUS = 230;
+const RACE_LAPS = 3;
+const RACE_TRACK = {
+    outerRx: 590,
+    outerRy: 330,
+    innerRx: 315,
+    innerRy: 155,
+    startAngle: Math.PI / 2
+};
 
 // World Boundaries (Updated for new BG size)
 const BOUNDS = {
     minX: -BG_WIDTH / 2 + PLAYER_SIZE / 2 + 10,
     maxX: BG_WIDTH / 2 - PLAYER_SIZE / 2 - 10,
     minY: -BG_HEIGHT / 2 + PLAYER_SIZE / 2 + 10,
-    maxY: BG_HEIGHT / 2 - PLAYER_SIZE / 2 - 10
+    maxY: -BG_HEIGHT / 2 + WORLD_HEIGHT - PLAYER_SIZE / 2 - 10
 };
 
 // Table Box
@@ -508,6 +535,28 @@ const easeOutBack = (x) => {
     const c3 = c1 + 1;
     return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
 };
+
+function isBreakActive() {
+    return gameState.pomodoro.active && gameState.pomodoro.phase === 'break';
+}
+
+function isInDoorOpening(x) {
+    return Math.abs(x) <= DOOR_HALF_WIDTH;
+}
+
+function isInBreakRoom(y) {
+    return y > ROOM_SEAM_Y;
+}
+
+function screenToWorld(clientX, clientY) {
+    const rect = gameState.canvas.getBoundingClientRect();
+    const canvasX = clientX - rect.left;
+    const canvasY = clientY - rect.top;
+    return {
+        x: (canvasX - gameState.canvas.width / 2) / gameState.zoom - gameState.camera.x,
+        y: (canvasY - gameState.canvas.height / 2) / gameState.zoom - gameState.camera.y
+    };
+}
 
 // Initialize game
 function init() {
@@ -539,7 +588,7 @@ function initWindParticles() {
 }
 
 function initLaptops() {
-    const rows = [0.25, 0.75]; 
+    const rows = [0.25, 0.75];
     const cols = [0.12, 0.31, 0.5, 0.69, 0.88];
     let index = 1;
     rows.forEach((ry, rIdx) => {
@@ -547,13 +596,13 @@ function initLaptops() {
             const worldX = TABLE_BOX.minX + (TABLE_WIDTH * cx);
             const worldY = TABLE_BOX.minY + (TABLE_HEIGHT * ry);
             const sitY = (rIdx === 0) ? TABLE_BOX.minY - 40 : TABLE_BOX.maxY + 40;
-            const intermediateY = (rIdx === 0) ? sitY - 180 : sitY + 180; 
+            const intermediateY = (rIdx === 0) ? sitY - 180 : sitY + 180;
 
-            gameState.laptops.push({ 
-                id: index++, 
-                x: worldX, 
-                y: worldY, 
-                sitX: worldX, 
+            gameState.laptops.push({
+                id: index++,
+                x: worldX,
+                y: worldY,
+                sitX: worldX,
                 sitY: sitY,
                 intermediateX: worldX,
                 intermediateY: intermediateY
@@ -583,20 +632,20 @@ function setupUserSelection() {
             const userItem = document.createElement('div');
             const isActive = userData.activeInGame === true;
             userItem.className = 'user-item' + (isActive ? ' disabled' : '');
-            
-            const avatarHtml = userData.avatar 
+
+            const avatarHtml = userData.avatar
                 ? `<img src="${userData.avatar}" alt="${userData.username}">`
                 : `<div class="placeholder-avatar">${userData.username.charAt(0).toUpperCase()}</div>`;
-            
+
             const statusHtml = isActive ? '<div class="in-game-status">داخل اللعبة</div>' : '';
-            
+
             userItem.innerHTML = `
                 ${statusHtml}
                 <div class="avatar-circle">${avatarHtml}</div>
                 <div class="name">${userData.username}</div>
                 <div class="channel">${userData.channelName || 'قناة صوتية'}</div>
             `;
-            
+
             if (!isActive) {
                 userItem.addEventListener('click', () => showConfirmModal({ userId, ...userData }));
             }
@@ -670,9 +719,11 @@ function startGame(userData) {
     resizeCanvas();
     setupControls();
     setupPomodoroUI();
+    setupRaceUI();
     setupLogout();
     listenToPlayers();
     listenToPomodoro();
+    listenToRace();
     get(ref(database, 'pomodoro')).then((pomoSnapshot) => {
         const pomoData = pomoSnapshot.val() || {};
         let activeLaptopId = null;
@@ -687,11 +738,11 @@ function startGame(userData) {
                 gameState.pomodoro.workDuration = state.workDuration;
                 gameState.pomodoro.breakDuration = state.breakDuration || 5;
                 gameState.pomodoro.totalSessions = state.totalSessions || state.sessionsLeft || 1;
-                
+
                 break;
             }
         }
-        
+
         get(ref(database, `users/${gameState.userId}`)).then((snapshot) => {
             const data = snapshot.val();
             let spawnX = 0, spawnY = BG_HEIGHT / 4;
@@ -716,11 +767,11 @@ function startGame(userData) {
                     spawnY = laptop.sitY;
                     if (gameState.pomodoro.phase === 'work' || gameState.pomodoro.phase === 'wait') locked = true;
                 }
-            } else if (data && (data.x !== undefined && data.y !== undefined) && data.x !== 0 && !checkCollision(data.x, data.y)) {
+            } else if (data && (data.x !== undefined && data.y !== undefined) && data.x !== 0 && !checkCollision(data.x, data.y) && !isInBreakRoom(data.y)) {
                 spawnX = data.x;
                 spawnY = data.y;
             }
-            
+
             if (!gameState.players[gameState.userId]) {
                 gameState.players[gameState.userId] = { userId: gameState.userId, username: gameState.currentUser, x: spawnX, y: spawnY };
             } else {
@@ -766,8 +817,8 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 
 function setupControls() {
-    window.addEventListener('keydown', (e) => { 
-        gameState.keys[e.code] = true; 
+    window.addEventListener('keydown', (e) => {
+        gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
     window.addEventListener('blur', () => { gameState.keys = {}; });
@@ -778,6 +829,15 @@ function setupControls() {
     }, { passive: false });
 
     gameState.canvas.addEventListener('mousedown', (e) => {
+        const clickWorld = screenToWorld(e.clientX, e.clientY);
+        const player = gameState.players[gameState.userId];
+        const clickedRaceButton = player && isBreakActive() && isInBreakRoom(player.y) &&
+            Math.hypot(player.x - RACE_BUTTON.x, player.y - RACE_BUTTON.y) < RACE_BUTTON.radius + PLAYER_SIZE / 2 &&
+            Math.hypot(clickWorld.x - RACE_BUTTON.x, clickWorld.y - RACE_BUTTON.y) < RACE_BUTTON.radius + 12;
+        if (clickedRaceButton) {
+            createRaceLobby();
+            return;
+        }
         if (gameState.pomodoro.active) return; // Completely disable starting another Pomodoro
         if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
             if (gameState.activeLaptop.claimedBy) return; // Ignore if claimed
@@ -842,7 +902,7 @@ function setupFocusPanelUI() {
         const soundName = item.dataset.sound;
         const btn = item.querySelector('.sound-toggle-btn');
         const slider = item.querySelector('.sound-vol');
-        
+
         btn.addEventListener('click', () => {
             if (!gameState.focusAudioEngine) return;
             gameState.focusAudioEngine.toggle(soundName);
@@ -852,7 +912,7 @@ function setupFocusPanelUI() {
                 item.classList.remove('active');
             }
         });
-        
+
         slider.addEventListener('input', (e) => {
             if (!gameState.focusAudioEngine) return;
             gameState.focusAudioEngine.updateVolume(soundName, e.target.value);
@@ -867,7 +927,7 @@ function setupFocusPanelUI() {
             gameState.focusAudioEngine.updateOverallVolume(e.target.value);
         });
     }
-    
+
     const taskInput = document.getElementById('current-task-input');
     if (taskInput) {
         let taskTimeout;
@@ -883,6 +943,377 @@ function setupFocusPanelUI() {
     }
 }
 
+function setupRaceUI() {
+    const startBtn = document.getElementById('race-start');
+    const returnBtn = document.getElementById('race-return');
+    if (startBtn) startBtn.addEventListener('click', startHostedRace);
+    if (returnBtn) {
+        returnBtn.addEventListener('click', () => {
+            const session = gameState.race.session;
+            if (!session) {
+                hideRacePanel();
+                return;
+            }
+            if (session.phase === 'lobby') {
+                if (session.hostId === gameState.userId) {
+                    update(ref(database), { 'minigames/race/current': null });
+                } else {
+                    update(ref(database), { [`minigames/race/current/participants/${gameState.userId}`]: null });
+                }
+                hideRacePanel();
+            } else {
+                returnFromRace(true);
+            }
+        });
+    }
+}
+
+function listenToRace() {
+    const raceRef = ref(database, 'minigames/race/current');
+    onValue(raceRef, (snapshot) => {
+        const session = snapshot.val();
+        const isParticipant = session && session.participants && session.participants[gameState.userId];
+
+        if (!isParticipant) {
+            if (gameState.race.active) returnFromRace(false);
+            gameState.race.session = null;
+            gameState.race.localCar = null;
+            hideRacePanel();
+            hideRaceHud();
+            return;
+        }
+
+        gameState.race.session = session;
+        gameState.race.returnPoint = session.participants[gameState.userId].returnPoint || gameState.race.returnPoint;
+
+        if (session.phase === 'lobby') {
+            gameState.race.active = false;
+            gameState.race.localCar = null;
+            showRaceLobby(session);
+            hideRaceHud();
+        } else if (session.phase === 'race') {
+            hideRacePanel();
+            startLocalRace(session);
+        } else if (session.phase === 'finished') {
+            gameState.race.active = false;
+            showRaceResults(session);
+            hideRaceHud();
+            scheduleRaceReturn();
+        }
+    });
+}
+
+async function createRaceLobby() {
+    if (!gameState.userId || !isBreakActive()) return;
+
+    const existing = await get(ref(database, 'minigames/race/current'));
+    const existingRace = existing.val();
+    if (existingRace && existingRace.phase !== 'finished' && Date.now() - (existingRace.createdAt || 0) < 15 * 60000) {
+        showRaceMessage('هناك سباق قائم الآن');
+        return;
+    }
+
+    const player = gameState.players[gameState.userId];
+    if (!player) return;
+
+    const candidates = Object.values(gameState.players)
+        .filter(p => p.userId && Math.hypot(p.x - player.x, p.y - player.y) <= RACE_JOIN_RADIUS)
+        .filter(p => p.userId === gameState.userId || (isInBreakRoom(p.y) && !p.isWorking))
+        .slice(0, 6);
+
+    if (!candidates.some(p => p.userId === gameState.userId)) candidates.unshift(player);
+
+    const participants = {};
+    candidates.forEach((p, index) => {
+        participants[p.userId] = {
+            username: p.username || 'لاعب',
+            avatar: p.avatar || '',
+            index,
+            returnPoint: { x: p.x, y: p.y }
+        };
+    });
+
+    const raceId = `${gameState.userId}_${Date.now()}`;
+    update(ref(database), {
+        'minigames/race/current': {
+            id: raceId,
+            hostId: gameState.userId,
+            phase: 'lobby',
+            createdAt: Date.now(),
+            participants
+        }
+    });
+}
+
+function showRaceLobby(session) {
+    const panel = document.getElementById('race-panel');
+    const title = document.getElementById('race-title');
+    const status = document.getElementById('race-status');
+    const startBtn = document.getElementById('race-start');
+    const returnBtn = document.getElementById('race-return');
+    if (!panel || !title || !status || !startBtn || !returnBtn) return;
+
+    title.textContent = 'سباق السيارات';
+    status.textContent = session.hostId === gameState.userId ? 'أنت المضيف' : 'بانتظار المضيف';
+    startBtn.style.display = session.hostId === gameState.userId ? 'block' : 'none';
+    returnBtn.textContent = session.hostId === gameState.userId ? 'إلغاء' : 'خروج';
+    returnBtn.style.display = 'block';
+    renderRacePlayerList(session);
+    panel.classList.remove('hidden');
+}
+
+function showRaceResults(session) {
+    const panel = document.getElementById('race-panel');
+    const title = document.getElementById('race-title');
+    const status = document.getElementById('race-status');
+    const startBtn = document.getElementById('race-start');
+    const returnBtn = document.getElementById('race-return');
+    if (!panel || !title || !status || !startBtn || !returnBtn) return;
+
+    title.textContent = 'النتائج';
+    status.textContent = 'سيتم إعادتك بعد لحظات';
+    startBtn.style.display = 'none';
+    returnBtn.textContent = 'عودة الآن';
+    returnBtn.style.display = 'block';
+    renderRacePlayerList(session, true);
+    panel.classList.remove('hidden');
+}
+
+function showRaceMessage(message) {
+    const panel = document.getElementById('race-panel');
+    const title = document.getElementById('race-title');
+    const list = document.getElementById('race-player-list');
+    const status = document.getElementById('race-status');
+    const startBtn = document.getElementById('race-start');
+    const returnBtn = document.getElementById('race-return');
+    if (!panel || !title || !list || !status || !startBtn || !returnBtn) return;
+    title.textContent = 'سباق السيارات';
+    list.innerHTML = '';
+    status.textContent = message;
+    startBtn.style.display = 'none';
+    returnBtn.textContent = 'إغلاق';
+    returnBtn.style.display = 'block';
+    panel.classList.remove('hidden');
+}
+
+function renderRacePlayerList(session, showResults = false) {
+    const list = document.getElementById('race-player-list');
+    if (!list) return;
+    const participants = Object.entries(session.participants || {})
+        .sort(([, a], [, b]) => (a.index || 0) - (b.index || 0));
+    const results = session.results || {};
+    const rows = showResults
+        ? participants.sort(([idA], [idB]) => (results[idA]?.finishTime || Infinity) - (results[idB]?.finishTime || Infinity))
+        : participants;
+
+    list.innerHTML = rows.map(([id, p], index) => {
+        const result = results[id];
+        const meta = showResults ? (result ? formatRaceTime(result.finishTime) : 'لم ينته') : (id === session.hostId ? 'المضيف' : 'جاهز');
+        const rank = showResults ? `<span class="race-rank">${index + 1}</span>` : '<span class="race-rank race-rank-empty"></span>';
+        const avatar = p.avatar ? `<img src="${p.avatar}" alt="">` : `<span>${(p.username || '?').charAt(0).toUpperCase()}</span>`;
+        return `
+            <div class="race-player-row">
+                ${rank}
+                <div class="race-avatar">${avatar}</div>
+                <div class="race-player-name">${p.username || 'لاعب'}</div>
+                <div class="race-player-meta">${meta}</div>
+            </div>
+        `;
+    }).join('');
+}
+
+function hideRacePanel() {
+    const panel = document.getElementById('race-panel');
+    if (panel) panel.classList.add('hidden');
+}
+
+function hideRaceHud() {
+    const hud = document.getElementById('race-hud');
+    if (hud) hud.classList.add('hidden');
+}
+
+function startHostedRace() {
+    const session = gameState.race.session;
+    if (!session || session.hostId !== gameState.userId || session.phase !== 'lobby') return;
+
+    const cars = {};
+    Object.keys(session.participants || {}).forEach((userId) => {
+        const participant = session.participants[userId];
+        cars[userId] = createRaceCar(participant.index || 0, participant.username || 'لاعب');
+    });
+
+    update(ref(database), {
+        'minigames/race/current/phase': 'race',
+        'minigames/race/current/startTime': Date.now() + 3500,
+        'minigames/race/current/cars': cars,
+        'minigames/race/current/results': null
+    });
+}
+
+function startLocalRace(session) {
+    if (gameState.race.active && gameState.race.localCar) return;
+    const participant = session.participants[gameState.userId];
+    gameState.race.active = true;
+    gameState.race.localResultSent = false;
+    gameState.race.returnPoint = participant.returnPoint;
+    gameState.race.localCar = {
+        ...createRaceCar(participant.index || 0, participant.username || gameState.currentUser || 'لاعب'),
+        ...(session.cars && session.cars[gameState.userId] ? session.cars[gameState.userId] : {})
+    };
+}
+
+function createRaceCar(index, username) {
+    return {
+        username,
+        x: 40 + (index % 6) * 48,
+        y: RACE_TRACK.outerRy - 52 - Math.floor(index / 6) * 44,
+        angle: 0,
+        speed: 0,
+        distance: 0,
+        lap: 1,
+        lastProgress: 0,
+        finished: false
+    };
+}
+
+function updateRaceMode() {
+    const session = gameState.race.session;
+    const car = gameState.race.localCar;
+    if (!session || !car) return;
+
+    if (!isBreakActive()) {
+        if (session.hostId === gameState.userId) update(ref(database), { 'minigames/race/current': null });
+        returnFromRace(false);
+        return;
+    }
+
+    const now = Date.now();
+    if (now < (session.startTime || 0) || car.finished) return;
+
+    const up = gameState.keys['KeyW'] || gameState.keys['ArrowUp'];
+    const down = gameState.keys['KeyS'] || gameState.keys['ArrowDown'];
+    const left = gameState.keys['KeyA'] || gameState.keys['ArrowLeft'];
+    const right = gameState.keys['KeyD'] || gameState.keys['ArrowRight'];
+    const dt = gameState.dtFactor;
+
+    if (up) car.speed += 0.16 * dt;
+    if (down) car.speed -= 0.11 * dt;
+    if (!up && !down) car.speed *= Math.pow(0.982, dt);
+    car.speed = Math.max(-3.2, Math.min(8.4, car.speed));
+
+    const turn = (right ? 1 : 0) - (left ? 1 : 0);
+    if (turn !== 0 && Math.abs(car.speed) > 0.25) {
+        car.angle += turn * 0.047 * dt * Math.sign(car.speed);
+    }
+
+    car.x += Math.cos(car.angle) * car.speed * dt;
+    car.y += Math.sin(car.angle) * car.speed * dt;
+
+    if (!isOnRaceRoad(car.x, car.y)) {
+        car.speed *= Math.pow(0.88, dt);
+    }
+
+    updateRaceProgress(car);
+    syncRaceCar(false);
+
+    if (car.distance >= RACE_LAPS && !gameState.race.localResultSent) {
+        car.finished = true;
+        car.speed = 0;
+        gameState.race.localResultSent = true;
+        const finishTime = Date.now() - (session.startTime || Date.now());
+        const participants = Object.keys(session.participants || {});
+        const results = { ...(session.results || {}), [gameState.userId]: { finishTime, username: car.username } };
+        const updates = {
+            [`minigames/race/current/results/${gameState.userId}`]: { finishTime, username: car.username },
+            [`minigames/race/current/cars/${gameState.userId}/finished`]: true,
+            [`minigames/race/current/cars/${gameState.userId}/lap`]: RACE_LAPS
+        };
+        if (participants.every(id => results[id])) {
+            updates['minigames/race/current/phase'] = 'finished';
+            updates['minigames/race/current/finishedAt'] = Date.now();
+        }
+        update(ref(database), updates);
+    }
+}
+
+function updateRaceProgress(car) {
+    const progress = getRaceProgress(car.x, car.y);
+    let delta = progress - car.lastProgress;
+    if (delta < -0.5) delta += 1;
+    if (delta > 0.5) delta -= 1;
+    if (delta > -0.03) car.distance = Math.max(0, car.distance + Math.max(0, delta));
+    car.lastProgress = progress;
+    car.lap = Math.min(RACE_LAPS, Math.floor(car.distance) + 1);
+}
+
+function getRaceProgress(x, y) {
+    const angle = Math.atan2(y / RACE_TRACK.outerRy, x / RACE_TRACK.outerRx);
+    return (RACE_TRACK.startAngle - angle + Math.PI * 2) % (Math.PI * 2) / (Math.PI * 2);
+}
+
+function isOnRaceRoad(x, y) {
+    const outer = Math.pow(x / RACE_TRACK.outerRx, 2) + Math.pow(y / RACE_TRACK.outerRy, 2);
+    const inner = Math.pow(x / RACE_TRACK.innerRx, 2) + Math.pow(y / RACE_TRACK.innerRy, 2);
+    return outer <= 1 && inner >= 1;
+}
+
+function syncRaceCar(force) {
+    const now = Date.now();
+    if (!force && now - gameState.race.lastSync < 90) return;
+    gameState.race.lastSync = now;
+    const car = gameState.race.localCar;
+    if (!car || !gameState.race.session) return;
+    update(ref(database), {
+        [`minigames/race/current/cars/${gameState.userId}`]: {
+            username: car.username,
+            x: car.x,
+            y: car.y,
+            angle: car.angle,
+            speed: car.speed,
+            distance: car.distance,
+            lap: car.lap,
+            finished: car.finished || false
+        }
+    });
+}
+
+function scheduleRaceReturn() {
+    if (gameState.race.finishReturnTimer) return;
+    gameState.race.finishReturnTimer = setTimeout(() => returnFromRace(true), 8000);
+    if (gameState.race.session && gameState.race.session.hostId === gameState.userId) {
+        setTimeout(() => {
+            update(ref(database), { 'minigames/race/current': null });
+        }, 11000);
+    }
+}
+
+function returnFromRace(clearPanel) {
+    if (gameState.race.finishReturnTimer) {
+        clearTimeout(gameState.race.finishReturnTimer);
+        gameState.race.finishReturnTimer = null;
+    }
+    const player = gameState.players[gameState.userId];
+    const returnPoint = gameState.race.returnPoint;
+    if (player && returnPoint) {
+        player.x = returnPoint.x;
+        player.y = returnPoint.y;
+        updatePlayerPosition(player.x, player.y);
+    }
+    gameState.race.active = false;
+    gameState.race.localCar = null;
+    gameState.race.localResultSent = false;
+    if (clearPanel) hideRacePanel();
+    hideRaceHud();
+}
+
+function formatRaceTime(ms) {
+    if (!Number.isFinite(ms)) return '--:--.---';
+    const mins = Math.floor(ms / 60000);
+    const secs = Math.floor((ms % 60000) / 1000);
+    const millis = Math.floor(ms % 1000);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
+}
+
 function setupPomodoroUI() {
     const modal = document.getElementById('pomodoro-modal');
     const cancelBtn = document.getElementById('pomodoro-cancel');
@@ -891,7 +1322,7 @@ function setupPomodoroUI() {
     ['work', 'break', 'session'].forEach(type => {
         const btns = document.querySelectorAll(`#${type}-options .opt-btn`);
         const input = document.getElementById(`custom-${type}`);
-        
+
         btns.forEach(btn => {
             btn.addEventListener('click', () => {
                 btns.forEach(b => b.classList.remove('active'));
@@ -920,24 +1351,24 @@ function setupPomodoroUI() {
             if (Notification.permission !== "granted" && Notification.permission !== "denied") Notification.requestPermission();
             const laptop = gameState.lastActiveLaptop;
             if (!laptop || laptop.claimedBy) return;
-            
+
             gameState.pomodoro.active = true;
             gameState.pomodoro.laptopId = laptop.id;
             gameState.pomodoro.workDuration = 10 / 60; // 10 seconds
-            gameState.pomodoro.breakDuration = 10 / 60; // 10 seconds
-            gameState.pomodoro.sessionsLeft = 2;
-            gameState.pomodoro.totalSessions = 2;
+            gameState.pomodoro.breakDuration = 3; // 3 minutes
+            gameState.pomodoro.sessionsLeft = 3;
+            gameState.pomodoro.totalSessions = 3;
             gameState.pomodoro.phase = 'wait';
-            
+
             const updates = {};
             updates[`pomodoro/${laptop.id}`] = {
                 claimedBy: gameState.userId,
                 phase: 'wait',
                 endTime: 0,
                 workDuration: 10 / 60,
-                breakDuration: 10 / 60,
-                sessionsLeft: 2,
-                totalSessions: 2
+                breakDuration: 3,
+                sessionsLeft: 3,
+                totalSessions: 3
             };
             update(ref(database), updates);
             startKidnapAnimation(laptop);
@@ -972,7 +1403,7 @@ function setupPomodoroUI() {
         gameState.pomodoro.sessionsLeft = sessions;
         gameState.pomodoro.totalSessions = sessions;
         gameState.pomodoro.phase = 'wait';
-        
+
         const updates = {};
         updates[`pomodoro/${laptop.id}`] = {
             claimedBy: gameState.userId,
@@ -984,7 +1415,7 @@ function setupPomodoroUI() {
             totalSessions: sessions
         };
         update(ref(database), updates);
-        
+
         startKidnapAnimation(laptop);
     });
 }
@@ -992,16 +1423,16 @@ function setupPomodoroUI() {
 function showSuccessModal(totalSessions, workDuration) {
     const modal = document.getElementById('success-modal');
     if (!modal) return;
-    
+
     const totalMins = Math.floor(totalSessions * workDuration);
     document.getElementById('success-total-time').textContent = `${totalMins} دقيقة`;
     document.getElementById('success-sessions-count').textContent = totalSessions;
-    
+
     const localPlayer = gameState.players[gameState.userId];
     const nameEl = document.getElementById('success-name');
     const avatarImg = document.getElementById('success-avatar-img');
     const avatarText = document.getElementById('success-avatar-text');
-    
+
     if (localPlayer) {
         nameEl.textContent = localPlayer.username;
         if (localPlayer.avatar) {
@@ -1014,14 +1445,14 @@ function showSuccessModal(totalSessions, workDuration) {
             avatarText.textContent = localPlayer.username.charAt(0).toUpperCase();
         }
     }
-    
+
     modal.classList.add('active');
-    
+
     const closeBtn = document.getElementById('success-close');
     closeBtn.onclick = () => {
         modal.classList.remove('active');
     };
-    
+
     if (gameState.focusAudioEngine) {
         gameState.focusAudioEngine.playEffect('yipee');
     } else {
@@ -1034,7 +1465,7 @@ function startPomodoroPhase(phase) {
     gameState.pomodoro.transitioning = false;
     const duration = phase === 'work' ? gameState.pomodoro.workDuration : gameState.pomodoro.breakDuration;
     gameState.pomodoro.endTime = Date.now() + duration * 60000;
-    
+
     if (gameState.pomodoro.laptopId !== null) {
         const updates = {};
         const pomoData = {
@@ -1055,7 +1486,7 @@ function startPomodoroPhase(phase) {
         if (panel) panel.classList.add('active');
         const taskPanel = document.getElementById('current-task-panel');
         if (taskPanel) taskPanel.classList.add('active');
-        
+
         if (gameState.focusAudioEngine) {
             gameState.focusAudioEngine.fadeToMaster(1.0, 2.0);
             for (const [name, config] of Object.entries(gameState.focusAudioEngine.sounds)) {
@@ -1141,7 +1572,7 @@ function listenToPlayers() {
                         player.channelName = userData.channelName;
                         player.avatar = userData.avatar;
                         player.currentTask = userData.currentTask || "";
-                        
+
                         if (isCurrentUser) {
                             const taskInput = document.getElementById('current-task-input');
                             if (taskInput && !gameState.taskInputInitialized) {
@@ -1150,10 +1581,10 @@ function listenToPlayers() {
                             }
                         }
 
-                        if (!isCurrentUser) { 
+                        if (!isCurrentUser) {
                             const player = gameState.players[userId];
-                            player.x = userData.x || 0; 
-                            player.y = userData.y || 0; 
+                            player.x = userData.x || 0;
+                            player.y = userData.y || 0;
                             player.isMoving = userData.isMoving || false;
                             player.isSprinting = userData.isSprinting || false;
                             player.isLockedIn = userData.isLockedIn || false;
@@ -1196,6 +1627,8 @@ function updatePlayerPosition(x, y) {
 
 function checkCollision(x, y) {
     if (x < BOUNDS.minX || x > BOUNDS.maxX || y < BOUNDS.minY || y > BOUNDS.maxY) return true;
+    const inBreakDoor = isBreakActive() && isInDoorOpening(x);
+    if (Math.abs(y - ROOM_SEAM_Y) < DOOR_HALF_HEIGHT && !inBreakDoor) return true;
     const buffer = PLAYER_SIZE / 2;
     if (x > TABLE_BOX.minX - buffer && x < TABLE_BOX.maxX + buffer && y > TABLE_BOX.minY - buffer && y < TABLE_BOX.maxY + buffer) return true;
     return false;
@@ -1230,7 +1663,7 @@ function handleMovement() {
         if (!checkCollision(nextX, player.y)) player.x = nextX;
         if (!checkCollision(player.x, nextY)) player.y = nextY;
         updatePlayerPosition(player.x, player.y);
-        
+
         if (Math.random() < (isSprinting ? 0.8 : 0.4) * gameState.dtFactor) {
             spawnDust(player.x, player.y, isSprinting ? 2 : 1, false);
         }
@@ -1248,7 +1681,7 @@ function updateWindParticles() {
     const isFocused = gameState.isLockedIn && gameState.pomodoro.active && gameState.pomodoro.phase === 'work';
     const targetWindSpeed = isFocused ? 0.15 : 1.0;
     const targetFogAlpha = isFocused ? 1.0 : 0.0;
-    
+
     const lerpFactor = 1 - Math.pow(1 - 0.03, gameState.dtFactor);
     gameState.windSpeedMultiplier += (targetWindSpeed - gameState.windSpeedMultiplier) * lerpFactor;
     gameState.focusFogAlpha += (targetFogAlpha - gameState.focusFogAlpha) * lerpFactor;
@@ -1267,6 +1700,7 @@ function updateInteractions() {
     if (!player) return;
 
     gameState.activeLaptop = null;
+    gameState.activeRaceButton = false;
     let closestDist = 120;
     let minDist = Infinity;
 
@@ -1279,14 +1713,19 @@ function updateInteractions() {
         }
     });
 
+    if (isBreakActive() && isInBreakRoom(player.y)) {
+        const raceDist = Math.hypot(player.x - RACE_BUTTON.x, player.y - RACE_BUTTON.y);
+        gameState.activeRaceButton = raceDist < RACE_BUTTON.radius + PLAYER_SIZE / 2;
+    }
+
     const baseAlpha = gameState.isLockedIn ? 0.95 : 0.8;
     let targetAlpha = (gameState.activeLaptop || gameState.isLockedIn) ? Math.min(baseAlpha, (1 - minDist / 120) * 1.5 || baseAlpha) : 0;
-    
+
     // Disable the dark laptop focus mask if we are currently on a break!
     if (gameState.pomodoro.active && gameState.pomodoro.phase === 'break') {
         targetAlpha = 0;
     }
-    
+
     const animAlphaMult = (gameState.anim.active && gameState.anim.phase !== 'none') ? 0 : 1;
     const lerpFactor = 1 - Math.pow(1 - 0.1, gameState.dtFactor);
     gameState.focusAlpha += (targetAlpha * animAlphaMult - gameState.focusAlpha) * lerpFactor;
@@ -1305,14 +1744,14 @@ function updateAnimation() {
     if (gameState.anim.phase === 'reach') {
         gameState.anim.progress += 0.08 * gameState.dtFactor;
         if (gameState.anim.progress >= 1) {
-            gameState.anim.phase = 'align'; 
+            gameState.anim.phase = 'align';
             gameState.anim.progress = 0;
             gameState.anim.startPos = { x: player.x, y: player.y };
         }
     } else if (gameState.anim.phase === 'align') {
-        gameState.anim.progress += 0.025 * gameState.dtFactor; 
-        const t = easeOutBack(Math.min(1, gameState.anim.progress)); 
-        
+        gameState.anim.progress += 0.025 * gameState.dtFactor;
+        const t = easeOutBack(Math.min(1, gameState.anim.progress));
+
         player.x = gameState.anim.startPos.x + (laptop.sitX - gameState.anim.startPos.x) * t;
         player.y = gameState.anim.startPos.y + (laptop.intermediateY - gameState.anim.startPos.y) * t;
 
@@ -1322,22 +1761,22 @@ function updateAnimation() {
             gameState.anim.startPos = { x: player.x, y: player.y };
         }
     } else if (gameState.anim.phase === 'pull') {
-        gameState.anim.progress += 0.045 * gameState.dtFactor; 
-        const t = easeOutBack(Math.pow(Math.min(1, gameState.anim.progress), 2.5)); 
-        
+        gameState.anim.progress += 0.045 * gameState.dtFactor;
+        const t = easeOutBack(Math.pow(Math.min(1, gameState.anim.progress), 2.5));
+
         player.y = gameState.anim.startPos.y + (laptop.sitY - gameState.anim.startPos.y) * t;
 
         if (gameState.anim.progress >= 1) {
             gameState.anim.active = false;
             gameState.anim.phase = 'none';
             gameState.isLockedIn = true;
-            
+
             if (gameState.pomodoro.active && gameState.pomodoro.phase === 'wait') {
                 startPomodoroPhase('work');
             }
         }
     }
-    
+
     // Sync position continuously during animation to prevent snapping for other clients
     updatePlayerPosition(player.x, player.y);
 }
@@ -1372,11 +1811,11 @@ function updatePlayerBobbing() {
     for (const player of Object.values(gameState.players)) {
         if (player.bobTime === undefined) player.bobTime = 0;
         if (player.bobOffset === undefined) player.bobOffset = 0;
-        
+
         const isLocal = player.userId === gameState.userId;
         const lastBobTime = player.bobTime;
         const lockedIn = isLocal ? gameState.isLockedIn : player.isLockedIn;
-        
+
         if (!isLocal && player.isMoving) {
             if (Math.random() < 0.2 * gameState.dtFactor) spawnDust(player.x, player.y, 1, false);
         }
@@ -1386,7 +1825,7 @@ function updatePlayerBobbing() {
             player.bobTime += speed * gameState.dtFactor;
             const targetBounce = Math.abs(Math.sin(player.bobTime)) * (player.isSprinting ? 12 : 6);
             player.bobOffset += (targetBounce - player.bobOffset) * 0.5 * gameState.dtFactor;
-            
+
             if (isLocal) {
                 if (Math.floor(player.bobTime / Math.PI) > Math.floor(lastBobTime / Math.PI)) {
                     if (gameState.sounds.walk) {
@@ -1409,7 +1848,7 @@ function updateNametags() {
 
     for (const player of Object.values(gameState.players)) {
         if (player.nameAlpha === undefined) player.nameAlpha = 0;
-        
+
         const isLocal = player.userId === gameState.userId;
         const lockedIn = isLocal ? gameState.isLockedIn : player.isLockedIn;
         let targetAlpha = 0;
@@ -1427,7 +1866,7 @@ function updateNametags() {
             }
         }
 
-        const fadeSpeed = lockedIn ? 0.3 : (isLocal ? 0.2 : 0.15); 
+        const fadeSpeed = lockedIn ? 0.3 : (isLocal ? 0.2 : 0.15);
         const lerpFactor = 1 - Math.pow(1 - fadeSpeed, gameState.dtFactor);
         player.nameAlpha += (targetAlpha - player.nameAlpha) * lerpFactor;
     }
@@ -1442,12 +1881,19 @@ function gameLoop(timestamp) {
     if (deltaTime > 100) deltaTime = 100; // Cap to avoid large jumps if tab is inactive
     gameState.dtFactor = deltaTime / 16.666; // Standardize to 60fps (1000ms / 60 = 16.666ms)
 
+    updatePomodoro();
+    if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'race') {
+        updateRaceMode();
+        renderRace();
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+
     handleMovement();
     updateAnimation();
     updateCamera();
     updatePlayerBobbing();
     updateNametags();
-    updatePomodoro();
     updateWindParticles();
     updateDustParticles();
     updateInteractions();
@@ -1468,12 +1914,12 @@ function render() {
     ctx.scale(gameState.zoom, gameState.zoom);
     ctx.translate(gameState.camera.x, gameState.camera.y);
 
-    if (gameState.assets.bg.complete) {
-        ctx.drawImage(gameState.assets.bg, -BG_WIDTH / 2, -BG_HEIGHT / 2, BG_WIDTH, BG_HEIGHT);
-    }
+    drawRooms();
     if (gameState.assets.tables.complete) {
         ctx.drawImage(gameState.assets.tables, TABLE_BOX.minX, TABLE_BOX.minY, TABLE_WIDTH, TABLE_HEIGHT);
     }
+    drawBreakDoor();
+    drawRaceButton();
 
     drawConnections();
 
@@ -1482,12 +1928,12 @@ function render() {
     }
 
     drawDustParticles();
-    drawPlayers(false); 
+    drawPlayers(false);
     drawTimers();
 
-    if (gameState.assets.shadow.complete) {
-        ctx.drawImage(gameState.assets.shadow, -BG_WIDTH / 2, -BG_HEIGHT / 2, BG_WIDTH, BG_HEIGHT);
-    }
+    drawRoomShadows();
+    drawBreakDoor();
+    drawRacePrompt();
 
     if (gameState.isLockedIn) {
         drawLockedInOverlay();
@@ -1501,6 +1947,257 @@ function render() {
 
     drawWindParticles();
     drawFocusFog();
+}
+
+function drawRooms() {
+    const ctx = gameState.ctx;
+    if (!gameState.assets.bg.complete) return;
+    for (let i = 0; i < ROOM_COUNT; i++) {
+        ctx.drawImage(gameState.assets.bg, -BG_WIDTH / 2, -BG_HEIGHT / 2 + (i * BG_HEIGHT), BG_WIDTH, BG_HEIGHT);
+    }
+}
+
+function drawRoomShadows() {
+    const ctx = gameState.ctx;
+    if (!gameState.assets.shadow.complete) return;
+    for (let i = 0; i < ROOM_COUNT; i++) {
+        ctx.drawImage(gameState.assets.shadow, -BG_WIDTH / 2, -BG_HEIGHT / 2 + (i * BG_HEIGHT), BG_WIDTH, BG_HEIGHT);
+    }
+}
+
+function drawBreakDoor() {
+    const ctx = gameState.ctx;
+    const y = ROOM_SEAM_Y;
+    const open = isBreakActive();
+
+    ctx.save();
+    ctx.fillStyle = '#2d160d';
+    ctx.fillRect(-DOOR_HALF_WIDTH, y - DOOR_HALF_HEIGHT, DOOR_WIDTH, DOOR_HALF_HEIGHT * 2);
+    ctx.strokeStyle = open ? '#3bb9ab' : '#f04e3a';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(-DOOR_HALF_WIDTH, y - DOOR_HALF_HEIGHT, DOOR_WIDTH, DOOR_HALF_HEIGHT * 2);
+    ctx.fillStyle = open ? 'rgba(59, 185, 171, 0.28)' : 'rgba(240, 78, 58, 0.25)';
+    ctx.fillRect(-DOOR_HALF_WIDTH + 5, y - DOOR_HALF_HEIGHT + 5, DOOR_WIDTH - 10, DOOR_HALF_HEIGHT * 2 - 10);
+
+    const player = gameState.players[gameState.userId];
+    if (player && Math.hypot(player.x, player.y - y) < 190) {
+        ctx.font = 'bold 15px Rubik';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = 'white';
+        ctx.shadowBlur = 8;
+        ctx.shadowColor = 'black';
+        ctx.fillText(open ? 'باب الاستراحة مفتوح' : 'باب الاستراحة مغلق', 0, y - 72);
+        ctx.shadowBlur = 0;
+    }
+    ctx.restore();
+}
+
+function drawRaceButton() {
+    const ctx = gameState.ctx;
+    const active = gameState.activeRaceButton;
+    const enabled = isBreakActive();
+
+    ctx.save();
+    ctx.translate(RACE_BUTTON.x, RACE_BUTTON.y);
+    ctx.shadowBlur = active ? 24 : 10;
+    ctx.shadowColor = enabled ? 'rgba(244, 200, 43, 0.45)' : 'rgba(0, 0, 0, 0.35)';
+    ctx.beginPath();
+    ctx.arc(0, 0, RACE_BUTTON.radius, 0, Math.PI * 2);
+    ctx.fillStyle = enabled ? '#f4c82b' : '#6b5b45';
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.lineWidth = 6;
+    ctx.strokeStyle = active ? '#ffffff' : '#2b2418';
+    ctx.stroke();
+
+    ctx.fillStyle = '#262626';
+    ctx.font = 'bold 24px Rubik';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('سباق', 0, -5);
+    ctx.font = 'bold 16px Rubik';
+    ctx.fillText('3 لفات', 0, 24);
+    ctx.restore();
+}
+
+function drawRacePrompt() {
+    if (!gameState.activeRaceButton) return;
+    const ctx = gameState.ctx;
+    ctx.save();
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 16px Rubik';
+    ctx.textAlign = 'center';
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = 'black';
+    ctx.fillText('انقر للسباق', RACE_BUTTON.x, RACE_BUTTON.y - RACE_BUTTON.radius - 22);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+function renderRace() {
+    const ctx = gameState.ctx;
+    const canvas = gameState.canvas;
+    const session = gameState.race.session;
+    const localCar = gameState.race.localCar;
+    if (!ctx || !canvas || !session || !localCar) return;
+
+    ctx.fillStyle = '#1f4f3a';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    const trackWidth = RACE_TRACK.outerRx * 2 + 220;
+    const trackHeight = RACE_TRACK.outerRy * 2 + 180;
+    const scale = Math.min(canvas.width / trackWidth, canvas.height / trackHeight);
+
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.scale(scale, scale);
+
+    drawRaceTrack();
+
+    const cars = { ...(session.cars || {}) };
+    cars[gameState.userId] = localCar;
+    Object.entries(cars).forEach(([userId, car]) => {
+        const participant = session.participants && session.participants[userId];
+        drawRaceCar(car, participant ? participant.index || 0 : 0, userId === gameState.userId);
+    });
+
+    const now = Date.now();
+    if (now < (session.startTime || 0)) {
+        const count = Math.max(1, Math.ceil(((session.startTime || 0) - now) / 1000));
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+        ctx.fillRect(-220, -105, 440, 210);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 92px Rubik';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(count.toString(), 0, 0);
+    } else if (localCar.finished) {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
+        ctx.fillRect(-250, -70, 500, 140);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 34px Rubik';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('انتهيت!', 0, 0);
+    }
+
+    ctx.restore();
+    updateRaceHud(session, localCar);
+}
+
+function drawRaceTrack() {
+    const ctx = gameState.ctx;
+    ctx.save();
+
+    ctx.fillStyle = '#6aa84f';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, RACE_TRACK.outerRx + 90, RACE_TRACK.outerRy + 65, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#5b6268';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, RACE_TRACK.outerRx, RACE_TRACK.outerRy, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#dfe6e9';
+    ctx.lineWidth = 10;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, RACE_TRACK.outerRx - 38, RACE_TRACK.outerRy - 24, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.45)';
+    ctx.lineWidth = 4;
+    ctx.setLineDash([28, 26]);
+    ctx.beginPath();
+    ctx.ellipse(0, 0, (RACE_TRACK.outerRx + RACE_TRACK.innerRx) / 2, (RACE_TRACK.outerRy + RACE_TRACK.innerRy) / 2, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = '#3f7f43';
+    ctx.beginPath();
+    ctx.ellipse(0, 0, RACE_TRACK.innerRx, RACE_TRACK.innerRy, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#2f3438';
+    ctx.lineWidth = 8;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, RACE_TRACK.outerRx, RACE_TRACK.outerRy, 0, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.ellipse(0, 0, RACE_TRACK.innerRx, RACE_TRACK.innerRy, 0, 0, Math.PI * 2);
+    ctx.stroke();
+
+    const finishY = RACE_TRACK.outerRy - 64;
+    ctx.fillStyle = '#ffffff';
+    for (let i = 0; i < 7; i++) {
+        ctx.fillRect(-72 + i * 24, finishY, 12, 86);
+        ctx.fillRect(-60 + i * 24, finishY + 12, 12, 62);
+    }
+    ctx.fillStyle = '#111';
+    ctx.fillRect(-75, finishY, 6, 86);
+    ctx.fillRect(75, finishY, 6, 86);
+
+    ctx.restore();
+}
+
+function drawRaceCar(car, index, isLocal) {
+    const ctx = gameState.ctx;
+    if (!car) return;
+    const palette = ['#086fb6', '#f04e3a', '#f4c82b', '#3bb9ab', '#ffffff', '#262626'];
+    const color = palette[index % palette.length];
+
+    ctx.save();
+    ctx.translate(car.x, car.y);
+    ctx.rotate(car.angle);
+    ctx.shadowBlur = isLocal ? 18 : 8;
+    ctx.shadowColor = isLocal ? 'rgba(8, 111, 182, 0.65)' : 'rgba(0, 0, 0, 0.4)';
+    ctx.fillStyle = color;
+    drawRoundedRectPath(ctx, -26, -16, 52, 32, 8);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.75)';
+    drawRoundedRectPath(ctx, -4, -12, 18, 24, 5);
+    ctx.fill();
+    ctx.fillStyle = '#111';
+    ctx.fillRect(18, -10, 7, 20);
+    ctx.restore();
+
+    ctx.save();
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 13px Rubik';
+    ctx.textAlign = 'center';
+    ctx.shadowBlur = 4;
+    ctx.shadowColor = 'black';
+    ctx.fillText(car.username || 'لاعب', car.x, car.y - 34);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+function drawRoundedRectPath(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+}
+
+function updateRaceHud(session, car) {
+    const hud = document.getElementById('race-hud');
+    const lap = document.getElementById('race-lap');
+    const time = document.getElementById('race-time');
+    if (!hud || !lap || !time) return;
+    hud.classList.remove('hidden');
+    lap.textContent = `لفة ${Math.min(RACE_LAPS, car.lap || 1)} من ${RACE_LAPS}`;
+    const elapsed = Math.max(0, Date.now() - (session.startTime || Date.now()));
+    time.textContent = car.finished && gameState.race.session?.results?.[gameState.userId]
+        ? formatRaceTime(gameState.race.session.results[gameState.userId].finishTime)
+        : formatRaceTime(elapsed);
 }
 
 function drawDustParticles() {
@@ -1520,8 +2217,8 @@ function drawKidnapLine() {
     const player = gameState.players[gameState.userId];
     const laptop = gameState.anim.laptop;
     const p = gameState.anim.progress;
-    
-    ctx.strokeStyle = 'white'; 
+
+    ctx.strokeStyle = 'white';
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(laptop.x, laptop.y);
@@ -1534,10 +2231,10 @@ function drawKidnapLine() {
         targetX = player.x;
         targetY = player.y;
     }
-    
+
     ctx.lineTo(targetX, targetY);
     ctx.stroke();
-    
+
     ctx.fillStyle = 'white';
     ctx.fillRect(targetX - 4, targetY - 4, 8, 8);
 }
@@ -1593,12 +2290,12 @@ function drawFocusMask(canvas) {
         mCtx.globalCompositeOperation = 'source-over';
     }
     ctx.drawImage(mCanvas, 0, 0);
-    
+
     ctx.save();
     ctx.translate(canvas.width / 2, canvas.height / 2);
     ctx.scale(gameState.zoom, gameState.zoom);
     ctx.translate(gameState.camera.x, gameState.camera.y);
-    drawPlayers(true); 
+    drawPlayers(true);
     if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
         drawPrompt(gameState.activeLaptop);
     }
@@ -1607,7 +2304,7 @@ function drawFocusMask(canvas) {
 
 function drawPrompt(laptop) {
     const ctx = gameState.ctx;
-    
+
     // If already in a Pomodoro, don't show prompt to start another one
     if (gameState.pomodoro.active) {
         if (laptop.claimedBy && laptop.claimedBy !== gameState.userId) {
@@ -1626,7 +2323,7 @@ function drawPrompt(laptop) {
         }
         return;
     }
-    
+
     if (laptop.claimedBy) {
         let ownerName = "شخص آخر";
         const owner = gameState.players[laptop.claimedBy];
@@ -1654,13 +2351,13 @@ function drawPrompt(laptop) {
 
 function updatePomodoro() {
     if (!gameState.pomodoro.active) return;
-    
+
     const now = Date.now();
     const remaining = Math.max(0, gameState.pomodoro.endTime - now);
-    
+
     const largeTimer = document.getElementById('pomodoro-large-timer');
     const smallTimer = document.getElementById('pomodoro-small-timer');
-    
+
     const mins = Math.floor(remaining / 60000);
     const secs = Math.floor((remaining % 60000) / 1000);
     const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
@@ -1670,12 +2367,12 @@ function updatePomodoro() {
         smallTimer.classList.add('hidden');
         document.getElementById('large-timer-text').textContent = timeStr;
         document.getElementById('large-session-text').textContent = `جلسة ${gameState.pomodoro.totalSessions - gameState.pomodoro.sessionsLeft + 1} من ${gameState.pomodoro.totalSessions}`;
-        
+
         if (remaining === 0 && !gameState.pomodoro.transitioning) {
             gameState.pomodoro.transitioning = true;
             largeTimer.classList.add('hidden');
             gameState.isLockedIn = false;
-            
+
             // FADE OUT FOCUS SOUNDS
             if (gameState.focusAudioEngine) {
                 gameState.focusAudioEngine.fadeToMaster(0, 1.5);
@@ -1686,7 +2383,7 @@ function updatePomodoro() {
             if (taskPanel) taskPanel.classList.remove('active');
             const taskInput = document.getElementById('current-task-input');
             if (taskInput) taskInput.blur();
-            
+
             if (gameState.pomodoro.sessionsLeft <= 1) {
                 // END SESSION
                 gameState.pomodoro.active = false;
@@ -1697,7 +2394,7 @@ function updatePomodoro() {
                 if (Notification.permission === "granted") {
                     new Notification("مدونة ستوديو", { body: "لقد أتممت جميع جلسات العمل بنجاح!" });
                 }
-                
+
                 // STOP ALL FOCUS SOUNDS
                 if (gameState.focusAudioEngine) {
                     gameState.focusAudioEngine.stopAll();
@@ -1714,7 +2411,7 @@ function updatePomodoro() {
                 if (Notification.permission === "granted") {
                     new Notification("مدونة ستوديو", { body: "انتهت جلسة العمل! وقت الراحة." });
                 }
-                
+
                 startPomodoroPhase('break');
             }
         }
@@ -1722,12 +2419,12 @@ function updatePomodoro() {
         largeTimer.classList.add('hidden');
         smallTimer.classList.remove('hidden');
         document.getElementById('small-timer-text').textContent = timeStr;
-        
+
         if (remaining === 0 && !gameState.pomodoro.transitioning) {
             gameState.pomodoro.transitioning = true;
             smallTimer.classList.add('hidden');
             gameState.pomodoro.sessionsLeft--;
-            
+
             if (gameState.pomodoro.sessionsLeft <= 0) {
                 gameState.pomodoro.active = false;
                 const updates = {};
@@ -1737,7 +2434,7 @@ function updatePomodoro() {
                 if (Notification.permission === "granted") {
                     new Notification("مدونة ستوديو", { body: "لقد أتممت جميع جلسات العمل بنجاح!" });
                 }
-                
+
                 // STOP ALL FOCUS SOUNDS
                 if (gameState.focusAudioEngine) {
                     gameState.focusAudioEngine.stopAll();
@@ -1748,7 +2445,7 @@ function updatePomodoro() {
                 if (taskPanel) taskPanel.classList.remove('active');
                 const taskInput = document.getElementById('current-task-input');
                 if (taskInput) taskInput.blur();
-                
+
                 gameState.pomodoro.transitioning = false;
             } else {
                 if (gameState.focusAudioEngine) {
@@ -1759,15 +2456,15 @@ function updatePomodoro() {
                 if (Notification.permission === "granted") {
                     new Notification("مدونة ستوديو", { body: "انتهى وقت الراحة. هيا للعمل!" });
                 }
-                
+
                 // Set state briefly to wait so that kidnap starts next work cycle timer
                 gameState.pomodoro.phase = 'wait';
-                
+
                 const updates = {};
                 updates[`pomodoro/${gameState.pomodoro.laptopId}/phase`] = 'wait';
                 updates[`pomodoro/${gameState.pomodoro.laptopId}/endTime`] = 0;
                 update(ref(database), updates);
-                
+
                 setTimeout(() => {
                     const laptop = gameState.laptops.find(l => l.id === gameState.pomodoro.laptopId);
                     if (laptop) {
@@ -1782,27 +2479,27 @@ function updatePomodoro() {
 function drawTimers() {
     const ctx = gameState.ctx;
     const now = Date.now();
-    
+
     gameState.laptops.forEach(laptop => {
         if (!laptop.claimedBy || laptop.claimedBy === gameState.userId) return; // Only draw for others
         if (laptop.phase !== 'work' && laptop.phase !== 'break') return; // Don't draw if not in valid phase
-        
+
         const remaining = Math.max(0, laptop.endTime - now);
-        
+
         // Hide if stuck on 00:00 for more than a few seconds (e.g., owner logged out or lagged)
         if (remaining === 0 && now - laptop.endTime > 5000) return;
-        
+
         const mins = Math.floor(remaining / 60000);
         const secs = Math.floor((remaining % 60000) / 1000);
         const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
-        
+
         // Use a rounded rectangle instead of a blocky one for the background
         const textWidth = ctx.measureText(timeStr).width;
         ctx.shadowBlur = 10;
         ctx.shadowColor = 'rgba(0,0,0,0.5)';
-        
+
         ctx.fillStyle = laptop.phase === 'work' ? COLORS.red : '#3bb9ab';
-        
+
         let renderY = laptop.y - 70;
         let renderX = laptop.x;
         const player = Object.values(gameState.players).find(p => p.userId === laptop.claimedBy);
@@ -1810,26 +2507,26 @@ function drawTimers() {
             renderX = player.x;
             renderY = player.y - PLAYER_SIZE / 2 - 20;
         }
-        
+
         const taskText = (player && player.currentTask) ? `أعمل على ${player.currentTask}` : '';
-        
+
         ctx.font = 'bold 12px Rubik';
         const taskWidth = taskText ? ctx.measureText(taskText).width : 0;
-        
+
         ctx.font = 'bold 14px Rubik';
         const timerWidth = ctx.measureText(timeStr).width;
-        
+
         const timerH = 26;
         const taskH = 24;
         const gap = 4;
-        
+
         const totalHeight = taskText ? (taskH + gap + timerH) : timerH;
         const startY = renderY - (totalHeight - timerH);
-        
+
         ctx.shadowBlur = 10;
         ctx.shadowColor = 'rgba(0,0,0,0.5)';
         ctx.fillStyle = laptop.phase === 'work' ? COLORS.red : '#3bb9ab';
-        
+
         const drawRoundedRect = (x, y, w, h, r) => {
             ctx.beginPath();
             ctx.moveTo(x + r, y);
@@ -1847,23 +2544,23 @@ function drawTimers() {
         if (taskText) {
             const bx = renderX - taskWidth/2 - 12;
             drawRoundedRect(bx, startY, taskWidth + 24, taskH, 12);
-            
+
             ctx.shadowBlur = 0;
             ctx.fillStyle = 'white';
             ctx.font = 'bold 12px Rubik';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(taskText, renderX, startY + taskH / 2);
-            
+
             ctx.shadowBlur = 10;
             ctx.shadowColor = 'rgba(0,0,0,0.5)';
             ctx.fillStyle = laptop.phase === 'work' ? COLORS.red : '#3bb9ab';
         }
-        
+
         const timerY = taskText ? startY + taskH + gap : startY;
         const bx = renderX - timerWidth/2 - 12;
         drawRoundedRect(bx, timerY, timerWidth + 24, timerH, 13);
-        
+
         ctx.shadowBlur = 0;
         ctx.fillStyle = 'white';
         ctx.font = 'bold 14px Rubik';
@@ -1909,12 +2606,12 @@ function drawFocusFog() {
     const canvas = gameState.canvas;
     const w = canvas.width;
     const h = canvas.height;
-    
+
     ctx.save();
     ctx.globalAlpha = gameState.focusFogAlpha * 0.85;
-    
+
     const t = Date.now() * 0.0004; // slower, extremely calming movement
-    
+
     // Gradient 1: Smooth Slate/Indigo edge shadow vignette
     const grad1 = ctx.createRadialGradient(
         w / 2 + Math.sin(t) * (w * 0.15), h / 2 + Math.cos(t * 0.7) * (h * 0.15), Math.min(w, h) * 0.3,
@@ -1925,7 +2622,7 @@ function drawFocusFog() {
     grad1.addColorStop(1, 'rgba(13, 27, 42, 0.6)'); // deep blue accent
     ctx.fillStyle = grad1;
     ctx.fillRect(0, 0, w, h);
-    
+
     // Gradient 2: Organic drifting emerald/teal focus highlight (creates a warm, premium organic feel)
     const grad2 = ctx.createRadialGradient(
         w * 0.3 + Math.cos(t * 0.8) * (w * 0.1), h * 0.4 + Math.sin(t * 1.1) * (h * 0.1), Math.min(w, h) * 0.25,
@@ -1947,7 +2644,7 @@ function drawFocusFog() {
     grad3.addColorStop(1, 'rgba(99, 102, 241, 0.15)');
     ctx.fillStyle = grad3;
     ctx.fillRect(0, 0, w, h);
-    
+
     ctx.restore();
 }
 
@@ -1982,19 +2679,19 @@ function drawPlayers(onlyLocal = false) {
     for (const player of Object.values(gameState.players)) {
         const isCurrentUser = player.userId === gameState.userId;
         if (onlyLocal && !isCurrentUser) continue;
-        
+
         const screenX = player.x;
         const screenY = player.y - (player.bobOffset || 0);
-        
-        const isWorking = isCurrentUser ? 
-            (gameState.isLockedIn && gameState.pomodoro.active && gameState.pomodoro.phase === 'work') : 
+
+        const isWorking = isCurrentUser ?
+            (gameState.isLockedIn && gameState.pomodoro.active && gameState.pomodoro.phase === 'work') :
             player.isWorking;
-            
+
         let workBob = 0;
         let workAngle = 0;
         let workScaleX = 1.0;
         let workScaleY = 1.0;
-        
+
         if (isWorking) {
             const workT = Date.now() * 0.005;
             workBob = Math.sin(workT) * 3;
@@ -2002,12 +2699,12 @@ function drawPlayers(onlyLocal = false) {
             workScaleY = 1.0 + Math.sin(workT) * 0.04;
             workScaleX = 1.0 - Math.sin(workT) * 0.04;
         }
-        
+
         ctx.save();
         ctx.translate(screenX, screenY + workBob);
         ctx.rotate(workAngle);
         ctx.scale(workScaleX, workScaleY);
-        
+
         ctx.shadowBlur = 10;
         ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
         ctx.shadowOffsetY = 4 + (player.bobOffset || 0);
@@ -2017,12 +2714,12 @@ function drawPlayers(onlyLocal = false) {
         ctx.fill();
         ctx.shadowBlur = 0;
         ctx.shadowOffsetY = 0;
-        
+
         ctx.save();
         ctx.beginPath();
         ctx.arc(0, 0, PLAYER_SIZE / 2, 0, Math.PI * 2);
         ctx.clip();
-        
+
         const img = gameState.avatarCache[player.userId];
         if (img && img !== 'failed') {
             ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
@@ -2037,7 +2734,7 @@ function drawPlayers(onlyLocal = false) {
         }
         ctx.restore();
         ctx.restore(); // restores translate, rotate, scale
-        
+
         if (player.nameAlpha > 0.01) {
             ctx.fillStyle = `rgba(255, 255, 255, ${player.nameAlpha})`;
             ctx.font = '500 14px Rubik';

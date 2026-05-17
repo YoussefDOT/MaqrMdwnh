@@ -616,6 +616,148 @@ body {
     font-variant-numeric: tabular-nums;
 }
 
+/* ===== BREAK RACE ===== */
+.race-panel {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0, 0, 0, 0.48);
+    backdrop-filter: blur(8px);
+    z-index: 1900;
+}
+
+.race-panel.hidden {
+    display: none;
+}
+
+.race-card {
+    width: min(460px, calc(100vw - 32px));
+    background: rgba(18, 22, 28, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: var(--radius-md);
+    box-shadow: 0 24px 60px rgba(0, 0, 0, 0.42);
+    color: white;
+    padding: 28px;
+    text-align: right;
+}
+
+.race-kicker {
+    color: var(--clr-saffron);
+    font-size: 0.85rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+}
+
+.race-card h2 {
+    font-size: 1.8rem;
+    margin-bottom: 18px;
+}
+
+.race-player-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.race-player-row {
+    display: grid;
+    grid-template-columns: auto 42px 1fr auto;
+    align-items: center;
+    gap: 10px;
+    background: rgba(255, 255, 255, 0.07);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 8px;
+    padding: 9px 12px;
+}
+
+.race-rank {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--clr-saffron);
+    color: var(--clr-raisin);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 0.85rem;
+}
+
+.race-rank-empty {
+    background: transparent;
+}
+
+.race-avatar {
+    width: 38px;
+    height: 38px;
+    border-radius: 50%;
+    overflow: hidden;
+    background: var(--clr-blue);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+}
+
+.race-avatar img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.race-player-name {
+    font-weight: 700;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.race-player-meta,
+.race-status {
+    color: rgba(255, 255, 255, 0.68);
+    font-size: 0.9rem;
+    font-weight: 600;
+}
+
+.race-status {
+    min-height: 22px;
+    margin-bottom: 16px;
+}
+
+.race-actions {
+    display: flex;
+    gap: 12px;
+}
+
+.race-hud {
+    position: fixed;
+    top: 96px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 1200;
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    color: white;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+
+.race-hud.hidden {
+    display: none;
+}
+
+.race-hud span {
+    background: rgba(18, 22, 28, 0.78);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 8px 14px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
 /* لوحة أصوات التركيز */
 .focus-sounds-panel {
     position: fixed;
