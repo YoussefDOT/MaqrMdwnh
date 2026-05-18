@@ -412,6 +412,184 @@ class FocusAudioEngine {
     }
 }
 
+// Simple YouTube-based focus player using the IFrame API. Persists per-user
+// playback state to `users/{userId}/focusPlayer` so timestamp+link survive sessions.
+class FocusYouTubePlayer {
+    constructor() {
+        this.player = null;
+        this.videoId = null;
+        this.url = null;
+        this.loop = false;
+        this.pollInterval = null;
+        this.ready = false;
+        this.ui = {};
+        this.volume = 80; // 0-100 for YT
+        this._ytReady = this._ensureApiLoaded();
+    }
+
+    _ensureApiLoaded() {
+        if (window.YT && window.YT.Player) return Promise.resolve();
+        return new Promise((resolve) => {
+            window.onYouTubeIframeAPIReady = () => resolve();
+            const s = document.createElement('script');
+            s.src = 'https://www.youtube.com/iframe_api';
+            document.head.appendChild(s);
+        });
+    }
+
+    parseVideoId(url) {
+        if (!url) return null;
+        const m = url.match(/(?:v=|\/videos\/|embed\/|youtu\.be\/|v%3D)([A-Za-z0-9_-]{6,})/i);
+        if (m && m[1]) return m[1];
+        // fallback: last path chunk
+        try { const u = new URL(url); const p = u.pathname.split('/').pop(); return p || null; } catch(e) { return null; }
+    }
+
+    async createPlayer() {
+        await this._ytReady;
+        if (this.player) return;
+        const container = document.getElementById('yt-iframe-container');
+        if (!container) return;
+        const iframeDiv = document.createElement('div');
+        iframeDiv.id = 'yt-player-iframe';
+        container.appendChild(iframeDiv);
+        this._playerReadyPromise = new Promise((resolve) => { this._playerReadyResolver = resolve; });
+        this.player = new YT.Player(iframeDiv.id, {
+            height: '90', width: '160',
+            playerVars: { controls: 0, modestbranding: 1, rel: 0, playsinline: 1 },
+            events: {
+                onReady: () => { this.ready = true; this.player.setVolume(this.volume); if (this._playerReadyResolver) this._playerReadyResolver(); },
+                onStateChange: (e) => { if (e.data === YT.PlayerState.ENDED && this.loop) this.player.playVideo(); }
+            }
+        });
+    }
+
+    async loadUrl(url, startSec = 0, saveToFirebase = true, startPaused = false) {
+        const id = this.parseVideoId(url);
+        if (!id) return false;
+        await this.createPlayer();
+        this.videoId = id;
+        this.url = url;
+        try {
+            if (this._playerReadyPromise) await this._playerReadyPromise;
+            if (startPaused) {
+                this.player.cueVideoById({ videoId: id, startSeconds: Math.max(0, startSec) });
+            } else {
+                this.player.loadVideoById({ videoId: id, startSeconds: Math.max(0, startSec) });
+                try { this.player.playVideo(); } catch(e) {}
+                this._startPoll();
+            }
+            this.player.setVolume(this.volume);
+            this._ensureUiVisible(true);
+            if (saveToFirebase && gameState.userId) {
+                const updates = {};
+                updates[`users/${gameState.userId}/focusPlayer`] = { url: this.url, videoId: this.videoId, timestamp: Math.floor(startSec), loop: this.loop };
+                update(ref(database), updates);
+            }
+            return true;
+        } catch (e) {
+            console.warn('YT load failed', e);
+            return false;
+        }
+    }
+
+    async resume() {
+        await this._ytReady;
+        if (!this.player) return;
+        try { this.player.playVideo(); this._startPoll(); } catch(e){}
+    }
+
+    async pause() {
+        if (!this.player) return;
+        try { this.player.pauseVideo(); this._stopPoll(); } catch(e){}
+    }
+
+    async seekTo(sec) {
+        if (!this.player) return;
+        try { this.player.seekTo(sec, true); } catch(e){}
+    }
+
+    async forward(sec = 10) {
+        if (!this.player) return;
+        const now = this.player.getCurrentTime() || 0;
+        this.seekTo(now + sec);
+    }
+
+    async back(sec = 10) {
+        if (!this.player) return;
+        const now = this.player.getCurrentTime() || 0;
+        this.seekTo(Math.max(0, now - sec));
+    }
+
+    setLoop(v) { this.loop = !!v; if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/focusPlayer/loop`]: this.loop }); }
+
+    setVolumePercent(pct) { this.volume = Math.max(0, Math.min(100, Math.round(pct))); if (this.player && this.ready) this.player.setVolume(this.volume); }
+
+    async fadeOutAndPause(duration = 1500) {
+        if (!this.player) return;
+        const steps = 12;
+        const initial = this.volume;
+        const stepTime = duration / steps;
+        for (let i = 1; i <= steps; i++) {
+            const v = Math.round(initial * (1 - i / steps));
+            try { this.player.setVolume(Math.max(0, v)); } catch(e){}
+            await new Promise(r => setTimeout(r, stepTime));
+        }
+        try { this.player.pauseVideo(); } catch(e){}
+        this._stopPoll();
+        if (this.player) this.player.setVolume(initial);
+    }
+
+    _startPoll() {
+        if (this.pollInterval) return;
+        this.pollInterval = setInterval(() => this._poll(), 500);
+    }
+
+    _stopPoll() { if (this.pollInterval) { clearInterval(this.pollInterval); this.pollInterval = null; } }
+
+    _poll() {
+        if (!this.player || !this.ready) return;
+        try {
+            const dur = this.player.getDuration() || 0;
+            const cur = this.player.getCurrentTime() || 0;
+            // update UI
+            const slider = document.getElementById('mini-yt-slider');
+            const timeEl = document.getElementById('mini-yt-time');
+            const titleEl = document.getElementById('mini-yt-title');
+            if (slider && dur > 0) slider.value = Math.max(0, Math.min(100, Math.round((cur / dur) * 100)));
+            if (timeEl) timeEl.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
+            if (titleEl && this.videoId) titleEl.textContent = `YouTube • ${this.videoId}`;
+            // persist timestamp occasionally
+            if (gameState.userId && (Math.floor(cur) % 5 === 0)) {
+                update(ref(database), { [`users/${gameState.userId}/focusPlayer/timestamp`]: Math.floor(cur) });
+            }
+        } catch(e) {}
+    }
+
+    _ensureUiVisible(visible) {
+        const mini = document.getElementById('mini-yt-player');
+        if (!mini) return;
+        if (visible) mini.classList.add('active'); else mini.classList.remove('active');
+        const cover = document.getElementById('mini-yt-cover');
+        if (cover && this.videoId) cover.src = `https://i.ytimg.com/vi/${this.videoId}/hqdefault.jpg`;
+    }
+
+    async loadFromProfile(profile) {
+        if (!profile || !profile.url) return;
+        await this.loadUrl(profile.url, profile.timestamp || 0, false, true);
+        if (profile.loop) this.loop = !!profile.loop;
+        if (profile.volume !== undefined) {
+            this.setVolumePercent(profile.volume);
+            const volSlider = document.getElementById('yt-volume-slider');
+            if (volSlider) volSlider.value = profile.volume;
+        }
+        if (gameState.isLockedIn) {
+            await this.resume();
+        }
+    }
+}
+
+
 // Game State
 const gameState = {
     currentUser: null,
@@ -964,6 +1142,13 @@ function getCurrentTaskText() {
     return (player && player.currentTask ? player.currentTask : '').trim();
 }
 
+function formatTime(sec) {
+    sec = Math.floor(sec || 0);
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
 function clearLocalPomodoroUi() {
     const largeTimer = document.getElementById('pomodoro-large-timer');
     const smallTimer = document.getElementById('pomodoro-small-timer');
@@ -1278,6 +1463,7 @@ function startGame(userData) {
 
     // Initialize Focus Audio Engine & Setup Focus UI
     gameState.focusAudioEngine = new FocusAudioEngine();
+    gameState.focusYTPlayer = new FocusYouTubePlayer();
     setupFocusPanelUI();
 
     // Set active presence in game and set up disconnect presence cleanup
@@ -1334,6 +1520,11 @@ function startGame(userData) {
             // Restore Focus Mix from User Profile instead of session!
             if (data && data.focusMix && gameState.focusAudioEngine) {
                 gameState.focusAudioEngine.applyState(data.focusMix);
+            }
+
+            // Restore persisted YouTube focus player if present
+            if (data && data.focusPlayer && gameState.focusYTPlayer) {
+                gameState.focusYTPlayer.loadFromProfile(data.focusPlayer);
             }
 
             if (gameState.pomodoro.active && gameState.pomodoro.phase === 'work') {
@@ -1550,6 +1741,72 @@ function setupFocusPanelUI() {
                 update(ref(database), updates);
             }, 500);
         });
+    }
+
+    // YouTube focus player UI
+    const ytInput = document.getElementById('yt-url-input');
+    const ytLoadBtn = document.getElementById('yt-load-btn');
+    const miniPlay = document.getElementById('mini-yt-play');
+    const miniPause = document.getElementById('mini-yt-pause');
+    const miniBack = document.getElementById('mini-yt-back10');
+    const miniForward = document.getElementById('mini-yt-forward10');
+    const miniSlider = document.getElementById('mini-yt-slider');
+    const miniLoop = document.getElementById('mini-yt-loop');
+
+    if (ytLoadBtn && ytInput) {
+        ytLoadBtn.addEventListener('click', async () => {
+            const url = ytInput.value.trim();
+            if (!url || !gameState.focusYTPlayer) return;
+            await gameState.focusYTPlayer.loadUrl(url, 0, true);
+            // save cover/title to profile is handled by YT class via DB writes
+        });
+    }
+
+    if (miniPlay) miniPlay.addEventListener('click', () => { gameState.focusYTPlayer?.resume(); miniPlay.style.display='none'; if (miniPause) miniPause.style.display='inline-block'; });
+    if (miniPause) miniPause.addEventListener('click', () => { gameState.focusYTPlayer?.pause(); miniPause.style.display='none'; if (miniPlay) miniPlay.style.display='inline-block'; });
+    if (miniBack) miniBack.addEventListener('click', () => { gameState.focusYTPlayer?.back(10); });
+    if (miniForward) miniForward.addEventListener('click', () => { gameState.focusYTPlayer?.forward(10); });
+    if (miniLoop) miniLoop.addEventListener('change', (e) => { if (gameState.focusYTPlayer) gameState.focusYTPlayer.setLoop(e.target.checked); });
+    if (miniSlider) {
+        let sliding = false;
+        miniSlider.addEventListener('input', async (e) => {
+            if (!gameState.focusYTPlayer || !gameState.focusYTPlayer.player) return;
+            sliding = true;
+            const dur = gameState.focusYTPlayer.player.getDuration() || 0;
+            const pct = parseFloat(e.target.value) / 100;
+            const sec = Math.round(dur * pct);
+            document.getElementById('mini-yt-time').textContent = `${formatTime(sec)} / ${formatTime(dur)}`;
+        });
+        miniSlider.addEventListener('change', async (e) => {
+            if (!gameState.focusYTPlayer || !gameState.focusYTPlayer.player) return;
+            const dur = gameState.focusYTPlayer.player.getDuration() || 0;
+            const pct = parseFloat(e.target.value) / 100;
+            const sec = Math.round(dur * pct);
+            await gameState.focusYTPlayer.seekTo(sec);
+            sliding = false;
+            if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/focusPlayer/timestamp`]: sec });
+        });
+    }
+
+    // Volume slider for YouTube player — sync to Firebase
+    const ytVolSlider = document.getElementById('yt-volume-slider');
+    if (ytVolSlider) {
+        ytVolSlider.addEventListener('input', (e) => {
+            const pct = parseFloat(e.target.value);
+            if (gameState.focusYTPlayer) {
+                gameState.focusYTPlayer.setVolumePercent(pct);
+                if (gameState.userId) {
+                    update(ref(database), { [`users/${gameState.userId}/focusPlayer/volume`]: pct });
+                }
+            }
+        });
+    }
+
+    // Detach the YouTube block from the focus panel and pin it bottom-left
+    const ytBlock = document.getElementById('yt-focus-block');
+    if (ytBlock) {
+        // move to body so it's not semantically inside the mixer
+        document.body.appendChild(ytBlock);
     }
 }
 
@@ -2177,6 +2434,10 @@ function startPomodoroPhase(phase) {
                     gameState.focusAudioEngine.startSound(name);
                 }
             }
+            if (gameState.focusYTPlayer) {
+                gameState.focusYTPlayer.setVolumePercent(Math.round(gameState.focusAudioEngine.overallVolume * 100));
+                gameState.focusYTPlayer.resume();
+            }
         }
     }
     const player = gameState.players[gameState.userId];
@@ -2468,6 +2729,10 @@ function updateAnimation() {
             gameState.anim.phase = 'none';
             gameState.isLockedIn = true;
 
+            if (gameState.focusYTPlayer && gameState.focusYTPlayer.videoId) {
+                gameState.focusYTPlayer.resume();
+            }
+
             if (gameState.pomodoro.active && gameState.pomodoro.phase === 'wait') {
                 startPomodoroPhase('work');
             }
@@ -2676,6 +2941,12 @@ function render() {
 
     drawWindParticles();
     drawFocusFog();
+
+    const ytBlock = document.getElementById('yt-focus-block');
+    if (ytBlock) {
+        const shouldShow = gameState.isLockedIn;
+        ytBlock.classList.toggle('visible', shouldShow);
+    }
 }
 
 function drawRooms() {
@@ -3248,6 +3519,7 @@ function updatePomodoro() {
             // FADE OUT FOCUS SOUNDS
             if (gameState.focusAudioEngine) {
                 gameState.focusAudioEngine.fadeToMaster(0, 1.5);
+                if (gameState.focusYTPlayer) gameState.focusYTPlayer.fadeOutAndPause(1500);
             }
             const panel = document.getElementById('focus-sounds-panel');
             if (panel) panel.classList.remove('active');
@@ -3274,6 +3546,7 @@ function updatePomodoro() {
                 // STOP ALL FOCUS SOUNDS
                 if (gameState.focusAudioEngine) {
                     gameState.focusAudioEngine.stopAll();
+                    if (gameState.focusYTPlayer) gameState.focusYTPlayer.pause();
                 }
                 gameState.pomodoro.transitioning = false;
                 showSuccessModal(gameState.pomodoro.totalSessions, gameState.pomodoro.workDuration, completedTaskText);
@@ -3314,6 +3587,7 @@ function updatePomodoro() {
                 // STOP ALL FOCUS SOUNDS
                 if (gameState.focusAudioEngine) {
                     gameState.focusAudioEngine.stopAll();
+                    if (gameState.focusYTPlayer) gameState.focusYTPlayer.pause();
                 }
                 const panel = document.getElementById('focus-sounds-panel');
                 if (panel) panel.classList.remove('active');

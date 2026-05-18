@@ -240,6 +240,37 @@
                 <input type="range" class="sound-vol" min="0" max="1" step="0.05" value="0.5">
             </div>
         </div>
+        <!-- YouTube Focus Player -->
+        <div id="yt-focus-block" class="yt-focus-block">
+            <div class="yt-input-section">
+                <input type="text" id="yt-url-input" placeholder="أدخل رابط YouTube هنا" autocomplete="off">
+                <button id="yt-load-btn">تحميل</button>
+            </div>
+            <div id="mini-yt-player" class="mini-yt-player">
+                <div class="yt-player-ui">
+                    <img id="mini-yt-cover" src="" alt="cover" class="yt-thumbnail">
+                    <div class="yt-controls-col">
+                        <div id="mini-yt-title" class="yt-title">---</div>
+                        <div class="yt-playback-controls">
+                            <button id="mini-yt-back10" class="yt-btn" title="رجوع 10s">⏪10</button>
+                            <button id="mini-yt-play" class="yt-btn" title="تشغيل">▶</button>
+                            <button id="mini-yt-pause" class="yt-btn" title="إيقاف" style="display:none;">⏸</button>
+                            <button id="mini-yt-forward10" class="yt-btn" title="تقديم 10s">10⏩</button>
+                            <label class="yt-loop-label"><input type="checkbox" id="mini-yt-loop"> تكرار</label>
+                        </div>
+                        <div class="yt-progress-container">
+                            <span id="mini-yt-time">00:00 / 00:00</span>
+                            <input type="range" id="mini-yt-slider" min="0" max="100" value="0">
+                        </div>
+                        <div class="yt-volume-section">
+                            <span class="yt-vol-icon">🔊</span>
+                            <input type="range" id="yt-volume-slider" min="0" max="100" value="80">
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id="yt-iframe-container" style="display:none;"></div>
+        </div>
     </div>
 
     <!-- البرمجيات -->
