@@ -143,7 +143,7 @@
                 <button id="pomodoro-confirm" class="btn-primary" style="width: 100%; font-size: 20px; padding: 15px;">أنا لها</button>
             </div>
             <button id="pomodoro-cancel" class="btn-secondary pomodoro-back-btn">رجوع</button>
-            <button id="pomodoro-test" class="btn-cancel" style="margin-top: 5px; background: none; border: none; color: #aaa; cursor: pointer; text-decoration: underline;">وضع الاختبار</button>
+            <button id="pomodoro-test" class="btn-cancel" style="display:none;margin-top:5px;background:none;border:none;color:#ff9b3a;cursor:pointer;font-weight:600;font-size:13px;letter-spacing:0.5px;">⚡ وضع الاختبار</button>
         </div>
     </div>
 
@@ -278,29 +278,96 @@
                     <button id="yt-load-btn">تحميل</button>
                 </div>
                 <div id="mini-yt-player" class="mini-yt-player">
-                    <div class="yt-player-ui">
-                        <img id="mini-yt-cover" src="" alt="cover" class="yt-thumbnail">
-                        <div class="yt-controls-col">
+                    <div class="yt-ambient" aria-hidden="true">
+                        <img id="yt-ambient-img" src="" alt="">
+                    </div>
+                    <div class="yt-body">
+                        <div class="yt-art-wrap">
+                            <img id="mini-yt-cover" src="" alt="" class="yt-art">
+                        </div>
+                        <div class="yt-info">
                             <div id="mini-yt-title" class="yt-title">---</div>
-                            <div class="yt-playback-controls">
-                                <button id="mini-yt-back10" class="yt-btn" title="رجوع 10s">⏪10</button>
-                                <button id="mini-yt-play" class="yt-btn" title="تشغيل">▶</button>
-                                <button id="mini-yt-pause" class="yt-btn" title="إيقاف" style="display:none;">⏸</button>
-                                <button id="mini-yt-forward10" class="yt-btn" title="تقديم 10s">10⏩</button>
-                                <label class="yt-loop-label"><input type="checkbox" id="mini-yt-loop"> تكرار</label>
+                            <div class="yt-wave-wrap" id="yt-wave-wrap">
+                                <canvas id="yt-waveform" class="yt-waveform"></canvas>
+                                <input type="range" id="mini-yt-slider" min="0" max="100" value="0" style="display:none">
                             </div>
-                            <div class="yt-progress-container">
-                                <span id="mini-yt-time">00:00 / 00:00</span>
-                                <input type="range" id="mini-yt-slider" min="0" max="100" value="0">
+                            <div id="mini-yt-time" class="yt-time">
+                                <span class="yt-time-cur">0:00</span>
+                                <span class="yt-time-dur">0:00</span>
                             </div>
-                            <div class="yt-volume-section">
-                                <span class="yt-vol-icon">🔊</span>
-                                <input type="range" id="yt-volume-slider" min="0" max="100" value="80">
+                            <div class="yt-ctrls">
+                                <button id="mini-yt-repeat" class="yt-btn2" title="تكرار">
+                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                        <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                                        <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+                                    </svg>
+                                </button>
+                                <button id="mini-yt-back10" class="yt-btn2" title="10 ثوانٍ للخلف">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/>
+                                    </svg>
+                                </button>
+                                <button id="mini-yt-playpause" class="yt-btn2 yt-btn-play" title="تشغيل/إيقاف">
+                                    <svg id="yt-icon-play" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                    <svg id="yt-icon-pause" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                                </button>
+                                <button id="mini-yt-forward10" class="yt-btn2" title="10 ثوانٍ للأمام">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                        <polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/>
+                                    </svg>
+                                </button>
+                                <div class="yt-vol">
+                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.55;flex-shrink:0">
+                                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                                    </svg>
+                                    <input type="range" id="yt-volume-slider" min="0" max="100" value="80" class="yt-vol-range">
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
                 <div id="yt-iframe-container" style="display:none;"></div>
+            </div>
+        </div>
+
+        <!-- وضع الاختبار المتقدم (سراج فقط) -->
+        <div id="test-mode-modal" class="modal-overlay">
+            <div class="modal-content test-mode-content">
+                <h3 style="color:white;font-size:20px;font-weight:700;margin-bottom:6px;">وضع الاختبار ⚡</h3>
+                <p style="color:rgba(255,255,255,0.5);font-size:13px;margin-bottom:22px;">اختر مدة دقيقة</p>
+
+                <div class="tm-row">
+                    <span class="tm-label">العمل</span>
+                    <div class="tm-fields">
+                        <div class="tm-field"><input type="number" id="test-work-h" value="0" min="0" max="23"><span>س</span></div>
+                        <div class="tm-sep">:</div>
+                        <div class="tm-field"><input type="number" id="test-work-m" value="0" min="0" max="59"><span>د</span></div>
+                        <div class="tm-sep">:</div>
+                        <div class="tm-field"><input type="number" id="test-work-s" value="5" min="0" max="59"><span>ث</span></div>
+                    </div>
+                </div>
+
+                <div class="tm-row">
+                    <span class="tm-label">الراحة</span>
+                    <div class="tm-fields">
+                        <div class="tm-field"><input type="number" id="test-break-h" value="0" min="0" max="23"><span>س</span></div>
+                        <div class="tm-sep">:</div>
+                        <div class="tm-field"><input type="number" id="test-break-m" value="1" min="0" max="59"><span>د</span></div>
+                        <div class="tm-sep">:</div>
+                        <div class="tm-field"><input type="number" id="test-break-s" value="0" min="0" max="59"><span>ث</span></div>
+                    </div>
+                </div>
+
+                <div class="tm-row tm-sessions-row">
+                    <span class="tm-label">الجلسات</span>
+                    <input type="number" id="test-sessions" value="3" min="1" max="99" class="tm-sessions-input">
+                </div>
+
+                <div class="modal-actions" style="margin-top:24px;">
+                    <button id="test-mode-confirm" class="btn-primary" style="flex:1;">ابدأ</button>
+                    <button id="test-mode-cancel" class="btn-secondary" style="flex:1;">إلغاء</button>
+                </div>
             </div>
         </div>
 

@@ -1,4 +1,4 @@
-import { database, ref, onValue, update, get, onDisconnect, set } from './firebase-config.js';
+import { database, ref, onValue, update, get, onDisconnect, set, remove } from './firebase-config.js';
 
 // ─── Lobby configuration ─────────────────────────────────────────────────────
 // To add a new lobby: add one entry.  The key is the internal lobby ID and must
@@ -18,12 +18,22 @@ const LOBBY_CONFIG = {
     // ← add new lobbies here; no other file changes needed
 };
 
+// Tracks temp Siraj ghost user IDs so they're deleted on disconnect
+const sirajGhosts = [];
+
 // Returns a Firebase path scoped to the active lobby.
 // All minigame and pomodoro data is segregated per lobby.
 function lobbyPath(subpath) {
     const lobby = gameState.selectedLobby;
     if (!lobby) throw new Error('lobbyPath called before lobby was selected');
     return `lobbies/${lobby}/${subpath}`;
+}
+
+// Returns a Firebase path within the current player's active race session.
+function raceSessionPath(subpath) {
+    const key = gameState.race.sessionKey;
+    if (!key) return lobbyPath('minigames/race/sessions/__invalid__');
+    return lobbyPath(`minigames/race/sessions/${key}${subpath ? '/' + subpath : ''}`);
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -282,6 +292,7 @@ class FocusAudioEngine {
 
         const gainNode = sound.nodes.gainNode;
         const nodesToStop = [sound.nodes.source, ...sound.nodes.secondaryNodes];
+        sound.nodes = null; // immediately clear so startSound can restart without blocking
 
         try {
             gainNode.gain.cancelScheduledValues(this.ctx.currentTime);
@@ -293,17 +304,10 @@ class FocusAudioEngine {
 
         setTimeout(() => {
             nodesToStop.forEach(n => {
-                try {
-                    n.stop();
-                } catch(e) {}
-                try {
-                    n.disconnect();
-                } catch(e) {}
+                try { n.stop(); } catch(e) {}
+                try { n.disconnect(); } catch(e) {}
             });
-            if (sound.nodes) {
-                sound.nodes.gainNode.disconnect();
-                sound.nodes = null;
-            }
+            try { gainNode.disconnect(); } catch(e) {}
         }, 600);
     }
 
@@ -423,9 +427,11 @@ class FocusYouTubePlayer {
         this.pollInterval = null;
         this.ready = false;
         this.ui = {};
-        this.volume = 80; // 0-100 for YT
+        this.volume = 80;
         this._ytReady = this._ensureApiLoaded();
         this._fading = false;
+        this._wavePhase = 0;
+        this._waveAnimId = null;
     }
 
     _ensureApiLoaded() {
@@ -460,7 +466,15 @@ class FocusYouTubePlayer {
             playerVars: { controls: 0, modestbranding: 1, rel: 0, playsinline: 1 },
             events: {
                 onReady: () => { this.ready = true; this.player.setVolume(this.volume); if (this._playerReadyResolver) this._playerReadyResolver(); },
-                onStateChange: (e) => { if (e.data === YT.PlayerState.ENDED && this.loop) this.player.playVideo(); }
+                onStateChange: (e) => {
+                    if (e.data === YT.PlayerState.ENDED && this.loop) this.player.playVideo();
+                    const isPlaying = e.data === YT.PlayerState.PLAYING;
+                    const playIcon = document.getElementById('yt-icon-play');
+                    const pauseIcon = document.getElementById('yt-icon-pause');
+                    if (playIcon) playIcon.style.display = isPlaying ? 'none' : 'block';
+                    if (pauseIcon) pauseIcon.style.display = isPlaying ? 'block' : 'none';
+                    if (isPlaying) this._startWaveAnim(); else this._stopWaveAnim();
+                }
             }
         });
     }
@@ -478,8 +492,8 @@ class FocusYouTubePlayer {
             } else {
                 this.player.loadVideoById({ videoId: id, startSeconds: Math.max(0, startSec) });
                 try { this.player.playVideo(); } catch(e) {}
-                this._startPoll();
             }
+            this._startPoll(); // always run poll so display refreshes immediately
             this.player.setVolume(this.volume);
             this._ensureUiVisible(true);
             if (saveToFirebase && gameState.userId) {
@@ -523,9 +537,19 @@ class FocusYouTubePlayer {
         this.seekTo(Math.max(0, now - sec));
     }
 
-    setLoop(v) { this.loop = !!v; if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/focusPlayer/loop`]: this.loop }); }
+    setLoop(v) {
+        this.loop = !!v;
+        const btn = document.getElementById('mini-yt-repeat');
+        if (btn) btn.classList.toggle('active', this.loop);
+        if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/focusPlayer/loop`]: this.loop });
+    }
 
-    setVolumePercent(pct) { this.volume = Math.max(0, Math.min(100, Math.round(pct))); if (this.player && this.ready) this.player.setVolume(this.volume); }
+    setVolumePercent(pct) {
+        this.volume = Math.max(0, Math.min(100, Math.round(pct)));
+        if (this.player && this.ready) this.player.setVolume(this.volume);
+        const s = document.getElementById('yt-volume-slider');
+        if (s) s.style.setProperty('--vp', `${this.volume}%`);
+    }
 
     async fadeOutAndPause(duration = 1500) {
         if (!this.player || this._fading) return;
@@ -554,14 +578,28 @@ class FocusYouTubePlayer {
     _poll() {
         if (!this.player || !this.ready) return;
         try {
+            const state = this.player.getPlayerState();
+            const isPlaying = state === 1; // YT.PlayerState.PLAYING
+            const playIcon = document.getElementById('yt-icon-play');
+            const pauseIcon = document.getElementById('yt-icon-pause');
+            if (playIcon) playIcon.style.display = isPlaying ? 'none' : 'block';
+            if (pauseIcon) pauseIcon.style.display = isPlaying ? 'block' : 'none';
+            if (isPlaying) this._startWaveAnim(); else this._stopWaveAnim();
+
             const dur = this.player.getDuration() || 0;
             const cur = this.player.getCurrentTime() || 0;
-            // update UI
             const slider = document.getElementById('mini-yt-slider');
             const timeEl = document.getElementById('mini-yt-time');
             const titleEl = document.getElementById('mini-yt-title');
             if (slider && dur > 0) slider.value = Math.max(0, Math.min(100, Math.round((cur / dur) * 100)));
-            if (timeEl) timeEl.textContent = `${formatTime(cur)} / ${formatTime(dur)}`;
+            if (timeEl) {
+                const curSpan = timeEl.querySelector('.yt-time-cur');
+                const durSpan = timeEl.querySelector('.yt-time-dur');
+                if (curSpan) curSpan.textContent = formatTime(cur);
+                if (durSpan) durSpan.textContent = formatTime(dur);
+            }
+            // Always draw waveform when not in the rAF animation loop (paused/buffering)
+            if (!this._waveAnimId) this._drawWaveform(dur > 0 ? cur / dur : 0);
             if (titleEl) {
                 try {
                     const data = this.player.getVideoData();
@@ -570,29 +608,99 @@ class FocusYouTubePlayer {
                     titleEl.textContent = `YouTube • ${this.videoId}`;
                 }
             }
-            // persist timestamp occasionally
             if (gameState.userId && (Math.floor(cur) % 5 === 0)) {
                 update(ref(database), { [`users/${gameState.userId}/focusPlayer/timestamp`]: Math.floor(cur) });
             }
         } catch(e) {}
     }
 
+    _drawWaveform(progress) {
+        const canvas = document.getElementById('yt-waveform');
+        if (!canvas) return;
+        // getBoundingClientRect forces layout reflow — always gives the rendered width
+        const W = canvas.getBoundingClientRect().width || canvas.parentElement?.getBoundingClientRect().width || 220;
+        const H = 22;
+        if (W <= 0) return;
+        if (canvas.width !== Math.round(W)) canvas.width = Math.round(W);
+        canvas.height = H;
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, W, H);
+        const p = this._wavePhase;
+        const splitX = Math.round(W * (progress || 0));
+        const A = 1.8, freq = 0.07, yMid = H / 2;
+
+        // Played portion — animated wiggly green line
+        if (splitX > 0) {
+            ctx.beginPath();
+            for (let x = 0; x <= splitX; x++) {
+                const y = yMid + A * Math.sin(x * freq + p);
+                x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            }
+            ctx.strokeStyle = '#1ed760';
+            ctx.lineWidth = 2;
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+        }
+
+        // Unplayed portion — flat static line
+        if (splitX < W) {
+            ctx.beginPath();
+            ctx.moveTo(splitX, yMid);
+            ctx.lineTo(W, yMid);
+            ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+        }
+    }
+
+    _startWaveAnim() {
+        if (this._waveAnimId) return;
+        const draw = () => {
+            this._wavePhase = (this._wavePhase + 0.04) % (Math.PI * 4);
+            if (this.player && this.ready) {
+                try {
+                    const dur = this.player.getDuration() || 0;
+                    const cur = this.player.getCurrentTime() || 0;
+                    this._drawWaveform(dur > 0 ? cur / dur : 0);
+                } catch(e) {}
+            }
+            this._waveAnimId = requestAnimationFrame(draw);
+        };
+        this._waveAnimId = requestAnimationFrame(draw);
+    }
+
+    _stopWaveAnim() {
+        if (this._waveAnimId) { cancelAnimationFrame(this._waveAnimId); this._waveAnimId = null; }
+        if (this.player && this.ready) {
+            try {
+                const dur = this.player.getDuration() || 0;
+                const cur = this.player.getCurrentTime() || 0;
+                this._drawWaveform(dur > 0 ? cur / dur : 0);
+            } catch(e) {}
+        }
+    }
+
     _ensureUiVisible(visible) {
         const mini = document.getElementById('mini-yt-player');
         if (!mini) return;
         if (visible) mini.classList.add('active'); else mini.classList.remove('active');
-        const cover = document.getElementById('mini-yt-cover');
-        if (cover && this.videoId) cover.src = `https://i.ytimg.com/vi/${this.videoId}/hqdefault.jpg`;
+        if (this.videoId) {
+            const src = `https://i.ytimg.com/vi/${this.videoId}/mqdefault.jpg`;
+            const cover = document.getElementById('mini-yt-cover');
+            const ambient = document.getElementById('yt-ambient-img');
+            if (cover) cover.src = src;
+            if (ambient) ambient.src = src;
+        }
     }
 
     async loadFromProfile(profile) {
         if (!profile || !profile.url) return;
         await this.loadUrl(profile.url, profile.timestamp || 0, false, true);
-        if (profile.loop) this.loop = !!profile.loop;
+        if (profile.loop) { this.loop = !!profile.loop; const btn = document.getElementById('mini-yt-repeat'); if (btn) btn.classList.toggle('active', this.loop); }
         if (profile.volume !== undefined) {
             this.setVolumePercent(profile.volume);
             const volSlider = document.getElementById('yt-volume-slider');
-            if (volSlider) volSlider.value = profile.volume;
+            if (volSlider) { volSlider.value = profile.volume; volSlider.style.setProperty('--vp', `${profile.volume}%`); }
         }
         if (gameState.isLockedIn) {
             await this.resume();
@@ -611,7 +719,8 @@ const gameState = {
     assets: {
         bg: new Image(),
         shadow: new Image(),
-        tables: new Image()
+        tables: new Image(),
+        race: new Image()
     },
     sounds: {
         kidnap: new Audio('Sound/LaptopGrab.mp3'),
@@ -638,8 +747,13 @@ const gameState = {
     focusFogAlpha: 0.0,
     focusAudioEngine: null,
     activeRaceButton: false,
+    isSirajGhost: false,
+    activeRaceZone: false,
+    raceZonePlayers: [],
     race: {
         session: null,
+        sessionKey: null,     // key within minigames/race/sessions/
+        activeSessions: {},   // all live sessions keyed by sessionKey
         active: false,
         localCar: null,
         returnPoint: null,
@@ -648,7 +762,8 @@ const gameState = {
         lastSync: 0,
         carVisuals: {},
         camera: { x: 0, y: 0 },
-        track: null
+        track: null,
+        teleportAnim: null
     },
 
     // Animation State
@@ -718,8 +833,14 @@ const BREAK_ROOM_CENTER_Y = BG_HEIGHT;
 const DOOR_WIDTH = 260;
 const DOOR_HALF_WIDTH = DOOR_WIDTH / 2;
 const DOOR_HALF_HEIGHT = 52;
-const RACE_BUTTON = { x: 0, y: BREAK_ROOM_CENTER_Y + 110, radius: 72 };
-const RACE_JOIN_RADIUS = 230;
+const RACE_ZONE_IMG_W = 160;
+const RACE_ZONE_IMG_H = 175;
+const RACE_ZONE_CX = 0;
+const RACE_ZONE_CY = BREAK_ROOM_CENTER_Y + 120;
+const RACE_ZONE_RECT = { x: -65, y: BREAK_ROOM_CENTER_Y + 40, w: 130, h: 148 };
+const RACE_BTN_CX = 0;
+const RACE_BTN_CY = BREAK_ROOM_CENTER_Y + 192;
+const RACE_BTN_R = 26;
 const RACE_LAPS = 3;
 const RACE_TRACK_SRC = 'Art/RaceTrack Var1.png';
 const RACE_TRACK_SCALE = 1;
@@ -1248,8 +1369,8 @@ function syncLaptopsFromPomodoro(data) {
     });
 }
 
-function cleanupStaleRaceSession(session) {
-    if (!session) return false;
+function cleanupStaleRaceSession(session, sessionKey) {
+    if (!session || !sessionKey) return false;
 
     const now = Date.now();
     const raceStartedAt = session.startTime || session.createdAt || 0;
@@ -1259,12 +1380,7 @@ function cleanupStaleRaceSession(session) {
 
     if (!isExpired) return false;
 
-    update(ref(database), { [lobbyPath('minigames/race/current')]: null });
-    if (gameState.race.active) returnFromRace(false);
-    gameState.race.session = null;
-    gameState.race.localCar = null;
-    hideRacePanel();
-    hideRaceHud();
+    update(ref(database), { [lobbyPath(`minigames/race/sessions/${sessionKey}`)]: null });
     return true;
 }
 
@@ -1300,6 +1416,7 @@ function loadAssets() {
     gameState.assets.bg.src = 'Art/Bg.png';
     gameState.assets.shadow.src = 'Art/Shadow.png';
     gameState.assets.tables.src = 'Art/Tables.png';
+    gameState.assets.race.src = 'Art/race.png';
 }
 
 function initWindParticles() {
@@ -1361,7 +1478,11 @@ function setupLobbySelection() {
             <div class="lobby-icon" aria-hidden="true"></div>
             <div class="lobby-label">${cfg.label}</div>
         `;
-        btn.addEventListener('click', () => {
+        btn.addEventListener('click', (e) => {
+            if (e.shiftKey && lobbyId === 'male') {
+                spawnSirajGhost();
+                return;
+            }
             gameState.selectedLobby = lobbyId;
             lobbyScreen.classList.remove('active');
             loginScreen.classList.add('active');
@@ -1369,6 +1490,53 @@ function setupLobbySelection() {
         });
         buttonsWrap.appendChild(btn);
     }
+}
+
+async function spawnSirajGhost() {
+    const hue = Math.floor(Math.random() * 360);
+    const sirajId = `siraj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+    // Render hue-shifted siraj avatar to a data URL
+    let avatarDataUrl = 'Art/siraj.png';
+    try {
+        const img = await new Promise((resolve, reject) => {
+            const i = new Image();
+            i.onload = () => resolve(i);
+            i.onerror = reject;
+            i.src = 'Art/siraj.png';
+        });
+        const offscreen = document.createElement('canvas');
+        offscreen.width = img.naturalWidth;
+        offscreen.height = img.naturalHeight;
+        const octx = offscreen.getContext('2d');
+        octx.filter = `hue-rotate(${hue}deg)`;
+        octx.drawImage(img, 0, 0);
+        avatarDataUrl = offscreen.toDataURL('image/png');
+    } catch (_) {}
+
+    await set(ref(database, `users/${sirajId}`), {
+        username: 'سراج',
+        status: 'in-voice',
+        categoryName: LOBBY_CONFIG.male.categoryName,
+        channelName: 'اختبار',
+        avatar: avatarDataUrl,
+        activeInGame: false,
+        x: 0,
+        y: 0
+    });
+
+    // Delete entire user on disconnect (not just set activeInGame=false)
+    onDisconnect(ref(database, `users/${sirajId}`)).remove();
+    sirajGhosts.push(sirajId);
+
+    gameState.isSirajGhost = true;
+    gameState.selectedLobby = 'male';
+    startGame({
+        userId: sirajId,
+        username: 'سراج',
+        channelName: 'اختبار',
+        avatar: avatarDataUrl
+    });
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -1480,7 +1648,12 @@ function startGame(userData) {
     // Set active presence in game and set up disconnect presence cleanup
     const activeRef = ref(database, `users/${gameState.userId}/activeInGame`);
     set(activeRef, true);
-    onDisconnect(activeRef).set(false);
+    if (gameState.isSirajGhost) {
+        // Siraj ghost: delete entire user entry on disconnect
+        onDisconnect(ref(database, `users/${gameState.userId}`)).remove();
+    } else {
+        onDisconnect(activeRef).set(false);
+    }
 
     document.getElementById('login-screen').classList.remove('active');
     document.getElementById('game-screen').classList.add('active');
@@ -1491,6 +1664,7 @@ function startGame(userData) {
     resizeCanvas();
     setupControls();
     setupPomodoroUI();
+    setupTestModeUI();
     setupRaceUI();
     setupLogout();
     listenToPlayers();
@@ -1628,16 +1802,18 @@ function setupControls() {
     gameState.canvas.addEventListener('mousedown', (e) => {
         const clickWorld = screenToWorld(e.clientX, e.clientY);
         const player = gameState.players[gameState.userId];
-        const clickedRaceButton = player && isBreakActive() && isInBreakRoom(player.y) &&
-            Math.hypot(player.x - RACE_BUTTON.x, player.y - RACE_BUTTON.y) < RACE_BUTTON.radius + PLAYER_SIZE / 2 &&
-            Math.hypot(clickWorld.x - RACE_BUTTON.x, clickWorld.y - RACE_BUTTON.y) < RACE_BUTTON.radius + 12;
-        if (clickedRaceButton) {
-            createRaceLobby();
+        const clickedRaceBtn = player && isBreakActive() && isInBreakRoom(player.y) &&
+            gameState.activeRaceZone &&
+            Math.hypot(clickWorld.x - RACE_BTN_CX, clickWorld.y - RACE_BTN_CY) < RACE_BTN_R + 24;
+        if (clickedRaceBtn) {
+            triggerRaceTeleport();
             return;
         }
         if (gameState.pomodoro.active) return; // Completely disable starting another Pomodoro
         if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
-            if (gameState.activeLaptop.claimedBy) return; // Ignore if claimed
+            if (gameState.activeLaptop.claimedBy) return;
+            const testBtn = document.getElementById('pomodoro-test');
+            if (testBtn) testBtn.style.display = gameState.isSirajGhost ? 'block' : 'none';
             document.getElementById('pomodoro-modal').classList.add('active');
         }
     });
@@ -1757,44 +1933,86 @@ function setupFocusPanelUI() {
     // YouTube focus player UI
     const ytInput = document.getElementById('yt-url-input');
     const ytLoadBtn = document.getElementById('yt-load-btn');
-    const miniPlay = document.getElementById('mini-yt-play');
-    const miniPause = document.getElementById('mini-yt-pause');
+    const miniPlayPause = document.getElementById('mini-yt-playpause');
+    const miniRepeat = document.getElementById('mini-yt-repeat');
     const miniBack = document.getElementById('mini-yt-back10');
     const miniForward = document.getElementById('mini-yt-forward10');
     const miniSlider = document.getElementById('mini-yt-slider');
-    const miniLoop = document.getElementById('mini-yt-loop');
 
     if (ytLoadBtn && ytInput) {
         ytLoadBtn.addEventListener('click', async () => {
             const url = ytInput.value.trim();
             if (!url || !gameState.focusYTPlayer) return;
             await gameState.focusYTPlayer.loadUrl(url, 0, true);
-            // save cover/title to profile is handled by YT class via DB writes
         });
     }
 
-    if (miniPlay) miniPlay.addEventListener('click', () => { gameState.focusYTPlayer?.resume(); miniPlay.style.display='none'; if (miniPause) miniPause.style.display='inline-block'; });
-    if (miniPause) miniPause.addEventListener('click', () => { gameState.focusYTPlayer?.pause(); miniPause.style.display='none'; if (miniPlay) miniPlay.style.display='inline-block'; });
+    if (miniPlayPause) {
+        miniPlayPause.addEventListener('click', () => {
+            if (!gameState.focusYTPlayer?.player) return;
+            const state = gameState.focusYTPlayer.player.getPlayerState?.() ?? -1;
+            if (state === 1) { gameState.focusYTPlayer.pause(); }
+            else { gameState.focusYTPlayer.resume(); }
+        });
+    }
+    if (miniRepeat) {
+        miniRepeat.addEventListener('click', () => {
+            if (!gameState.focusYTPlayer) return;
+            gameState.focusYTPlayer.setLoop(!gameState.focusYTPlayer.loop);
+            miniRepeat.classList.toggle('active', gameState.focusYTPlayer.loop);
+        });
+    }
     if (miniBack) miniBack.addEventListener('click', () => { gameState.focusYTPlayer?.back(10); });
     if (miniForward) miniForward.addEventListener('click', () => { gameState.focusYTPlayer?.forward(10); });
-    if (miniLoop) miniLoop.addEventListener('change', (e) => { if (gameState.focusYTPlayer) gameState.focusYTPlayer.setLoop(e.target.checked); });
-    if (miniSlider) {
-        let sliding = false;
-        miniSlider.addEventListener('input', async (e) => {
-            if (!gameState.focusYTPlayer || !gameState.focusYTPlayer.player) return;
-            sliding = true;
+    // Waveform scrub — use direct mouse position to avoid range-input thumb-offset bugs
+    const waveWrap = document.getElementById('yt-wave-wrap');
+    if (waveWrap) {
+        let dragging = false;
+
+        const getPct = (e) => {
+            const rect = waveWrap.getBoundingClientRect();
+            return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+        };
+
+        const updateTimeDisplay = (sec, dur) => {
+            const timeEl = document.getElementById('mini-yt-time');
+            if (!timeEl) return;
+            const curSpan = timeEl.querySelector('.yt-time-cur');
+            const durSpan = timeEl.querySelector('.yt-time-dur');
+            if (curSpan) curSpan.textContent = formatTime(sec);
+            if (durSpan) durSpan.textContent = formatTime(dur);
+            const slider = document.getElementById('mini-yt-slider');
+            if (slider && dur > 0) slider.value = Math.round((sec / dur) * 100);
+        };
+
+        waveWrap.addEventListener('mousedown', (e) => {
+            if (!gameState.focusYTPlayer?.player) return;
+            dragging = true;
+            const pct = getPct(e);
             const dur = gameState.focusYTPlayer.player.getDuration() || 0;
-            const pct = parseFloat(e.target.value) / 100;
-            const sec = Math.round(dur * pct);
-            document.getElementById('mini-yt-time').textContent = `${formatTime(sec)} / ${formatTime(dur)}`;
+            updateTimeDisplay(dur * pct, dur);
+            if (gameState.focusYTPlayer._waveAnimId == null)
+                gameState.focusYTPlayer._drawWaveform(pct);
+            e.preventDefault();
         });
-        miniSlider.addEventListener('change', async (e) => {
-            if (!gameState.focusYTPlayer || !gameState.focusYTPlayer.player) return;
+
+        window.addEventListener('mousemove', (e) => {
+            if (!dragging || !gameState.focusYTPlayer?.player) return;
+            const pct = getPct(e);
             const dur = gameState.focusYTPlayer.player.getDuration() || 0;
-            const pct = parseFloat(e.target.value) / 100;
+            updateTimeDisplay(dur * pct, dur);
+            gameState.focusYTPlayer._drawWaveform(pct);
+        });
+
+        window.addEventListener('mouseup', async (e) => {
+            if (!dragging) return;
+            dragging = false;
+            if (!gameState.focusYTPlayer?.player) return;
+            const pct = getPct(e);
+            const dur = gameState.focusYTPlayer.player.getDuration() || 0;
             const sec = Math.round(dur * pct);
+            updateTimeDisplay(sec, dur);
             await gameState.focusYTPlayer.seekTo(sec);
-            sliding = false;
             if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/focusPlayer/timestamp`]: sec });
         });
     }
@@ -1802,8 +2020,10 @@ function setupFocusPanelUI() {
     // Volume slider for YouTube player — sync to Firebase
     const ytVolSlider = document.getElementById('yt-volume-slider');
     if (ytVolSlider) {
+        ytVolSlider.style.setProperty('--vp', `${ytVolSlider.value}%`);
         ytVolSlider.addEventListener('input', (e) => {
             const pct = parseFloat(e.target.value);
+            e.target.style.setProperty('--vp', `${pct}%`);
             if (gameState.focusYTPlayer) {
                 gameState.focusYTPlayer.setVolumePercent(pct);
                 if (gameState.userId) {
@@ -1834,9 +2054,9 @@ function setupRaceUI() {
             }
             if (session.phase === 'lobby') {
                 if (session.hostId === gameState.userId) {
-                    update(ref(database), { [lobbyPath('minigames/race/current')]: null });
+                    update(ref(database), { [raceSessionPath()]: null });
                 } else {
-                    update(ref(database), { [lobbyPath(`minigames/race/current/participants/${gameState.userId}`)]: null });
+                    update(ref(database), { [raceSessionPath(`participants/${gameState.userId}`)]: null });
                 }
                 hideRacePanel();
             } else {
@@ -1847,15 +2067,28 @@ function setupRaceUI() {
 }
 
 function listenToRace() {
-    const raceRef = ref(database, lobbyPath('minigames/race/current'));
-    onValue(raceRef, (snapshot) => {
-        const session = snapshot.val();
-        if (cleanupStaleRaceSession(session)) return;
-        const isParticipant = session && session.participants && session.participants[gameState.userId];
+    onValue(ref(database, lobbyPath('minigames/race/sessions')), (snap) => {
+        const sessions = snap.val() || {};
 
-        if (!isParticipant) {
+        // Build active (non-stale) session map and prune stale ones from Firebase
+        const active = {};
+        for (const [key, s] of Object.entries(sessions)) {
+            if (!s) continue;
+            if (cleanupStaleRaceSession(s, key)) continue;
+            active[key] = s;
+        }
+        gameState.race.activeSessions = active;
+
+        // Find the session this player is a participant in
+        let myKey = null, mySession = null;
+        for (const [key, s] of Object.entries(active)) {
+            if (s.participants?.[gameState.userId]) { myKey = key; mySession = s; break; }
+        }
+
+        if (!mySession) {
             if (gameState.race.active) returnFromRace(false);
             gameState.race.session = null;
+            gameState.race.sessionKey = null;
             gameState.race.localCar = null;
             gameState.race.carVisuals = {};
             hideRacePanel();
@@ -1863,23 +2096,41 @@ function listenToRace() {
             return;
         }
 
-        gameState.race.session = session;
-        gameState.race.returnPoint = session.participants[gameState.userId].returnPoint || gameState.race.returnPoint;
+        gameState.race.session = mySession;
+        gameState.race.sessionKey = myKey;
+        gameState.race.returnPoint = mySession.participants[gameState.userId].returnPoint || gameState.race.returnPoint;
 
-        if (session.phase === 'lobby') {
+        if (mySession.phase === 'lobby') {
             gameState.race.active = false;
             gameState.race.localCar = null;
-            showRaceLobby(session);
+            showRaceLobby(mySession);
             hideRaceHud();
-        } else if (session.phase === 'race') {
+        } else if (mySession.phase === 'teleporting') {
             hideRacePanel();
-            startLocalRace(session);
-        } else if (session.phase === 'finished') {
-            // Keep the race rendering active so we can show results in-game
+            if (!gameState.race.teleportAnim) {
+                const elapsed = Math.max(0, (serverNow() - (mySession.teleportAt || serverNow())) / 1000);
+                gameState.race.teleportAnim = {
+                    t: elapsed, phase: 'fly', flyProgress: 0, screenAlpha: 0,
+                    players: Object.keys(mySession.participants || {}).map(uid => {
+                        const p = gameState.players[uid];
+                        return { userId: uid, startX: p ? p.x : 0, startY: p ? p.y : 0 };
+                    }),
+                    pendingSession: null, raceStarted: false,
+                    isHost: mySession.hostId === gameState.userId
+                };
+            }
+        } else if (mySession.phase === 'race') {
+            hideRacePanel();
+            if (gameState.race.teleportAnim) {
+                gameState.race.teleportAnim.pendingSession = gameState.race.teleportAnim.pendingSession || mySession;
+            } else {
+                startLocalRace(mySession);
+            }
+        } else if (mySession.phase === 'finished') {
             gameState.race.active = true;
-            gameState.race.session = session;
+            gameState.race.session = mySession;
             gameState.race.showResultsInGame = true;
-            gameState.race.finishedSession = session;
+            gameState.race.finishedSession = mySession;
             hideRacePanel();
             hideRaceHud();
             scheduleRaceReturn();
@@ -1887,49 +2138,6 @@ function listenToRace() {
     });
 }
 
-async function createRaceLobby() {
-    if (!gameState.userId || !isBreakActive()) return;
-
-    const existing = await get(ref(database, lobbyPath('minigames/race/current')));
-    const existingRace = existing.val();
-    if (existingRace && cleanupStaleRaceSession(existingRace)) {
-        // The stale race was cleared; allow a new lobby to be created below.
-    } else if (existingRace && existingRace.phase !== 'finished' && Date.now() - (existingRace.createdAt || 0) < RACE_MAX_AGE_MS) {
-        showRaceMessage('هناك سباق قائم الآن');
-        return;
-    }
-
-    const player = gameState.players[gameState.userId];
-    if (!player) return;
-
-    const candidates = Object.values(gameState.players)
-        .filter(p => p.userId && Math.hypot(p.x - player.x, p.y - player.y) <= RACE_JOIN_RADIUS)
-        .filter(p => p.userId === gameState.userId || (isInBreakRoom(p.y) && !p.isWorking))
-        .slice(0, 6);
-
-    if (!candidates.some(p => p.userId === gameState.userId)) candidates.unshift(player);
-
-    const participants = {};
-    candidates.forEach((p, index) => {
-        participants[p.userId] = {
-            username: p.username || 'لاعب',
-            avatar: p.avatar || '',
-            index,
-            returnPoint: { x: p.x, y: p.y }
-        };
-    });
-
-    const raceId = `${gameState.userId}_${Date.now()}`;
-    update(ref(database), {
-        [lobbyPath('minigames/race/current')]: {
-            id: raceId,
-            hostId: gameState.userId,
-            phase: 'lobby',
-            createdAt: Date.now(),
-            participants
-        }
-    });
-}
 
 function showRaceLobby(session) {
     const panel = document.getElementById('race-panel');
@@ -2033,11 +2241,10 @@ function startHostedRace() {
     });
 
     update(ref(database), {
-        [lobbyPath('minigames/race/current/phase')]: 'race',
-        // Use server-synced time so all clients start together
-        [lobbyPath('minigames/race/current/startTime')]: serverNow() + 3500,
-        [lobbyPath('minigames/race/current/cars')]: cars,
-        [lobbyPath('minigames/race/current/results')]: null
+        [raceSessionPath('phase')]: 'race',
+        [raceSessionPath('startTime')]: serverNow() + 3500,
+        [raceSessionPath('cars')]: cars,
+        [raceSessionPath('results')]: null
     });
 }
 
@@ -2094,7 +2301,7 @@ function updateRaceMode() {
     if (!session || !car) return;
 
     if (!isBreakActive()) {
-        if (session.hostId === gameState.userId) update(ref(database), { [lobbyPath('minigames/race/current')]: null });
+        if (session.hostId === gameState.userId) update(ref(database), { [raceSessionPath()]: null });
         returnFromRace(false);
         return;
     }
@@ -2146,13 +2353,13 @@ function updateRaceMode() {
         const participants = Object.keys(session.participants || {});
         const results = { ...(session.results || {}), [gameState.userId]: { finishTime, username: car.username } };
         const updates = {
-            [lobbyPath(`minigames/race/current/results/${gameState.userId}`)]: { finishTime, username: car.username },
-            [lobbyPath(`minigames/race/current/cars/${gameState.userId}/finished`)]: true,
-            [lobbyPath(`minigames/race/current/cars/${gameState.userId}/lap`)]: RACE_LAPS
+            [raceSessionPath(`results/${gameState.userId}`)]: { finishTime, username: car.username },
+            [raceSessionPath(`cars/${gameState.userId}/finished`)]: true,
+            [raceSessionPath(`cars/${gameState.userId}/lap`)]: RACE_LAPS
         };
         if (participants.every(id => results[id])) {
-            updates[lobbyPath('minigames/race/current/phase')] = 'finished';
-            updates[lobbyPath('minigames/race/current/finishedAt')] = Date.now();
+            updates[raceSessionPath('phase')] = 'finished';
+            updates[raceSessionPath('finishedAt')] = Date.now();
         }
         update(ref(database), updates);
     }
@@ -2193,15 +2400,10 @@ function syncRaceCar(force) {
     const car = gameState.race.localCar;
     if (!car || !gameState.race.session) return;
     update(ref(database), {
-        [lobbyPath(`minigames/race/current/cars/${gameState.userId}`)]: {
+        [raceSessionPath(`cars/${gameState.userId}`)]: {
             username: car.username,
-            x: car.x,
-            y: car.y,
-            angle: car.angle,
-            speed: car.speed,
-            distance: car.distance,
-            lap: car.lap,
-            finished: car.finished || false
+            x: car.x, y: car.y, angle: car.angle, speed: car.speed,
+            distance: car.distance, lap: car.lap, finished: car.finished || false
         }
     });
 }
@@ -2211,7 +2413,7 @@ function scheduleRaceReturn() {
     gameState.race.finishReturnTimer = setTimeout(() => returnFromRace(true), 8000);
     if (gameState.race.session && gameState.race.session.hostId === gameState.userId) {
         setTimeout(() => {
-            update(ref(database), { [lobbyPath('minigames/race/current')]: null });
+            update(ref(database), { [raceSessionPath()]: null });
         }, 11000);
     }
 }
@@ -2230,6 +2432,7 @@ function returnFromRace(clearPanel) {
     gameState.race.active = false;
     gameState.race.localCar = null;
     gameState.race.carVisuals = {};
+    gameState.race.camera = { x: 0, y: 0 };
     gameState.race.localResultSent = false;
     // Clear working flag so others know the player is no longer racing
     if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/isWorking`]: false });
@@ -2288,32 +2491,7 @@ function setupPomodoroUI() {
     if (testBtn) {
         testBtn.addEventListener('click', () => {
             modal.classList.remove('active');
-            if (Notification.permission !== "granted" && Notification.permission !== "denied") Notification.requestPermission();
-            const laptop = gameState.lastActiveLaptop;
-            if (!laptop || laptop.claimedBy) return;
-
-            gameState.pomodoro.active = true;
-            gameState.pomodoro.laptopId = laptop.id;
-            gameState.pomodoro.workDuration = 10 / 60; // 10 seconds
-            gameState.pomodoro.breakDuration = 10 / 60; // 10 seconds
-            gameState.pomodoro.sessionsLeft = 3;
-            gameState.pomodoro.totalSessions = 3;
-            gameState.pomodoro.createdAt = Date.now();
-            gameState.pomodoro.phase = 'wait';
-
-            const updates = {};
-            updates[lobbyPath(`pomodoro/${laptop.id}`)] = {
-                claimedBy: gameState.userId,
-                phase: 'wait',
-                endTime: 0,
-                workDuration: 10 / 60,
-                breakDuration: 10 / 60,
-                sessionsLeft: 3,
-                totalSessions: 3,
-                createdAt: Date.now()
-            };
-            update(ref(database), updates);
-            startKidnapAnimation(laptop);
+            document.getElementById('test-mode-modal').classList.add('active');
         });
     }
 
@@ -2360,6 +2538,62 @@ function setupPomodoroUI() {
         };
         update(ref(database), updates);
 
+        startKidnapAnimation(laptop);
+    });
+}
+
+function setupTestModeUI() {
+    const modal = document.getElementById('test-mode-modal');
+    const cancelBtn = document.getElementById('test-mode-cancel');
+    const confirmBtn = document.getElementById('test-mode-confirm');
+    if (!modal || !cancelBtn || !confirmBtn) return;
+
+    cancelBtn.addEventListener('click', () => modal.classList.remove('active'));
+
+    confirmBtn.addEventListener('click', () => {
+        const getNum = (id, fallback = 0) => Math.max(0, parseInt(document.getElementById(id)?.value) || fallback);
+        const workH = getNum('test-work-h');
+        const workM = getNum('test-work-m');
+        const workS = getNum('test-work-s');
+        const breakH = getNum('test-break-h');
+        const breakM = getNum('test-break-m');
+        const breakS = getNum('test-break-s');
+        const sessions = Math.max(1, getNum('test-sessions', 3));
+
+        const workMins = workH * 60 + workM + workS / 60;
+        const breakMins = breakH * 60 + breakM + breakS / 60;
+        if (workMins <= 0) return;
+
+        modal.classList.remove('active');
+        if (Notification.permission !== 'granted' && Notification.permission !== 'denied') Notification.requestPermission();
+
+        const laptop = gameState.lastActiveLaptop;
+        if (!laptop || laptop.claimedBy) return;
+
+        gameState.pomodoro.active = true;
+        gameState.pomodoro.laptopId = laptop.id;
+        gameState.pomodoro.workDuration = workMins;
+        gameState.pomodoro.breakDuration = breakMins;
+        gameState.pomodoro.sessionsLeft = sessions;
+        gameState.pomodoro.totalSessions = sessions;
+        gameState.pomodoro.createdAt = Date.now();
+        gameState.pomodoro.phase = 'wait';
+
+        const updates = {};
+        updates[lobbyPath(`pomodoro/${laptop.id}`)] = {
+            claimedBy: gameState.userId,
+            phase: 'wait',
+            endTime: 0,
+            workDuration: workMins,
+            breakDuration: breakMins,
+            sessionsLeft: sessions,
+            totalSessions: sessions,
+            createdAt: Date.now()
+        };
+        update(ref(database), updates);
+        if (gameState.isSirajGhost) {
+            onDisconnect(ref(database, lobbyPath(`pomodoro/${laptop.id}`))).remove();
+        }
         startKidnapAnimation(laptop);
     });
 }
@@ -2469,11 +2703,25 @@ function listenToPomodoro() {
 function setupLogout() {
     document.getElementById('logout-btn').addEventListener('click', () => {
         if (gameState.userId) {
-            set(ref(database, `users/${gameState.userId}/activeInGame`), false).then(() => {
-                window.location.reload();
-            }).catch(() => {
-                window.location.reload();
-            });
+            if (gameState.isSirajGhost) {
+                const cleanups = { [`users/${gameState.userId}`]: null };
+                if (gameState.pomodoro.active && gameState.pomodoro.laptopId) {
+                    cleanups[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}`)] = null;
+                }
+                const raceSession = gameState.race.session;
+                const raceSessionKey = gameState.race.sessionKey;
+                if (raceSession && raceSessionKey && (raceSession.hostId === gameState.userId ||
+                    raceSession.phase === 'teleporting')) {
+                    cleanups[lobbyPath(`minigames/race/sessions/${raceSessionKey}`)] = null;
+                }
+                update(ref(database), cleanups)
+                    .then(() => window.location.reload())
+                    .catch(() => window.location.reload());
+            } else {
+                set(ref(database, `users/${gameState.userId}/activeInGame`), false)
+                    .then(() => window.location.reload())
+                    .catch(() => window.location.reload());
+            }
         } else {
             window.location.reload();
         }
@@ -2684,9 +2932,21 @@ function updateInteractions() {
         }
     });
 
+    gameState.raceZonePlayers = isBreakActive() ? Object.values(gameState.players).filter(p => {
+        if (!(p.x >= RACE_ZONE_RECT.x && p.x <= RACE_ZONE_RECT.x + RACE_ZONE_RECT.w &&
+              p.y >= RACE_ZONE_RECT.y && p.y <= RACE_ZONE_RECT.y + RACE_ZONE_RECT.h)) return false;
+        // Exclude players already committed to a race session
+        const sessions = Object.values(gameState.race.activeSessions || {});
+        return !sessions.some(s => s && s.phase !== 'finished' && s.participants?.[p.userId]);
+    }) : [];
+
     if (isBreakActive() && isInBreakRoom(player.y)) {
-        const raceDist = Math.hypot(player.x - RACE_BUTTON.x, player.y - RACE_BUTTON.y);
-        gameState.activeRaceButton = raceDist < RACE_BUTTON.radius + PLAYER_SIZE / 2;
+        gameState.activeRaceZone = player.x >= RACE_ZONE_RECT.x && player.x <= RACE_ZONE_RECT.x + RACE_ZONE_RECT.w &&
+                                   player.y >= RACE_ZONE_RECT.y && player.y <= RACE_ZONE_RECT.y + RACE_ZONE_RECT.h;
+        gameState.activeRaceButton = gameState.activeRaceZone;
+    } else {
+        gameState.activeRaceZone = false;
+        gameState.activeRaceButton = false;
     }
 
     const baseAlpha = gameState.isLockedIn ? 0.95 : 0.8;
@@ -2874,12 +3134,14 @@ function gameLoop(timestamp) {
     gameState.dtFactor = deltaTime / 16.666; // Standardize to 60fps (1000ms / 60 = 16.666ms)
 
     updatePomodoro();
+    updateTeleportAnim();
     cleanupStaleRaceSession(gameState.race.session);
     if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'race') {
         updateRaceMode();
         updateRaceCarVisuals();
         updateRaceCamera();
         renderRace();
+        drawTeleportOverlay();
         requestAnimationFrame(gameLoop);
         return;
     }
@@ -2924,7 +3186,7 @@ function render() {
         ctx.drawImage(gameState.assets.tables, TABLE_BOX.minX, TABLE_BOX.minY, TABLE_WIDTH, TABLE_HEIGHT);
     }
     drawBreakDoor();
-    drawRaceButton();
+    drawRaceMachine();
 
     drawConnections();
 
@@ -2938,7 +3200,7 @@ function render() {
 
     drawRoomShadows();
     drawBreakDoor();
-    drawRacePrompt();
+    drawRaceHint();
 
     if (gameState.isLockedIn) {
         drawLockedInOverlay();
@@ -2952,6 +3214,7 @@ function render() {
 
     drawWindParticles();
     drawFocusFog();
+    drawTeleportOverlay();
 
     const ytBlock = document.getElementById('yt-focus-block');
     if (ytBlock) {
@@ -3014,58 +3277,232 @@ function drawBreakDoor() {
     ctx.restore();
 }
 
-function drawRaceButton() {
+function drawRaceMachine() {
     const ctx = gameState.ctx;
-    const active = gameState.activeRaceButton;
-    const enabled = isBreakActive();
+    if (!isBreakActive()) return;
+
+    const img = gameState.assets.race;
+    if (!img || !img.complete || !img.naturalWidth) return;
+
+    const cx = RACE_ZONE_CX;
+    const cy = RACE_ZONE_CY;
 
     ctx.save();
     ctx.imageSmoothingEnabled = false;
-    ctx.translate(RACE_BUTTON.x, RACE_BUTTON.y);
-    ctx.shadowBlur = active ? 18 : 8;
-    ctx.shadowColor = enabled ? 'rgba(244, 200, 43, 0.5)' : 'rgba(0, 0, 0, 0.35)';
-    ctx.fillStyle = enabled ? '#f4c82b' : '#6b5b45';
-    drawPixelDiamond(ctx, 0, 0, 72, 8);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = active ? '#ffffff' : '#2b2418';
-    drawPixelDiamondOutline(ctx, 0, 0, 80, 8);
 
-    ctx.fillStyle = '#262626';
-    ctx.font = 'bold 24px Rubik';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('سباق', 0, -5);
-    ctx.font = 'bold 16px Rubik';
-    ctx.fillText('3 لفات', 0, 24);
+    if (gameState.activeRaceButton && !gameState.race.teleportAnim) {
+        ctx.shadowBlur = 28;
+        ctx.shadowColor = 'rgba(220, 100, 30, 0.7)';
+    }
+
+    ctx.drawImage(img, cx - RACE_ZONE_IMG_W / 2, cy - RACE_ZONE_IMG_H / 2, RACE_ZONE_IMG_W, RACE_ZONE_IMG_H);
+    ctx.shadowBlur = 0;
+
+    const zonePlayers = gameState.raceZonePlayers;
+    if (zonePlayers.length > 0 && !gameState.race.teleportAnim) {
+        drawReadyList(ctx, cx, cy - RACE_ZONE_IMG_H / 2 - 6, zonePlayers);
+    }
+
     ctx.restore();
 }
 
-function drawPixelDiamond(ctx, x, y, radius, block) {
-    for (let row = -radius; row <= radius; row += block) {
-        const width = radius * 2 - Math.abs(row) * 2;
-        ctx.fillRect(x - width / 2, y + row, width, block);
-    }
+function drawReadyList(ctx, cx, bottomY, players) {
+    const rowH = 34;
+    const listW = 158;
+    const padTop = 22;
+    const listH = players.length * rowH + padTop + 4;
+    const listX = cx - listW / 2;
+    const listY = bottomY - listH - 6;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(8, 10, 20, 0.88)';
+    drawRoundedRectPath(ctx, listX, listY, listW, listH, 10);
+    ctx.fill();
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+    ctx.lineWidth = 1;
+    drawRoundedRectPath(ctx, listX, listY, listW, listH, 10);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(180, 180, 200, 0.7)';
+    ctx.font = 'bold 12px Rubik';
+    ctx.textAlign = 'center';
+    ctx.fillText('جاهزون للسباق', cx, listY + 15);
+
+    players.forEach((p, i) => {
+        const rowY = listY + padTop + i * rowH;
+        const avatarR = 12;
+        const avatarX = listX + 22;
+        const avatarCY = rowY + rowH / 2;
+
+        ctx.beginPath();
+        ctx.arc(avatarX, avatarCY, avatarR, 0, Math.PI * 2);
+        ctx.fillStyle = p.userId === gameState.userId ? COLORS.blue : '#444';
+        ctx.fill();
+
+        const avImg = gameState.avatarCache[p.userId];
+        if (avImg && avImg !== 'failed') {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(avatarX, avatarCY, avatarR, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.imageSmoothingEnabled = true;
+            ctx.drawImage(avImg, avatarX - avatarR, avatarCY - avatarR, avatarR * 2, avatarR * 2);
+            ctx.restore();
+        }
+
+        ctx.fillStyle = 'white';
+        ctx.font = '13px Rubik';
+        ctx.textAlign = 'left';
+        ctx.fillText((p.username || '?').slice(0, 12), listX + 40, avatarCY + 4);
+
+        ctx.fillStyle = '#4caf50';
+        ctx.font = 'bold 11px Rubik';
+        ctx.textAlign = 'right';
+        ctx.fillText('✓ جاهز', listX + listW - 8, avatarCY + 4);
+    });
+
+    ctx.restore();
 }
 
-function drawPixelDiamondOutline(ctx, x, y, radius, block) {
-    for (let row = -radius; row <= radius; row += block) {
-        const width = radius * 2 - Math.abs(row) * 2;
-        ctx.fillRect(x - width / 2 - block, y + row, block, block);
-        ctx.fillRect(x + width / 2, y + row, block, block);
-    }
-}
-
-function drawRacePrompt() {
-    if (!gameState.activeRaceButton) return;
+function drawRaceHint() {
+    if (gameState.race.teleportAnim) return;
+    if (!gameState.activeRaceZone) return;
     const ctx = gameState.ctx;
     ctx.save();
     ctx.fillStyle = 'white';
-    ctx.font = 'bold 16px Rubik';
+    ctx.font = 'bold 13px Rubik';
     ctx.textAlign = 'center';
     ctx.shadowBlur = 6;
     ctx.shadowColor = 'black';
-    ctx.fillText('انقر للسباق', RACE_BUTTON.x, RACE_BUTTON.y - RACE_BUTTON.radius - 22);
+    ctx.fillText('اضغط زر البدء', RACE_ZONE_CX, RACE_BTN_CY - RACE_BTN_R - 10);
     ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+async function triggerRaceTeleport() {
+    if (!gameState.userId || !isBreakActive()) return;
+    if (gameState.race.teleportAnim) return;
+    if (gameState.race.active) return;
+
+    const zonePlayers = [...gameState.raceZonePlayers];
+    if (zonePlayers.length === 0) return;
+
+    if (!isRaceTrackReady()) {
+        showRaceMessage('جاري تحميل حلبة السباق، حاول مرة أخرى');
+        return;
+    }
+
+    // Block if this player is already in an active session
+    const alreadyInRace = Object.values(gameState.race.activeSessions || {}).some(
+        s => s && s.participants?.[gameState.userId]
+    );
+    if (alreadyInRace) return;
+
+    const sessionId = `${gameState.userId}_${Date.now()}`;
+
+    if (gameState.isSirajGhost) {
+        onDisconnect(ref(database, lobbyPath(`minigames/race/sessions/${sessionId}`))).remove();
+    }
+
+    const participants = {};
+    zonePlayers.forEach((p, index) => {
+        participants[p.userId] = {
+            username: p.username || 'لاعب',
+            avatar: p.avatar || '',
+            index,
+            returnPoint: { x: p.x, y: p.y }
+        };
+    });
+
+    // Write 'teleporting' phase — ALL participants react to this and start animation in sync
+    update(ref(database), {
+        [lobbyPath(`minigames/race/sessions/${sessionId}`)]: {
+            id: sessionId,
+            hostId: gameState.userId,
+            phase: 'teleporting',
+            createdAt: Date.now(),
+            teleportAt: serverNow(),
+            participants
+        }
+    });
+}
+
+function createRaceFromParticipants() {
+    const session = gameState.race.session;
+    if (!session || !session.participants || !isRaceTrackReady()) return;
+
+    const cars = {};
+    Object.keys(session.participants).forEach(userId => {
+        const p = session.participants[userId];
+        cars[userId] = createRaceCar(p.index || 0, p.username || 'لاعب');
+    });
+
+    update(ref(database), {
+        [raceSessionPath('phase')]: 'race',
+        [raceSessionPath('startTime')]: serverNow() + 3000,
+        [raceSessionPath('cars')]: cars,
+        [raceSessionPath('results')]: null
+    });
+}
+
+function updateTeleportAnim() {
+    const anim = gameState.race.teleportAnim;
+    if (!anim) return;
+
+    const FLY_DUR = 0.45;
+    const FADE_DUR = 0.30;
+    const HOLD_DUR = 0.40;
+    const FADEIN_DUR = 0.60;
+
+    anim.t += gameState.dtFactor / 60;
+
+    const tryStartRace = () => {
+        if (anim.pendingSession && !anim.raceStarted) {
+            anim.raceStarted = true;
+            startLocalRace(anim.pendingSession);
+        }
+    };
+
+    if (anim.t < FLY_DUR) {
+        anim.phase = 'fly';
+        anim.flyProgress = anim.t / FLY_DUR;
+        anim.screenAlpha = 0;
+    } else if (anim.t < FLY_DUR + FADE_DUR) {
+        anim.phase = 'fade';
+        anim.flyProgress = 1;
+        anim.screenAlpha = (anim.t - FLY_DUR) / FADE_DUR;
+    } else if (anim.t < FLY_DUR + FADE_DUR + HOLD_DUR) {
+        anim.phase = 'hold';
+        anim.flyProgress = 1;
+        anim.screenAlpha = 1;
+        // Host triggers race creation once during hold
+        if (anim.isHost && !anim.raceCreated) {
+            anim.raceCreated = true;
+            createRaceFromParticipants();
+        }
+        tryStartRace();
+    } else if (anim.t < FLY_DUR + FADE_DUR + HOLD_DUR + FADEIN_DUR) {
+        anim.phase = 'fadein';
+        anim.flyProgress = 1;
+        anim.screenAlpha = 1 - (anim.t - FLY_DUR - FADE_DUR - HOLD_DUR) / FADEIN_DUR;
+        tryStartRace();
+    } else {
+        tryStartRace();
+        gameState.race.teleportAnim = null;
+    }
+}
+
+function drawTeleportOverlay() {
+    const anim = gameState.race.teleportAnim;
+    if (!anim || anim.screenAlpha < 0.01) return;
+    const ctx = gameState.ctx;
+    const canvas = gameState.canvas;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, anim.screenAlpha);
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.globalAlpha = 1;
     ctx.restore();
 }
 
@@ -3918,12 +4355,20 @@ function blendHexColors(fromHex, toHex, t) {
 
 function drawPlayers(onlyLocal = false) {
     const ctx = gameState.ctx;
+    const teleportAnim = gameState.race.teleportAnim;
+
     for (const player of Object.values(gameState.players)) {
         const isCurrentUser = player.userId === gameState.userId;
         if (onlyLocal && !isCurrentUser) continue;
 
         const { x: screenX, y: renderY } = getPlayerRenderPos(player);
         const screenY = renderY - (player.bobOffset || 0);
+
+        // Teleport animation overrides
+        const tpData = teleportAnim && teleportAnim.players.find(tp => tp.userId === player.userId);
+        const tpFly = tpData ? easeOutExpo(teleportAnim.flyProgress || 0) : 0;
+        const tpFlyOffsetY = tpFly * -110;
+        const tpFadeOut = tpData ? Math.min(1, tpFly * 1.4) : 0;
 
         const isWorking = isCurrentUser ?
             (gameState.isLockedIn && gameState.pomodoro.active && gameState.pomodoro.phase === 'work') :
@@ -3936,7 +4381,7 @@ function drawPlayers(onlyLocal = false) {
         let workScaleX = 1.0;
         let workScaleY = 1.0;
 
-        if (isWorking) {
+        if (isWorking && !tpData) {
             const workT = Date.now() * 0.005;
             workBob = Math.sin(workT) * 3;
             workAngle = Math.sin(workT * 0.5) * 0.08;
@@ -3950,7 +4395,8 @@ function drawPlayers(onlyLocal = false) {
         const mutedRing = '#8a8a8a';
 
         ctx.save();
-        ctx.translate(screenX, screenY + workBob);
+        if (tpFadeOut > 0.01) ctx.globalAlpha = 1 - tpFadeOut;
+        ctx.translate(screenX, screenY + workBob + tpFlyOffsetY);
         ctx.rotate(workAngle);
         ctx.scale(workScaleX, workScaleY);
 
@@ -3964,9 +4410,7 @@ function drawPlayers(onlyLocal = false) {
         ctx.shadowOffsetY = 4 + (player.bobOffset || 0);
         ctx.beginPath();
         ctx.arc(0, 0, (PLAYER_SIZE / 2) + 4, 0, Math.PI * 2);
-        ctx.fillStyle = grayMix > 0.01
-            ? blendHexColors(ringColor, mutedRing, grayMix)
-            : ringColor;
+        ctx.fillStyle = grayMix > 0.01 ? blendHexColors(ringColor, mutedRing, grayMix) : ringColor;
         ctx.fill();
         ctx.shadowBlur = 0;
         ctx.shadowOffsetY = 0;
@@ -3996,11 +4440,12 @@ function drawPlayers(onlyLocal = false) {
             ctx.fillText(player.username.charAt(0).toUpperCase(), 0, 0);
         }
         ctx.restore();
+
         ctx.filter = 'none';
         ctx.globalAlpha = 1;
         ctx.restore(); // restores translate, rotate, scale
 
-        if (player.nameAlpha > 0.01) {
+        if (player.nameAlpha > 0.01 && !tpData) {
             ctx.fillStyle = `rgba(255, 255, 255, ${player.nameAlpha})`;
             ctx.font = '500 14px Rubik';
             ctx.textAlign = 'center';
