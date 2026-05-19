@@ -2295,7 +2295,7 @@ function setupPomodoroUI() {
             gameState.pomodoro.active = true;
             gameState.pomodoro.laptopId = laptop.id;
             gameState.pomodoro.workDuration = 10 / 60; // 10 seconds
-            gameState.pomodoro.breakDuration = 3; // 3 minutes
+            gameState.pomodoro.breakDuration = 10 / 60; // 10 seconds
             gameState.pomodoro.sessionsLeft = 3;
             gameState.pomodoro.totalSessions = 3;
             gameState.pomodoro.createdAt = Date.now();
@@ -2307,7 +2307,7 @@ function setupPomodoroUI() {
                 phase: 'wait',
                 endTime: 0,
                 workDuration: 10 / 60,
-                breakDuration: 3,
+                breakDuration: 10 / 60,
                 sessionsLeft: 3,
                 totalSessions: 3,
                 createdAt: Date.now()
@@ -2742,12 +2742,10 @@ function updateAnimation() {
             gameState.anim.phase = 'none';
             gameState.isLockedIn = true;
 
-            if (gameState.focusYTPlayer && gameState.focusYTPlayer.videoId) {
-                gameState.focusYTPlayer.resume();
-            }
-
             if (gameState.pomodoro.active && gameState.pomodoro.phase === 'wait') {
                 startPomodoroPhase('work');
+            } else if (gameState.pomodoro.active && gameState.pomodoro.phase === 'work' && gameState.focusYTPlayer && gameState.focusYTPlayer.videoId) {
+                gameState.focusYTPlayer.resume();
             }
         }
     }
@@ -3527,8 +3525,8 @@ function enforceAudioFailsafe() {
 }
 
 function updatePomodoro() {
-    if (!gameState.pomodoro.active) return;
     enforceAudioFailsafe();
+    if (!gameState.pomodoro.active) return;
 
     const now = Date.now();
     const remaining = Math.max(0, gameState.pomodoro.endTime - now);
