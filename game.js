@@ -4354,6 +4354,11 @@ function updateCoffeeMode() {
     });
 
     if (matchOver) {
+        // Fade out applause quickly when match ends
+        if (gameState.coffee.applausePlayed) {
+            fadeOutAudio(gameState.sounds.minigameApplause, 350);
+            gameState.coffee.applausePlayed = false;
+        }
         if (!gameState.coffee.localResultSent) {
             gameState.coffee.localResultSent = true;
             update(ref(database), {
@@ -4432,7 +4437,7 @@ function updateCoffeeMode() {
                 });
             } else {
                 mug.score++;
-                mug.flashFrames = 2.5; mug.flashType = 'good';
+                mug.flashFrames = 7; mug.flashType = 'good';
                 spawnCatchParticles(sx, mugSY, 'good');
                 addCoffeeShake(7, 0.83);
                 // Play collect sound (cloned so rapid catches overlap)
@@ -4605,7 +4610,7 @@ function renderCoffee() {
                 oc.height  = COFFEE_MUG_H;
                 const octx = oc.getContext('2d');
                 octx.drawImage(mugImg, 0, 0, COFFEE_MUG_W, COFFEE_MUG_H);
-                const flashAlpha = Math.min(1, mug.flashFrames / 2.5) * 0.72;
+                const flashAlpha = Math.min(1, mug.flashFrames / 7) * 0.92;
                 octx.globalAlpha = flashAlpha;
                 octx.globalCompositeOperation = 'source-atop';
                 octx.fillStyle = mug.flashType === 'bad' ? '#ff3030' : '#ffffff';
