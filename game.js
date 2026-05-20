@@ -742,6 +742,8 @@ const gameState = {
         minigameCountdown:       new Audio('Sound/Minigame_Racing_Countdown.mp3'),
         minigameCoffeeCountdown: new Audio('Sound/Minigame_Coffee_Countdown.mp3'),
         minigameCoffeeCollect:   new Audio('Sound/Minigame_Coffee_Collect.mp3'),
+        minigameCoffeeBad:       new Audio('Sound/Minigame_Coffee_Collect_Bad.mp3'),
+        minigameCoffeeTimerClose: new Audio('Sound/Minigame_Coffee_TimerClose.mp3'),
         minigameApplause:        new Audio('Sound/Minigame_Aplause.mp3'),
     },
     canvas: null,
@@ -789,6 +791,8 @@ const gameState = {
         readyFallbackTimer: null,
         countdownSoundPlayed: false,
         applausePlayed:     false,
+        timerClosePlayed:   false,
+        sugarParticles: [],
         _mouseMoveHandler:  null,
         _touchMoveHandler:  null,
     },
@@ -852,6 +856,8 @@ gameState.sounds.minigameButtonPressed.preload = 'auto';
 gameState.sounds.minigameCountdown.preload       = 'auto';
 gameState.sounds.minigameCoffeeCountdown.preload = 'auto';
 gameState.sounds.minigameCoffeeCollect.preload   = 'auto';
+gameState.sounds.minigameCoffeeBad.preload       = 'auto';
+gameState.sounds.minigameCoffeeTimerClose.preload = 'auto';
 gameState.sounds.minigameApplause.preload        = 'auto';
 
 // Constants
@@ -4177,6 +4183,8 @@ function returnFromCoffee(clearState) {
     gameState.coffee.active           = false;
     gameState.coffee.localMug         = null;
     gameState.coffee.catchParticles   = [];
+    gameState.coffee.sugarParticles   = [];
+    gameState.coffee.timerClosePlayed = false;
     gameState.coffee.shakeX           = 0;
     gameState.coffee.shakeY           = 0;
     gameState.coffee.shakeDecay       = 0;
@@ -4266,6 +4274,13 @@ function updateCoffeeMode() {
         // Tilt toward velocity direction, snap back when still
         const targetTilt = mug.velX * 9;    // ±0.25 rad ≈ ±14° at max speed
         mug.tilt += (targetTilt - mug.tilt) * Math.min(1, 0.14 * gameState.dtFactor);
+
+        // Timer-close sound: 5 s before end
+        const remaining = COFFEE_MATCH_MS - elapsed;
+        if (remaining <= 5000 && remaining > 0 && !gameState.coffee.timerClosePlayed) {
+            gameState.coffee.timerClosePlayed = true;
+            playSoundRobust(gameState.sounds.minigameCoffeeTimerClose);
+        }
     }
 
     // Tick down catch flash
@@ -4290,6 +4305,38 @@ function updateCoffeeMode() {
         gameState.coffee.shakeX = 0;
         gameState.coffee.shakeY = 0;
     }
+
+    // Spawn white pixel particles from falling sugars
+    const sugarsForParticles = session.sugars || {};
+    for (const [, sugar] of Object.entries(sugarsForParticles)) {
+        if (sugar.caughtBy !== null && sugar.caughtBy !== undefined) continue;
+        const prog = (now - sugar.spawnTime) / sugar.fallDuration;
+        if (prog < 0 || prog > 1) continue;
+        if (Math.random() < 0.18) {
+            const canvas = gameState.canvas;
+            const dpr = gameState.dpr || 1;
+            const W2 = canvas.width / dpr;
+            const H2 = canvas.height / dpr;
+            const mugSY2 = H2 * COFFEE_MUG_Y_FRAC;
+            gameState.coffee.sugarParticles.push({
+                x:    sugar.x * W2 + (Math.random() - 0.5) * COFFEE_SUGAR_W * 0.6,
+                y:    prog * mugSY2,
+                vy:   0.6 + Math.random() * 1.4,
+                vx:   (Math.random() - 0.5) * 0.8,
+                life: 22 + Math.random() * 18,
+                maxLife: 40,
+                size: 2,   // pixelated = always 2px square
+            });
+        }
+    }
+    // Tick sugar particles
+    gameState.coffee.sugarParticles = gameState.coffee.sugarParticles.filter(p => {
+        p.x  += p.vx * gameState.dtFactor;
+        p.y  += p.vy * gameState.dtFactor;
+        p.vy += 0.06 * gameState.dtFactor; // gentle gravity
+        p.life -= gameState.dtFactor;
+        return p.life > 0;
+    });
 
     // Update particles
     gameState.coffee.catchParticles = gameState.coffee.catchParticles.filter(p => {
@@ -4367,12 +4414,16 @@ function updateCoffeeMode() {
         if (sy >= mugSY - 28 && sy <= mugSY + 22 && Math.abs(sx - mugSX) < COFFEE_CATCH_HALF) {
             update(ref(database), { [coffeeSessionPath(`sugars/${sid}/caughtBy`)]: gameState.userId });
             if (sugar.type === 'bad') {
-                mug.alive = false;
-                mug.flashFrames = 4; mug.flashType = 'bad';
+                mug.score = Math.max(0, mug.score - 3);
+                mug.flashFrames = 5; mug.flashType = 'bad';
                 spawnCatchParticles(sx, mugSY, 'bad');
-                addCoffeeShake(24, 0.77);
+                addCoffeeShake(40, 0.72);
+                // Play bad collect sound (cloned so overlapping works)
+                const badSnd = gameState.sounds.minigameCoffeeBad.cloneNode();
+                badSnd.volume = 1;
+                badSnd.play().catch(() => {});
                 update(ref(database), {
-                    [coffeeSessionPath(`participants/${gameState.userId}/alive`)]: false
+                    [coffeeSessionPath(`participants/${gameState.userId}/score`)]: mug.score
                 });
             } else {
                 mug.score++;
@@ -4499,6 +4550,18 @@ function renderCoffee() {
         ctx.restore();
     });
 
+    // White pixel particles from sugars
+    gameState.coffee.sugarParticles.forEach(p => {
+        const alpha = Math.max(0, p.life / p.maxLife) * 0.85;
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = '#ffffff';
+        // Disable anti-aliasing for pixelated look
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillRect(Math.round(p.x + shX), Math.round(p.y + shY), p.size, p.size);
+        ctx.restore();
+    });
+
     // Ghost mugs (other players) — use client-side smoothed position
     const mugImg = gameState.assets.coffeeMug;
     Object.entries(session.participants || {}).forEach(([uid, participant]) => {
@@ -4531,12 +4594,13 @@ function renderCoffee() {
         if (mugImg && mugImg.complete && mugImg.naturalWidth) {
             ctx.drawImage(mugImg, -COFFEE_MUG_W / 2, -COFFEE_MUG_H / 2, COFFEE_MUG_W, COFFEE_MUG_H);
         }
-        // Flash overlay using 'screen' blend so it brightens without covering the image
+        // Flash overlay using 'source-atop' so it only tints opaque mug pixels
         if (mug.flashFrames > 0) {
-            const flashAlpha = Math.min(1, mug.flashFrames / 2.5) * 0.88;
-            ctx.globalCompositeOperation = 'screen';
+            const flashAlpha = Math.min(1, mug.flashFrames / 2.5) * 0.72;
+            // Redraw mug as color-tinted mask using source-atop
             ctx.globalAlpha = flashAlpha;
-            ctx.fillStyle   = mug.flashType === 'bad' ? '#ff2020' : '#ffffff';
+            ctx.globalCompositeOperation = 'source-atop';
+            ctx.fillStyle = mug.flashType === 'bad' ? '#ff3030' : '#ffffff';
             ctx.fillRect(-COFFEE_MUG_W / 2, -COFFEE_MUG_H / 2, COFFEE_MUG_W, COFFEE_MUG_H);
         }
         ctx.restore();
@@ -4610,7 +4674,7 @@ function drawCoffeeHud(W, H, elapsed, session, mug) {
     const now       = serverNow();
     const gameActive = startTime > 0 && now >= startTime;
 
-    const listW  = 160;
+    const listW  = 200;
     const listX  = W - listW - 10;
     let   listY  = 14;
 
@@ -4639,9 +4703,9 @@ function drawCoffeeHud(W, H, elapsed, session, mug) {
     // ── Leaderboard (always visible during coffee game) ─────────────
     const participants = Object.entries(session.participants || {})
         .sort(([, a], [, b]) => (b.score || 0) - (a.score || 0));
-    const rowH    = 34;
-    const avSize  = 22;
-    const headerH = 24;
+    const rowH    = 40;
+    const avSize  = 28;
+    const headerH = 28;
     const panelH  = headerH + participants.length * rowH + 6;
 
     ctx.save();
@@ -4657,7 +4721,7 @@ function drawCoffeeHud(W, H, elapsed, session, mug) {
     }
     // Header label
     ctx.fillStyle    = 'rgba(244,200,43,0.7)';
-    ctx.font         = 'bold 11px Rubik';
+    ctx.font         = 'bold 12px Rubik';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText('الترتيب ☕', listX + listW / 2, listY + headerH / 2);
@@ -4700,14 +4764,14 @@ function drawCoffeeHud(W, H, elapsed, session, mug) {
 
         // Name
         ctx.fillStyle    = dead ? '#555' : (isLocal ? '#f4c82b' : 'rgba(255,255,255,0.85)');
-        ctx.font         = `${isLocal ? 'bold ' : ''}12px Rubik`;
+        ctx.font         = `${isLocal ? 'bold ' : ''}14px Rubik`;
         ctx.textAlign    = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText((p.username || '?').slice(0, 9), listX + 10 + avSize + 4, acy);
 
         // Score / dead
         ctx.fillStyle = dead ? '#666' : '#f4c82b';
-        ctx.font      = 'bold 13px Rubik';
+        ctx.font      = 'bold 14px Rubik';
         ctx.textAlign = 'right';
         ctx.fillText(dead ? '💀' : `${p.score || 0}`, listX + listW - 8, acy);
     });
