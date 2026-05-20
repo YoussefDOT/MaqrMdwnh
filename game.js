@@ -1657,6 +1657,11 @@ async function spawnSirajGhost() {
 
     gameState.isSirajGhost = true;
     gameState.selectedLobby = 'male';
+    // Hide lobby + login screens before entering game
+    const _ls = document.getElementById('lobby-screen');
+    const _li = document.getElementById('login-screen');
+    if (_ls) _ls.classList.remove('active');
+    if (_li) _li.classList.remove('active');
     startGame({
         userId: sirajId,
         username: 'سراج',
