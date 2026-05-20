@@ -5785,6 +5785,26 @@ function updatePomodoro() {
     const now = Date.now();
     const remaining = Math.max(0, gameState.pomodoro.endTime - now);
 
+    // Safety net: if transitioning flag is stuck (timer expired but transition never completed),
+    // force-reset after 2 s so the transition can re-fire.
+    if (gameState.pomodoro.transitioning && gameState.pomodoro.endTime > 0 && now >= gameState.pomodoro.endTime) {
+        if (!gameState.pomodoro._transStuckAt) {
+            gameState.pomodoro._transStuckAt = now;
+        } else if (now - gameState.pomodoro._transStuckAt > 2000) {
+            console.warn('[pomo] transitioning stuck >2s — force-resetting', {
+                phase: gameState.pomodoro.phase,
+                isLockedIn: gameState.isLockedIn,
+                breakDuration: gameState.pomodoro.breakDuration,
+                sessionsLeft: gameState.pomodoro.sessionsLeft,
+            });
+            gameState.pomodoro.transitioning = false;
+            gameState.isLockedIn = false;
+            gameState.pomodoro._transStuckAt = null;
+        }
+    } else {
+        gameState.pomodoro._transStuckAt = null;
+    }
+
     const largeTimer = document.getElementById('pomodoro-large-timer');
     const smallTimer = document.getElementById('pomodoro-small-timer');
 
@@ -5799,15 +5819,23 @@ function updatePomodoro() {
         document.getElementById('large-session-text').textContent = `جلسة ${gameState.pomodoro.totalSessions - gameState.pomodoro.sessionsLeft + 1} من ${gameState.pomodoro.totalSessions}`;
 
         if (remaining === 0 && !gameState.pomodoro.transitioning) {
+            console.log('[pomo] work→break: starting transition', {
+                sessionsLeft: gameState.pomodoro.sessionsLeft,
+                breakDuration: gameState.pomodoro.breakDuration,
+                isLockedIn: gameState.isLockedIn,
+                isMobile: isMobile(),
+            });
             gameState.pomodoro.transitioning = true;
             largeTimer.classList.add('hidden');
             gameState.isLockedIn = false;
 
             // FADE OUT FOCUS SOUNDS
-            if (gameState.focusAudioEngine) {
-                gameState.focusAudioEngine.fadeToMaster(0, 1.5);
-                if (gameState.focusYTPlayer) gameState.focusYTPlayer.fadeOutAndPause(1500);
-            }
+            try {
+                if (gameState.focusAudioEngine) {
+                    gameState.focusAudioEngine.fadeToMaster(0, 1.5);
+                    if (gameState.focusYTPlayer) gameState.focusYTPlayer.fadeOutAndPause(1500);
+                }
+            } catch(e) { console.error('[pomo] audio fade error:', e); }
             const panel = document.getElementById('focus-sounds-panel');
             if (panel) panel.classList.remove('active');
             const taskPanel = document.getElementById('current-task-panel');
@@ -5821,34 +5849,35 @@ function updatePomodoro() {
 
             if (shouldEndAfterThisTimer) {
                 // END SESSION
-                const completedTaskText = getCurrentTaskText();
-                gameState.pomodoro.active = false;
-                const updates = {};
-                updates[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}`)] = null;
-                update(ref(database), updates);
-                gameState.pomodoro.laptopId = null;
-                if (Notification.permission === "granted") {
-                    new Notification("مدونة ستوديو", { body: "لقد أتممت جميع جلسات العمل بنجاح!" });
+                try {
+                    const completedTaskText = getCurrentTaskText();
+                    gameState.pomodoro.active = false;
+                    const updates = {};
+                    updates[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}`)] = null;
+                    update(ref(database), updates);
+                    gameState.pomodoro.laptopId = null;
+                    try { if (Notification.permission === "granted") new Notification("مدونة ستوديو", { body: "لقد أتممت جميع جلسات العمل بنجاح!" }); } catch(e) {}
+                    if (gameState.focusAudioEngine) {
+                        gameState.focusAudioEngine.stopAll();
+                        if (gameState.focusYTPlayer) gameState.focusYTPlayer.pause();
+                    }
+                    gameState.pomodoro.transitioning = false;
+                    showSuccessModal(gameState.pomodoro.totalSessions, gameState.pomodoro.workDuration, completedTaskText);
+                } catch(e) {
+                    console.error('[pomo] session-end error:', e);
+                    gameState.pomodoro.transitioning = false;
                 }
-
-                // STOP ALL FOCUS SOUNDS
-                if (gameState.focusAudioEngine) {
-                    gameState.focusAudioEngine.stopAll();
-                    if (gameState.focusYTPlayer) gameState.focusYTPlayer.pause();
-                }
-                gameState.pomodoro.transitioning = false;
-                showSuccessModal(gameState.pomodoro.totalSessions, gameState.pomodoro.workDuration, completedTaskText);
             } else {
                 // GO TO BREAK
-                if (gameState.focusAudioEngine) {
-                    gameState.focusAudioEngine.playEffect('timeBreak');
-                } else {
-                    playSoundRobust(gameState.sounds.timeBreak);
-                }
-                if (Notification.permission === "granted") {
-                    new Notification("مدونة ستوديو", { body: "انتهت جلسة العمل! وقت الراحة." });
-                }
-
+                try {
+                    if (gameState.focusAudioEngine) {
+                        gameState.focusAudioEngine.playEffect('timeBreak');
+                    } else {
+                        playSoundRobust(gameState.sounds.timeBreak);
+                    }
+                } catch(e) {}
+                try { if (Notification.permission === "granted") new Notification("مدونة ستوديو", { body: "انتهت جلسة العمل! وقت الراحة." }); } catch(e) {}
+                console.log('[pomo] calling startPomodoroPhase(break)', { breakDuration: gameState.pomodoro.breakDuration });
                 startPomodoroPhase('break');
             }
         }
