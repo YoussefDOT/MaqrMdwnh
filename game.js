@@ -1786,6 +1786,22 @@ function audioObjPlayHelper(el) {
     return el.play();
 }
 
+// Pool of pre-loaded Audio instances per src — avoids cloneNode() unreliability.
+// Finds a free (paused/ended) instance; creates a new one if all are busy.
+const _audioPool = {};
+function playPooledSound(src, volume = 1) {
+    if (!_audioPool[src]) _audioPool[src] = [];
+    const pool = _audioPool[src];
+    let audio = pool.find(a => a.paused || a.ended);
+    if (!audio) {
+        audio = new Audio(src);
+        pool.push(audio);
+    }
+    audio.volume = volume;
+    audio.currentTime = 0;
+    audio.play().catch(() => {});
+}
+
 /**
  * Play the "player ready" minigame sound with distance-based volume
  * and a small random pitch shift for variety.
@@ -4445,9 +4461,7 @@ function updateCoffeeMode() {
                 spawnCatchParticles(sx, mugSY, 'bad');
                 addCoffeeShake(40, 0.72);
                 // Play bad collect sound (cloned so overlapping works)
-                const badSnd = gameState.sounds.minigameCoffeeBad.cloneNode();
-                badSnd.volume = 1;
-                badSnd.play().catch(() => {});
+                playPooledSound('Sound/Minigame_Coffee_Collect_Bad.mp3');
                 update(ref(database), {
                     [coffeeSessionPath(`participants/${gameState.userId}/score`)]: mug.score
                 });
@@ -4457,9 +4471,7 @@ function updateCoffeeMode() {
                 spawnCatchParticles(sx, mugSY, 'good');
                 addCoffeeShake(7, 0.83);
                 // Play collect sound (cloned so rapid catches overlap)
-                const collectSnd = gameState.sounds.minigameCoffeeCollect.cloneNode();
-                collectSnd.volume = 1;
-                collectSnd.play().catch(() => {});
+                playPooledSound('Sound/Minigame_Coffee_Collect.mp3');
                 update(ref(database), {
                     [coffeeSessionPath(`participants/${gameState.userId}/score`)]: mug.score
                 });
