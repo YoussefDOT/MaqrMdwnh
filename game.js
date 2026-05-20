@@ -726,7 +726,11 @@ const gameState = {
         bg: new Image(),
         shadow: new Image(),
         tables: new Image(),
-        race: new Image()
+        race: new Image(),
+        coffeeZone:     new Image(),
+        coffeeMug:      new Image(),
+        coffeeSugar:    new Image(),
+        coffeeBadSugar: new Image(),
     },
     sounds: {
         kidnap:                new Audio('Sound/LaptopGrab.mp3'),
@@ -735,7 +739,10 @@ const gameState = {
         yipee:                 new Audio('Sound/Yipee.mp3'),
         minigameReady:         new Audio('Sound/Minigame_Ready.mp3'),
         minigameButtonPressed: new Audio('Sound/Minigame_ButtonPressed.mp3'),
-        minigameCountdown:     new Audio('Sound/Minigame_Racing_Countdown.mp3'),
+        minigameCountdown:       new Audio('Sound/Minigame_Racing_Countdown.mp3'),
+        minigameCoffeeCountdown: new Audio('Sound/Minigame_Coffee_Countdown.mp3'),
+        minigameCoffeeCollect:   new Audio('Sound/Minigame_Coffee_Collect.mp3'),
+        minigameApplause:        new Audio('Sound/Minigame_Aplause.mp3'),
     },
     canvas: null,
     ctx: null,
@@ -759,6 +766,32 @@ const gameState = {
     isSirajGhost: false,
     activeRaceZone: false,
     raceZonePlayers: [],
+    activeCoffeeZone: false,
+    coffeeZonePlayers: [],
+    coffee: {
+        session:            null,
+        sessionKey:         null,
+        activeSessions:     {},
+        active:             false,
+        localMug:           null,
+        returnPoint:        null,
+        teleportAnim:       null,
+        localResultSent:    false,
+        showResultsInGame:  false,
+        resultsButtonRect:  null,
+        lastMugSync:        0,
+        lastSugarSpawn:     0,
+        shakeX:             0,
+        shakeY:             0,
+        shakeDecay:         0,
+        catchParticles:     [],
+        startTimeScheduled: false,
+        readyFallbackTimer: null,
+        countdownSoundPlayed: false,
+        applausePlayed:     false,
+        _mouseMoveHandler:  null,
+        _touchMoveHandler:  null,
+    },
     race: {
         session: null,
         sessionKey: null,     // key within minigames/race/sessions/
@@ -772,7 +805,10 @@ const gameState = {
         carVisuals: {},
         camera: { x: 0, y: 0, angle: 0 },
         track: null,
-        teleportAnim: null
+        teleportAnim: null,
+        startTimeScheduled: false,
+        readyFallbackTimer: null,
+        applausePlayed: false,
     },
 
     // Mobile joystick state
@@ -813,7 +849,10 @@ gameState.sounds.timeReturn.preload            = 'auto';
 gameState.sounds.yipee.preload                 = 'auto';
 gameState.sounds.minigameReady.preload         = 'auto';
 gameState.sounds.minigameButtonPressed.preload = 'auto';
-gameState.sounds.minigameCountdown.preload     = 'auto';
+gameState.sounds.minigameCountdown.preload       = 'auto';
+gameState.sounds.minigameCoffeeCountdown.preload = 'auto';
+gameState.sounds.minigameCoffeeCollect.preload   = 'auto';
+gameState.sounds.minigameApplause.preload        = 'auto';
 
 // Constants
 const COLORS = {
@@ -876,6 +915,23 @@ const RACE_MIN_LAP_DIST = 600;
 const RACE_CAR_SCALE = 0.5; // 50% size
 // Make cars 75% of the previous (current) speed: 1.5 * 0.75 = 1.125
 const RACE_SPEED_FACTOR = 1.125; // 112.5% of baseline, 75% of prior 1.5 tuning
+
+// Coffee catch minigame
+const COFFEE_ZONE_IMG_W  = 150;
+const COFFEE_ZONE_IMG_H  = 165;
+const COFFEE_ZONE_CX     = 280;
+const COFFEE_ZONE_CY     = BREAK_ROOM_CENTER_Y + 115;
+const COFFEE_ZONE_RECT   = { x: 205, y: BREAK_ROOM_CENTER_Y + 35, w: 150, h: 152 };
+const COFFEE_BTN_CX      = 280;
+const COFFEE_BTN_CY      = BREAK_ROOM_CENTER_Y + 192;
+const COFFEE_BTN_R       = 26;
+const COFFEE_MATCH_MS    = 30000;  // 30 s match
+const COFFEE_MUG_W       = 82;
+const COFFEE_MUG_H       = 92;
+const COFFEE_MUG_Y_FRAC  = 0.80;  // mug center Y as fraction of screen H
+const COFFEE_SUGAR_W     = 48;
+const COFFEE_SUGAR_H     = 48;
+const COFFEE_CATCH_HALF  = 52;    // half-width of catch hitbox
 
 // World Boundaries (Updated for new BG size)
 const BOUNDS = {
@@ -1456,6 +1512,10 @@ function loadAssets() {
     gameState.assets.shadow.src = 'Art/Shadow.png';
     gameState.assets.tables.src = 'Art/Tables.png';
     gameState.assets.race.src = 'Art/race.png';
+    gameState.assets.coffeeZone.src     = 'Art/Coffee.png';
+    gameState.assets.coffeeMug.src      = 'Art/Coffee mug.png';
+    gameState.assets.coffeeSugar.src    = 'Art/Sugar.png';
+    gameState.assets.coffeeBadSugar.src = 'Art/Bad suger.png';
 }
 
 function initWindParticles() {
@@ -1692,6 +1752,25 @@ function playSoundRobust(audioElement) {
     }
 }
 
+function fadeOutAudio(audio, durationMs = 900) {
+    if (!audio || audio.paused) return;
+    const startVol = audio.volume > 0 ? audio.volume : 1;
+    const steps    = 18;
+    const stepTime = durationMs / steps;
+    const volStep  = startVol / steps;
+    let step = 0;
+    const iv = setInterval(() => {
+        step++;
+        audio.volume = Math.max(0, startVol - volStep * step);
+        if (step >= steps) {
+            clearInterval(iv);
+            audio.pause();
+            audio.currentTime = 0;
+            try { audio.volume = 1; } catch(e) {}
+        }
+    }, stepTime);
+}
+
 function audioObjPlayHelper(el) {
     return el.play();
 }
@@ -1755,6 +1834,7 @@ function startGame(userData) {
     listenToPlayers();
     listenToPomodoro();
     listenToRace();
+    listenToCoffee();
     // Track server time offset so race start/countdown is synchronized across clients
     const offsetRef = ref(database, '.info/serverTimeOffset');
     onValue(offsetRef, (snap) => {
@@ -1903,6 +1983,10 @@ function setupControls() {
             triggerRaceTeleport();
             return;
         }
+        const clickedCoffeeBtn = player && isBreakActive() && isInBreakRoom(player.y) &&
+            gameState.activeCoffeeZone &&
+            Math.hypot(clickWorld.x - COFFEE_BTN_CX, clickWorld.y - COFFEE_BTN_CY) < COFFEE_BTN_R + 24;
+        if (clickedCoffeeBtn) { triggerCoffeeTeleport(); return; }
         if (gameState.pomodoro.active) return; // Completely disable starting another Pomodoro
         if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
             if (gameState.activeLaptop.claimedBy) return;
@@ -1914,17 +1998,24 @@ function setupControls() {
 
     // Handle clicks on the in-game results overlay 'عودة' button
     gameState.canvas.addEventListener('click', (e) => {
-        if (!gameState.race || !gameState.race.showResultsInGame) return;
         const rect = gameState.canvas.getBoundingClientRect();
         const cx = e.clientX - rect.left;
         const cy = e.clientY - rect.top;
-        const btn = gameState.race.resultsButtonRect;
-        if (btn && cx >= btn.x && cx <= btn.x + btn.w && cy >= btn.y && cy <= btn.y + btn.h) {
-            // User clicked return button in results overlay
-            returnFromRace(true);
-            gameState.race.showResultsInGame = false;
-            gameState.race.finishedSession = null;
-            gameState.race.resultsButtonRect = null;
+        if (gameState.race && gameState.race.showResultsInGame) {
+            const btn = gameState.race.resultsButtonRect;
+            if (btn && cx >= btn.x && cx <= btn.x + btn.w && cy >= btn.y && cy <= btn.y + btn.h) {
+                // User clicked return button in results overlay
+                returnFromRace(true);
+                gameState.race.showResultsInGame = false;
+                gameState.race.finishedSession = null;
+                gameState.race.resultsButtonRect = null;
+            }
+        }
+        if (!gameState.race.showResultsInGame && gameState.coffee && gameState.coffee.showResultsInGame) {
+            const cbtn = gameState.coffee.resultsButtonRect;
+            if (cbtn && cx >= cbtn.x && cx <= cbtn.x + cbtn.w && cy >= cbtn.y && cy <= cbtn.y + cbtn.h) {
+                returnFromCoffee(true);
+            }
         }
     });
 
@@ -2334,6 +2425,10 @@ function initMobileControls() {
                 gameState.activeRaceZone &&
                 Math.hypot(clickWorld.x - RACE_BTN_CX, clickWorld.y - RACE_BTN_CY) < RACE_BTN_R + 24;
             if (clickedRaceBtn) { triggerRaceTeleport(); return; }
+            const clickedCoffeeBtn = player && isBreakActive() && isInBreakRoom(player.y) &&
+                gameState.activeCoffeeZone &&
+                Math.hypot(clickWorld.x - COFFEE_BTN_CX, clickWorld.y - COFFEE_BTN_CY) < COFFEE_BTN_R + 24;
+            if (clickedCoffeeBtn) { triggerCoffeeTeleport(); return; }
 
             // Check results button tap
             if (gameState.race && gameState.race.showResultsInGame) {
@@ -2491,6 +2586,35 @@ function listenToRace() {
                 };
             }
         } else if (mySession.phase === 'race') {
+            // Host: watch for all-ready then set startTime (1-second minimum wait)
+            if (mySession.hostId === gameState.userId && mySession.startTime === 0) {
+                const parts = Object.values(mySession.participants || {});
+                const allReady = parts.length > 0 && parts.every(p => p.ready);
+                if (allReady && !gameState.race.startTimeScheduled) {
+                    gameState.race.startTimeScheduled = true;
+                    const newestReady = Math.max(...parts.map(p => p.ready || 0));
+                    const delay = Math.max(0, newestReady + 1000 - serverNow());
+                    setTimeout(() => {
+                        update(ref(database), { [raceSessionPath('startTime')]: serverNow() + 3500 });
+                        gameState.race.startTimeScheduled = false;
+                    }, delay);
+                }
+                if (!gameState.race.readyFallbackTimer) {
+                    gameState.race.readyFallbackTimer = setTimeout(() => {
+                        if (gameState.race.session?.startTime === 0) {
+                            update(ref(database), { [raceSessionPath('startTime')]: serverNow() + 3500 });
+                        }
+                        gameState.race.readyFallbackTimer = null;
+                    }, 5000);
+                }
+            }
+            if (mySession.startTime > 0) {
+                gameState.race.startTimeScheduled = false;
+                if (gameState.race.readyFallbackTimer) {
+                    clearTimeout(gameState.race.readyFallbackTimer);
+                    gameState.race.readyFallbackTimer = null;
+                }
+            }
             hideRacePanel();
             if (gameState.race.teleportAnim) {
                 gameState.race.teleportAnim.pendingSession = gameState.race.teleportAnim.pendingSession || mySession;
@@ -2613,7 +2737,7 @@ function startHostedRace() {
 
     update(ref(database), {
         [raceSessionPath('phase')]: 'race',
-        [raceSessionPath('startTime')]: serverNow() + 3500,
+        [raceSessionPath('startTime')]: 0,
         [raceSessionPath('cars')]: cars,
         [raceSessionPath('results')]: null
     });
@@ -2645,7 +2769,10 @@ function startLocalRace(session) {
     gameState.race.camera.angle = isMobile() ? -(car.angle + Math.PI / 2) : 0;
     gameState.race.countdownSoundPlayed = false;
     // Mark this user as working so others see avatar bobbing while racing
-    update(ref(database), { [`users/${gameState.userId}/isWorking`]: true });
+    update(ref(database), {
+        [raceSessionPath(`participants/${gameState.userId}/ready`)]: serverNow(),
+        [`users/${gameState.userId}/isWorking`]: true
+    });
 }
 
 function createRaceCar(index, username) {
@@ -2683,12 +2810,12 @@ function updateRaceMode() {
     }
 
     const now = serverNow();
-    // Play countdown sound once when the pre-race countdown begins
-    if (now < (session.startTime || 0) && !gameState.race.countdownSoundPlayed) {
+    // Play countdown sound once when countdown is actually ticking (startTime set and in future)
+    if (session.startTime > 0 && now < session.startTime && !gameState.race.countdownSoundPlayed) {
         gameState.race.countdownSoundPlayed = true;
         playSoundRobust(gameState.sounds.minigameCountdown);
     }
-    if (now < (session.startTime || 0) || car.finished) return;
+    if (session.startTime === 0 || now < (session.startTime || 1) || car.finished) return;
 
     const up    = gameState.keys['KeyW'] || gameState.keys['ArrowUp']    || gameState.raceButtons.forward;
     const down  = gameState.keys['KeyS'] || gameState.keys['ArrowDown']  || gameState.raceButtons.backward;
@@ -2771,6 +2898,14 @@ function updateRaceProgress(car) {
             car.lapDistance = 0;
             car.canCountLap = false;
             car.leftFinishZone = false;
+            // Start looping applause on final lap
+            if (car.lap >= RACE_LAPS && !gameState.race.applausePlayed) {
+                gameState.race.applausePlayed = true;
+                const ap = gameState.sounds.minigameApplause;
+                ap.loop = true;
+                ap.volume = 1;
+                playSoundRobust(ap);
+            }
         }
     }
 
@@ -2810,6 +2945,10 @@ function returnFromRace(clearPanel) {
         clearTimeout(gameState.race.finishReturnTimer);
         gameState.race.finishReturnTimer = null;
     }
+    // Fade out applause if playing
+    const ap = gameState.sounds.minigameApplause;
+    if (ap) { ap.loop = false; fadeOutAudio(ap, 900); }
+    gameState.race.applausePlayed = false;
     const player = gameState.players[gameState.userId];
     const returnPoint = gameState.race.returnPoint;
     if (player && returnPoint) {
@@ -3379,6 +3518,31 @@ function updateInteractions() {
         gameState.activeRaceButton = false;
     }
 
+    // Coffee zone
+    const prevCoffeeZonePlayers = gameState.coffeeZonePlayers || [];
+    gameState.coffeeZonePlayers = isBreakActive() ? Object.values(gameState.players).filter(p => {
+        if (!(p.x >= COFFEE_ZONE_RECT.x && p.x <= COFFEE_ZONE_RECT.x + COFFEE_ZONE_RECT.w &&
+              p.y >= COFFEE_ZONE_RECT.y && p.y <= COFFEE_ZONE_RECT.y + COFFEE_ZONE_RECT.h)) return false;
+        const sessions = Object.values(gameState.coffee.activeSessions || {});
+        return !sessions.some(s => s && s.phase !== 'finished' && s.participants?.[p.userId]);
+    }) : [];
+    // Play ready sound for newly-entered coffee zone players
+    if (!gameState.coffee.active) {
+        const prevCoffeeIds = new Set(prevCoffeeZonePlayers.map(p => p.userId));
+        gameState.coffeeZonePlayers.filter(p => !prevCoffeeIds.has(p.userId)).forEach(p => {
+            const dist = Math.hypot(p.x - player.x, p.y - player.y);
+            const vol  = Math.max(0, 1 - Math.max(0, dist - 80) / 370);
+            if (vol > 0.04) playMinigameReadySound(vol);
+        });
+    }
+    if (isBreakActive() && isInBreakRoom(player.y)) {
+        gameState.activeCoffeeZone =
+            player.x >= COFFEE_ZONE_RECT.x && player.x <= COFFEE_ZONE_RECT.x + COFFEE_ZONE_RECT.w &&
+            player.y >= COFFEE_ZONE_RECT.y && player.y <= COFFEE_ZONE_RECT.y + COFFEE_ZONE_RECT.h;
+    } else {
+        gameState.activeCoffeeZone = false;
+    }
+
     const baseAlpha = gameState.isLockedIn ? 0.95 : 0.8;
     let targetAlpha = (gameState.activeLaptop || gameState.isLockedIn) ? Math.min(baseAlpha, (1 - minDist / 120) * 1.5 || baseAlpha) : 0;
 
@@ -3567,6 +3731,7 @@ function gameLoop(timestamp) {
 
     updatePomodoro();
     updateTeleportAnim();
+    updateCoffeeTeleportAnim();
     cleanupStaleRaceSession(gameState.race.session);
     if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'race') {
         updateRaceMode();
@@ -3581,6 +3746,13 @@ function gameLoop(timestamp) {
         updateRaceCarVisuals();
         updateRaceCamera();
         renderRace();
+        requestAnimationFrame(gameLoop);
+        return;
+    }
+    if (gameState.coffee.active && gameState.coffee.session &&
+        (gameState.coffee.session.phase === 'active' || gameState.coffee.session.phase === 'finished')) {
+        updateCoffeeMode();
+        renderCoffee();
         requestAnimationFrame(gameLoop);
         return;
     }
@@ -3626,6 +3798,7 @@ function render() {
     }
     drawBreakDoor();
     drawRaceMachine();
+    drawCoffeeMachine();
 
     drawConnections();
 
@@ -3640,6 +3813,7 @@ function render() {
     drawRoomShadows();
     drawBreakDoor();
     drawRaceHint();
+    drawCoffeeHint();
 
     if (gameState.isLockedIn) {
         drawLockedInOverlay();
@@ -3715,6 +3889,1015 @@ function drawBreakDoor() {
         ctx.fillText(open ? 'باب الاستراحة مفتوح' : 'باب الاستراحة مغلق', 0, y - 72);
         ctx.shadowBlur = 0;
     }
+    ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  COFFEE MINIGAME
+// ═══════════════════════════════════════════════════════════════════
+
+function coffeeSessionPath(subpath) {
+    const key = gameState.coffee.sessionKey;
+    if (!key) return lobbyPath('minigames/coffee/sessions/__invalid__');
+    return lobbyPath(`minigames/coffee/sessions/${key}${subpath ? '/' + subpath : ''}`);
+}
+
+function listenToCoffee() {
+    onValue(ref(database, lobbyPath('minigames/coffee/sessions')), (snap) => {
+        const sessions = snap.val() || {};
+        const nowMs = Date.now();
+        const active = {};
+        for (const [key, s] of Object.entries(sessions)) {
+            if (!s) continue;
+            if (s.createdAt && nowMs - s.createdAt > 600000) {
+                if (s.hostId === gameState.userId) {
+                    update(ref(database), { [lobbyPath(`minigames/coffee/sessions/${key}`)]: null });
+                }
+                continue;
+            }
+            active[key] = s;
+        }
+        gameState.coffee.activeSessions = active;
+
+        let myKey = null, mySession = null;
+        for (const [key, s] of Object.entries(active)) {
+            if (s.participants?.[gameState.userId]) { myKey = key; mySession = s; break; }
+        }
+
+        if (!mySession) {
+            if (gameState.coffee.active) returnFromCoffee(false);
+            gameState.coffee.session = null;
+            gameState.coffee.sessionKey = null;
+            return;
+        }
+
+        gameState.coffee.session = mySession;
+        gameState.coffee.sessionKey = myKey;
+
+        if (mySession.phase === 'teleporting') {
+            if (!gameState.coffee.teleportAnim) {
+                const elapsed = Math.max(0, (serverNow() - (mySession.teleportAt || serverNow())) / 1000);
+                gameState.coffee.teleportAnim = {
+                    t: elapsed, phase: 'fly', flyProgress: 0, screenAlpha: 0,
+                    players: Object.keys(mySession.participants || {}).map(uid => {
+                        const p = gameState.players[uid];
+                        return { userId: uid, startX: p ? p.x : 0, startY: p ? p.y : 0 };
+                    }),
+                    pendingSession: null, gameStarted: false, sessionCreated: false,
+                    isHost: mySession.hostId === gameState.userId
+                };
+            }
+        } else if (mySession.phase === 'active') {
+            if (gameState.coffee.teleportAnim) {
+                gameState.coffee.teleportAnim.pendingSession = gameState.coffee.teleportAnim.pendingSession || mySession;
+            } else {
+                startLocalCoffee(mySession);
+            }
+            // Host: watch for all-ready → set startTime
+            if (mySession.hostId === gameState.userId && mySession.startTime === 0) {
+                const parts = Object.values(mySession.participants || {});
+                const allReady = parts.length > 0 && parts.every(p => p.ready);
+                if (allReady && !gameState.coffee.startTimeScheduled) {
+                    gameState.coffee.startTimeScheduled = true;
+                    const newestReady = Math.max(...parts.map(p => p.ready || 0));
+                    const delay = Math.max(0, newestReady + 1000 - serverNow());
+                    setTimeout(() => {
+                        update(ref(database), { [coffeeSessionPath('startTime')]: serverNow() + 3500 });
+                        gameState.coffee.startTimeScheduled = false;
+                    }, delay);
+                }
+                if (!gameState.coffee.readyFallbackTimer) {
+                    gameState.coffee.readyFallbackTimer = setTimeout(() => {
+                        if (gameState.coffee.session?.startTime === 0) {
+                            update(ref(database), { [coffeeSessionPath('startTime')]: serverNow() + 3500 });
+                        }
+                        gameState.coffee.readyFallbackTimer = null;
+                    }, 5000);
+                }
+            }
+            if (mySession.startTime > 0) {
+                gameState.coffee.startTimeScheduled = false;
+                if (gameState.coffee.readyFallbackTimer) {
+                    clearTimeout(gameState.coffee.readyFallbackTimer);
+                    gameState.coffee.readyFallbackTimer = null;
+                }
+            }
+        } else if (mySession.phase === 'finished') {
+            gameState.coffee.active = true;
+            gameState.coffee.session = mySession;
+            gameState.coffee.showResultsInGame = true;
+        }
+    });
+}
+
+async function triggerCoffeeTeleport() {
+    if (!gameState.userId || !isBreakActive()) return;
+    if (gameState.coffee.teleportAnim) return;
+    if (gameState.coffee.active) return;
+
+    const zonePlayers = [...gameState.coffeeZonePlayers];
+    if (zonePlayers.length === 0) return;
+
+    playSoundRobust(gameState.sounds.minigameButtonPressed);
+
+    const alreadyIn = Object.values(gameState.coffee.activeSessions || {}).some(
+        s => s && s.participants?.[gameState.userId]
+    );
+    if (alreadyIn) return;
+
+    const sessionId = `${gameState.userId}_${Date.now()}`;
+    const participants = {};
+    zonePlayers.forEach((p, index) => {
+        participants[p.userId] = {
+            username:    p.username || 'لاعب',
+            avatar:      p.avatar   || '',
+            index,
+            returnPoint: { x: p.x, y: p.y },
+            mugX:        0.5,
+            score:       0,
+            alive:       true
+        };
+    });
+
+    update(ref(database), {
+        [lobbyPath(`minigames/coffee/sessions/${sessionId}`)]: {
+            id:          sessionId,
+            hostId:      gameState.userId,
+            phase:       'teleporting',
+            createdAt:   Date.now(),
+            teleportAt:  serverNow(),
+            participants
+        }
+    });
+}
+
+function createCoffeeSession() {
+    const session = gameState.coffee.session;
+    if (!session || !session.participants) return;
+    update(ref(database), {
+        [coffeeSessionPath('phase')]:     'active',
+        [coffeeSessionPath('startTime')]: 0,
+        [coffeeSessionPath('sugars')]:    null,
+        [coffeeSessionPath('results')]:   null
+    });
+}
+
+function startLocalCoffee(session) {
+    if (gameState.coffee.active && gameState.coffee.localMug) return;
+    const participant = session.participants[gameState.userId];
+    gameState.coffee.active          = true;
+    gameState.coffee.localResultSent = false;
+    gameState.coffee.returnPoint     = participant.returnPoint;
+    gameState.coffee.localMug        = {
+        x: 0.5, targetX: 0.5,
+        velX: 0,          // spring velocity (normalized units/frame)
+        tilt: 0,          // current tilt in radians
+        score: 0, alive: true,
+        flashFrames: 0,   // frames remaining for catch flash
+        flashType: 'good' // 'good' | 'bad'
+    };
+    gameState.coffee.shakeX          = 0;
+    gameState.coffee.shakeY          = 0;
+    gameState.coffee.shakeDecay      = 0;
+    gameState.coffee.catchParticles  = [];
+    gameState.coffee.lastMugSync     = 0;
+    gameState.coffee.lastSugarSpawn  = 0;
+    gameState.coffee.countdownSoundPlayed = false;
+    gameState.coffee.mugVisuals      = {};  // uid → { displayX } for smooth ghost interpolation
+    // Warm ambient wind streaks for the background
+    gameState.coffee.windParticles   = Array.from({ length: 16 }, () => ({
+        x:     Math.random(),
+        y:     Math.random(),
+        speed: 0.00035 + Math.random() * 0.00055,
+        size:  1 + Math.random() * 1.8,
+        alpha: 0.03 + Math.random() * 0.07
+    }));
+
+    // Mouse control
+    if (gameState.coffee._mouseMoveHandler) {
+        window.removeEventListener('mousemove', gameState.coffee._mouseMoveHandler);
+    }
+    gameState.coffee._mouseMoveHandler = (e) => {
+        if (!gameState.coffee.active || !gameState.coffee.localMug) return;
+        const canvas = gameState.canvas;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const dpr  = gameState.dpr || 1;
+        const W    = canvas.width / dpr;
+        gameState.coffee.localMug.targetX = Math.max(0.04, Math.min(0.96, (e.clientX - rect.left) / W));
+    };
+    window.addEventListener('mousemove', gameState.coffee._mouseMoveHandler);
+
+    // Touch control
+    if (gameState.coffee._touchMoveHandler) {
+        window.removeEventListener('touchmove', gameState.coffee._touchMoveHandler);
+    }
+    gameState.coffee._touchMoveHandler = (e) => {
+        if (!gameState.coffee.active || !gameState.coffee.localMug) return;
+        if (e.touches.length !== 1) return;
+        const canvas = gameState.canvas;
+        if (!canvas) return;
+        const rect = canvas.getBoundingClientRect();
+        const dpr  = gameState.dpr || 1;
+        const W    = canvas.width / dpr;
+        gameState.coffee.localMug.targetX = Math.max(0.04, Math.min(0.96, (e.touches[0].clientX - rect.left) / W));
+        e.preventDefault();
+    };
+    window.addEventListener('touchmove', gameState.coffee._touchMoveHandler, { passive: false });
+
+    // Signal ready
+    update(ref(database), {
+        [coffeeSessionPath(`participants/${gameState.userId}/ready`)]: serverNow(),
+        [`users/${gameState.userId}/isWorking`]: true
+    });
+}
+
+function updateCoffeeTeleportAnim() {
+    const anim = gameState.coffee.teleportAnim;
+    if (!anim) return;
+    const FLY_DUR = 0.45, FADE_DUR = 0.30, HOLD_DUR = 0.40, FADEIN_DUR = 0.60;
+    anim.t += gameState.dtFactor / 60;
+
+    const tryStart = () => {
+        if (anim.pendingSession && !anim.gameStarted) {
+            anim.gameStarted = true;
+            startLocalCoffee(anim.pendingSession);
+        }
+    };
+
+    if (anim.t < FLY_DUR) {
+        anim.phase = 'fly';  anim.flyProgress = anim.t / FLY_DUR;  anim.screenAlpha = 0;
+    } else if (anim.t < FLY_DUR + FADE_DUR) {
+        anim.phase = 'fade'; anim.flyProgress = 1;
+        anim.screenAlpha = (anim.t - FLY_DUR) / FADE_DUR;
+    } else if (anim.t < FLY_DUR + FADE_DUR + HOLD_DUR) {
+        anim.phase = 'hold'; anim.flyProgress = 1; anim.screenAlpha = 1;
+        if (anim.isHost && !anim.sessionCreated) {
+            anim.sessionCreated = true;
+            createCoffeeSession();
+        }
+        tryStart();
+    } else if (anim.t < FLY_DUR + FADE_DUR + HOLD_DUR + FADEIN_DUR) {
+        anim.phase = 'fadein'; anim.flyProgress = 1;
+        anim.screenAlpha = 1 - (anim.t - FLY_DUR - FADE_DUR - HOLD_DUR) / FADEIN_DUR;
+        tryStart();
+    } else {
+        tryStart();
+        gameState.coffee.teleportAnim = null;
+    }
+}
+
+function returnFromCoffee(clearState) {
+    if (gameState.coffee.readyFallbackTimer) {
+        clearTimeout(gameState.coffee.readyFallbackTimer);
+        gameState.coffee.readyFallbackTimer = null;
+    }
+    // Fade out applause if playing
+    fadeOutAudio(gameState.sounds.minigameApplause, 900);
+    gameState.coffee.applausePlayed = false;
+    // Delete the session from Firebase so the same player can start a new one
+    const sessionKeyToDelete = gameState.coffee.sessionKey;
+    if (sessionKeyToDelete) {
+        update(ref(database), { [lobbyPath(`minigames/coffee/sessions/${sessionKeyToDelete}`)]: null });
+    }
+    gameState.coffee.session    = null;
+    gameState.coffee.sessionKey = null;
+    const player      = gameState.players[gameState.userId];
+    const returnPoint = gameState.coffee.returnPoint;
+    if (player && returnPoint) {
+        teleportEntity(player, returnPoint.x, returnPoint.y);
+        updatePlayerPosition(returnPoint.x, returnPoint.y);
+    }
+    gameState.coffee.active           = false;
+    gameState.coffee.localMug         = null;
+    gameState.coffee.catchParticles   = [];
+    gameState.coffee.shakeX           = 0;
+    gameState.coffee.shakeY           = 0;
+    gameState.coffee.shakeDecay       = 0;
+    gameState.coffee.showResultsInGame = false;
+    gameState.coffee.resultsButtonRect = null;
+    gameState.coffee.localResultSent  = false;
+    if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/isWorking`]: false });
+    if (gameState.coffee._mouseMoveHandler) {
+        window.removeEventListener('mousemove', gameState.coffee._mouseMoveHandler);
+        gameState.coffee._mouseMoveHandler = null;
+    }
+    if (gameState.coffee._touchMoveHandler) {
+        window.removeEventListener('touchmove', gameState.coffee._touchMoveHandler);
+        gameState.coffee._touchMoveHandler = null;
+    }
+}
+
+function spawnCatchParticles(x, y, type) {
+    const count = type === 'good' ? 10 : 8;
+    for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i / count) - Math.PI / 2 + (Math.random() - 0.5) * 0.9;
+        const speed = 2.5 + Math.random() * 4;
+        gameState.coffee.catchParticles.push({
+            x, y,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed - 1.5,
+            life:    25 + Math.random() * 18,
+            maxLife: 43,
+            type,
+            size: 4 + Math.random() * 5
+        });
+    }
+}
+
+function addCoffeeShake(amplitude, decay) {
+    gameState.coffee.shakeX     = (Math.random() - 0.5) * 2 * amplitude;
+    gameState.coffee.shakeY     = (Math.random() - 0.5) * 2 * amplitude * 0.6;
+    gameState.coffee.shakeDecay = decay;
+}
+
+function updateCoffeeMode() {
+    const session = gameState.coffee.session;
+    const mug     = gameState.coffee.localMug;
+    if (!session || !mug) return;
+
+    if (!isBreakActive()) {
+        if (session.hostId === gameState.userId) {
+            update(ref(database), { [lobbyPath(`minigames/coffee/sessions/${gameState.coffee.sessionKey}`)]: null });
+        }
+        returnFromCoffee(false);
+        return;
+    }
+
+    const now       = serverNow();
+    const startTime = session.startTime || 0;
+
+    // Countdown sound (coffee-specific)
+    if (startTime > 0 && now < startTime && !gameState.coffee.countdownSoundPlayed) {
+        gameState.coffee.countdownSoundPlayed = true;
+        playSoundRobust(gameState.sounds.minigameCoffeeCountdown);
+    }
+
+    // Applause: start once when game goes live
+    if (startTime > 0 && now >= startTime && !gameState.coffee.applausePlayed) {
+        gameState.coffee.applausePlayed = true;
+        const ap = gameState.sounds.minigameApplause;
+        ap.loop = false;
+        ap.volume = 1;
+        playSoundRobust(ap);
+    }
+
+    // Freeze until start
+    if (startTime === 0 || now < startTime) return;
+
+    const elapsed  = now - startTime;
+    const matchOver = elapsed >= COFFEE_MATCH_MS || !mug.alive;
+
+    if (!matchOver) {
+        // Spring physics: underdamped (ratio ≈ 0.36) → slight bouncy overshoot
+        const dx    = mug.targetX - mug.x;
+        const accel = dx * 0.16 - mug.velX * 0.30;
+        mug.velX   += accel * gameState.dtFactor;
+        mug.velX    = Math.max(-0.028, Math.min(0.028, mug.velX));
+        mug.x      += mug.velX * gameState.dtFactor;
+        mug.x       = Math.max(0.04, Math.min(0.96, mug.x));
+
+        // Tilt toward velocity direction, snap back when still
+        const targetTilt = mug.velX * 9;    // ±0.25 rad ≈ ±14° at max speed
+        mug.tilt += (targetTilt - mug.tilt) * Math.min(1, 0.14 * gameState.dtFactor);
+    }
+
+    // Tick down catch flash
+    if (mug.flashFrames > 0) mug.flashFrames = Math.max(0, mug.flashFrames - gameState.dtFactor);
+
+    // Drift wind particles
+    if (gameState.coffee.windParticles) {
+        gameState.coffee.windParticles.forEach(p => {
+            p.x += p.speed * gameState.dtFactor * 0.75;
+            p.y += p.speed * gameState.dtFactor * 0.22;
+            if (p.x > 1.06) { p.x = -0.06; p.y = Math.random(); }
+            if (p.y > 1.06) { p.y = -0.06; p.x = Math.random(); }
+        });
+    }
+
+    // Decay shake
+    if (Math.abs(gameState.coffee.shakeX) > 0.3 || Math.abs(gameState.coffee.shakeY) > 0.3) {
+        gameState.coffee.shakeX *= gameState.coffee.shakeDecay;
+        gameState.coffee.shakeY *= gameState.coffee.shakeDecay;
+        gameState.coffee.shakeDecay = Math.max(0, gameState.coffee.shakeDecay - 0.005 * gameState.dtFactor);
+    } else {
+        gameState.coffee.shakeX = 0;
+        gameState.coffee.shakeY = 0;
+    }
+
+    // Update particles
+    gameState.coffee.catchParticles = gameState.coffee.catchParticles.filter(p => {
+        p.x  += p.vx * gameState.dtFactor;
+        p.y  += p.vy * gameState.dtFactor;
+        p.vx *= 0.93;
+        p.vy  = p.vy * 0.93 + 0.15 * gameState.dtFactor;
+        p.life -= gameState.dtFactor;
+        return p.life > 0;
+    });
+
+    if (matchOver) {
+        if (!gameState.coffee.localResultSent) {
+            gameState.coffee.localResultSent = true;
+            update(ref(database), {
+                [coffeeSessionPath(`results/${gameState.userId}`)]: {
+                    score:    mug.score,
+                    username: session.participants[gameState.userId]?.username || 'لاعب',
+                    alive:    mug.alive
+                }
+            }).then(() => {
+                if (session.hostId !== gameState.userId) return;
+                setTimeout(() => {
+                    const s = gameState.coffee.session;
+                    if (!s || s.phase === 'finished') return;
+                    update(ref(database), { [coffeeSessionPath('phase')]: 'finished' });
+                }, 2000);
+            });
+        }
+        return;
+    }
+
+    // Host: spawn sugars
+    if (session.hostId === gameState.userId) {
+        const spawnInterval = Math.max(450, 1050 - (elapsed / COFFEE_MATCH_MS) * 600);
+        if (now - gameState.coffee.lastSugarSpawn > spawnInterval) {
+            gameState.coffee.lastSugarSpawn = now;
+            const isBad      = Math.random() < 0.14;
+            const fallDur    = Math.max(1800, 4300 - (elapsed / COFFEE_MATCH_MS) * 2500);
+            const sugarId    = `s${now}${Math.floor(Math.random() * 9999)}`;
+            update(ref(database), {
+                [coffeeSessionPath(`sugars/${sugarId}`)]: {
+                    x:            0.08 + Math.random() * 0.84,
+                    spawnTime:    now,
+                    fallDuration: fallDur,
+                    type:         isBad ? 'bad' : 'good',
+                    caughtBy:     null
+                }
+            });
+        }
+    }
+
+    // Check catches
+    const canvas   = gameState.canvas;
+    const dpr      = gameState.dpr || 1;
+    const W        = canvas.width  / dpr;
+    const H        = canvas.height / dpr;
+    const mugSX    = mug.x * W;
+    const mugSY    = H * COFFEE_MUG_Y_FRAC;
+    const sugars   = session.sugars || {};
+
+    for (const [sid, sugar] of Object.entries(sugars)) {
+        if (sugar.caughtBy !== null && sugar.caughtBy !== undefined) continue;
+        const progress = (now - sugar.spawnTime) / sugar.fallDuration;
+        if (progress < 0) continue;
+        if (progress > 1.18) {
+            if (session.hostId === gameState.userId) {
+                update(ref(database), { [coffeeSessionPath(`sugars/${sid}`)]: null });
+            }
+            continue;
+        }
+        const sy = progress * mugSY;
+        const sx = sugar.x * W;
+
+        if (sy >= mugSY - 28 && sy <= mugSY + 22 && Math.abs(sx - mugSX) < COFFEE_CATCH_HALF) {
+            update(ref(database), { [coffeeSessionPath(`sugars/${sid}/caughtBy`)]: gameState.userId });
+            if (sugar.type === 'bad') {
+                mug.alive = false;
+                mug.flashFrames = 4; mug.flashType = 'bad';
+                spawnCatchParticles(sx, mugSY, 'bad');
+                addCoffeeShake(24, 0.77);
+                update(ref(database), {
+                    [coffeeSessionPath(`participants/${gameState.userId}/alive`)]: false
+                });
+            } else {
+                mug.score++;
+                mug.flashFrames = 2.5; mug.flashType = 'good';
+                spawnCatchParticles(sx, mugSY, 'good');
+                addCoffeeShake(7, 0.83);
+                // Play collect sound (cloned so rapid catches overlap)
+                const collectSnd = gameState.sounds.minigameCoffeeCollect.cloneNode();
+                collectSnd.volume = 1;
+                collectSnd.play().catch(() => {});
+                update(ref(database), {
+                    [coffeeSessionPath(`participants/${gameState.userId}/score`)]: mug.score
+                });
+            }
+        }
+    }
+
+    // Smooth ghost mug positions (client-side interpolation)
+    const mugVis = gameState.coffee.mugVisuals || (gameState.coffee.mugVisuals = {});
+    Object.entries(session.participants || {}).forEach(([uid, p]) => {
+        if (uid === gameState.userId) return;
+        if (!mugVis[uid]) mugVis[uid] = { displayX: p.mugX != null ? p.mugX : 0.5 };
+        const target = p.mugX != null ? p.mugX : 0.5;
+        mugVis[uid].displayX += (target - mugVis[uid].displayX) * Math.min(1, 0.10 * gameState.dtFactor);
+    });
+
+    // Sync mug X
+    if (now - gameState.coffee.lastMugSync > 80) {
+        gameState.coffee.lastMugSync = now;
+        update(ref(database), {
+            [coffeeSessionPath(`participants/${gameState.userId}/mugX`)]: Math.round(mug.x * 1000) / 1000
+        });
+    }
+}
+
+function renderCoffee() {
+    const ctx    = gameState.ctx;
+    const canvas = gameState.canvas;
+    const session = gameState.coffee.session;
+    const mug    = gameState.coffee.localMug;
+    if (!ctx || !canvas || !session) return;
+
+    const dpr = gameState.dpr || 1;
+    const W   = canvas.width  / dpr;
+    const H   = canvas.height / dpr;
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
+    // Background
+    ctx.fillStyle = '#180d06';
+    ctx.fillRect(0, 0, W, H);
+
+    const now       = serverNow();
+    const startTime = session.startTime || 0;
+    const elapsed   = startTime > 0 ? Math.max(0, now - startTime) : 0;
+    const mugSY     = H * COFFEE_MUG_Y_FRAC;
+    const shX       = gameState.coffee.shakeX || 0;
+    const shY       = gameState.coffee.shakeY || 0;
+
+    // Background gradient warmth
+    const grad = ctx.createRadialGradient(W / 2, H * 0.3, 0, W / 2, H * 0.3, W * 0.7);
+    grad.addColorStop(0, 'rgba(80,40,10,0.28)');
+    grad.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    // Ambient wind streaks
+    if (mug && mug.windParticles) {
+        mug.windParticles.forEach(p => {
+            ctx.save();
+            ctx.globalAlpha = p.alpha;
+            ctx.fillStyle   = '#c8844a';
+            ctx.beginPath();
+            ctx.ellipse(p.x * W, p.y * H, p.size * 4, p.size * 0.9, 0.25, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+        });
+    }
+
+    // Draw falling sugars
+    if (startTime > 0 && now >= startTime) {
+        const sugars = session.sugars || {};
+        for (const [, sugar] of Object.entries(sugars)) {
+            if (sugar.caughtBy !== null && sugar.caughtBy !== undefined) continue;
+            const progress = (now - sugar.spawnTime) / sugar.fallDuration;
+            if (progress < 0 || progress > 1.12) continue;
+
+            const sugarX = sugar.x * W + shX;
+            const sugarY = progress * mugSY + shY;
+
+            // Soft trail
+            if (progress < 0.9) {
+                ctx.save();
+                ctx.globalAlpha = (1 - progress) * 0.18;
+                const trailGrad = ctx.createLinearGradient(sugarX, sugarY - COFFEE_SUGAR_H, sugarX, sugarY);
+                trailGrad.addColorStop(0, 'transparent');
+                trailGrad.addColorStop(1, sugar.type === 'bad' ? '#ff5555' : '#ffe0a0');
+                ctx.fillStyle = trailGrad;
+                ctx.fillRect(sugarX - 10, sugarY - COFFEE_SUGAR_H * 0.8, 20, COFFEE_SUGAR_H * 0.8);
+                ctx.restore();
+            }
+
+            const img = sugar.type === 'bad' ? gameState.assets.coffeeBadSugar : gameState.assets.coffeeSugar;
+            if (img && img.complete && img.naturalWidth) {
+                ctx.save();
+                ctx.translate(sugarX, sugarY);
+                ctx.rotate(Math.sin(now * 0.0025 + sugar.spawnTime * 0.001) * 0.07);
+                ctx.drawImage(img, -COFFEE_SUGAR_W / 2, -COFFEE_SUGAR_H / 2, COFFEE_SUGAR_W, COFFEE_SUGAR_H);
+                ctx.restore();
+            }
+        }
+    }
+
+    // Catch particles
+    gameState.coffee.catchParticles.forEach(p => {
+        const alpha = Math.max(0, p.life / p.maxLife);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.type === 'good' ? '#f4c82b' : '#ff4444';
+        ctx.beginPath();
+        ctx.arc(p.x + shX, p.y + shY, p.size * alpha, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+    });
+
+    // Ghost mugs (other players) — use client-side smoothed position
+    const mugImg = gameState.assets.coffeeMug;
+    Object.entries(session.participants || {}).forEach(([uid, participant]) => {
+        if (uid === gameState.userId) return;
+        const mugVis = gameState.coffee.mugVisuals || {};
+        const ghostX = ((mugVis[uid] ? mugVis[uid].displayX : null) ?? participant.mugX ?? 0.5) * W;
+        ctx.save();
+        ctx.globalAlpha = participant.alive === false ? 0.12 : 0.28;
+        if (mugImg && mugImg.complete && mugImg.naturalWidth) {
+            ctx.drawImage(mugImg, ghostX - COFFEE_MUG_W / 2 + shX, mugSY - COFFEE_MUG_H / 2 + shY, COFFEE_MUG_W, COFFEE_MUG_H);
+        }
+        ctx.globalAlpha = participant.alive === false ? 0.2 : 0.5;
+        ctx.fillStyle   = 'white';
+        ctx.font        = '11px Rubik';
+        ctx.textAlign   = 'center';
+        ctx.textBaseline = 'alphabetic';
+        ctx.fillText((participant.username || '?').slice(0, 10), ghostX + shX, mugSY - COFFEE_MUG_H / 2 - 5 + shY);
+        ctx.restore();
+    });
+
+    // Local mug — rendered with tilt, flash overlay, and score bubble
+    if (mug) {
+        const mugX = mug.x * W + shX;
+        const mugY = mugSY + shY;
+
+        ctx.save();
+        if (!mug.alive) ctx.globalAlpha = 0.35;
+        ctx.translate(mugX, mugY);
+        ctx.rotate(mug.tilt || 0);
+        if (mugImg && mugImg.complete && mugImg.naturalWidth) {
+            ctx.drawImage(mugImg, -COFFEE_MUG_W / 2, -COFFEE_MUG_H / 2, COFFEE_MUG_W, COFFEE_MUG_H);
+        }
+        // Flash overlay using 'screen' blend so it brightens without covering the image
+        if (mug.flashFrames > 0) {
+            const flashAlpha = Math.min(1, mug.flashFrames / 2.5) * 0.88;
+            ctx.globalCompositeOperation = 'screen';
+            ctx.globalAlpha = flashAlpha;
+            ctx.fillStyle   = mug.flashType === 'bad' ? '#ff2020' : '#ffffff';
+            ctx.fillRect(-COFFEE_MUG_W / 2, -COFFEE_MUG_H / 2, COFFEE_MUG_W, COFFEE_MUG_H);
+        }
+        ctx.restore();
+
+        // Score bubble above mug (follows tilt)
+        if (mug.alive && startTime > 0 && now >= startTime) {
+            ctx.save();
+            ctx.translate(mugX, mugY - COFFEE_MUG_H / 2 - 22);
+            ctx.rotate((mug.tilt || 0) * 0.4);  // subtle echo of the tilt
+            ctx.fillStyle = 'rgba(255,255,255,0.12)';
+            ctx.beginPath();
+            if (ctx.roundRect) { ctx.roundRect(-22, -14, 44, 28, 14); }
+            else { ctx.rect(-22, -14, 44, 28); }
+            ctx.fill();
+            ctx.fillStyle    = '#f4c82b';
+            ctx.font         = 'bold 17px Rubik';
+            ctx.textAlign    = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(`${mug.score}`, 0, 0);
+            ctx.restore();
+        }
+    }
+
+    // Waiting overlay
+    if (startTime === 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle    = 'white';
+        ctx.font         = 'bold 28px Rubik';
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('جاري التحميل...', W / 2, H / 2);
+    } else if (now < startTime) {
+        const count = Math.max(1, Math.ceil((startTime - now) / 1000));
+        ctx.fillStyle = 'rgba(0,0,0,0.52)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle    = 'white';
+        ctx.font         = 'bold 96px Rubik';
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.shadowBlur   = 32;
+        ctx.shadowColor  = 'rgba(244,200,43,0.6)';
+        ctx.fillText(count.toString(), W / 2, H / 2);
+        ctx.shadowBlur   = 0;
+    }
+
+    // HUD
+    drawCoffeeHud(W, H, elapsed, session, mug);
+
+    // Results
+    if (session.phase === 'finished' || gameState.coffee.showResultsInGame) {
+        drawCoffeeResults(W, H, session);
+    }
+
+    // Teleport overlay (still inside DPR scale)
+    const coffeeAnim = gameState.coffee.teleportAnim;
+    if (coffeeAnim && coffeeAnim.screenAlpha > 0.01) {
+        ctx.save();
+        ctx.globalAlpha = Math.min(1, coffeeAnim.screenAlpha);
+        ctx.fillStyle   = 'black';
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+    }
+
+    ctx.restore(); // undo DPR scale
+}
+
+function drawCoffeeHud(W, H, elapsed, session, mug) {
+    const ctx       = gameState.ctx;
+    const startTime = session.startTime || 0;
+    const now       = serverNow();
+    const gameActive = startTime > 0 && now >= startTime;
+
+    const listW  = 160;
+    const listX  = W - listW - 10;
+    let   listY  = 14;
+
+    // ── Timer (only once game has started) ──────────────────────────
+    if (gameActive) {
+        const remaining = Math.max(0, COFFEE_MATCH_MS - elapsed);
+        const secs      = Math.ceil(remaining / 1000);
+        ctx.save();
+        ctx.fillStyle = remaining < 8000 ? 'rgba(200,30,30,0.92)' : 'rgba(18,10,4,0.82)';
+        if (ctx.roundRect) {
+            ctx.beginPath(); ctx.roundRect(listX, listY, listW, 38, 10); ctx.fill();
+        } else { ctx.fillRect(listX, listY, listW, 38); }
+        ctx.fillStyle    = 'white';
+        ctx.font         = 'bold 20px Rubik';
+        ctx.textAlign    = 'center';
+        ctx.textBaseline = 'middle';
+        if (remaining < 8000) { ctx.shadowBlur = 10; ctx.shadowColor = '#ff4444'; }
+        ctx.fillText(`⏱ ${secs}s`, listX + listW / 2, listY + 19);
+        ctx.shadowBlur = 0;
+        ctx.restore();
+        listY += 46;
+    } else {
+        listY += 4; // small top padding when no timer
+    }
+
+    // ── Leaderboard (always visible during coffee game) ─────────────
+    const participants = Object.entries(session.participants || {})
+        .sort(([, a], [, b]) => (b.score || 0) - (a.score || 0));
+    const rowH    = 34;
+    const avSize  = 22;
+    const headerH = 24;
+    const panelH  = headerH + participants.length * rowH + 6;
+
+    ctx.save();
+    // Panel background
+    ctx.fillStyle = 'rgba(12,6,2,0.80)';
+    if (ctx.roundRect) {
+        ctx.beginPath(); ctx.roundRect(listX, listY, listW, panelH, 10); ctx.fill();
+    } else { ctx.fillRect(listX, listY, listW, panelH); }
+    ctx.strokeStyle = 'rgba(244,200,43,0.18)';
+    ctx.lineWidth   = 1;
+    if (ctx.roundRect) {
+        ctx.beginPath(); ctx.roundRect(listX, listY, listW, panelH, 10); ctx.stroke();
+    }
+    // Header label
+    ctx.fillStyle    = 'rgba(244,200,43,0.7)';
+    ctx.font         = 'bold 11px Rubik';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('الترتيب ☕', listX + listW / 2, listY + headerH / 2);
+
+    participants.forEach(([uid, p], i) => {
+        const ry      = listY + headerH + i * rowH;
+        const isLocal = uid === gameState.userId;
+        const dead    = p.alive === false;
+
+        // Row highlight
+        if (isLocal) {
+            ctx.fillStyle = 'rgba(244,200,43,0.12)';
+            ctx.fillRect(listX + 4, ry, listW - 8, rowH - 2);
+        }
+
+        // Avatar circle
+        const ax  = listX + 8 + avSize / 2;
+        const acy = ry + rowH / 2;
+        ctx.save();
+        ctx.beginPath(); ctx.arc(ax, acy, avSize / 2, 0, Math.PI * 2);
+        ctx.fillStyle = dead ? '#333' : (isLocal ? '#f4c82b' : '#444');
+        ctx.fill();
+        const avImg = gameState.avatarCache[uid];
+        if (!avImg && p.avatar) {
+            const a = new Image(); a.crossOrigin = 'anonymous'; a.src = p.avatar;
+            a.onload = () => { gameState.avatarCache[uid] = a; };
+            a.onerror = () => { gameState.avatarCache[uid] = 'failed'; };
+        }
+        if (avImg && avImg !== 'failed') {
+            ctx.beginPath(); ctx.arc(ax, acy, avSize / 2, 0, Math.PI * 2); ctx.clip();
+            if (dead) ctx.filter = 'grayscale(80%)';
+            ctx.drawImage(avImg, ax - avSize / 2, acy - avSize / 2, avSize, avSize);
+            ctx.filter = 'none';
+        } else {
+            ctx.fillStyle    = 'white'; ctx.font = 'bold 10px Rubik';
+            ctx.textAlign    = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText((p.username || '?').charAt(0).toUpperCase(), ax, acy + 1);
+        }
+        ctx.restore();
+
+        // Name
+        ctx.fillStyle    = dead ? '#555' : (isLocal ? '#f4c82b' : 'rgba(255,255,255,0.85)');
+        ctx.font         = `${isLocal ? 'bold ' : ''}12px Rubik`;
+        ctx.textAlign    = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText((p.username || '?').slice(0, 9), listX + 10 + avSize + 4, acy);
+
+        // Score / dead
+        ctx.fillStyle = dead ? '#666' : '#f4c82b';
+        ctx.font      = 'bold 13px Rubik';
+        ctx.textAlign = 'right';
+        ctx.fillText(dead ? '💀' : `${p.score || 0}`, listX + listW - 8, acy);
+    });
+    ctx.restore();
+}
+
+function drawCoffeeResults(W, H, session) {
+    const ctx     = gameState.ctx;
+    const results = session.results || {};
+    const ranked  = Object.entries(results).sort(([, a], [, b]) => (b.score || 0) - (a.score || 0));
+
+    const panelW = Math.min(400, W - 60);
+    const rowH   = 46;
+    const panelH = 120 + ranked.length * rowH;
+    const px     = (W - panelW) / 2;
+    const py     = (H - panelH) / 2;
+
+    ctx.fillStyle = 'rgba(10,5,2,0.95)';
+    if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(px, py, panelW, panelH, 14);
+        ctx.fill();
+    } else {
+        ctx.fillRect(px, py, panelW, panelH);
+    }
+    ctx.strokeStyle = 'rgba(244,200,43,0.3)';
+    ctx.lineWidth   = 1.5;
+    if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(px, py, panelW, panelH, 14);
+        ctx.stroke();
+    }
+
+    ctx.fillStyle    = '#f4c82b';
+    ctx.font         = 'bold 22px Rubik';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText('النتائج ☕', W / 2, py + 40);
+
+    ranked.forEach(([uid, result], i) => {
+        const ry     = py + 64 + i * rowH;
+        const dead   = result.alive === false;
+        if (i % 2 === 0) {
+            ctx.fillStyle = 'rgba(255,255,255,0.03)';
+            ctx.fillRect(px + 12, ry, panelW - 24, rowH - 4);
+        }
+        // Rank number
+        ctx.fillStyle    = i === 0 ? '#f4c82b' : 'rgba(255,255,255,0.45)';
+        ctx.font         = 'bold 13px Rubik';
+        ctx.textAlign    = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(`${i + 1}.`, px + 16, ry + rowH / 2);
+        // Avatar
+        const avSize = 28;
+        const ax     = px + 38 + avSize / 2;
+        const acy    = ry + rowH / 2;
+        ctx.save();
+        ctx.beginPath(); ctx.arc(ax, acy, avSize / 2, 0, Math.PI * 2);
+        ctx.fillStyle = dead ? '#333' : (i === 0 ? '#f4c82b' : '#555'); ctx.fill();
+        // Look up avatar from participants (results only store username/score)
+        const participantData = session.participants?.[uid];
+        const avImg = gameState.avatarCache[uid];
+        if (!avImg && participantData?.avatar) {
+            const a = new Image(); a.crossOrigin = 'anonymous'; a.src = participantData.avatar;
+            a.onload = () => { gameState.avatarCache[uid] = a; };
+            a.onerror = () => { gameState.avatarCache[uid] = 'failed'; };
+        }
+        if (avImg && avImg !== 'failed') {
+            ctx.beginPath(); ctx.arc(ax, acy, avSize / 2, 0, Math.PI * 2); ctx.clip();
+            if (dead) ctx.filter = 'grayscale(80%)';
+            ctx.drawImage(avImg, ax - avSize / 2, acy - avSize / 2, avSize, avSize);
+            ctx.filter = 'none';
+        } else {
+            ctx.fillStyle = 'white'; ctx.font = 'bold 12px Rubik';
+            ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+            ctx.fillText((result.username || '?').charAt(0).toUpperCase(), ax, acy + 1);
+        }
+        ctx.restore();
+        // Name + score
+        ctx.fillStyle    = dead ? '#666' : (i === 0 ? '#f4c82b' : 'rgba(255,255,255,0.85)');
+        ctx.font         = `${i === 0 ? 'bold ' : ''}14px Rubik`;
+        ctx.textAlign    = 'left';
+        ctx.textBaseline = 'middle';
+        ctx.fillText((result.username || '?').slice(0, 11), ax + avSize / 2 + 8, acy);
+        ctx.textAlign = 'right';
+        ctx.fillText(dead ? '💀 خسر' : `${result.score || 0} ☕`, px + panelW - 16, acy);
+    });
+
+    // Return button
+    const btnW = 130, btnH = 42;
+    const bx   = px + (panelW - btnW) / 2;
+    const by   = py + panelH - btnH - 18;
+    ctx.fillStyle = '#6b3a14';
+    if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(bx, by, btnW, btnH, 10);
+        ctx.fill();
+    } else {
+        ctx.fillRect(bx, by, btnW, btnH);
+    }
+    ctx.fillStyle    = 'white';
+    ctx.font         = 'bold 17px Rubik';
+    ctx.textAlign    = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('عودة', bx + btnW / 2, by + btnH / 2);
+    gameState.coffee.resultsButtonRect = { x: bx, y: by, w: btnW, h: btnH };
+}
+
+function drawCoffeeMachine() {
+    if (!isBreakActive()) return;
+    const ctx = gameState.ctx;
+    const img = gameState.assets.coffeeZone;
+    if (!img || !img.complete || !img.naturalWidth) return;
+
+    const cx = COFFEE_ZONE_CX;
+    const cy = COFFEE_ZONE_CY;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    if (gameState.activeCoffeeZone && !gameState.coffee.teleportAnim) {
+        ctx.shadowBlur  = 28;
+        ctx.shadowColor = 'rgba(160,80,20,0.70)';
+    }
+    ctx.drawImage(img, cx - COFFEE_ZONE_IMG_W / 2, cy - COFFEE_ZONE_IMG_H / 2, COFFEE_ZONE_IMG_W, COFFEE_ZONE_IMG_H);
+    ctx.shadowBlur = 0;
+
+    const zonePlayers = gameState.coffeeZonePlayers;
+    if (zonePlayers.length > 0 && !gameState.coffee.teleportAnim) {
+        drawCoffeeReadyList(ctx, cx, cy - COFFEE_ZONE_IMG_H / 2 - 6, zonePlayers);
+    }
+    ctx.restore();
+}
+
+function drawCoffeeReadyList(ctx, cx, bottomY, players) {
+    const rowH = 34, listW = 158, padTop = 22;
+    const listH = players.length * rowH + padTop + 4;
+    const listX = cx - listW / 2;
+    const listY = bottomY - listH - 6;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(20,10,3,0.90)';
+    drawRoundedRectPath(ctx, listX, listY, listW, listH, 10);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(244,200,43,0.12)';
+    ctx.lineWidth   = 1;
+    drawRoundedRectPath(ctx, listX, listY, listW, listH, 10);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(244,200,43,0.85)';
+    ctx.font      = 'bold 12px Rubik';
+    ctx.textAlign = 'center';
+    ctx.fillText('جاهزون ☕', cx, listY + 15);
+
+    players.forEach((p, i) => {
+        const rowY   = listY + padTop + i * rowH;
+        const avatarR = 12;
+        const avatarX = listX + 22;
+        const avatarCY = rowY + rowH / 2;
+
+        ctx.beginPath();
+        ctx.arc(avatarX, avatarCY, avatarR, 0, Math.PI * 2);
+        ctx.fillStyle = p.userId === gameState.userId ? COLORS.blue : '#444';
+        ctx.fill();
+
+        const avImg = gameState.avatarCache[p.userId];
+        if (avImg && avImg !== 'failed') {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(avatarX, avatarCY, avatarR, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.drawImage(avImg, avatarX - avatarR, avatarCY - avatarR, avatarR * 2, avatarR * 2);
+            ctx.restore();
+        }
+        ctx.fillStyle = 'white';
+        ctx.font      = '13px Rubik';
+        ctx.textAlign = 'left';
+        ctx.fillText((p.username || '?').slice(0, 12), listX + 40, avatarCY + 4);
+        ctx.fillStyle = '#f4c82b';
+        ctx.font      = 'bold 11px Rubik';
+        ctx.textAlign = 'right';
+        ctx.fillText('✓ جاهز', listX + listW - 8, avatarCY + 4);
+    });
+    ctx.restore();
+}
+
+function drawCoffeeHint() {
+    if (!gameState.activeCoffeeZone) return;
+    if (gameState.coffee.teleportAnim) return;
+    const ctx = gameState.ctx;
+    ctx.save();
+    ctx.fillStyle  = 'white';
+    ctx.font       = 'bold 13px Rubik';
+    ctx.textAlign  = 'center';
+    ctx.shadowBlur  = 6;
+    ctx.shadowColor = 'black';
+    ctx.fillText('اضغط زر البدء', COFFEE_BTN_CX, COFFEE_BTN_CY - COFFEE_BTN_R - 10);
+    ctx.shadowBlur = 0;
     ctx.restore();
 }
 
@@ -3884,7 +5067,7 @@ function createRaceFromParticipants() {
 
     update(ref(database), {
         [raceSessionPath('phase')]: 'race',
-        [raceSessionPath('startTime')]: serverNow() + 3000,
+        [raceSessionPath('startTime')]: 0,
         [raceSessionPath('cars')]: cars,
         [raceSessionPath('results')]: null
     });
@@ -3938,7 +5121,7 @@ function updateTeleportAnim() {
 }
 
 function drawTeleportOverlay(W, H) {
-    const anim = gameState.race.teleportAnim;
+    const anim = gameState.race.teleportAnim || gameState.coffee.teleportAnim;
     if (!anim || anim.screenAlpha < 0.01) return;
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
@@ -4019,7 +5202,15 @@ function renderRace() {
     });
 
     const now = serverNow();
-    if (now < (session.startTime || 0)) {
+    if (session.startTime === 0) {
+        ctx.fillStyle = 'rgba(0,0,0,0.65)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 28px Rubik';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('جاري التحميل...', W / 2, H / 2);
+    } else if (now < (session.startTime || 0)) {
         const count = Math.max(1, Math.ceil(((session.startTime || 0) - now) / 1000));
         ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
         ctx.fillRect(0, 0, W, H);
@@ -4859,7 +6050,7 @@ function blendHexColors(fromHex, toHex, t) {
 
 function drawPlayers(onlyLocal = false) {
     const ctx = gameState.ctx;
-    const teleportAnim = gameState.race.teleportAnim;
+    const teleportAnim = gameState.race.teleportAnim || gameState.coffee.teleportAnim;
 
     for (const player of Object.values(gameState.players)) {
         const isCurrentUser = player.userId === gameState.userId;

@@ -81,6 +81,45 @@ WIND_PARTICLE_COUNT = 30   (desktop)
 WIND_PARTICLE_COUNT_MOBILE = 10
 ```
 
+## Minigame Architecture
+
+**Gender separation**: All minigame sessions live under `lobbies/{male|female}/minigames/...` — since `lobbyPath()` is always used, male and female lobbies never share sessions.
+
+**Multiple simultaneous games**: Each game type has its own session namespace (`minigames/race/sessions/` and `minigames/coffee/sessions/`). Within each type, multiple sessions can be active at the same time (each keyed by `{hostId}_{timestamp}`). Players in different sessions don't interact.
+
+**Ready-sync protocol** (both games):
+1. Host creates session with `startTime: 0`
+2. Each client writes `participants/{uid}/ready: serverNow()` when they enter the game
+3. Host watches Firebase: when all participants have `ready`, waits until `max(ready timestamps) + 1000ms`, then writes `startTime: serverNow() + 3500` (3.5 s gives the 3-2-1 countdown)
+4. 5-second fallback: if not all ready after 5s, host starts anyway
+5. **Do NOT set a small +500 offset** — clients need the full countdown window to render 3-2-1
+
+### Coffee Minigame (`minigames/coffee/sessions/`)
+| Key constant | Value |
+|---|---|
+| `COFFEE_MATCH_MS` | 30000 (30s) |
+| `COFFEE_MUG_Y_FRAC` | 0.80 (mug at 80% screen height) |
+| `COFFEE_CATCH_HALF` | 52 px half-hitbox |
+| `COFFEE_ZONE_CX` | 280 world units (right of race zone) |
+
+Sugar spawning: host writes to `sessions/{key}/sugars/{id}`. Y position computed by all clients as `progress = (serverNow() - spawnTime) / fallDuration`. First player to write `caughtBy` claims the catch. Bad sugar (14% chance) = instant loss for catcher.
+
+Mug sync: `participants/{uid}/mugX` (0..1) updated every 80ms for ghost rendering. Ghost positions use client-side lerp (`mugVisuals[uid].displayX`) to hide Firebase latency — never apply lerp to the local mug.
+
+Session lifetime: `returnFromCoffee()` always deletes the session from Firebase (`lobbyPath('minigames/coffee/sessions/{key}') = null`) so the same player can start a new game immediately. **Forgetting this causes "can't play again" bugs.**
+
+## Common Minigame Pitfalls (lessons learned)
+
+| Issue | Root cause | Fix |
+|---|---|---|
+| Timer shows before game starts | `startTime` set too close to `now` | Use `startTime = serverNow() + 3500` to allow 3-2-1 countdown |
+| Session blocks replaying | Session never deleted from Firebase | `returnFromCoffee/returnFromRace` must write `null` to the session path |
+| Ghost movement is snappy | Raw Firebase value used directly | Lerp `displayX` toward `mugX` every frame in `updateCoffeeMode` |
+| HUD overlaps OS chrome | Element placed at top-center same as pomodoro pill | Coffee HUD lives on right side; check existing HTML elements before choosing position |
+| Ready sound missing for new game type | Sound only wired to race zone entry | Each zone needs its own "newly entered" diff check with `prevZonePlayers` |
+| Leaderboard not visible during countdown | HUD function returned early when `now < startTime` | Split: timer shown only when active, leaderboard shown always |
+| Results panel missing avatars | `results` only stores `username`/`score` | Look up avatar from `session.participants[uid].avatar` at draw time |
+
 ## DPR Canvas Scaling
 Canvas is scaled by `window.devicePixelRatio` in `resizeCanvas()`:
 - `canvas.width/height = viewport * dpr` (physical)
