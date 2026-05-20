@@ -3769,45 +3769,52 @@ function gameLoop(timestamp) {
     // On mobile, cap dtFactor more aggressively to reduce stutters from dropped frames
     if (isMobile() && gameState.dtFactor > 2) gameState.dtFactor = 2;
 
-    updatePomodoro();
-    updateTeleportAnim();
-    updateCoffeeTeleportAnim();
-    cleanupStaleRaceSession(gameState.race.session);
-    if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'race') {
-        updateRaceMode();
-        updateRaceCarVisuals();
-        updateRaceCamera();
-        renderRace();   // drawTeleportOverlay is called inside renderRace
-        requestAnimationFrame(gameLoop);
-        return;
-    }
-    // If the race has finished, keep rendering the race screen so we can show in-game results
-    if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'finished') {
-        updateRaceCarVisuals();
-        updateRaceCamera();
-        renderRace();
-        requestAnimationFrame(gameLoop);
-        return;
-    }
-    if (gameState.coffee.active && gameState.coffee.session &&
-        (gameState.coffee.session.phase === 'active' || gameState.coffee.session.phase === 'finished')) {
-        updateCoffeeMode();
-        renderCoffee();
-        requestAnimationFrame(gameLoop);
-        return;
-    }
+    try {
+        updatePomodoro();
+        updateTeleportAnim();
+        updateCoffeeTeleportAnim();
+        cleanupStaleRaceSession(gameState.race.session);
+        if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'race') {
+            updateRaceMode();
+            updateRaceCarVisuals();
+            updateRaceCamera();
+            renderRace();
+            requestAnimationFrame(gameLoop);
+            return;
+        }
+        if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'finished') {
+            updateRaceCarVisuals();
+            updateRaceCamera();
+            renderRace();
+            requestAnimationFrame(gameLoop);
+            return;
+        }
+        if (gameState.coffee.active && gameState.coffee.session &&
+            (gameState.coffee.session.phase === 'active' || gameState.coffee.session.phase === 'finished')) {
+            updateCoffeeMode();
+            renderCoffee();
+            requestAnimationFrame(gameLoop);
+            return;
+        }
 
-    handleMovement();
-    updateAnimation();
-    updatePlayerRenderPositions();
-    updateCamera();
-    updatePlayerBobbing();
-    updateNametags();
-    updateAvatarColorFade();
-    updateWindParticles();
-    updateDustParticles();
-    updateInteractions();
-    render();
+        handleMovement();
+        updateAnimation();
+        updatePlayerRenderPositions();
+        updateCamera();
+        updatePlayerBobbing();
+        updateNametags();
+        updateAvatarColorFade();
+        updateWindParticles();
+        updateDustParticles();
+        updateInteractions();
+        render();
+    } catch (e) {
+        console.error('[gameLoop crash — loop kept alive]', e);
+        // Ensure isLockedIn doesn't stay stuck after a crash during break transition
+        if (gameState.pomodoro.active && gameState.pomodoro.phase === 'break') {
+            gameState.isLockedIn = false;
+        }
+    }
     requestAnimationFrame(gameLoop);
 }
 
