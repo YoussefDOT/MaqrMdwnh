@@ -1304,3 +1304,448 @@ body {
 .tm-sessions-input::-webkit-outer-spin-button,
 .tm-sessions-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
 .tm-sessions-input:focus { border-color: #ff9b3a; }
+
+/* ══════════════════════════════════════════════════════
+   USER CARD  (replaces the old .hud top bar)
+   ══════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════
+   USER CARD  — Apple HIG-inspired minimal floating card
+   ══════════════════════════════════════════════════════ */
+.user-card {
+    position: fixed;
+    top: 18px;
+    right: 18px;
+    z-index: 200;
+    background: rgba(18, 18, 18, 0.68);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 20px;
+    padding: 12px 14px 10px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30), 0 1px 0 rgba(255,255,255,0.06) inset;
+    min-width: 172px;
+    /* Slide-up animation for mobile focus mode */
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+                opacity 0.35s ease;
+}
+
+.user-card-top {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+
+.user-card-avatar-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.user-card-avatar {
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1.5px solid rgba(255, 255, 255, 0.18);
+    background: rgba(255, 255, 255, 0.08);
+    display: block;
+}
+
+.user-card-status-dot {
+    position: absolute;
+    bottom: 1px;
+    right: 1px;
+    width: 10px;
+    height: 10px;
+    background: var(--success);
+    border-radius: 50%;
+    border: 2px solid rgba(20, 20, 20, 0.9);
+    box-shadow: 0 0 6px var(--success);
+}
+
+.user-card-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.user-card-name {
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.95);
+    font-size: 0.87rem;
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.user-card-channel {
+    color: rgba(255, 255, 255, 0.42);
+    font-size: 0.7rem;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.user-card-bottom {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.user-card-count {
+    font-size: 0.72rem;
+    color: rgba(255, 255, 255, 0.42);
+    font-weight: 500;
+    letter-spacing: 0.01em;
+}
+
+/* ══════════════════════════════════════════════════════
+   LOGOUT PILL — left side of screen, Apple-style
+   ══════════════════════════════════════════════════════ */
+.logout-pill {
+    position: fixed;
+    top: 18px;
+    left: 18px;
+    z-index: 200;
+    background: rgba(18, 18, 18, 0.68);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 50px;
+    padding: 9px 20px;
+    color: rgba(255, 255, 255, 0.65);
+    font-family: var(--font-main);
+    font-size: 0.82rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, border-color 0.2s, box-shadow 0.2s;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.28), 0 1px 0 rgba(255,255,255,0.06) inset;
+    /* Slide-up with user card during focus mode */
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1),
+                opacity 0.35s ease,
+                background 0.2s, color 0.2s;
+}
+.logout-pill:hover {
+    background: rgba(220, 60, 40, 0.55);
+    border-color: rgba(220, 60, 40, 0.4);
+    color: white;
+    box-shadow: 0 4px 20px rgba(220, 60, 40, 0.25);
+}
+.logout-pill:active {
+    transform: scale(0.95);
+}
+
+/* Override old .hud styles that are no longer needed */
+.hud { display: none !important; }
+/* Legacy logout-btn class (kept for JS compatibility) */
+.logout-btn { /* styles from .logout-pill apply via id */ }
+
+/* ══════════════════════════════════════════════════════
+   MOBILE JOYSTICK
+   ══════════════════════════════════════════════════════ */
+.mobile-joystick {
+    display: none; /* hidden on desktop */
+    position: fixed;
+    bottom: 36px;
+    left: 36px;
+    width: 116px;
+    height: 116px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.07);
+    border: 2px solid rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    z-index: 500;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.35);
+    will-change: transform;
+}
+
+.joystick-knob {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.70);
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
+    transform: translate(-50%, -50%);
+    transition: width 0.1s, height 0.1s;
+    pointer-events: none;
+    will-change: transform;
+}
+
+.mobile-joystick.active .joystick-knob {
+    width: 40px;
+    height: 40px;
+    background: white;
+}
+
+/* Sprint ring pulse when sprinting */
+@keyframes sprintRing {
+    0%   { box-shadow: 0 0 0 0 rgba(255,200,80,0.55); }
+    70%  { box-shadow: 0 0 0 10px rgba(255,200,80,0); }
+    100% { box-shadow: 0 0 0 0 rgba(255,200,80,0); }
+}
+.mobile-joystick.sprinting .joystick-knob {
+    background: var(--clr-saffron);
+    animation: sprintRing 0.7s ease-out infinite;
+}
+
+/* ══════════════════════════════════════════════════════
+   MOBILE RACE D-PAD
+   ══════════════════════════════════════════════════════ */
+.mobile-race-btns {
+    position: fixed;
+    bottom: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 500;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.mobile-race-btns.hidden { display: none; }
+
+.race-dpad {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.race-dpad-row {
+    display: flex;
+    gap: 60px;
+    direction: ltr; /* prevent RTL from flipping left/right buttons */
+}
+
+.race-dpad-btn {
+    width: 64px;
+    height: 64px;
+    border-radius: 14px;
+    background: rgba(20, 20, 20, 0.72);
+    border: 1.5px solid rgba(255, 255, 255, 0.18);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: rgba(255, 255, 255, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.1s, transform 0.08s;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+}
+
+.race-dpad-btn svg {
+    width: 28px;
+    height: 28px;
+    pointer-events: none;
+}
+
+.race-dpad-btn.pressed,
+.race-dpad-btn:active {
+    background: rgba(8, 111, 182, 0.55);
+    border-color: var(--clr-blue);
+    transform: scale(0.92);
+}
+
+.race-dpad-fwd {
+    width: 72px;
+    height: 72px;
+}
+
+.race-dpad-bwd {
+    width: 72px;
+    height: 72px;
+    opacity: 0.80;
+}
+
+/* ══════════════════════════════════════════════════════
+   MOBILE DRAWER HANDLE (inside focus-sounds-panel)
+   ══════════════════════════════════════════════════════ */
+.mobile-drawer-handle {
+    display: none; /* hidden on desktop */
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 0 4px;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    width: 100%;
+    flex-shrink: 0;
+    will-change: transform;
+}
+
+.drawer-pill {
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.30);
+}
+
+.drawer-label {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.55);
+    letter-spacing: 1px;
+}
+
+/* ══════════════════════════════════════════════════════
+   MOBILE-SPECIFIC OVERRIDES  (body.is-mobile)
+   ══════════════════════════════════════════════════════ */
+body.is-mobile .mobile-joystick { display: flex; }
+body.is-mobile .mobile-drawer-handle { display: flex; }
+
+/* User card on mobile: compact, top-right */
+body.is-mobile .user-card {
+    top: 14px;
+    right: 14px;
+    padding: 9px 12px 8px;
+    min-width: 0;
+    gap: 6px;
+    border-radius: 16px;
+    will-change: transform;
+}
+
+/* Logout pill on mobile: smaller, still top-left */
+body.is-mobile .logout-pill {
+    top: 14px;
+    left: 14px;
+    padding: 8px 16px;
+    font-size: 0.78rem;
+    will-change: transform;
+}
+
+body.is-mobile .user-card-bottom { display: none; }
+
+/* Slide user card + logout up during focus work mode */
+body.is-mobile .user-card.focus-hidden {
+    transform: translateY(-140%);
+    opacity: 0;
+    pointer-events: none;
+}
+body.is-mobile .logout-pill.focus-hidden {
+    transform: translateY(-140%);
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Pomodoro large timer: adjust top so it clears user card on mobile */
+body.is-mobile .pomodoro-large {
+    top: 16px;
+}
+body.is-mobile .timer-text { font-size: 5.5rem; }
+body.is-mobile .session-text { font-size: 1.1rem; }
+
+/* Pomodoro small timer on mobile */
+body.is-mobile .pomodoro-small {
+    top: 16px;
+    font-size: 1rem;
+    padding: 8px 18px;
+}
+
+/* ── Mobile Focus Drawer ──────────────────────────── */
+
+/* On mobile the focus-sounds-panel becomes a bottom drawer */
+body.is-mobile .focus-sounds-panel {
+    position: fixed !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-height: 78vh;
+    border-radius: 20px 20px 0 0 !important;
+    transform: translateY(calc(100% - 72px)) !important;
+    padding: 0 16px 24px !important;
+    overflow: hidden;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    /* Snap transitions */
+    transition: transform 0.38s cubic-bezier(0.34, 1.4, 0.64, 1) !important;
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    will-change: transform;
+}
+
+/* When hidden on mobile, fully off-screen */
+body.is-mobile .focus-sounds-panel:not(.active) {
+    transform: translateY(110%) !important;
+    pointer-events: none !important;
+    opacity: 0 !important;
+}
+
+/* When active but not dragged open: show 72px (handle height) */
+body.is-mobile .focus-sounds-panel.active {
+    opacity: 1 !important;
+    pointer-events: all !important;
+    transform: translateY(calc(100% - 72px)) !important;
+}
+
+/* When fully open */
+body.is-mobile .focus-sounds-panel.active.drawer-open {
+    transform: translateY(0) !important;
+}
+
+/* Drawer contents scroll container */
+body.is-mobile .focus-sounds-panel .panel-header-row,
+body.is-mobile .focus-sounds-panel .sound-controls {
+    flex-shrink: 0;
+}
+
+/* On mobile the YT block is part of the drawer, not fixed */
+body.is-mobile .yt-focus-block {
+    position: relative !important;
+    left: auto !important;
+    bottom: auto !important;
+    width: 100% !important;
+    transform: none !important;
+    opacity: 1 !important;
+    pointer-events: all !important;
+    border-radius: 12px !important;
+    margin-top: 4px;
+}
+
+/* Hide YT block .visible requirement on mobile (always shown in drawer) */
+body.is-mobile .yt-focus-block { display: flex; flex-direction: column; }
+
+/* Task panel on mobile: center bottom above drawer handle */
+body.is-mobile .current-task-panel {
+    bottom: 80px;
+    left: 12px;
+    right: 12px;
+    transform: translate(0, 100px) scale(0.97) !important;
+    width: auto;
+}
+body.is-mobile .current-task-panel.active {
+    transform: translate(0, 0) scale(1) !important;
+}
+body.is-mobile #current-task-input {
+    width: 100%;
+    font-size: 15px;
+}
+
+/* Sound grid: 5 columns → 3 on narrow screens */
+@media (max-width: 400px) {
+    .sound-controls {
+        grid-template-columns: repeat(3, 1fr) !important;
+    }
+}
+
+/* Race HUD on mobile: shift down a bit (no top bar) */
+body.is-mobile .race-hud { top: 70px; }

@@ -65,24 +65,53 @@
 
     <!-- شاشة اللعبة / المساحة -->
     <div id="game-screen" class="screen">
-        <div class="hud">
-            <div class="hud-right">
-                <div class="user-badge">
-                    <span class="status-dot"></span>
-                    <div class="user-info">
-                        <span id="current-user">جاري التحميل...</span>
-                        <span id="channel-name"></span>
-                    </div>
+
+        <!-- بطاقة المستخدم (تحل محل شريط الـ HUD) -->
+        <div id="user-card" class="user-card">
+            <div class="user-card-top">
+                <div class="user-card-avatar-wrap">
+                    <span class="user-card-status-dot"></span>
+                    <img id="hud-avatar" class="user-card-avatar" src="" alt="صورة المستخدم">
+                </div>
+                <div class="user-card-info">
+                    <span id="current-user" class="user-card-name">جاري التحميل...</span>
+                    <span id="channel-name" class="user-card-channel"></span>
                 </div>
             </div>
-
-            <div class="hud-left">
-                <span id="player-count" class="player-stat">0 مستخدمين</span>
-                <button id="logout-btn" class="logout-btn">خروج</button>
+            <div class="user-card-bottom">
+                <span id="player-count" class="user-card-count">0 مستخدمين</span>
             </div>
         </div>
 
+        <!-- زر الخروج (يسار الشاشة، مستقل عن بطاقة المستخدم) -->
+        <button id="logout-btn" class="logout-pill">خروج</button>
+
         <canvas id="game-canvas"></canvas>
+
+        <!-- عصا التحكم للجوال (تظهر على الجوال فقط) -->
+        <div id="mobile-joystick" class="mobile-joystick">
+            <div id="joystick-knob" class="joystick-knob"></div>
+        </div>
+
+        <!-- أزرار السباق للجوال (للأمام / يسار / يمين / للخلف) -->
+        <div id="mobile-race-btns" class="mobile-race-btns hidden">
+            <div class="race-dpad">
+                <button id="race-btn-fwd" class="race-dpad-btn race-dpad-fwd" aria-label="للأمام">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="18 15 12 9 6 15"/></svg>
+                </button>
+                <div class="race-dpad-row">
+                    <button id="race-btn-left" class="race-dpad-btn race-dpad-side" aria-label="يسار">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                    </button>
+                    <button id="race-btn-right" class="race-dpad-btn race-dpad-side" aria-label="يمين">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+                    </button>
+                </div>
+                <button id="race-btn-bwd" class="race-dpad-btn race-dpad-bwd" aria-label="للخلف">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
+            </div>
+        </div>
 
 
 
@@ -207,6 +236,11 @@
 
         <!-- لوحة أصوات التركيز -->
         <div id="focus-sounds-panel" class="focus-sounds-panel">
+            <!-- مقبض الدرج للجوال فقط -->
+            <div class="mobile-drawer-handle" id="drawer-handle">
+                <div class="drawer-pill"></div>
+                <span class="drawer-label">أصوات</span>
+            </div>
             <div class="panel-header-row">
                 <div class="panel-header">أصوات التركيز 🎧</div>
                 <div class="overall-vol-container">

@@ -1,5 +1,11 @@
 import { database, ref, onValue, update, get, onDisconnect, set, remove } from './firebase-config.js';
 
+// ─── Mobile detection ────────────────────────────────────────────────────────
+const MOBILE_BREAKPOINT = 1024;
+function isMobile() { return window.innerWidth < MOBILE_BREAKPOINT; }
+function setMobileClass() {
+    document.body.classList.toggle('is-mobile', isMobile());
+}
 // ─── Lobby configuration ─────────────────────────────────────────────────────
 // To add a new lobby: add one entry.  The key is the internal lobby ID and must
 // match what index.js writes into users/{id}/lobby.
@@ -723,10 +729,13 @@ const gameState = {
         race: new Image()
     },
     sounds: {
-        kidnap: new Audio('Sound/LaptopGrab.mp3'),
-        timeBreak: new Audio('Sound/TimeBreak.mp3'),
-        timeReturn: new Audio('Sound/TimeReturn.mp3'),
-        yipee: new Audio('Sound/Yipee.mp3')
+        kidnap:                new Audio('Sound/LaptopGrab.mp3'),
+        timeBreak:             new Audio('Sound/TimeBreak.mp3'),
+        timeReturn:            new Audio('Sound/TimeReturn.mp3'),
+        yipee:                 new Audio('Sound/Yipee.mp3'),
+        minigameReady:         new Audio('Sound/Minigame_Ready.mp3'),
+        minigameButtonPressed: new Audio('Sound/Minigame_ButtonPressed.mp3'),
+        minigameCountdown:     new Audio('Sound/Minigame_Racing_Countdown.mp3'),
     },
     canvas: null,
     ctx: null,
@@ -761,10 +770,17 @@ const gameState = {
         finishReturnTimer: null,
         lastSync: 0,
         carVisuals: {},
-        camera: { x: 0, y: 0 },
+        camera: { x: 0, y: 0, angle: 0 },
         track: null,
         teleportAnim: null
     },
+
+    // Mobile joystick state
+    joystick: { active: false, dx: 0, dy: 0, magnitude: 0, sprinting: false },
+    // Mobile race d-pad button state
+    raceButtons: { forward: false, left: false, right: false, backward: false },
+    // Device pixel ratio (set in resizeCanvas)
+    dpr: 1,
 
     // Animation State
     anim: {
@@ -790,11 +806,14 @@ const gameState = {
     }
 };
 
-// Preload Sound
-gameState.sounds.kidnap.preload = 'auto';
-gameState.sounds.timeBreak.preload = 'auto';
-gameState.sounds.timeReturn.preload = 'auto';
-gameState.sounds.yipee.preload = 'auto';
+// Preload all sounds so they fire instantly with no lag
+gameState.sounds.kidnap.preload                = 'auto';
+gameState.sounds.timeBreak.preload             = 'auto';
+gameState.sounds.timeReturn.preload            = 'auto';
+gameState.sounds.yipee.preload                 = 'auto';
+gameState.sounds.minigameReady.preload         = 'auto';
+gameState.sounds.minigameButtonPressed.preload = 'auto';
+gameState.sounds.minigameCountdown.preload     = 'auto';
 
 // Constants
 const COLORS = {
@@ -880,7 +899,8 @@ const CAMERA_SMOOTHING = 0.1;
 const POSITION_LERP_SPEED = 0.22;
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 2.0;
-const WIND_PARTICLE_COUNT = 30;
+const WIND_PARTICLE_COUNT = 30;      // desktop
+const WIND_PARTICLE_COUNT_MOBILE = 10; // mobile (performance)
 
 // Easing Functions
 const easeOutExpo = (x) => x === 1 ? 1 : 1 - Math.pow(2, -10 * x);
@@ -1265,6 +1285,18 @@ function updateRaceCamera() {
     const lerpFactor = 1 - Math.pow(1 - CAMERA_SMOOTHING, gameState.dtFactor);
     gameState.race.camera.x += (targetX - gameState.race.camera.x) * lerpFactor;
     gameState.race.camera.y += (targetY - gameState.race.camera.y) * lerpFactor;
+
+    // Mobile: rotate camera to follow car heading so car always drives "upward"
+    if (isMobile()) {
+        const carAngle = visual ? visual.angle : car.angle;
+        // Target angle makes the car appear to drive toward the top of the screen
+        const targetAngle = -(carAngle + Math.PI / 2);
+        // Shortest-path angle lerp (handles wraparound)
+        let diff = targetAngle - gameState.race.camera.angle;
+        while (diff > Math.PI)  diff -= 2 * Math.PI;
+        while (diff < -Math.PI) diff += 2 * Math.PI;
+        gameState.race.camera.angle += diff * Math.min(lerpFactor * 1.4, 1);
+    }
 }
 
 function getCurrentTaskText() {
@@ -1292,6 +1324,7 @@ function clearLocalPomodoroUi() {
     if (taskPanel) taskPanel.classList.remove('active');
     const taskInput = document.getElementById('current-task-input');
     if (taskInput) taskInput.blur();
+    setMobileFocusMode(false);
 }
 
 function getPomodoroStartedAt(state) {
@@ -1394,16 +1427,22 @@ function isInBreakRoom(y) {
 
 function screenToWorld(clientX, clientY) {
     const rect = gameState.canvas.getBoundingClientRect();
+    // CSS clientX/Y are in logical pixels; with ctx.scale(dpr,dpr) the draw space
+    // is also logical, so no DPR multiplication needed here.
+    const dpr = gameState.dpr || 1;
+    const W = gameState.canvas.width / dpr;  // logical viewport width
+    const H = gameState.canvas.height / dpr;
     const canvasX = clientX - rect.left;
     const canvasY = clientY - rect.top;
     return {
-        x: (canvasX - gameState.canvas.width / 2) / gameState.zoom - gameState.camera.x,
-        y: (canvasY - gameState.canvas.height / 2) / gameState.zoom - gameState.camera.y
+        x: (canvasX - W / 2) / gameState.zoom - gameState.camera.x,
+        y: (canvasY - H / 2) / gameState.zoom - gameState.camera.y
     };
 }
 
 // Initialize game
 function init() {
+    setMobileClass(); // set body.is-mobile before anything renders
     loadAssets();
     loadRaceTrackAsset();
     setupLobbySelection();   // ← shows lobby screen first; calls setupUserSelection internally
@@ -1420,7 +1459,8 @@ function loadAssets() {
 }
 
 function initWindParticles() {
-    for (let i = 0; i < WIND_PARTICLE_COUNT; i++) {
+    const count = isMobile() ? WIND_PARTICLE_COUNT_MOBILE : WIND_PARTICLE_COUNT;
+    for (let i = 0; i < count; i++) {
         gameState.windParticles.push({
             x: Math.random() * window.innerWidth,
             y: Math.random() * window.innerHeight,
@@ -1488,6 +1528,26 @@ function setupLobbySelection() {
             loginScreen.classList.add('active');
             setupUserSelection();   // now that a lobby is chosen, build the user list
         });
+
+        // Mobile: long-press الإخوة button (800ms) → spawn siraj ghost (like Shift+click on desktop)
+        if (lobbyId === 'male') {
+            let sirajHoldTimer = null;
+            btn.addEventListener('touchstart', () => {
+                sirajHoldTimer = setTimeout(() => {
+                    sirajHoldTimer = null;
+                    // Light haptic if available
+                    if (navigator.vibrate) navigator.vibrate(40);
+                    spawnSirajGhost();
+                }, 800);
+            }, { passive: true });
+            const cancelSirajHold = () => {
+                if (sirajHoldTimer) { clearTimeout(sirajHoldTimer); sirajHoldTimer = null; }
+            };
+            btn.addEventListener('touchend', cancelSirajHold, { passive: true });
+            btn.addEventListener('touchmove', cancelSirajHold, { passive: true });
+            btn.addEventListener('touchcancel', cancelSirajHold, { passive: true });
+        }
+
         buttonsWrap.appendChild(btn);
     }
 }
@@ -1636,9 +1696,33 @@ function audioObjPlayHelper(el) {
     return el.play();
 }
 
+/**
+ * Play the "player ready" minigame sound with distance-based volume
+ * and a small random pitch shift for variety.
+ * @param {number} volume  0–1, already distance-attenuated
+ */
+function playMinigameReadySound(volume) {
+    const snd = gameState.sounds.minigameReady;
+    if (!snd) return;
+    try {
+        const clone = snd.cloneNode();
+        clone.volume = Math.max(0, Math.min(1, volume));
+        // ±10% pitch variation so repeated plays never sound identical
+        clone.playbackRate = 0.92 + Math.random() * 0.16;
+        clone.play().catch(() => {});
+    } catch (e) {}
+}
+
 function startGame(userData) {
     gameState.currentUser = userData.username;
     gameState.userId = userData.userId;
+
+    // Set HUD avatar image
+    const hudAvatar = document.getElementById('hud-avatar');
+    if (hudAvatar && userData.avatar) hudAvatar.src = userData.avatar;
+
+    // Apply mobile class immediately
+    setMobileClass();
 
     // Initialize Focus Audio Engine & Setup Focus UI
     gameState.focusAudioEngine = new FocusAudioEngine();
@@ -1667,6 +1751,7 @@ function startGame(userData) {
     setupTestModeUI();
     setupRaceUI();
     setupLogout();
+    initMobileControls();
     listenToPlayers();
     listenToPomodoro();
     listenToRace();
@@ -1776,11 +1861,20 @@ function startGame(userData) {
 
 function resizeCanvas() {
     if (!gameState.canvas) return;
-    gameState.canvas.width = window.innerWidth;
-    gameState.canvas.height = window.innerHeight;
+    const dpr = window.devicePixelRatio || 1;
+    gameState.dpr = dpr;
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+    gameState.canvas.width  = w * dpr;
+    gameState.canvas.height = h * dpr;
+    gameState.canvas.style.width  = w + 'px';
+    gameState.canvas.style.height = h + 'px';
 }
 
-window.addEventListener('resize', resizeCanvas);
+window.addEventListener('resize', () => {
+    resizeCanvas();
+    setMobileClass();
+});
 
 function setupControls() {
     window.addEventListener('keydown', (e) => {
@@ -2033,10 +2127,10 @@ function setupFocusPanelUI() {
         });
     }
 
-    // Detach the YouTube block from the focus panel and pin it bottom-left
+    // On desktop: detach the YouTube block from the focus panel and pin it bottom-left
+    // On mobile: leave it inside the panel so it becomes part of the drawer
     const ytBlock = document.getElementById('yt-focus-block');
-    if (ytBlock) {
-        // move to body so it's not semantically inside the mixer
+    if (ytBlock && !isMobile()) {
         document.body.appendChild(ytBlock);
     }
 }
@@ -2065,6 +2159,283 @@ function setupRaceUI() {
         });
     }
 }
+
+// ─── Mobile UI helpers ────────────────────────────────────────────────────────
+
+/** Show/hide user card during focus work phase (mobile only) */
+function setMobileFocusMode(active) {
+    const card   = document.getElementById('user-card');
+    const logout = document.getElementById('logout-btn');
+    if (active && isMobile()) {
+        if (card)   card.classList.add('focus-hidden');
+        if (logout) logout.classList.add('focus-hidden');
+    } else {
+        if (card)   card.classList.remove('focus-hidden');
+        if (logout) logout.classList.remove('focus-hidden');
+    }
+}
+
+/** Show or hide the race d-pad, and toggle joystick visibility */
+function showMobileRaceButtons(show) {
+    if (!isMobile()) return;
+    const dpad = document.getElementById('mobile-race-btns');
+    const joystick = document.getElementById('mobile-joystick');
+    if (dpad) dpad.classList.toggle('hidden', !show);
+    if (joystick) joystick.style.display = show ? 'none' : '';
+    if (!show) {
+        // Reset button state
+        gameState.raceButtons.forward  = false;
+        gameState.raceButtons.left     = false;
+        gameState.raceButtons.right    = false;
+        gameState.raceButtons.backward = false;
+    }
+}
+
+/** Initialize all mobile-only controls: joystick, pinch-zoom, canvas tap, focus drawer, race d-pad */
+function initMobileControls() {
+    // Always set up the resize observer for mobile class
+    setMobileClass();
+
+    // ── Joystick ──────────────────────────────────────────────────────
+    const joystickEl = document.getElementById('mobile-joystick');
+    const knob = document.getElementById('joystick-knob');
+    if (joystickEl && knob) {
+        const RADIUS = 58; // max knob displacement in px (outer ring radius - knob radius)
+        let joyTouchId = null;
+        let joyCenterX = 0;
+        let joyCenterY = 0;
+
+        const getJoyCenter = () => {
+            const rect = joystickEl.getBoundingClientRect();
+            return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+        };
+
+        joystickEl.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (joyTouchId !== null) return;
+            const t = e.changedTouches[0];
+            joyTouchId = t.identifier;
+            const center = getJoyCenter();
+            joyCenterX = center.x;
+            joyCenterY = center.y;
+            joystickEl.classList.add('active');
+            gameState.joystick.active = true;
+        }, { passive: false });
+
+        window.addEventListener('touchmove', (e) => {
+            if (joyTouchId === null) return;
+            let touch = null;
+            for (const t of e.changedTouches) {
+                if (t.identifier === joyTouchId) { touch = t; break; }
+            }
+            if (!touch) return;
+            e.preventDefault();
+
+            const rawDx = touch.clientX - joyCenterX;
+            const rawDy = touch.clientY - joyCenterY;
+            const dist = Math.hypot(rawDx, rawDy);
+            const clampedDist = Math.min(dist, RADIUS);
+            const mag = clampedDist / RADIUS;
+
+            const nx = dist > 0 ? rawDx / dist : 0;
+            const ny = dist > 0 ? rawDy / dist : 0;
+
+            gameState.joystick.dx = nx;
+            gameState.joystick.dy = ny;
+            gameState.joystick.magnitude = mag;
+            gameState.joystick.sprinting = mag > 0.55;
+
+            // Move knob visually
+            knob.style.transform = `translate(calc(-50% + ${nx * clampedDist}px), calc(-50% + ${ny * clampedDist}px))`;
+
+            // Sprint visual
+            joystickEl.classList.toggle('sprinting', gameState.joystick.sprinting);
+        }, { passive: false });
+
+        const endJoy = (e) => {
+            let found = false;
+            for (const t of e.changedTouches) {
+                if (t.identifier === joyTouchId) { found = true; break; }
+            }
+            if (!found) return;
+            joyTouchId = null;
+            gameState.joystick.active = false;
+            gameState.joystick.dx = 0;
+            gameState.joystick.dy = 0;
+            gameState.joystick.magnitude = 0;
+            gameState.joystick.sprinting = false;
+            knob.style.transform = 'translate(-50%, -50%)';
+            joystickEl.classList.remove('active', 'sprinting');
+        };
+        window.addEventListener('touchend', endJoy);
+        window.addEventListener('touchcancel', endJoy);
+    }
+
+    // ── Pinch-to-zoom (canvas, disabled during race) ──────────────────
+    const canvas = document.getElementById('game-canvas');
+    if (canvas) {
+        let pinchDist = 0;
+
+        canvas.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 2) {
+                pinchDist = Math.hypot(
+                    e.touches[0].clientX - e.touches[1].clientX,
+                    e.touches[0].clientY - e.touches[1].clientY
+                );
+            }
+        }, { passive: true });
+
+        canvas.addEventListener('touchmove', (e) => {
+            if (e.touches.length !== 2) return;
+            // Disable pinch during active race
+            if (gameState.race && gameState.race.active) return;
+
+            const newDist = Math.hypot(
+                e.touches[0].clientX - e.touches[1].clientX,
+                e.touches[0].clientY - e.touches[1].clientY
+            );
+            if (pinchDist === 0) { pinchDist = newDist; return; }
+
+            const scale = newDist / pinchDist;
+            gameState.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, gameState.zoom * scale));
+            pinchDist = newDist;
+            e.preventDefault();
+        }, { passive: false });
+
+        canvas.addEventListener('touchend', () => { pinchDist = 0; }, { passive: true });
+
+        // ── Canvas tap → laptop interaction (mobile) ─────────────────
+        let tapMoved = false;
+        let tapStartX = 0, tapStartY = 0;
+
+        canvas.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            tapMoved = false;
+            tapStartX = e.touches[0].clientX;
+            tapStartY = e.touches[0].clientY;
+        }, { passive: true });
+
+        canvas.addEventListener('touchmove', (e) => {
+            if (e.touches.length !== 1) return;
+            const dx = e.touches[0].clientX - tapStartX;
+            const dy = e.touches[0].clientY - tapStartY;
+            if (Math.hypot(dx, dy) > 10) tapMoved = true;
+        }, { passive: true });
+
+        canvas.addEventListener('touchend', (e) => {
+            if (tapMoved) return; // was a drag, not a tap
+            if (e.changedTouches.length !== 1) return;
+            const t = e.changedTouches[0];
+
+            // Check race return button tap
+            const clickWorld = screenToWorld(t.clientX, t.clientY);
+            const player = gameState.players[gameState.userId];
+            const clickedRaceBtn = player && isBreakActive() && isInBreakRoom(player.y) &&
+                gameState.activeRaceZone &&
+                Math.hypot(clickWorld.x - RACE_BTN_CX, clickWorld.y - RACE_BTN_CY) < RACE_BTN_R + 24;
+            if (clickedRaceBtn) { triggerRaceTeleport(); return; }
+
+            // Check results button tap
+            if (gameState.race && gameState.race.showResultsInGame) {
+                const rect = canvas.getBoundingClientRect();
+                const cx = t.clientX - rect.left;
+                const cy = t.clientY - rect.top;
+                const btn = gameState.race.resultsButtonRect;
+                if (btn && cx >= btn.x && cx <= btn.x + btn.w && cy >= btn.y && cy <= btn.y + btn.h) {
+                    returnFromRace(true);
+                    gameState.race.showResultsInGame = false;
+                    gameState.race.finishedSession = null;
+                    gameState.race.resultsButtonRect = null;
+                    return;
+                }
+            }
+
+            // Open laptop / pomodoro modal
+            if (gameState.pomodoro.active) return;
+            if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
+                if (gameState.activeLaptop.claimedBy) return;
+                const testBtn = document.getElementById('pomodoro-test');
+                if (testBtn) testBtn.style.display = gameState.isSirajGhost ? 'block' : 'none';
+                document.getElementById('pomodoro-modal').classList.add('active');
+            }
+        }, { passive: true });
+    }
+
+    // ── Focus sounds drawer (drag handle) ─────────────────────────────
+    const drawer = document.getElementById('focus-sounds-panel');
+    const handle = document.getElementById('drawer-handle');
+    if (drawer && handle) {
+        let dragStartY = 0;
+        let dragStartTranslate = 0; // will be set on touch start
+        let currentTranslate = 0;
+        let isDraggingDrawer = false;
+        const SNAP_THRESHOLD = 0.4; // fraction of drawer height
+
+        const getCollapsedTranslate = () => {
+            return drawer.offsetHeight - 72; // 72px visible when collapsed
+        };
+
+        handle.addEventListener('touchstart', (e) => {
+            if (!isMobile()) return;
+            e.preventDefault();
+            isDraggingDrawer = true;
+            dragStartY = e.touches[0].clientY;
+            // Determine current position from class
+            dragStartTranslate = drawer.classList.contains('drawer-open') ? 0 : getCollapsedTranslate();
+            currentTranslate = dragStartTranslate;
+            drawer.style.transition = 'none';
+        }, { passive: false });
+
+        window.addEventListener('touchmove', (e) => {
+            if (!isDraggingDrawer) return;
+            e.preventDefault();
+            const dy = e.touches[0].clientY - dragStartY;
+            const collapsed = getCollapsedTranslate();
+            currentTranslate = Math.max(0, Math.min(collapsed, dragStartTranslate + dy));
+            drawer.style.transform = `translateY(${currentTranslate}px)`;
+        }, { passive: false });
+
+        const endDrag = () => {
+            if (!isDraggingDrawer) return;
+            isDraggingDrawer = false;
+            drawer.style.transition = '';
+
+            const collapsed = getCollapsedTranslate();
+            const openThreshold = collapsed * SNAP_THRESHOLD;
+
+            if (currentTranslate < openThreshold) {
+                // Snap open
+                drawer.classList.add('drawer-open');
+                drawer.style.transform = '';
+            } else {
+                // Snap closed (but still visible as handle)
+                drawer.classList.remove('drawer-open');
+                drawer.style.transform = '';
+            }
+        };
+        window.addEventListener('touchend', endDrag);
+        window.addEventListener('touchcancel', endDrag);
+    }
+
+    // ── Mobile race d-pad buttons ─────────────────────────────────────
+    const setupDpadBtn = (id, key) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        const setPressed = (val) => {
+            gameState.raceButtons[key] = val;
+            btn.classList.toggle('pressed', val);
+        };
+        btn.addEventListener('touchstart', (e) => { e.preventDefault(); setPressed(true); }, { passive: false });
+        btn.addEventListener('touchend', (e) => { e.preventDefault(); setPressed(false); }, { passive: false });
+        btn.addEventListener('touchcancel', () => setPressed(false));
+    };
+    setupDpadBtn('race-btn-fwd',  'forward');
+    setupDpadBtn('race-btn-left', 'left');
+    setupDpadBtn('race-btn-right','right');
+    setupDpadBtn('race-btn-bwd',  'backward');
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function listenToRace() {
     onValue(ref(database, lobbyPath('minigames/race/sessions')), (snap) => {
@@ -2257,6 +2628,8 @@ function startLocalRace(session) {
     gameState.race.returnPoint = participant.returnPoint;
     gameState.race.localCar = freshCar;
     gameState.race.carVisuals = {};
+    // Show mobile race d-pad (hide joystick during race)
+    showMobileRaceButtons(true);
     // Remember previous zoom and double it for race view
     gameState.race.prevZoom = gameState.zoom || 1;
     gameState.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, (gameState.race.prevZoom || 1) * 2));
@@ -2268,6 +2641,9 @@ function startLocalRace(session) {
     car.lastLapAt = 0;
     gameState.race.camera.x = -car.x;
     gameState.race.camera.y = -car.y;
+    // Mobile: init camera angle to match car's starting heading so camera doesn't spin on race start
+    gameState.race.camera.angle = isMobile() ? -(car.angle + Math.PI / 2) : 0;
+    gameState.race.countdownSoundPlayed = false;
     // Mark this user as working so others see avatar bobbing while racing
     update(ref(database), { [`users/${gameState.userId}/isWorking`]: true });
 }
@@ -2307,12 +2683,17 @@ function updateRaceMode() {
     }
 
     const now = serverNow();
+    // Play countdown sound once when the pre-race countdown begins
+    if (now < (session.startTime || 0) && !gameState.race.countdownSoundPlayed) {
+        gameState.race.countdownSoundPlayed = true;
+        playSoundRobust(gameState.sounds.minigameCountdown);
+    }
     if (now < (session.startTime || 0) || car.finished) return;
 
-    const up = gameState.keys['KeyW'] || gameState.keys['ArrowUp'];
-    const down = gameState.keys['KeyS'] || gameState.keys['ArrowDown'];
-    const left = gameState.keys['KeyA'] || gameState.keys['ArrowLeft'];
-    const right = gameState.keys['KeyD'] || gameState.keys['ArrowRight'];
+    const up    = gameState.keys['KeyW'] || gameState.keys['ArrowUp']    || gameState.raceButtons.forward;
+    const down  = gameState.keys['KeyS'] || gameState.keys['ArrowDown']  || gameState.raceButtons.backward;
+    const left  = gameState.keys['KeyA'] || gameState.keys['ArrowLeft']  || gameState.raceButtons.left;
+    const right = gameState.keys['KeyD'] || gameState.keys['ArrowRight'] || gameState.raceButtons.right;
     const dt = gameState.dtFactor;
 
     if (up) car.speed += 0.16 * dt * RACE_SPEED_FACTOR;
@@ -2323,8 +2704,14 @@ function updateRaceMode() {
     car.speed = Math.max(-3.2 * RACE_SPEED_FACTOR, Math.min(8.4 * RACE_SPEED_FACTOR, car.speed));
 
     const turn = (right ? 1 : 0) - (left ? 1 : 0);
-    if (turn !== 0 && Math.abs(car.speed) > 0.25) {
-        car.angle += turn * 0.047 * dt * Math.sign(car.speed);
+    if (turn !== 0) {
+        // On mobile allow turning from a standstill (d-pad needs it); desktop keeps the speed gate
+        const speedOk = isMobile() ? true : Math.abs(car.speed) > 0.25;
+        if (speedOk) {
+            // Use forward direction when stopped so turn feels natural
+            const dir = car.speed !== 0 ? Math.sign(car.speed) : 1;
+            car.angle += turn * 0.047 * dt * dir;
+        }
     }
 
     const prevX = car.x;
@@ -2432,7 +2819,7 @@ function returnFromRace(clearPanel) {
     gameState.race.active = false;
     gameState.race.localCar = null;
     gameState.race.carVisuals = {};
-    gameState.race.camera = { x: 0, y: 0 };
+    gameState.race.camera = { x: 0, y: 0, angle: 0 };
     gameState.race.localResultSent = false;
     // Clear working flag so others know the player is no longer racing
     if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/isWorking`]: false });
@@ -2447,6 +2834,8 @@ function returnFromRace(clearPanel) {
     gameState.race.resultsButtonRect = null;
     if (clearPanel) hideRacePanel();
     hideRaceHud();
+    // Hide mobile race d-pad and restore joystick
+    showMobileRaceButtons(false);
 }
 
 function formatRaceTime(ms) {
@@ -2667,6 +3056,7 @@ function startPomodoroPhase(phase) {
     }
 
     if (phase === 'work') {
+        setMobileFocusMode(true);
         const panel = document.getElementById('focus-sounds-panel');
         if (panel) panel.classList.add('active');
         const taskPanel = document.getElementById('current-task-panel');
@@ -2680,9 +3070,25 @@ function startPomodoroPhase(phase) {
                 }
             }
             if (gameState.focusYTPlayer) {
-                gameState.focusYTPlayer.setVolumePercent(Math.round(gameState.focusAudioEngine.overallVolume * 100));
+                const targetPct = Math.round(gameState.focusAudioEngine.overallVolume * 100);
                 if (gameState.isLockedIn) {
-                    gameState.focusYTPlayer.resume();
+                    // Fade in from silence over 2 s so re-entry feels smooth
+                    gameState.focusYTPlayer.setVolumePercent(0);
+                    gameState.focusYTPlayer.resume().then(() => {
+                        let elapsed = 0;
+                        const FADE_MS = 2000;
+                        const iv = setInterval(() => {
+                            elapsed += 50;
+                            gameState.focusYTPlayer.setVolumePercent(
+                                Math.min(targetPct, Math.round(targetPct * elapsed / FADE_MS))
+                            );
+                            if (elapsed >= FADE_MS) clearInterval(iv);
+                        }, 50);
+                    }).catch(() => {
+                        gameState.focusYTPlayer.setVolumePercent(targetPct);
+                    });
+                } else {
+                    gameState.focusYTPlayer.setVolumePercent(targetPct);
                 }
             }
         }
@@ -2866,12 +3272,21 @@ function handleMovement() {
     const player = gameState.players[gameState.userId];
     if (!player) return;
     let dx = 0, dy = 0;
-    const isSprinting = gameState.keys['ShiftLeft'] || gameState.keys['ShiftRight'];
+    let isSprinting = gameState.keys['ShiftLeft'] || gameState.keys['ShiftRight'];
     const currentSpeed = (isSprinting ? MOVE_SPEED * 1.8 : MOVE_SPEED) * gameState.dtFactor;
     if (gameState.keys['KeyW'] || gameState.keys['ArrowUp']) dy -= currentSpeed;
     if (gameState.keys['KeyS'] || gameState.keys['ArrowDown']) dy += currentSpeed;
     if (gameState.keys['KeyA'] || gameState.keys['ArrowLeft']) dx -= currentSpeed;
     if (gameState.keys['KeyD'] || gameState.keys['ArrowRight']) dx += currentSpeed;
+
+    // Mobile joystick input
+    if (gameState.joystick.active && gameState.joystick.magnitude > 0.08) {
+        const jSprint = gameState.joystick.sprinting;
+        const jSpeed = (jSprint ? MOVE_SPEED * 1.8 : MOVE_SPEED) * gameState.dtFactor;
+        dx += gameState.joystick.dx * jSpeed;
+        dy += gameState.joystick.dy * jSpeed;
+        if (jSprint) isSprinting = true;
+    }
     if (dx !== 0 || dy !== 0) {
         player.isMoving = true;
         player.isSprinting = isSprinting;
@@ -2908,8 +3323,10 @@ function updateWindParticles() {
     gameState.windParticles.forEach(p => {
         p.x -= p.speed * gameState.dtFactor * gameState.windSpeedMultiplier;
         if (p.x < -100) {
-            p.x = window.innerWidth + 100;
-            p.y = Math.random() * window.innerHeight;
+            // Use logical viewport size (window.innerWidth = canvas.width / dpr)
+            const dpr = gameState.dpr || 1;
+            p.x = (gameState.canvas ? gameState.canvas.width / dpr : window.innerWidth) + 100;
+            p.y = Math.random() * (gameState.canvas ? gameState.canvas.height / dpr : window.innerHeight);
         }
     });
 }
@@ -2932,6 +3349,7 @@ function updateInteractions() {
         }
     });
 
+    const prevZonePlayers = gameState.raceZonePlayers || [];
     gameState.raceZonePlayers = isBreakActive() ? Object.values(gameState.players).filter(p => {
         if (!(p.x >= RACE_ZONE_RECT.x && p.x <= RACE_ZONE_RECT.x + RACE_ZONE_RECT.w &&
               p.y >= RACE_ZONE_RECT.y && p.y <= RACE_ZONE_RECT.y + RACE_ZONE_RECT.h)) return false;
@@ -2939,6 +3357,18 @@ function updateInteractions() {
         const sessions = Object.values(gameState.race.activeSessions || {});
         return !sessions.some(s => s && s.phase !== 'finished' && s.participants?.[p.userId]);
     }) : [];
+
+    // Detect newly-entered players and play the ready sound for them
+    if (!gameState.race.active) {
+        const prevIds = new Set(prevZonePlayers.map(p => p.userId));
+        const newlyEntered = gameState.raceZonePlayers.filter(p => !prevIds.has(p.userId));
+        newlyEntered.forEach(p => {
+            const dist = Math.hypot(p.x - player.x, p.y - player.y);
+            // Full volume within 80 px, fades to ~0 at 450 px
+            const vol = Math.max(0, 1 - Math.max(0, dist - 80) / 370);
+            if (vol > 0.04) playMinigameReadySound(vol);
+        });
+    }
 
     if (isBreakActive() && isInBreakRoom(player.y)) {
         gameState.activeRaceZone = player.x >= RACE_ZONE_RECT.x && player.x <= RACE_ZONE_RECT.x + RACE_ZONE_RECT.w &&
@@ -3132,6 +3562,8 @@ function gameLoop(timestamp) {
 
     if (deltaTime > 100) deltaTime = 100; // Cap to avoid large jumps if tab is inactive
     gameState.dtFactor = deltaTime / 16.666; // Standardize to 60fps (1000ms / 60 = 16.666ms)
+    // On mobile, cap dtFactor more aggressively to reduce stutters from dropped frames
+    if (isMobile() && gameState.dtFactor > 2) gameState.dtFactor = 2;
 
     updatePomodoro();
     updateTeleportAnim();
@@ -3140,8 +3572,7 @@ function gameLoop(timestamp) {
         updateRaceMode();
         updateRaceCarVisuals();
         updateRaceCamera();
-        renderRace();
-        drawTeleportOverlay();
+        renderRace();   // drawTeleportOverlay is called inside renderRace
         requestAnimationFrame(gameLoop);
         return;
     }
@@ -3173,11 +3604,19 @@ function render() {
     const canvas = gameState.canvas;
     if (!ctx) return;
 
+    const dpr = gameState.dpr || 1;
+    const W = canvas.width  / dpr;  // logical (CSS-pixel) viewport width
+    const H = canvas.height / dpr;  // logical (CSS-pixel) viewport height
+
+    // Scale context by DPR so all drawing uses logical coordinates → sharp on retina
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
     ctx.fillStyle = COLORS.black;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, W, H);
 
     ctx.save();
-    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.translate(W / 2, H / 2);
     ctx.scale(gameState.zoom, gameState.zoom);
     ctx.translate(gameState.camera.x, gameState.camera.y);
 
@@ -3206,15 +3645,17 @@ function render() {
         drawLockedInOverlay();
     }
 
-    ctx.restore();
+    ctx.restore();  // undo world translate/zoom
 
     if (gameState.focusAlpha > 0.01) {
-        drawFocusMask(canvas);
+        drawFocusMask(W, H);
     }
 
-    drawWindParticles();
-    drawFocusFog();
-    drawTeleportOverlay();
+    drawWindParticles(W, H);
+    drawFocusFog(W, H);
+    drawTeleportOverlay(W, H);
+
+    ctx.restore();  // undo DPR scale
 
     const ytBlock = document.getElementById('yt-focus-block');
     if (ytBlock) {
@@ -3388,6 +3829,9 @@ async function triggerRaceTeleport() {
     const zonePlayers = [...gameState.raceZonePlayers];
     if (zonePlayers.length === 0) return;
 
+    // Button-press confirmation sound
+    playSoundRobust(gameState.sounds.minigameButtonPressed);
+
     if (!isRaceTrackReady()) {
         showRaceMessage('جاري تحميل حلبة السباق، حاول مرة أخرى');
         return;
@@ -3493,15 +3937,18 @@ function updateTeleportAnim() {
     }
 }
 
-function drawTeleportOverlay() {
+function drawTeleportOverlay(W, H) {
     const anim = gameState.race.teleportAnim;
     if (!anim || anim.screenAlpha < 0.01) return;
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
+    // W/H are logical viewport dims (already in DPR-scaled context when called from render/renderRace)
+    const w = W || canvas.width / (gameState.dpr || 1);
+    const h = H || canvas.height / (gameState.dpr || 1);
     ctx.save();
     ctx.globalAlpha = Math.min(1, anim.screenAlpha);
     ctx.fillStyle = 'black';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, w, h);
     ctx.globalAlpha = 1;
     ctx.restore();
 }
@@ -3514,16 +3961,25 @@ function renderRace() {
     const track = gameState.race.track;
     if (!ctx || !canvas || !session || !localCar) return;
 
+    const dpr = gameState.dpr || 1;
+    const W = canvas.width  / dpr;
+    const H = canvas.height / dpr;
+
+    // DPR scale — all drawing below uses logical pixels
+    ctx.save();
+    ctx.scale(dpr, dpr);
+
     ctx.fillStyle = '#1a3324';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillRect(0, 0, W, H);
 
     if (!track || !track.image) {
         ctx.fillStyle = 'white';
         ctx.font = 'bold 24px Rubik';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('جاري تحميل حلبة السباق...', canvas.width / 2, canvas.height / 2);
+        ctx.fillText('جاري تحميل حلبة السباق...', W / 2, H / 2);
         updateRaceHud(session, localCar);
+        ctx.restore();
         return;
     }
 
@@ -3531,7 +3987,11 @@ function renderRace() {
     const drawH = track.height * track.scale;
 
     ctx.save();
-    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.translate(W / 2, H / 2);
+    // Mobile: rotate camera to follow car heading so car always drives "upward"
+    if (isMobile()) {
+        ctx.rotate(gameState.race.camera.angle);
+    }
     ctx.scale(gameState.zoom, gameState.zoom);
     ctx.translate(gameState.race.camera.x, gameState.race.camera.y);
 
@@ -3543,29 +4003,39 @@ function renderRace() {
     Object.entries(cars).forEach(([userId, car]) => {
         const participant = session.participants && session.participants[userId];
         const drawCar = getRaceCarDrawState(userId, car);
-        drawRaceCar(drawCar, participant ? participant.index || 0 : 0, userId === gameState.userId, userId, participant);
+        drawRaceCar(drawCar, participant ? participant.index || 0 : 0, userId === gameState.userId);
     });
 
-    ctx.restore();
+    ctx.restore();  // undo world translate/zoom/rotation
+
+    // Second pass: draw labels in screen space so they're always upright regardless of camera rotation
+    Object.entries(cars).forEach(([userId, car]) => {
+        const participant = session.participants && session.participants[userId];
+        const drawCar = getRaceCarDrawState(userId, car);
+        const cx = drawCar ? drawCar.x : car.x;
+        const cy = drawCar ? drawCar.y : car.y;
+        const screen = raceWorldToScreen(cx, cy, W, H);
+        drawRaceCarLabelScreen(userId, participant, screen.x, screen.y, userId === gameState.userId);
+    });
 
     const now = serverNow();
     if (now < (session.startTime || 0)) {
         const count = Math.max(1, Math.ceil(((session.startTime || 0) - now) / 1000));
         ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillRect(0, 0, W, H);
         ctx.fillStyle = 'white';
         ctx.font = 'bold 92px Rubik';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(count.toString(), canvas.width / 2, canvas.height / 2);
+        ctx.fillText(count.toString(), W / 2, H / 2);
     } else if (localCar.finished) {
         ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillRect(0, 0, W, H);
         ctx.fillStyle = 'white';
         ctx.font = 'bold 34px Rubik';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText('انتهيت!', canvas.width / 2, canvas.height / 2);
+        ctx.fillText('انتهيت!', W / 2, H / 2);
     }
 
     // If the session is finished, draw the in-game results overlay
@@ -3578,11 +4048,11 @@ function renderRace() {
         // sort by finish time for ranking display
         const ranked = participants.slice().sort((a, b) => (results[a.id]?.finishTime || Infinity) - (results[b.id]?.finishTime || Infinity));
 
-        const panelW = Math.min(520, canvas.width - 80);
+        const panelW = Math.min(520, W - 80);
         const rowH = 44;
         const panelH = 120 + ranked.length * rowH;
-        const px = (canvas.width - panelW) / 2;
-        const py = (canvas.height - panelH) / 2;
+        const px = (W - panelW) / 2;
+        const py = (H - panelH) / 2;
 
         // panel background
         ctx.fillStyle = 'rgba(12, 12, 12, 0.92)';
@@ -3674,14 +4144,19 @@ function renderRace() {
         ctx.textBaseline = 'middle';
         ctx.fillText('عودة', bx + btnW / 2, by + btnH / 2);
 
-        // store button rect in canvas coords for click handler
+        // store button rect in logical canvas coords for click handler
         gameState.race.resultsButtonRect = { x: bx, y: by, w: btnW, h: btnH };
     }
 
     updateRaceHud(session, localCar);
+
+    // Draw teleport overlay on top (still inside DPR scale)
+    drawTeleportOverlay(W, H);
+
+    ctx.restore();  // undo DPR scale
 }
 
-function drawRaceCar(car, index, isLocal, userId, participant) {
+function drawRaceCar(car, index, isLocal) {
     const ctx = gameState.ctx;
     if (!car) return;
     const palette = ['#086fb6', '#f04e3a', '#f4c82b', '#3bb9ab', '#ffffff', '#262626'];
@@ -3699,16 +4174,66 @@ function drawRaceCar(car, index, isLocal, userId, participant) {
     drawPixelCarBody(ctx, color);
     ctx.shadowBlur = 0;
     ctx.restore();
+    // Labels are drawn separately in screen space — see renderRace() second pass
+}
 
-    drawRaceAvatarBadge(userId, participant, car.x, car.y - 44, isLocal);
+// Convert a world position to logical screen coordinates given the race camera transform
+function raceWorldToScreen(worldX, worldY, W, H) {
+    const cam = gameState.race.camera;
+    const zoom = gameState.zoom;
+    const camAngle = isMobile() ? (cam.angle || 0) : 0;
+    const wx = (worldX + cam.x) * zoom;
+    const wy = (worldY + cam.y) * zoom;
+    const ca = Math.cos(camAngle);
+    const sa = Math.sin(camAngle);
+    return {
+        x: W / 2 + ca * wx - sa * wy,
+        y: H / 2 + sa * wx + ca * wy
+    };
+}
+
+// Draw avatar badge + name in screen space (no world rotation involved)
+function drawRaceCarLabelScreen(userId, participant, screenX, screenY, isLocal) {
+    const ctx = gameState.ctx;
+    const img = gameState.avatarCache[userId];
+    if (!img && participant && participant.avatar) {
+        const avatar = new Image();
+        avatar.crossOrigin = 'anonymous';
+        avatar.src = participant.avatar;
+        avatar.onload  = () => { gameState.avatarCache[userId] = avatar; };
+        avatar.onerror = () => { gameState.avatarCache[userId] = 'failed'; };
+    }
+
+    const bx = screenX;
+    const by = screenY - 44;
 
     ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    // Badge border
+    ctx.fillStyle = isLocal ? '#f4c82b' : '#ffffff';
+    ctx.fillRect(bx - 18, by - 18, 36, 36);
+    ctx.fillStyle = '#111111';
+    ctx.fillRect(bx - 14, by - 14, 28, 28);
+    // Avatar or fallback
+    if (img && img !== 'failed') {
+        ctx.drawImage(img, bx - 12, by - 12, 24, 24);
+    } else {
+        ctx.fillStyle = '#086fb6';
+        ctx.fillRect(bx - 12, by - 12, 24, 24);
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 14px Rubik';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText((participant?.username || '?').charAt(0).toUpperCase(), bx, by + 1);
+    }
+    // Username text
     ctx.fillStyle = 'white';
     ctx.font = 'bold 13px Rubik';
     ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
     ctx.shadowBlur = 4;
     ctx.shadowColor = 'black';
-    ctx.fillText(car.username || 'لاعب', car.x, car.y - 34);
+    ctx.fillText(participant?.username || 'لاعب', screenX, screenY - 26);
     ctx.shadowBlur = 0;
     ctx.restore();
 }
@@ -3731,37 +4256,6 @@ function drawPixelCarBody(ctx, color) {
     ctx.fillRect(27, 3, 5, 5);
 }
 
-function drawRaceAvatarBadge(userId, participant, x, y, isLocal) {
-    const ctx = gameState.ctx;
-    const img = gameState.avatarCache[userId];
-    if (!img && participant && participant.avatar) {
-        const avatar = new Image();
-        avatar.crossOrigin = "anonymous";
-        avatar.src = participant.avatar;
-        avatar.onload = () => { gameState.avatarCache[userId] = avatar; };
-        avatar.onerror = () => { gameState.avatarCache[userId] = 'failed'; };
-    }
-
-    ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    ctx.fillStyle = isLocal ? '#f4c82b' : '#ffffff';
-    ctx.fillRect(x - 18, y - 18, 36, 36);
-    ctx.fillStyle = '#111111';
-    ctx.fillRect(x - 14, y - 14, 28, 28);
-
-    if (img && img !== 'failed') {
-        ctx.drawImage(img, x - 12, y - 12, 24, 24);
-    } else {
-        ctx.fillStyle = '#086fb6';
-        ctx.fillRect(x - 12, y - 12, 24, 24);
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 14px Rubik';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText((participant?.username || '?').charAt(0).toUpperCase(), x, y + 1);
-    }
-    ctx.restore();
-}
 
 function drawRoundedRectPath(ctx, x, y, w, h, r) {
     ctx.beginPath();
@@ -3829,16 +4323,19 @@ function drawKidnapLine() {
     ctx.fillRect(targetX - 4, targetY - 4, 8, 8);
 }
 
-function drawFocusMask(canvas) {
+function drawFocusMask(W, H) {
     const ctx = gameState.ctx;
+    const canvas = gameState.canvas;
+    const dpr = gameState.dpr || 1;
     if (!gameState.maskCanvas) {
         gameState.maskCanvas = document.createElement('canvas');
         gameState.maskCtx = gameState.maskCanvas.getContext('2d');
     }
     const mCanvas = gameState.maskCanvas;
     const mCtx = gameState.maskCtx;
+    // mCanvas is always physical resolution to draw sharp masks
     if (mCanvas.width !== canvas.width || mCanvas.height !== canvas.height) {
-        mCanvas.width = canvas.width;
+        mCanvas.width  = canvas.width;
         mCanvas.height = canvas.height;
     }
     mCtx.clearRect(0, 0, mCanvas.width, mCanvas.height);
@@ -3850,14 +4347,15 @@ function drawFocusMask(canvas) {
 
     if (player) {
         mCtx.globalCompositeOperation = 'destination-out';
-        const centerX = canvas.width / 2;
-        const centerY = canvas.height / 2;
+        // mCanvas is physical pixels → compute positions in physical pixels
+        const centerX = mCanvas.width  / 2;
+        const centerY = mCanvas.height / 2;
         const zoom = gameState.zoom;
         const { x: playerX, y: playerY } = getPlayerRenderPos(player);
-        const pScreenX = centerX + (playerX + gameState.camera.x) * zoom;
-        const pScreenY = centerY + (playerY + gameState.camera.y) * zoom;
+        const pScreenX = centerX + (playerX + gameState.camera.x) * zoom * dpr;
+        const pScreenY = centerY + (playerY + gameState.camera.y) * zoom * dpr;
 
-        const pRadius = (gameState.isLockedIn ? 85 : 75) * zoom;
+        const pRadius = (gameState.isLockedIn ? 85 : 75) * zoom * dpr;
         const pGrad = mCtx.createRadialGradient(pScreenX, pScreenY, pRadius * 0.4, pScreenX, pScreenY, pRadius);
         pGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
         pGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
@@ -3867,9 +4365,9 @@ function drawFocusMask(canvas) {
         mCtx.fill();
 
         if (laptop && !gameState.isLockedIn) {
-            const lScreenX = centerX + (laptop.x + gameState.camera.x) * zoom;
-            const lScreenY = centerY + (laptop.y + gameState.camera.y) * zoom;
-            const lRadius = 100 * zoom;
+            const lScreenX = centerX + (laptop.x + gameState.camera.x) * zoom * dpr;
+            const lScreenY = centerY + (laptop.y + gameState.camera.y) * zoom * dpr;
+            const lRadius = 100 * zoom * dpr;
             const lGrad = mCtx.createRadialGradient(lScreenX, lScreenY, lRadius * 0.4, lScreenX, lScreenY, lRadius);
             lGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
             lGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
@@ -3880,10 +4378,11 @@ function drawFocusMask(canvas) {
         }
         mCtx.globalCompositeOperation = 'source-over';
     }
-    ctx.drawImage(mCanvas, 0, 0);
+    // Draw physical-resolution mask at logical size (ctx is DPR-scaled)
+    ctx.drawImage(mCanvas, 0, 0, W, H);
 
     ctx.save();
-    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.translate(W / 2, H / 2);
     ctx.scale(gameState.zoom, gameState.zoom);
     ctx.translate(gameState.camera.x, gameState.camera.y);
     drawPlayers(true);
@@ -3997,6 +4496,7 @@ function updatePomodoro() {
             if (taskPanel) taskPanel.classList.remove('active');
             const taskInput = document.getElementById('current-task-input');
             if (taskInput) taskInput.blur();
+            setMobileFocusMode(false);
 
             const shouldEndAfterThisTimer = gameState.pomodoro.sessionsLeft <= 1 ||
                 shouldExpirePomodoroAfterCurrentTimer(gameState.pomodoro);
@@ -4240,17 +4740,20 @@ function drawLockedInOverlay() {
     ctx.fill();
 }
 
-function drawWindParticles() {
+function drawWindParticles(W, H) {
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
+    // Logical viewport dimensions (ctx is DPR-scaled when called from render)
+    const w = W || canvas.width  / (gameState.dpr || 1);
+    const h = H || canvas.height / (gameState.dpr || 1);
     ctx.save();
     gameState.windParticles.forEach(p => {
         const offsetX = gameState.camera.x * (p.parallax - 1.0) * gameState.zoom;
         const offsetY = gameState.camera.y * (p.parallax - 1.0) * gameState.zoom;
-        let drawX = (p.x + offsetX) % canvas.width;
-        let drawY = (p.y + offsetY) % canvas.height;
-        if (drawX < 0) drawX += canvas.width;
-        if (drawY < 0) drawY += canvas.height;
+        let drawX = (p.x + offsetX) % w;
+        let drawY = (p.y + offsetY) % h;
+        if (drawX < 0) drawX += w;
+        if (drawY < 0) drawY += h;
         ctx.fillStyle = `rgba(255, 255, 255, ${p.opacity})`;
         for (let i = 0; i < p.length; i++) {
             ctx.fillRect(drawX + (i * p.size), drawY, p.size, p.size);
@@ -4259,12 +4762,13 @@ function drawWindParticles() {
     ctx.restore();
 }
 
-function drawFocusFog() {
+function drawFocusFog(W, H) {
     if (gameState.focusFogAlpha <= 0.01) return;
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
-    const w = canvas.width;
-    const h = canvas.height;
+    // Use logical viewport dims (ctx is DPR-scaled when called from render)
+    const w = W || canvas.width  / (gameState.dpr || 1);
+    const h = H || canvas.height / (gameState.dpr || 1);
 
     ctx.save();
     ctx.globalAlpha = gameState.focusFogAlpha * 0.85;
