@@ -4124,6 +4124,18 @@ function startLocalCoffee(session) {
         [coffeeSessionPath(`participants/${gameState.userId}/ready`)]: serverNow(),
         [`users/${gameState.userId}/isWorking`]: true
     });
+
+    // Siraj ghost cleanup: delete the entire coffee session after 90s
+    // (covers the 30s match + results screen) and also on disconnect.
+    if (gameState.isSirajGhost && gameState.coffee.sessionKey) {
+        const cleanupPath = lobbyPath(`minigames/coffee/sessions/${gameState.coffee.sessionKey}`);
+        onDisconnect(ref(database, cleanupPath)).remove();
+        if (gameState.coffee._sirajCleanupTimer) clearTimeout(gameState.coffee._sirajCleanupTimer);
+        gameState.coffee._sirajCleanupTimer = setTimeout(() => {
+            update(ref(database), { [cleanupPath]: null });
+            gameState.coffee._sirajCleanupTimer = null;
+        }, 90000);
+    }
 }
 
 function updateCoffeeTeleportAnim() {
@@ -4165,6 +4177,10 @@ function returnFromCoffee(clearState) {
     if (gameState.coffee.readyFallbackTimer) {
         clearTimeout(gameState.coffee.readyFallbackTimer);
         gameState.coffee.readyFallbackTimer = null;
+    }
+    if (gameState.coffee._sirajCleanupTimer) {
+        clearTimeout(gameState.coffee._sirajCleanupTimer);
+        gameState.coffee._sirajCleanupTimer = null;
     }
     // Fade out applause if playing
     fadeOutAudio(gameState.sounds.minigameApplause, 900);

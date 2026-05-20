@@ -102,11 +102,13 @@ WIND_PARTICLE_COUNT_MOBILE = 10
 | `COFFEE_CATCH_HALF` | 52 px half-hitbox |
 | `COFFEE_ZONE_CX` | 280 world units (right of race zone) |
 
-Sugar spawning: host writes to `sessions/{key}/sugars/{id}`. Y position computed by all clients as `progress = (serverNow() - spawnTime) / fallDuration`. First player to write `caughtBy` claims the catch. Bad sugar (14% chance) = instant loss for catcher.
+Sugar spawning: host writes to `sessions/{key}/sugars/{id}`. Y position computed by all clients as `progress = (serverNow() - spawnTime) / fallDuration`. First player to write `caughtBy` claims the catch. Bad sugar (14% chance) = −3 pts + heavy shake (not elimination).
 
 Mug sync: `participants/{uid}/mugX` (0..1) updated every 80ms for ghost rendering. Ghost positions use client-side lerp (`mugVisuals[uid].displayX`) to hide Firebase latency — never apply lerp to the local mug.
 
 Session lifetime: `returnFromCoffee()` always deletes the session from Firebase (`lobbyPath('minigames/coffee/sessions/{key}') = null`) so the same player can start a new game immediately. **Forgetting this causes "can't play again" bugs.**
+
+**Siraj ghost cleanup**: Siraj test ghosts never trigger the normal logout/return flow, so their minigame sessions can linger. Fix applied in `startLocalCoffee`: if `gameState.isSirajGhost`, set `onDisconnect(...).remove()` on the session path AND a 90-second `setTimeout` that force-deletes it. Cancel the timer in `returnFromCoffee`. Apply the same pattern to any future minigame.
 
 ## Common Minigame Pitfalls (lessons learned)
 
@@ -119,6 +121,9 @@ Session lifetime: `returnFromCoffee()` always deletes the session from Firebase 
 | Ready sound missing for new game type | Sound only wired to race zone entry | Each zone needs its own "newly entered" diff check with `prevZonePlayers` |
 | Leaderboard not visible during countdown | HUD function returned early when `now < startTime` | Split: timer shown only when active, leaderboard shown always |
 | Results panel missing avatars | `results` only stores `username`/`score` | Look up avatar from `session.participants[uid].avatar` at draw time |
+| Siraj ghost sessions linger in Firebase | Ghost disconnects without calling `returnFromCoffee` | `onDisconnect` + 90s `setTimeout` in `startLocalCoffee` when `isSirajGhost`; cancel timer in `returnFromCoffee` |
+| Mug flash shows white rectangle (transparent bg) | `source-atop` on main canvas composites against everything drawn | Render mug to offscreen canvas, apply `source-atop` tint there, stamp result back |
+| Lobby screen stays visible after Siraj Shift+click | `spawnSirajGhost` calls `startGame` which only removes `login-screen` | Explicitly remove `active` from `lobby-screen` before calling `startGame` in `spawnSirajGhost` |
 
 ## DPR Canvas Scaling
 Canvas is scaled by `window.devicePixelRatio` in `resizeCanvas()`:
