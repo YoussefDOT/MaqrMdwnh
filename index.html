@@ -205,8 +205,13 @@
             <span class="sp-gather-title">جلسة مشتركة</span>
             <button id="sp-gather-cancel" class="sp-close-btn" aria-label="إلغاء">✕</button>
         </div>
-        <div id="sp-gather-members" class="sp-gather-members">
-            <span class="sp-empty-hint">في انتظار القبول…</span>
+        <div class="sp-gather-roster">
+            <div class="sp-gather-host-wrap">
+                <div id="sp-gather-host-av" class="sp-member-av sp-av-ready sp-gather-host-av"></div>
+                <span class="sp-gather-host-label">أنت</span>
+            </div>
+            <span class="sp-gather-plus">+</span>
+            <div id="sp-gather-members" class="sp-gather-members"></div>
         </div>
         <div class="sp-gather-config">
             <div class="sp-cfg-row">
@@ -350,8 +355,8 @@
 
         <!-- لوحة المهمة الحالية -->
         <div id="current-task-panel" class="current-task-panel">
-            <div style="color: rgba(255, 255, 255, 0.8); font-size: 14px; font-weight: 600;">أعمل على:</div>
-            <input type="text" id="current-task-input" placeholder="اكتب المهمة هنا..." autocomplete="off">
+            <div class="task-panel-label">أعمل على</div>
+            <input type="text" id="current-task-input" placeholder="اكتب ما تعمل عليه..." autocomplete="off">
         </div>
 
         <!-- لوحة أصوات التركيز -->
@@ -362,126 +367,243 @@
                 <span class="drawer-label">أصوات</span>
             </div>
             <div class="panel-header-row">
-                <div class="panel-header">أصوات التركيز 🎧</div>
+                <div class="panel-header">أصوات التركيز</div>
                 <div class="overall-vol-container">
-                    <span class="overall-vol-label">الصوت العام</span>
-                    <input type="range" id="overall-vol" class="overall-vol-slider" min="0" max="1" step="0.05"
-                        value="0.5">
+                    <svg class="overall-vol-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+                    <input type="range" id="overall-vol" class="overall-vol-slider" min="0" max="1" step="0.05" value="0.5">
                 </div>
             </div>
             <div class="sound-controls">
-                <!-- Plane -->
-                <div class="sound-item" data-sound="plane">
-                    <button class="sound-toggle-btn" title="طائرة">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" stroke-linejoin="round">
-                            <path
-                                d="M17.8 19.2L16 11l3.5-3.5C21 6 21.5 4 21 3.5c-.5-.5-2.5 0-4 1.5L13.5 8.5l-8.2-1.8c-.9-.2-1.8.1-2.4.7l-.5.5c-.4.4-.3 1 .1 1.3l6.3 3.8-3.8 3.8-2.3-.5c-.6-.1-1.2.1-1.5.6l-.3.3c-.3.3-.2.8.2.9L5 20l.9 3.9c.1.4.6.5.9.2l.3-.3c.5-.3.7-.9.6-1.5l-.5-2.3 3.8-3.8 3.8 6.3c.3.4.9.5 1.3.1l.5-.5c.6-.6.9-1.5.7-2.4z" />
-                        </svg>
+                <!-- Rain -->
+                <div class="sound-item" data-sound="rain">
+                    <button class="sound-toggle-btn" title="مطر">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 17.58A5 5 0 0 0 18 8h-1.26A8 8 0 1 0 4 16.25"/><line x1="8" y1="16" x2="8" y2="20"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="16" y1="16" x2="16" y2="20"/></svg>
                     </button>
+                    <span class="sound-name">مطر</span>
                     <input type="range" class="sound-vol" min="0" max="1" step="0.05" value="0.5">
                 </div>
-                <!-- Rain Muffled -->
+                <!-- Muffled Rain -->
                 <div class="sound-item" data-sound="rain_muffled">
                     <button class="sound-toggle-btn" title="مطر خافت">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M20 17.58A5 5 0 0 0 18 8h-1.26A8 8 0 1 0 4 16.25" />
-                            <line x1="12" y1="16" x2="12" y2="22" />
-                            <path d="M8 18c0-2 2-3 4-3s4 1 4 3" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 17.58A5 5 0 0 0 18 8h-1.26A8 8 0 1 0 4 16.25"/><path d="M8 19l1-3m3 1l1-3m3 1l1-3"/></svg>
                     </button>
+                    <span class="sound-name">مطر خافت</span>
                     <input type="range" class="sound-vol" min="0" max="1" step="0.05" value="0.5">
                 </div>
-                <!-- White Noise Muffled -->
-                <div class="sound-item" data-sound="white_muffled">
-                    <button class="sound-toggle-btn" title="ضوضاء بيضاء خافتة">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M2 12h20M2 16h20M2 8h20" />
-                        </svg>
+                <!-- Fire -->
+                <div class="sound-item" data-sound="fire">
+                    <button class="sound-toggle-btn" title="نار">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22c-4.97 0-7-3.58-7-7 0-4 3.5-7.5 4-10.5 1 2 2.5 3 3.5 3C14.5 7.5 17 3 17 3s1 3.5 1 7c0 3.42-2.03 7-6 12z"/><path d="M10 17c0 1.1.9 2 2 2s2-.9 2-2c0-1.5-2-3-2-3s-2 1.5-2 3z"/></svg>
                     </button>
+                    <span class="sound-name">موقد</span>
                     <input type="range" class="sound-vol" min="0" max="1" step="0.05" value="0.5">
                 </div>
-                <!-- Brown Noise Muffled -->
-                <div class="sound-item" data-sound="brown_muffled">
-                    <button class="sound-toggle-btn" title="ضوضاء بنية خافتة">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M3 10h18M6 14h12M9 18h6M1 6h22" />
-                        </svg>
+                <!-- Forest -->
+                <div class="sound-item" data-sound="forest">
+                    <button class="sound-toggle-btn" title="غابة">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l-8 15h5v3h6v-3h5L12 3z"/><line x1="12" y1="22" x2="12" y2="18"/></svg>
                     </button>
+                    <span class="sound-name">غابة</span>
+                    <input type="range" class="sound-vol" min="0" max="1" step="0.05" value="0.5">
+                </div>
+                <!-- Brown Noise -->
+                <div class="sound-item" data-sound="brown">
+                    <button class="sound-toggle-btn" title="ضوضاء بنية">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12c2-3 4-3 6 0s4 3 6 0 4-3 6 0"/><path d="M2 17c2-3 4-3 6 0s4 3 6 0 4-3 6 0"/><path d="M2 7c2-3 4-3 6 0s4 3 6 0 4-3 6 0"/></svg>
+                    </button>
+                    <span class="sound-name">ضوضاء بنية</span>
                     <input type="range" class="sound-vol" min="0" max="1" step="0.05" value="0.5">
                 </div>
                 <!-- Wind -->
                 <div class="sound-item" data-sound="wind">
                     <button class="sound-toggle-btn" title="رياح">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-                            stroke-linecap="round" stroke-linejoin="round">
-                            <path
-                                d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2" />
-                        </svg>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.59 4.59A2 2 0 1 1 11 8H2m10.59 11.41A2 2 0 1 0 14 16H2m15.73-8.27A2.5 2.5 0 1 1 19.5 12H2"/></svg>
                     </button>
+                    <span class="sound-name">رياح</span>
+                    <input type="range" class="sound-vol" min="0" max="1" step="0.05" value="0.5">
+                </div>
+                <!-- Plane -->
+                <div class="sound-item" data-sound="plane">
+                    <button class="sound-toggle-btn" title="طائرة">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.8 19.2L16 11l3.5-3.5C21 6 21.5 4 21 3.5c-.5-.5-2.5 0-4 1.5L13.5 8.5l-8.2-1.8c-.9-.2-1.8.1-2.4.7l-.5.5c-.4.4-.3 1 .1 1.3l6.3 3.8-3.8 3.8-2.3-.5c-.6-.1-1.2.1-1.5.6l-.3.3c-.3.3-.2.8.2.9L5 20l.9 3.9c.1.4.6.5.9.2l.3-.3c.5-.3.7-.9.6-1.5l-.5-2.3 3.8-3.8 3.8 6.3c.3.4.9.5 1.3.1l.5-.5c.6-.6.9-1.5.7-2.4z"/></svg>
+                    </button>
+                    <span class="sound-name">طائرة</span>
+                    <input type="range" class="sound-vol" min="0" max="1" step="0.05" value="0.5">
+                </div>
+                <!-- Bubbling Water -->
+                <div class="sound-item" data-sound="stream">
+                    <button class="sound-toggle-btn" title="جدول مائي">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2C6.48 2 2 6.48 2 12c0 1.33.26 2.61.74 3.77"/><path d="M8 15c1-2 3-2 4 0s3 2 4 0"/><path d="M6 19c1-2 3-2 4 0s3 2 4 0"/><circle cx="18" cy="6" r="3"/></svg>
+                    </button>
+                    <span class="sound-name">جدول مائي</span>
                     <input type="range" class="sound-vol" min="0" max="1" step="0.05" value="0.5">
                 </div>
             </div>
-            <!-- YouTube Focus Player -->
-            <div id="yt-focus-block" class="yt-focus-block">
-                <div class="yt-input-section">
-                    <input type="text" id="yt-url-input" placeholder="أدخل رابط YouTube هنا" autocomplete="off">
-                    <button id="yt-load-btn">تحميل</button>
+        </div>
+
+        <!-- YouTube Focus Player (outside focus-sounds-panel to avoid transform containing block) -->
+        <div id="yt-focus-block" class="yt-focus-block">
+            <div class="yt-input-section">
+                <input type="text" id="yt-url-input" placeholder="أدخل رابط YouTube هنا" autocomplete="off">
+                <button id="yt-load-btn">تحميل</button>
+            </div>
+            <div id="mini-yt-player" class="mini-yt-player">
+                <div class="yt-ambient" aria-hidden="true">
+                    <img id="yt-ambient-img" src="" alt="">
                 </div>
-                <div id="mini-yt-player" class="mini-yt-player">
-                    <div class="yt-ambient" aria-hidden="true">
-                        <img id="yt-ambient-img" src="" alt="">
+                <div class="yt-body">
+                    <div class="yt-art-wrap">
+                        <img id="mini-yt-cover" src="" alt="" class="yt-art">
                     </div>
-                    <div class="yt-body">
-                        <div class="yt-art-wrap">
-                            <img id="mini-yt-cover" src="" alt="" class="yt-art">
+                    <div class="yt-info">
+                        <div id="mini-yt-title" class="yt-title">---</div>
+                        <div class="yt-wave-wrap" id="yt-wave-wrap">
+                            <canvas id="yt-waveform" class="yt-waveform"></canvas>
+                            <input type="range" id="mini-yt-slider" min="0" max="100" value="0" style="display:none">
                         </div>
-                        <div class="yt-info">
-                            <div id="mini-yt-title" class="yt-title">---</div>
-                            <div class="yt-wave-wrap" id="yt-wave-wrap">
-                                <canvas id="yt-waveform" class="yt-waveform"></canvas>
-                                <input type="range" id="mini-yt-slider" min="0" max="100" value="0" style="display:none">
-                            </div>
-                            <div id="mini-yt-time" class="yt-time">
-                                <span class="yt-time-cur">0:00</span>
-                                <span class="yt-time-dur">0:00</span>
-                            </div>
-                            <div class="yt-ctrls">
-                                <button id="mini-yt-repeat" class="yt-btn2" title="تكرار">
-                                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                                        <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
-                                        <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
-                                    </svg>
-                                </button>
-                                <button id="mini-yt-back10" class="yt-btn2" title="10 ثوانٍ للخلف">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                                        <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/>
-                                    </svg>
-                                </button>
-                                <button id="mini-yt-playpause" class="yt-btn2 yt-btn-play" title="تشغيل/إيقاف">
-                                    <svg id="yt-icon-play" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                                    <svg id="yt-icon-pause" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
-                                </button>
-                                <button id="mini-yt-forward10" class="yt-btn2" title="10 ثوانٍ للأمام">
-                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-                                        <polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/>
-                                    </svg>
-                                </button>
-                                <div class="yt-vol">
-                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.55;flex-shrink:0">
-                                        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-                                        <path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/>
-                                    </svg>
-                                    <input type="range" id="yt-volume-slider" min="0" max="100" value="80" class="yt-vol-range">
-                                </div>
+                        <div id="mini-yt-time" class="yt-time">
+                            <span class="yt-time-cur">0:00</span>
+                            <span class="yt-time-dur">0:00</span>
+                        </div>
+                        <div class="yt-ctrls">
+                            <button id="mini-yt-repeat" class="yt-btn2" title="تكرار">
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+                                    <polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/>
+                                    <polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>
+                                </svg>
+                            </button>
+                            <button id="mini-yt-back10" class="yt-btn2" title="10 ثوانٍ للخلف">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polygon points="19 20 9 12 19 4 19 20"/><line x1="5" y1="19" x2="5" y2="5"/>
+                                </svg>
+                            </button>
+                            <button id="mini-yt-playpause" class="yt-btn2 yt-btn-play" title="تشغيل/إيقاف">
+                                <svg id="yt-icon-play" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                                <svg id="yt-icon-pause" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>
+                            </button>
+                            <button id="mini-yt-forward10" class="yt-btn2" title="10 ثوانٍ للأمام">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <polygon points="5 4 15 12 5 20 5 4"/><line x1="19" y1="5" x2="19" y2="19"/>
+                                </svg>
+                            </button>
+                            <div class="yt-vol">
+                                <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="opacity:.55;flex-shrink:0">
+                                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+                                    <path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/>
+                                </svg>
+                                <input type="range" id="yt-volume-slider" min="0" max="100" value="80" class="yt-vol-range">
                             </div>
                         </div>
                     </div>
                 </div>
-                <div id="yt-iframe-container" style="display:none;"></div>
+            </div>
+            <div id="yt-iframe-container" style="display:none;"></div>
+        </div>
+
+        <!-- Prayer Times Panel (outside focus-sounds-panel to avoid transform containing block) -->
+        <div id="prayer-panel" class="prayer-panel">
+            <div id="prayer-blur-overlay" class="prayer-blur-overlay">
+                <button id="prayer-setup-btn" class="prayer-setup-btn">حدد موقعك - مواقيت الصلاة</button>
+            </div>
+            <button id="prayer-edit-btn" class="prayer-edit-btn" title="تعديل الأوقات">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            </button>
+            <div class="prayer-next">
+                <span class="prayer-next-label">الصلاة القادمة</span>
+                <div class="prayer-next-row">
+                    <span id="prayer-next-name" class="prayer-next-name">--</span>
+                    <span id="prayer-next-time" class="prayer-next-time">--:--</span>
+                </div>
+                <div class="prayer-progress-track">
+                    <div id="prayer-progress-fill" class="prayer-progress-fill"></div>
+                </div>
+            </div>
+            <div class="prayer-icons-row">
+                <div class="prayer-icon-item" data-prayer="Fajr">
+                    <div class="prayer-icon-circle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/><circle cx="17" cy="5" r="1" fill="currentColor" stroke="none"/></svg></div>
+                    <span class="prayer-arabic">الفَجْر</span>
+                    <span class="prayer-item-time" id="pt-Fajr">--:--</span>
+                </div>
+                <div class="prayer-icon-item" data-prayer="Dhuhr">
+                    <div class="prayer-icon-circle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg></div>
+                    <span class="prayer-arabic">الظُّهْر</span>
+                    <span class="prayer-item-time" id="pt-Dhuhr">--:--</span>
+                </div>
+                <div class="prayer-icon-item" data-prayer="Asr">
+                    <div class="prayer-icon-circle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="14" r="4.5"/><line x1="12" y1="5" x2="12" y2="7.5"/><line x1="5.64" y1="8.64" x2="7.05" y2="10.05"/><line x1="3" y1="14" x2="5" y2="14"/><line x1="19" y1="14" x2="21" y2="14"/><line x1="16.95" y1="10.05" x2="18.36" y2="8.64"/><line x1="2" y1="21" x2="22" y2="21"/></svg></div>
+                    <span class="prayer-arabic">العَصْر</span>
+                    <span class="prayer-item-time" id="pt-Asr">--:--</span>
+                </div>
+                <div class="prayer-icon-item" data-prayer="Maghrib">
+                    <div class="prayer-icon-circle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 18a5 5 0 1 0-10 0"/><line x1="12" y1="9" x2="12" y2="11.5"/><line x1="7.05" y1="13.05" x2="8.46" y2="14.46"/><line x1="4" y1="18" x2="6" y2="18"/><line x1="18" y1="18" x2="20" y2="18"/><line x1="15.54" y1="14.46" x2="16.95" y2="13.05"/><line x1="2" y1="21" x2="22" y2="21"/></svg></div>
+                    <span class="prayer-arabic">المَغْرِب</span>
+                    <span class="prayer-item-time" id="pt-Maghrib">--:--</span>
+                </div>
+                <div class="prayer-icon-item" data-prayer="Isha">
+                    <div class="prayer-icon-circle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/><circle cx="18" cy="5" r="0.8" fill="currentColor" stroke="none"/><circle cx="15" cy="3" r="0.6" fill="currentColor" stroke="none"/><circle cx="20" cy="8" r="0.5" fill="currentColor" stroke="none"/></svg></div>
+                    <span class="prayer-arabic">العِشَاء</span>
+                    <span class="prayer-item-time" id="pt-Isha">--:--</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Prayer Location Modal -->
+        <div id="prayer-loc-modal" class="prayer-loc-modal hidden">
+            <div class="prayer-loc-content">
+                <button id="prayer-loc-close" class="prayer-modal-close">✕</button>
+                <div class="prayer-loc-header">مواقيت الصلاة</div>
+                <div class="prayer-loc-subtitle">حدد موقعك لعرض أوقات الصلاة الدقيقة</div>
+                <button id="prayer-loc-auto" class="prayer-loc-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="2" x2="12" y2="6"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="2" y1="12" x2="6" y2="12"/><line x1="18" y1="12" x2="22" y2="12"/><circle cx="12" cy="12" r="3"/></svg>
+                    تحديد تلقائي
+                </button>
+                <div class="prayer-loc-or">أو</div>
+                <button id="prayer-loc-manual-btn" class="prayer-loc-btn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+                    اختيار المنطقة
+                </button>
+                <div id="prayer-loc-manual" class="prayer-loc-manual hidden">
+                    <select id="prayer-country-select"><option value="">اختر الدولة</option></select>
+                    <select id="prayer-city-select" class="hidden"><option value="">اختر المدينة</option></select>
+                    <button id="prayer-loc-save" class="prayer-loc-save hidden">حفظ الموقع</button>
+                </div>
+                <div id="prayer-loc-status" class="prayer-loc-status"></div>
+            </div>
+        </div>
+
+        <!-- Prayer Edit Modal -->
+        <div id="prayer-edit-modal" class="prayer-edit-modal hidden">
+            <div class="prayer-edit-content">
+                <button id="prayer-edit-close" class="prayer-modal-close">✕</button>
+                <div class="prayer-edit-header">تعديل الأوقات (دقائق)</div>
+                <div id="prayer-edit-rows" class="prayer-edit-rows"></div>
+                <div class="prayer-edit-actions">
+                    <button id="prayer-edit-save" class="prayer-edit-save">حفظ</button>
+                    <button id="prayer-edit-cancel" class="prayer-edit-cancel">إلغاء</button>
+                </div>
+                <div class="prayer-edit-loc-row">
+                    <button id="prayer-change-loc" class="prayer-change-loc">تغيير الموقع</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Prayer Overlay (fullscreen, shown at prayer time) -->
+        <div id="prayer-overlay" class="prayer-overlay hidden">
+            <div class="prayer-overlay-bg"></div>
+            <canvas id="prayer-rain-canvas"></canvas>
+            <div class="prayer-fog">
+                <div class="prayer-fog-layer"></div>
+                <div class="prayer-fog-layer"></div>
+                <div class="prayer-fog-layer"></div>
+                <div class="prayer-fog-layer"></div>
+            </div>
+            <div class="prayer-overlay-content">
+                <div id="prayer-overlay-icon" class="prayer-overlay-icon"></div>
+                <div id="prayer-overlay-name" class="prayer-overlay-name"></div>
+                <button id="prayer-overlay-btn" class="prayer-overlay-btn" disabled>
+                    <span id="prayer-overlay-btn-text">صليت.. الحمدلله ♥️</span>
+                    <span id="prayer-overlay-timer" class="prayer-overlay-timer">3:00</span>
+                </button>
             </div>
         </div>
 
@@ -516,6 +638,14 @@
                 <div class="tm-row tm-sessions-row">
                     <span class="tm-label">الجلسات</span>
                     <input type="number" id="test-sessions" value="3" min="1" max="99" class="tm-sessions-input">
+                </div>
+
+                <div class="tm-row" style="margin-top:14px;flex-direction:column;align-items:flex-start;gap:5px;">
+                    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;color:rgba(255,255,255,0.7);font-size:13px;font-weight:500;">
+                        <input type="checkbox" id="test-prayer-check" style="width:16px;height:16px;accent-color:#3bb9ab;cursor:pointer;">
+                        تجربة الصلاة 🕌
+                    </label>
+                    <span style="font-size:11px;color:rgba(255,255,255,0.3);padding-right:26px;">يُشغّل الأذان بعد ١٠ ثوانٍ من البداية</span>
                 </div>
 
                 <div class="modal-actions" style="margin-top:24px;">

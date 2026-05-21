@@ -50,19 +50,25 @@ class FocusAudioEngine {
         this.masterGain = null;
         this.overallVolume = 0.5;
         this.sounds = {
-            plane: { active: false, volume: 0.5, nodes: null },
+            rain:         { active: false, volume: 0.5, nodes: null },
             rain_muffled: { active: false, volume: 0.5, nodes: null },
-            white_muffled: { active: false, volume: 0.5, nodes: null },
-            brown_muffled: { active: false, volume: 0.5, nodes: null },
-            wind: { active: false, volume: 0.5, nodes: null }
+            fire:         { active: false, volume: 0.5, nodes: null },
+            forest:       { active: false, volume: 0.5, nodes: null },
+            brown:        { active: false, volume: 0.5, nodes: null },
+            wind:         { active: false, volume: 0.5, nodes: null },
+            plane:        { active: false, volume: 0.5, nodes: null },
+            stream:       { active: false, volume: 0.5, nodes: null },
         };
         // Normalized ambient silent levels
         this.baseVolumeScale = {
-            plane: 0.09,
+            rain: 0.18,
             rain_muffled: 0.15,
-            white_muffled: 0.05,
-            brown_muffled: 0.21,
-            wind: 0.09
+            fire: 0.22,
+            forest: 0.16,
+            brown: 0.22,
+            wind: 0.09,
+            plane: 0.09,
+            stream: 0.15,
         };
         this.buffers = {
             timeBreak: null,
@@ -184,42 +190,17 @@ class FocusAudioEngine {
         let source = null;
         let secondaryNodes = [];
 
-        if (name === 'white') {
+        if (name === 'rain') {
+            // Bright rain — white noise through a bandpass around 2kHz for crisp drops
             source = this.createWhiteNoiseNode();
-            source.connect(gainNode);
+            const bpRain = this.ctx.createBiquadFilter();
+            bpRain.type = 'bandpass';
+            bpRain.frequency.setValueAtTime(2200, this.ctx.currentTime);
+            bpRain.Q.setValueAtTime(0.5, this.ctx.currentTime);
+            source.connect(bpRain);
+            bpRain.connect(gainNode);
             source.start();
-        } else if (name === 'white_muffled') {
-            source = this.createWhiteNoiseNode();
-            const filter = this.ctx.createBiquadFilter();
-            filter.type = 'lowpass';
-            filter.frequency.setValueAtTime(250, this.ctx.currentTime);
-            source.connect(filter);
-            filter.connect(gainNode);
-            source.start();
-            secondaryNodes.push(filter);
-        } else if (name === 'brown') {
-            source = this.createBrownNoiseNode();
-            source.connect(gainNode);
-            source.start();
-        } else if (name === 'brown_muffled') {
-            source = this.createBrownNoiseNode();
-            const filter = this.ctx.createBiquadFilter();
-            filter.type = 'lowpass';
-            filter.frequency.setValueAtTime(150, this.ctx.currentTime);
-            source.connect(filter);
-            filter.connect(gainNode);
-            source.start();
-            secondaryNodes.push(filter);
-        } else if (name === 'rain') {
-            source = this.createWhiteNoiseNode();
-            const filter = this.ctx.createBiquadFilter();
-            filter.type = 'bandpass';
-            filter.frequency.setValueAtTime(1000, this.ctx.currentTime);
-            filter.Q.setValueAtTime(0.8, this.ctx.currentTime);
-            source.connect(filter);
-            filter.connect(gainNode);
-            source.start();
-            secondaryNodes.push(filter);
+            secondaryNodes.push(bpRain);
         } else if (name === 'rain_muffled') {
             source = this.createWhiteNoiseNode();
             const filter = this.ctx.createBiquadFilter();
@@ -279,6 +260,81 @@ class FocusAudioEngine {
             osc2.start();
 
             secondaryNodes.push(filter, osc1, osc1Gain, osc2, osc2Gain);
+        } else if (name === 'brown') {
+            source = this.createBrownNoiseNode();
+            source.connect(gainNode);
+            source.start();
+        } else if (name === 'fire') {
+            // Crackling fire: brown noise through narrow bandpass + amplitude modulation
+            source = this.createBrownNoiseNode();
+            const fireLp = this.ctx.createBiquadFilter();
+            fireLp.type = 'bandpass';
+            fireLp.frequency.setValueAtTime(600, this.ctx.currentTime);
+            fireLp.Q.setValueAtTime(1.2, this.ctx.currentTime);
+            // Crackle modulation
+            const crackleNoise = this.createWhiteNoiseNode();
+            const crackleGain = this.ctx.createGain();
+            crackleGain.gain.setValueAtTime(0.35, this.ctx.currentTime);
+            const crackleFilter = this.ctx.createBiquadFilter();
+            crackleFilter.type = 'highpass';
+            crackleFilter.frequency.setValueAtTime(3000, this.ctx.currentTime);
+            crackleNoise.connect(crackleFilter);
+            crackleFilter.connect(crackleGain);
+            crackleGain.connect(gainNode);
+            crackleNoise.start();
+            source.connect(fireLp);
+            fireLp.connect(gainNode);
+            source.start();
+            secondaryNodes.push(fireLp, crackleNoise, crackleFilter, crackleGain);
+        } else if (name === 'forest') {
+            // Forest: layered filtered noises — a gentle bed with intermittent high chirps
+            source = this.createBrownNoiseNode();
+            const forestBed = this.ctx.createBiquadFilter();
+            forestBed.type = 'bandpass';
+            forestBed.frequency.setValueAtTime(300, this.ctx.currentTime);
+            forestBed.Q.setValueAtTime(0.6, this.ctx.currentTime);
+            source.connect(forestBed);
+            forestBed.connect(gainNode);
+            // Bird-like chirps layer
+            const chirpNoise = this.createWhiteNoiseNode();
+            const chirpBp = this.ctx.createBiquadFilter();
+            chirpBp.type = 'bandpass';
+            chirpBp.frequency.setValueAtTime(4000, this.ctx.currentTime);
+            chirpBp.Q.setValueAtTime(8, this.ctx.currentTime);
+            const chirpGain = this.ctx.createGain();
+            chirpGain.gain.setValueAtTime(0.06, this.ctx.currentTime);
+            // Slow amplitude modulation for chirp
+            const chirpLfo = this.ctx.createOscillator();
+            chirpLfo.frequency.setValueAtTime(0.15, this.ctx.currentTime);
+            const chirpLfoGain = this.ctx.createGain();
+            chirpLfoGain.gain.setValueAtTime(0.04, this.ctx.currentTime);
+            chirpLfo.connect(chirpLfoGain);
+            chirpLfoGain.connect(chirpGain.gain);
+            chirpNoise.connect(chirpBp);
+            chirpBp.connect(chirpGain);
+            chirpGain.connect(gainNode);
+            source.start();
+            chirpNoise.start();
+            chirpLfo.start();
+            secondaryNodes.push(forestBed, chirpNoise, chirpBp, chirpGain, chirpLfo, chirpLfoGain);
+        } else if (name === 'stream') {
+            // Bubbling stream: white noise filtered + slight modulation
+            source = this.createWhiteNoiseNode();
+            const streamBp = this.ctx.createBiquadFilter();
+            streamBp.type = 'bandpass';
+            streamBp.frequency.setValueAtTime(1200, this.ctx.currentTime);
+            streamBp.Q.setValueAtTime(1.5, this.ctx.currentTime);
+            const streamLfo = this.ctx.createOscillator();
+            streamLfo.frequency.setValueAtTime(0.3, this.ctx.currentTime);
+            const streamLfoGain = this.ctx.createGain();
+            streamLfoGain.gain.setValueAtTime(400, this.ctx.currentTime);
+            streamLfo.connect(streamLfoGain);
+            streamLfoGain.connect(streamBp.frequency);
+            source.connect(streamBp);
+            streamBp.connect(gainNode);
+            source.start();
+            streamLfo.start();
+            secondaryNodes.push(streamBp, streamLfo, streamLfoGain);
         }
 
         sound.nodes = { source, gainNode, secondaryNodes };
@@ -368,7 +424,7 @@ class FocusAudioEngine {
         if (mixState.overallVolume !== undefined) {
             this.overallVolume = mixState.overallVolume;
             const slider = document.getElementById('overall-vol');
-            if (slider) slider.value = this.overallVolume;
+            if (slider) { slider.value = this.overallVolume; slider.style.setProperty('--vp', `${this.overallVolume * 100}%`); }
             if (this.masterGain && gameState.pomodoro.active && gameState.pomodoro.phase === 'work') {
                 this.masterGain.gain.setValueAtTime(this.overallVolume, this.ctx.currentTime);
             }
@@ -383,7 +439,8 @@ class FocusAudioEngine {
                 if (el) {
                     if (config.active) el.classList.add('active');
                     else el.classList.remove('active');
-                    el.querySelector('.sound-vol').value = this.sounds[name].volume;
+                    const volSlider = el.querySelector('.sound-vol');
+                    if (volSlider) { volSlider.value = this.sounds[name].volume; volSlider.style.setProperty('--vp', `${this.sounds[name].volume * 100}%`); }
                 }
 
                 if (gameState.pomodoro.active && gameState.pomodoro.phase === 'work') {
@@ -745,6 +802,7 @@ const gameState = {
         minigameCoffeeBad:       new Audio('Sound/Minigame_Coffee_Collect_Bad.mp3'),
         minigameCoffeeTimerClose: new Audio('Sound/Minigame_Coffee_TimerClose.mp3'),
         minigameApplause:        new Audio('Sound/Minigame_Aplause.mp3'),
+        prayerCall:              new Audio('Sound/Prayer_CallToPrayer.mp3'),
     },
     canvas: null,
     ctx: null,
@@ -867,9 +925,26 @@ const gameState = {
             swapTimer: 0,
         },
         nearbyCoopId: '',       // hostId of detected nearby active coop session
+        nearbySoloId: '',       // userId of a nearby solo worker (join-solo flow)
         joinDetails: null,      // cached live session data for join panel
         extCoopAnims: {},       // uid → animMem for remote coop players (external observer view)
-    }
+        unsubSoloUpgrade: null, // Firebase listener watching for incoming solo-join requests
+    },
+    prayer: {
+        location: null,            // { lat, lon, city, country }
+        times: null,               // { Fajr: '05:23', Dhuhr: '12:30', ... }
+        adjustments: {},           // { Fajr: 0, Dhuhr: 5, ... } offset in minutes
+        nextPrayer: null,          // { key, arabic, timeMs, prevTimeMs }
+        lastFetchDate: null,       // 'YYYY-MM-DD'
+        isOverlayActive: false,
+        pausedRemaining: 0,        // ms left on timer when paused by prayer
+        pausedPhase: null,         // 'work' | 'break'
+        overlayPrayer: null,       // prayer key that triggered overlay
+        overlayStartTime: 0,       // when overlay appeared
+        prayerLockMs: 180000,      // 3 min lock (10 s for Siraj)
+        triggeredToday: {},        // { Fajr: true, ... } avoid re-triggering same prayer
+        lastDayCheck: null,        // date string to reset triggers at midnight
+    },
 };
 
 // Preload all sounds so they fire instantly with no lag
@@ -885,6 +960,7 @@ gameState.sounds.minigameCoffeeCollect.preload   = 'auto';
 gameState.sounds.minigameCoffeeBad.preload       = 'auto';
 gameState.sounds.minigameCoffeeTimerClose.preload = 'auto';
 gameState.sounds.minigameApplause.preload        = 'auto';
+gameState.sounds.prayerCall.preload              = 'auto';
 
 // Constants
 const COLORS = {
@@ -1874,6 +1950,7 @@ function startGame(userData) {
 
     document.getElementById('login-screen').classList.remove('active');
     document.getElementById('game-screen').classList.add('active');
+    document.body.classList.add('game-ready');
     document.getElementById('current-user').textContent = userData.username;
     document.getElementById('channel-name').textContent = userData.channelName || 'قناة غير معروفة';
     gameState.canvas = document.getElementById('game-canvas');
@@ -1891,6 +1968,7 @@ function startGame(userData) {
     listenToCoffee();
     initSharedPomo();
     setupPomoLeaveBtn();
+    initPrayerSystem();
 
     // Track server time offset so race start/countdown is synchronized across clients
     const offsetRef = ref(database, '.info/serverTimeOffset');
@@ -2134,6 +2212,9 @@ function setupFocusPanelUI() {
         const btn = item.querySelector('.sound-toggle-btn');
         const slider = item.querySelector('.sound-vol');
 
+        // Init fill variable
+        slider.style.setProperty('--vp', `${slider.value * 100}%`);
+
         btn.addEventListener('click', () => {
             if (!gameState.focusAudioEngine) return;
             gameState.focusAudioEngine.toggle(soundName);
@@ -2146,6 +2227,7 @@ function setupFocusPanelUI() {
 
         slider.addEventListener('input', (e) => {
             if (!gameState.focusAudioEngine) return;
+            e.target.style.setProperty('--vp', `${e.target.value * 100}%`);
             gameState.focusAudioEngine.updateVolume(soundName, e.target.value);
             gameState.focusAudioEngine.saveToFirebase();
         });
@@ -2153,8 +2235,10 @@ function setupFocusPanelUI() {
 
     const masterSlider = document.getElementById('overall-vol');
     if (masterSlider) {
+        masterSlider.style.setProperty('--vp', `${masterSlider.value * 100}%`);
         masterSlider.addEventListener('input', (e) => {
             if (!gameState.focusAudioEngine) return;
+            e.target.style.setProperty('--vp', `${e.target.value * 100}%`);
             gameState.focusAudioEngine.updateOverallVolume(e.target.value);
         });
     }
@@ -2276,12 +2360,6 @@ function setupFocusPanelUI() {
         });
     }
 
-    // On desktop: detach the YouTube block from the focus panel and pin it bottom-left
-    // On mobile: leave it inside the panel so it becomes part of the drawer
-    const ytBlock = document.getElementById('yt-focus-block');
-    if (ytBlock && !isMobile()) {
-        document.body.appendChild(ytBlock);
-    }
 }
 
 function setupRaceUI() {
@@ -3152,6 +3230,8 @@ function setupTestModeUI() {
         const breakMins = rawBreakMins > 0 ? Math.max(5 / 60, rawBreakMins) : 0;
         if (workMins <= 0) return;
 
+        const testPrayer = document.getElementById('test-prayer-check')?.checked || false;
+
         modal.classList.remove('active');
         if (Notification.permission !== 'granted' && Notification.permission !== 'denied') Notification.requestPermission();
 
@@ -3183,6 +3263,15 @@ function setupTestModeUI() {
             onDisconnect(ref(database, lobbyPath(`pomodoro/${laptop.id}`))).remove();
         }
         startKidnapAnimation(laptop);
+
+        // Prayer test: fire athan 10 seconds into the session
+        if (testPrayer) {
+            setTimeout(() => {
+                if (gameState.pomodoro.active) {
+                    triggerPrayerOverlay('dhuhr', 'الظهر');
+                }
+            }, 10000);
+        }
     });
 }
 
@@ -3260,6 +3349,10 @@ function startPomodoroPhase(phase) {
         update(ref(database), updates);
     }
 
+    // Prayer panel: compact during break (only show next prayer), full during work
+    const _pp = document.getElementById('prayer-panel');
+    if (_pp) _pp.classList.toggle('break-compact', phase === 'break');
+
     if (phase === 'break') {
         // Hard-reset any stuck state so the player can always move during break
         gameState.isLockedIn = false;
@@ -3295,7 +3388,8 @@ function startPomodoroPhase(phase) {
                 }
             }
             if (gameState.focusYTPlayer) {
-                const targetPct = Math.round(gameState.focusAudioEngine.overallVolume * 100);
+                // Use the player's own saved volume (from Firebase), not the mixer's overallVolume
+                const targetPct = gameState.focusYTPlayer.volume ?? 80;
                 if (gameState.isLockedIn) {
                     // Fade in from silence over 2 s so re-entry feels smooth
                     gameState.focusYTPlayer.setVolumePercent(0);
@@ -3317,6 +3411,10 @@ function startPomodoroPhase(phase) {
                 }
             }
         }
+    }
+    // Wire solo-to-shared upgrade listener whenever a fresh solo pomo starts
+    if (phase === 'work' && gameState.sharedPomo.phase === 'idle' && !gameState.sharedPomo.unsubSoloUpgrade) {
+        setupSoloUpgradeListener();
     }
     const player = gameState.players[gameState.userId];
     if (player) {
@@ -3501,7 +3599,7 @@ function updateCamera() {
 }
 
 function handleMovement() {
-    if (gameState.isLockedIn || gameState.anim.active) return;
+    if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive) return;
     const player = gameState.players[gameState.userId];
     if (!player) return;
     let dx = 0, dy = 0;
@@ -3880,6 +3978,7 @@ function gameLoop(timestamp) {
         updateCoopAnimation();
         updateCoopTaskPanel();
         updatePomoLeaveBtn();
+        updatePrayerSystem();
         render();
     } catch (e) {
         console.error('[gameLoop crash — loop kept alive]', e);
@@ -3937,7 +4036,8 @@ function render() {
     drawRaceHint();
     drawCoffeeHint();
 
-    if (gameState.isLockedIn) {
+    // Blue locked-in circle: solo pomo only, not coop (coop has its own ring)
+    if (gameState.isLockedIn && gameState.sharedPomo.phase !== 'active') {
         drawLockedInOverlay();
     }
 
@@ -3957,6 +4057,14 @@ function render() {
     if (ytBlock) {
         const shouldShow = gameState.isLockedIn;
         ytBlock.classList.toggle('visible', shouldShow);
+    }
+    const prayerPanel = document.getElementById('prayer-panel');
+    if (prayerPanel) {
+        const showPrayer = gameState.pomodoro.active;
+        prayerPanel.classList.toggle('visible', !!showPrayer);
+        // During breaks, show compact (just next prayer, no 5-icon row)
+        const isBreak = gameState.pomodoro.active && gameState.pomodoro.phase === 'break';
+        prayerPanel.classList.toggle('break-compact', isBreak);
     }
 }
 
@@ -5869,6 +5977,22 @@ function updatePomodoro() {
     enforceAudioFailsafe();
     if (!gameState.pomodoro.active) return;
 
+    // Prayer pause — freeze timer completely
+    if (gameState.prayer.isOverlayActive) {
+        gameState.pomodoro.endTime = Date.now() + gameState.prayer.pausedRemaining;
+        const pr = gameState.prayer.pausedRemaining;
+        const frozenStr = `${Math.floor(pr / 60000).toString().padStart(2, '0')}:${Math.floor((pr % 60000) / 1000).toString().padStart(2, '0')}`;
+        const lg = document.getElementById('large-timer-text');
+        const sm = document.getElementById('small-timer-text');
+        if (gameState.pomodoro.phase === 'work' && lg) lg.textContent = frozenStr;
+        if (gameState.pomodoro.phase === 'break' && sm) sm.textContent = frozenStr;
+        updatePrayerOverlayTimer();
+        return;
+    }
+
+    // Check if prayer time arrived
+    checkPrayerTrigger();
+
     const now = Date.now();
     const remaining = Math.max(0, gameState.pomodoro.endTime - now);
 
@@ -6550,8 +6674,9 @@ function initSharedPomo() {
     const inviteRef = ref(database, spPath(`invites/${gameState.userId}`));
     sp.unsubInvite = onValue(inviteRef, snap => {
         const invite = snap.val();
-        if (!invite) { if (sp.phase === 'idle') hideSpToast(); return; }
-        if (sp.phase !== 'idle') return;
+        if (!invite) { if (sp.phase === 'idle' || sp.phase === 'gathering') hideSpToast(); return; }
+        // Allow receiving invites when idle OR when hosting a gathering (can swap to guest)
+        if (sp.phase !== 'idle' && sp.phase !== 'gathering') return;
         const age = Date.now() - (invite.sentAt || 0);
         if (age > SP_INVITE_TTL) {
             update(ref(database), { [spPath(`invites/${gameState.userId}`)]: null });
@@ -6588,7 +6713,9 @@ function setupSpSessionListener(sessionId) {
 
 function updateSharedPomoProximity() {
     const sp = gameState.sharedPomo;
-    if (sp.phase !== 'idle' || gameState.pomodoro.active) {
+    // When hosting a gathering, keep showing nearby players so more can be invited
+    const hostIsGathering = sp.phase === 'gathering' && sp.isHost;
+    if ((!hostIsGathering && sp.phase !== 'idle') || gameState.pomodoro.active) {
         renderSpNearbyPanel([]);
         // Still detect nearby coop sessions even when not idle for join flow
         if (!gameState.pomodoro.active) checkNearbyCoopSession();
@@ -6624,13 +6751,14 @@ function updateSharedPomoProximity() {
 function checkNearbyCoopSession() {
     const sp = gameState.sharedPomo;
     if (sp.phase !== 'idle' || gameState.pomodoro.active) {
-        if (sp.nearbyCoopId) { sp.nearbyCoopId = ''; document.getElementById('sp-join-panel')?.classList.add('hidden'); }
+        if (sp.nearbyCoopId)  { sp.nearbyCoopId  = ''; document.getElementById('sp-join-panel')?.classList.add('hidden'); }
+        if (sp.nearbySoloId)  { sp.nearbySoloId  = ''; }
         return;
     }
     const local = gameState.players[gameState.userId];
     if (!local) return;
 
-    // Find nearest working player who is in a coop session
+    // ── Active coop sessions (highest priority) ──────────────────────────────
     let bestCoopHostId = null, bestDist = Infinity;
     for (const p of Object.values(gameState.players)) {
         if (p.userId === gameState.userId) continue;
@@ -6640,15 +6768,37 @@ function checkNearbyCoopSession() {
         if (d < SP_PROXIMITY_SQ && d < bestDist) { bestDist = d; bestCoopHostId = p.coopHostId; }
     }
 
-    if (!bestCoopHostId) {
-        if (sp.nearbyCoopId) { sp.nearbyCoopId = ''; document.getElementById('sp-join-panel')?.classList.add('hidden'); }
+    if (bestCoopHostId) {
+        if (sp.nearbySoloId) sp.nearbySoloId = ''; // coop wins over solo
+        if (bestCoopHostId !== sp.nearbyCoopId) {
+            sp.nearbyCoopId = bestCoopHostId;
+            sp.joinDetails  = null;
+            showSpJoinPanel(bestCoopHostId);
+        }
         return;
     }
 
-    if (bestCoopHostId !== sp.nearbyCoopId) {
-        sp.nearbyCoopId = bestCoopHostId;
-        sp.joinDetails = null;
-        showSpJoinPanel(bestCoopHostId);
+    // No coop session — hide stale coop panel
+    if (sp.nearbyCoopId) { sp.nearbyCoopId = ''; document.getElementById('sp-join-panel')?.classList.add('hidden'); }
+
+    // ── Solo workers (can be converted to shared) ─────────────────────────────
+    let bestSoloId = null; bestDist = Infinity;
+    for (const p of Object.values(gameState.players)) {
+        if (p.userId === gameState.userId) continue;
+        if (!p.isWorking || p.coopHostId) continue; // solo = working but NOT in a coop group
+        const dx = p.x - local.x, dy = p.y - local.y;
+        const d = dx*dx + dy*dy;
+        if (d < SP_PROXIMITY_SQ && d < bestDist) { bestDist = d; bestSoloId = p.userId; }
+    }
+
+    if (bestSoloId) {
+        if (bestSoloId !== sp.nearbySoloId) {
+            sp.nearbySoloId = bestSoloId;
+            sp.joinDetails  = null;
+            showSoloJoinPanel(bestSoloId);
+        }
+    } else {
+        if (sp.nearbySoloId) { sp.nearbySoloId = ''; document.getElementById('sp-join-panel')?.classList.add('hidden'); }
     }
 }
 
@@ -6683,6 +6833,10 @@ function showSpJoinPanel(hostId) {
     document.getElementById('sp-join-details')?.classList.add('hidden');
     document.getElementById('sp-join-confirm')?.classList.add('hidden');
     document.getElementById('sp-join-peek')?.classList.remove('hidden');
+
+    // Restore coop subtitle in case the solo-join path changed it
+    const subEl = panel.querySelector('.sp-join-sub');
+    if (subEl) subEl.textContent = 'جلسة عمل جارية';
 
     // Fetch live session data
     get(ref(database, spPath(`live/${hostId}`))).then(snap => {
@@ -6804,6 +6958,188 @@ function confirmJoinCoopSession() {
     showSpInfoToast('انضممت للجلسة!');
 }
 
+// ── Solo-to-shared join flow ──────────────────────────────────────────────────
+
+function showSoloJoinPanel(hostId) {
+    const sp = gameState.sharedPomo;
+    const panel = document.getElementById('sp-join-panel');
+    if (!panel) return;
+    const hostPlayer = gameState.players[hostId];
+    const laptop = gameState.laptops.find(l => l.claimedBy === hostId && (l.phase === 'work' || l.phase === 'break'));
+    if (!laptop || !hostPlayer) return;
+
+    sp.joinDetails = { hostId, isSolo: true };
+
+    // Reset panel to peek state
+    document.getElementById('sp-join-details')?.classList.add('hidden');
+    document.getElementById('sp-join-confirm')?.classList.add('hidden');
+    document.getElementById('sp-join-peek')?.classList.remove('hidden');
+
+    // Host avatar + name
+    const avEl = document.getElementById('sp-join-avatars');
+    if (avEl) avEl.innerHTML = `<div class="sp-join-av">${hostPlayer.avatar ? `<img src="${hostPlayer.avatar}" alt="">` : (hostPlayer.username||'?').charAt(0).toUpperCase()}</div>`;
+    const titleEl = document.getElementById('sp-join-title');
+    if (titleEl) titleEl.textContent = hostPlayer.username;
+    const subEl = panel.querySelector('.sp-join-sub');
+    if (subEl) subEl.textContent = 'يعمل بمفرده';
+
+    panel.classList.remove('hidden');
+
+    // Wire buttons (clone to prevent stacking)
+    ['sp-join-peek', 'sp-join-confirm', 'sp-join-cancel'].forEach(id => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        const fresh = btn.cloneNode(true);
+        btn.replaceWith(fresh);
+    });
+
+    document.getElementById('sp-join-peek')?.addEventListener('click', () => {
+        const remaining = Math.max(0, laptop.endTime - Date.now());
+        const mm = String(Math.floor(remaining / 60000)).padStart(2,'0');
+        const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2,'0');
+        const timerEl = document.getElementById('sp-join-timer');
+        const breakEl = document.getElementById('sp-join-break');
+        const sessEl  = document.getElementById('sp-join-sess');
+        if (timerEl) timerEl.textContent = `${mm}:${ss}`;
+        if (breakEl) breakEl.textContent = `${laptop.breakDuration || '?'} د`;
+        if (sessEl)  sessEl.textContent  = laptop.sessionsLeft || '—';
+        document.getElementById('sp-join-details')?.classList.remove('hidden');
+        document.getElementById('sp-join-confirm')?.classList.remove('hidden');
+        document.getElementById('sp-join-peek')?.classList.add('hidden');
+    });
+
+    document.getElementById('sp-join-confirm')?.addEventListener('click', confirmJoinSoloSession);
+
+    document.getElementById('sp-join-cancel')?.addEventListener('click', () => {
+        document.getElementById('sp-join-panel')?.classList.add('hidden');
+        const sub2 = document.querySelector('.sp-join-sub');
+        if (sub2) sub2.textContent = 'جلسة عمل جارية';
+        sp.nearbySoloId = '';
+        sp.joinDetails  = null;
+    });
+}
+
+function confirmJoinSoloSession() {
+    const sp = gameState.sharedPomo;
+    const data = sp.joinDetails;
+    if (!data?.isSolo) return;
+
+    document.getElementById('sp-join-panel')?.classList.add('hidden');
+    const sub = document.querySelector('.sp-join-sub');
+    if (sub) sub.textContent = 'جلسة عمل جارية';
+
+    const hostId = data.hostId;
+    const laptop = gameState.laptops.find(l => l.claimedBy === hostId);
+    if (!laptop) { showSpInfoToast('تعذر الدخول — اللابتوب غير متاح'); return; }
+
+    const hostPlayer = gameState.players[hostId];
+    const local = gameState.players[gameState.userId];
+    if (!local || !hostPlayer) return;
+
+    // Write live doc — triggers host's upgrade listener
+    const liveDoc = {
+        hostId,
+        hostName: hostPlayer.username,
+        hostLaptopId: laptop.id,
+        endTime: laptop.endTime,
+        workDuration: laptop.workDuration,
+        breakDuration: laptop.breakDuration || 5,
+        sessionsLeft: laptop.sessionsLeft || 1,
+        participants: {
+            [hostId]:           { username: hostPlayer.username, avatar: hostPlayer.avatar || null },
+            [gameState.userId]: { username: local.username,      avatar: local.avatar      || null },
+        },
+    };
+    update(ref(database), { [spPath(`live/${hostId}`)]: liveDoc });
+
+    // Local shared-pomo state
+    sp.phase = 'active';
+    sp.isHost = false;
+    sp.sessionId = hostId;
+    sp.activeGroupMembers = [hostId, gameState.userId];
+    sp.coopAnim.members = {};
+    sp.coopAnim.emojiFloats = [];
+    for (const uid of sp.activeGroupMembers) {
+        sp.coopAnim.members[uid] = {
+            state: 'idle', stateTimer: 60 + Math.random() * 100, stateProgress: 0,
+            orbitAngle: Math.random() * Math.PI * 2,
+            dxBlend: 0, dyBlend: 0, scaleXBlend: 1, scaleYBlend: 1, angleBlend: 0,
+        };
+    }
+
+    // Teleport to host's laptop
+    teleportEntity(local, laptop.sitX, laptop.sitY);
+    updatePlayerPosition(laptop.sitX, laptop.sitY);
+    gameState.isLockedIn = true;
+
+    // Sync local pomo to host's timer (don't recalculate endTime — use host's)
+    gameState.pomodoro.active        = true;
+    gameState.pomodoro.laptopId      = laptop.id;
+    gameState.pomodoro.workDuration  = laptop.workDuration;
+    gameState.pomodoro.breakDuration = laptop.breakDuration || 5;
+    gameState.pomodoro.sessionsLeft  = laptop.sessionsLeft  || 1;
+    gameState.pomodoro.totalSessions = laptop.totalSessions || laptop.sessionsLeft || 1;
+    gameState.pomodoro.phase         = laptop.phase || 'work';
+    gameState.pomodoro.endTime       = laptop.endTime;
+    gameState.pomodoro.transitioning = false;
+
+    // Show focus UI
+    document.getElementById('focus-sounds-panel')?.classList.add('active');
+    document.getElementById('current-task-panel')?.classList.add('active');
+    setMobileFocusMode(true);
+
+    // Start audio if joining mid-work
+    if (laptop.phase !== 'break' && gameState.focusAudioEngine) {
+        gameState.focusAudioEngine.fadeToMaster(1.0, 1.5);
+        for (const [name, cfg] of Object.entries(gameState.focusAudioEngine.sounds)) {
+            if (cfg.active) gameState.focusAudioEngine.startSound(name);
+        }
+    }
+
+    setupSpLiveListener(hostId);
+    showSpInfoToast('انضممت للجلسة!');
+}
+
+// Called when a solo pomo starts — watches for anyone writing a live doc (= someone joining us)
+function setupSoloUpgradeListener() {
+    const sp = gameState.sharedPomo;
+    if (sp.unsubSoloUpgrade) { sp.unsubSoloUpgrade(); sp.unsubSoloUpgrade = null; }
+
+    sp.unsubSoloUpgrade = onValue(ref(database, spPath(`live/${gameState.userId}`)), snap => {
+        const data = snap.val();
+        if (!data) return;                              // doc deleted / doesn't exist yet
+        if (sp.phase !== 'idle') return;               // already in a session
+        if (!gameState.pomodoro.active) return;        // pomo ended before anyone joined
+
+        const uids = Object.keys(data.participants || {});
+        if (uids.length < 2) return;                   // need at least host + 1 guest
+
+        // Upgrade from solo → shared
+        sp.phase = 'active';
+        sp.isHost = true;
+        sp.sessionId = gameState.userId;
+        sp.activeGroupMembers = uids;
+        sp.coopAnim.members = {};
+        sp.coopAnim.emojiFloats = [];
+        for (const uid of uids) {
+            sp.coopAnim.members[uid] = {
+                state: 'idle', stateTimer: 60 + Math.random() * 100, stateProgress: 0,
+                orbitAngle: Math.random() * Math.PI * 2,
+                dxBlend: 0, dyBlend: 0, scaleXBlend: 1, scaleYBlend: 1, angleBlend: 0,
+            };
+        }
+
+        // Stop solo listener, hand off to proper live listener
+        if (sp.unsubSoloUpgrade) { sp.unsubSoloUpgrade(); sp.unsubSoloUpgrade = null; }
+        setupSpLiveListener(gameState.userId);
+
+        // coopHostId written to Firebase on the next writePlayerState tick
+        const joinerUid  = uids.find(uid => uid !== gameState.userId);
+        const joinerName = joinerUid ? data.participants[joinerUid]?.username : null;
+        showSpInfoToast(`${joinerName || '?'} انضم إليك! 🎉`);
+    });
+}
+
 // ── Invite flow ───────────────────────────────────────────────────────────────
 
 function sendSpInvite(targetUid) {
@@ -6859,6 +7195,16 @@ function acceptSpInvite() {
     if (!invite) return;
     hideSpToast();
 
+    // If we were hosting a gathering, cleanly cancel it first
+    if (sp.isHost && sp.sessionId && sp.phase === 'gathering') {
+        update(ref(database), { [spPath(`sessions/${sp.sessionId}`)]: null });
+        document.getElementById('sp-gather')?.classList.add('hidden');
+        if (sp.unsubSession) { sp.unsubSession(); sp.unsubSession = null; }
+        if (sp.unsubLive)    { sp.unsubLive();    sp.unsubLive    = null; }
+        sp.session = null; sp.sessionId = null; sp.isHost = false;
+        sp.nearbyPlayerIds = '';
+    }
+
     sp.phase     = 'guest-waiting';
     sp.isHost    = false;
     sp.sessionId = invite.sessionId;
@@ -6900,6 +7246,16 @@ function setupSpGatherPanel() {
     const panel = document.getElementById('sp-gather');
     if (!panel) return;
     panel.classList.remove('hidden');
+
+    // Populate host avatar
+    const local = gameState.players[gameState.userId];
+    const hostAvEl = document.getElementById('sp-gather-host-av');
+    if (hostAvEl && local) {
+        hostAvEl.innerHTML = local.avatar
+            ? `<img src="${local.avatar}" alt="">`
+            : (local.username || '?').charAt(0).toUpperCase();
+    }
+
     renderSpGatherPanel(gameState.sharedPomo.session || { participants: {} });
 
     // Config option buttons
@@ -6934,18 +7290,63 @@ function renderSpGatherPanel(session) {
     const membersEl = document.getElementById('sp-gather-members');
     if (!membersEl) return;
     const parts = Object.entries(session.participants || {}).filter(([uid]) => uid !== gameState.userId);
-    membersEl.innerHTML = parts.length === 0
-        ? '<span class="sp-empty-hint">في انتظار القبول…</span>'
-        : parts.map(([, p]) => {
-            const ready = p.status === 'ready';
-            const av = p.avatar ? `<img src="${p.avatar}" alt="">` : (p.username||'?').charAt(0).toUpperCase();
-            return `<div class="sp-member-chip">
-                <div class="sp-member-av${ready?' sp-av-ready':''}">${av}</div>
-                <span class="sp-member-name">${p.username||''}</span>
-                <div class="sp-member-dot${ready?' sp-dot-ready':''}"></div>
-            </div>`;
-        }).join('');
 
+    // ── Diff-based DOM update (enables enter/leave animations) ──
+    // Snapshot existing chips
+    const existingChips = {};
+    membersEl.querySelectorAll('.sp-member-chip[data-uid]').forEach(c => {
+        existingChips[c.dataset.uid] = c;
+    });
+    const currentUids = new Set(parts.map(([uid]) => uid));
+
+    // Mark chips that are leaving — fade out then remove
+    for (const [uid, chip] of Object.entries(existingChips)) {
+        if (!currentUids.has(uid)) {
+            chip.classList.add('sp-chip-leaving');
+            setTimeout(() => { if (chip.parentNode) chip.remove(); updateEmptyHint(); }, 320);
+        }
+    }
+
+    // Add or update chips that are present
+    for (const [uid, p] of parts) {
+        const ready = p.status === 'ready';
+        const av = p.avatar ? `<img src="${p.avatar}" alt="">` : (p.username||'?').charAt(0).toUpperCase();
+
+        if (existingChips[uid]) {
+            // Update status classes on existing chip
+            const chip = existingChips[uid];
+            chip.classList.toggle('sp-chip-pending', !ready);
+            chip.querySelector('.sp-member-av')?.classList.toggle('sp-av-ready', ready);
+            chip.querySelector('.sp-member-dot')?.classList.toggle('sp-dot-ready', ready);
+        } else {
+            // New chip — enter animation
+            const chip = document.createElement('div');
+            chip.className = `sp-member-chip sp-chip-entering${ready ? '' : ' sp-chip-pending'}`;
+            chip.dataset.uid = uid;
+            chip.innerHTML = `<div class="sp-member-av${ready?' sp-av-ready':''}">${av}</div>
+                <span class="sp-member-name">${p.username||''}</span>
+                <div class="sp-member-dot${ready?' sp-dot-ready':''}"></div>`;
+            membersEl.appendChild(chip);
+            // Trigger enter animation next frame
+            requestAnimationFrame(() => requestAnimationFrame(() => chip.classList.remove('sp-chip-entering')));
+        }
+    }
+
+    function updateEmptyHint() {
+        const hasAny = membersEl.querySelectorAll('.sp-member-chip:not(.sp-chip-leaving)').length > 0;
+        let hint = membersEl.querySelector('.sp-empty-hint');
+        if (!hasAny && !hint) {
+            hint = document.createElement('span');
+            hint.className = 'sp-empty-hint';
+            hint.textContent = 'في انتظار القبول…';
+            membersEl.appendChild(hint);
+        } else if (hasAny && hint) {
+            hint.remove();
+        }
+    }
+    updateEmptyHint();
+
+    // Update start button
     const startBtn = document.getElementById('sp-start-btn');
     if (startBtn) {
         const hasReady = parts.some(([, p]) => p.status === 'ready');
@@ -7138,8 +7539,9 @@ function onSpSessionCancelled() {
 
 function cleanupSpLocal(clearGroup = false) {
     const sp = gameState.sharedPomo;
-    if (sp.unsubSession) { sp.unsubSession(); sp.unsubSession = null; }
-    if (sp.unsubLive)    { sp.unsubLive();    sp.unsubLive    = null; }
+    if (sp.unsubSession)     { sp.unsubSession();     sp.unsubSession     = null; }
+    if (sp.unsubLive)        { sp.unsubLive();        sp.unsubLive        = null; }
+    if (sp.unsubSoloUpgrade) { sp.unsubSoloUpgrade(); sp.unsubSoloUpgrade = null; }
     if (sp.isHost && sp.sessionId) {
         update(ref(database), { [spPath(`live/${sp.sessionId}`)]: null });
     }
@@ -7147,6 +7549,17 @@ function cleanupSpLocal(clearGroup = false) {
     sp.phase = 'idle'; sp.agreedEndTime = 0;
     sp.nearbyPlayerIds = ''; // force panel re-render
     if (clearGroup) sp.activeGroupMembers = [];
+
+    // Clear coop animation state so players stop spinning after session ends
+    sp.coopAnim.members = {};
+    sp.coopAnim.emojiFloats = [];
+    sp.extCoopAnims = {};
+
+    // Clear our own coopHostId in Firebase so others see we're no longer in a session
+    if (gameState.userId) {
+        update(ref(database), { [`users/${gameState.userId}/coopHostId`]: null });
+    }
+
     document.getElementById('sp-coop-tasks')?.classList.add('hidden');
     document.getElementById('sp-join-panel')?.classList.add('hidden');
 }
@@ -7279,7 +7692,9 @@ function setupPomoLeaveBtn() {
 function updatePomoLeaveBtn() {
     const btn = document.getElementById('pomo-leave-btn');
     if (!btn) return;
-    const active = gameState.pomodoro.active && gameState.isLockedIn;
+    // Show during work (isLockedIn) AND during breaks so the user can exit mid-break
+    const active = gameState.pomodoro.active &&
+        (gameState.isLockedIn || gameState.pomodoro.phase === 'break');
     btn.classList.toggle('hidden', !active);
 }
 
@@ -7302,11 +7717,16 @@ function exitPomoNow() {
         cleanupSpLocal(true);
     }
 
-    // Release laptop on Firebase
+    // Release laptop on Firebase — only if WE own it (host/solo).
+    // Guests share the host's laptop; releasing it would kill the host's session.
     if (gameState.pomodoro.laptopId) {
-        update(ref(database), { [lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}`)]: null });
-        const laptop = gameState.laptops.find(l => l.id === gameState.pomodoro.laptopId);
-        if (laptop) { laptop.claimedBy = null; laptop.phase = 'none'; }
+        const _laptop = gameState.laptops.find(l => l.id === gameState.pomodoro.laptopId);
+        const weOwnIt = _laptop?.claimedBy === gameState.userId;
+        if (weOwnIt) {
+            update(ref(database), { [lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}`)]: null });
+            _laptop.claimedBy = null;
+            _laptop.phase = 'none';
+        }
     }
 
     // Reset local pomo state
@@ -7318,6 +7738,9 @@ function exitPomoNow() {
     gameState.isLockedIn            = false;
     gameState.anim.active           = false;
     gameState.anim.phase            = 'none';
+
+    // Clear any coop session that was tied to this pomo
+    cleanupSpLocal(true);
 
     // Hide all focus / pomo UI
     document.getElementById('focus-sounds-panel')?.classList.remove('active');
@@ -7499,18 +7922,23 @@ function drawCoopGroupLabels() {
     for (const members of Object.values(groups)) {
         if (!members.length) continue;
 
-        // Average draw position (world space, same transform as drawPlayers)
+        // Average draw position — deliberately ignore coop dance offsets so the
+        // label stays anchored above the static badge box, not bobbing with sprites.
         let sumX = 0, minY = Infinity;
         for (const p of members) {
             const { x: rx, y: ry } = getPlayerRenderPos(p);
-            const animMem = sp.extCoopAnims[p.userId];
-            const dx = animMem ? animMem.dxBlend : 0;
-            const dy = animMem ? animMem.dyBlend : 0;
-            sumX += rx + dx;
-            minY = Math.min(minY, ry + dy);
+            sumX += rx;
+            minY = Math.min(minY, ry);
         }
         const cx = sumX / members.length;
-        const labelY = minY - PLAYER_SIZE * 0.8;
+
+        // Replicate getLaptopBadgePosition's offset (PLAYER_SIZE/2 + 20 = 55)
+        // to get the true topY that drawCoopBadge receives, then place the pill
+        // 10 px above the badge's top edge.
+        const _rowH = 26, _gapRows = 3, _timerH = 28;
+        const badgeH = members.length * _rowH + (members.length - 1) * _gapRows + _gapRows + _timerH;
+        const badgeTopY = minY - (PLAYER_SIZE / 2 + 20) - badgeH;
+        const labelY = badgeTopY - 10;
 
         ctx.save();
         ctx.font = 'bold 12px Rubik';
@@ -7566,6 +7994,774 @@ function updateCoopTaskPanel() {
     document.getElementById('sp-coop-leave')?.addEventListener('click', () => {
         leaveSharedPomo();
     });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PRAYER TIMES SYSTEM
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const PRAYER_DATA = [
+    { key: 'Fajr',    arabic: 'الفَجْر'   },
+    { key: 'Dhuhr',   arabic: 'الظُّهْر'  },
+    { key: 'Asr',     arabic: 'العَصْر'   },
+    { key: 'Maghrib', arabic: 'المَغْرِب' },
+    { key: 'Isha',    arabic: 'العِشَاء'  },
+];
+
+const PRAYER_ICON_SVG = {
+    Fajr:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/><circle cx="17" cy="5" r="1" fill="currentColor" stroke="none"/></svg>',
+    Dhuhr:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>',
+    Asr:     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="14" r="4.5"/><line x1="12" y1="5" x2="12" y2="7.5"/><line x1="5.64" y1="8.64" x2="7.05" y2="10.05"/><line x1="3" y1="14" x2="5" y2="14"/><line x1="19" y1="14" x2="21" y2="14"/><line x1="16.95" y1="10.05" x2="18.36" y2="8.64"/><line x1="2" y1="21" x2="22" y2="21"/></svg>',
+    Maghrib: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M17 18a5 5 0 1 0-10 0"/><line x1="12" y1="9" x2="12" y2="11.5"/><line x1="7.05" y1="13.05" x2="8.46" y2="14.46"/><line x1="4" y1="18" x2="6" y2="18"/><line x1="18" y1="18" x2="20" y2="18"/><line x1="15.54" y1="14.46" x2="16.95" y2="13.05"/><line x1="2" y1="21" x2="22" y2="21"/></svg>',
+    Isha:    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/><circle cx="18" cy="5" r="0.8" fill="currentColor" stroke="none"/><circle cx="15" cy="3" r="0.6" fill="currentColor" stroke="none"/><circle cx="20" cy="8" r="0.5" fill="currentColor" stroke="none"/></svg>',
+};
+
+const PRAYER_LOCATIONS = [
+    { country: 'مصر', cities: [
+        { name: 'القاهرة', lat: 30.0444, lon: 31.2357 },
+        { name: 'الإسكندرية', lat: 31.2001, lon: 29.9187 },
+        { name: 'الجيزة', lat: 30.0131, lon: 31.2089 },
+        { name: 'المنصورة', lat: 31.0409, lon: 31.3785 },
+        { name: 'طنطا', lat: 30.7865, lon: 31.0004 },
+        { name: 'أسيوط', lat: 27.1783, lon: 31.1859 },
+    ]},
+    { country: 'السعودية', cities: [
+        { name: 'مكة المكرمة', lat: 21.4225, lon: 39.8262 },
+        { name: 'المدينة المنورة', lat: 24.4672, lon: 39.6024 },
+        { name: 'الرياض', lat: 24.7136, lon: 46.6753 },
+        { name: 'جدة', lat: 21.4858, lon: 39.1925 },
+    ]},
+    { country: 'الإمارات', cities: [
+        { name: 'دبي', lat: 25.2048, lon: 55.2708 },
+        { name: 'أبوظبي', lat: 24.4539, lon: 54.3773 },
+    ]},
+    { country: 'فلسطين', cities: [
+        { name: 'القدس', lat: 31.7683, lon: 35.2137 },
+        { name: 'غزة', lat: 31.5017, lon: 34.4668 },
+    ]},
+    { country: 'الأردن', cities: [
+        { name: 'عمّان', lat: 31.9454, lon: 35.9284 },
+    ]},
+    { country: 'العراق', cities: [
+        { name: 'بغداد', lat: 33.3152, lon: 44.3661 },
+    ]},
+    { country: 'الكويت', cities: [
+        { name: 'الكويت', lat: 29.3759, lon: 47.9774 },
+    ]},
+    { country: 'المغرب', cities: [
+        { name: 'الدار البيضاء', lat: 33.5731, lon: -7.5898 },
+        { name: 'الرباط', lat: 34.0209, lon: -6.8416 },
+    ]},
+    { country: 'تركيا', cities: [
+        { name: 'اسطنبول', lat: 41.0082, lon: 28.9784 },
+        { name: 'أنقرة', lat: 39.9334, lon: 32.8597 },
+    ]},
+    { country: 'الولايات المتحدة', cities: [
+        { name: 'نيويورك', lat: 40.7128, lon: -74.0060 },
+        { name: 'لوس أنجلوس', lat: 34.0522, lon: -118.2437 },
+        { name: 'هيوستن', lat: 29.7604, lon: -95.3698 },
+        { name: 'شيكاغو', lat: 41.8781, lon: -87.6298 },
+    ]},
+    { country: 'بريطانيا', cities: [
+        { name: 'لندن', lat: 51.5074, lon: -0.1278 },
+    ]},
+    { country: 'كندا', cities: [
+        { name: 'تورنتو', lat: 43.6532, lon: -79.3832 },
+    ]},
+    { country: 'ماليزيا', cities: [
+        { name: 'كوالالمبور', lat: 3.139, lon: 101.6869 },
+    ]},
+];
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+
+function initPrayerSystem() {
+    if (gameState.isSirajGhost) gameState.prayer.prayerLockMs = 10000; // 10 s for Siraj
+
+    // Preload athan buffer so it's ready for background playback
+    const _preloadAthan = () => {
+        if (!gameState.focusAudioEngine?.ctx) return;
+        const ctx = gameState.focusAudioEngine.ctx;
+        fetch('Sound/Prayer_CallToPrayer.mp3')
+            .then(r => r.arrayBuffer())
+            .then(buf => ctx.decodeAudioData(buf))
+            .then(decoded => { gameState.prayer._athanBuffer = decoded; })
+            .catch(() => {});
+    };
+    // Delay slightly to let AudioContext initialize first
+    setTimeout(_preloadAthan, 2000);
+
+    // On mobile, move YT + prayer panel inside the focus drawer for proper scrolling
+    if (isMobile()) {
+        const drawer = document.getElementById('focus-sounds-panel');
+        const yt = document.getElementById('yt-focus-block');
+        const pp = document.getElementById('prayer-panel');
+        if (drawer && yt) drawer.appendChild(yt);
+        if (drawer && pp) drawer.appendChild(pp);
+    }
+
+    // Read location from Firebase (city + country only)
+    get(ref(database, `users/${gameState.userId}/prayerLocation`)).then(snap => {
+        const loc = snap.val();
+        if (loc && (loc.city || loc.country)) {
+            gameState.prayer.location = loc;
+            document.getElementById('prayer-blur-overlay')?.classList.add('hidden');
+            fetchPrayerTimes();
+        }
+    });
+
+    // Read adjustments
+    get(ref(database, `users/${gameState.userId}/prayerAdjustments`)).then(snap => {
+        const adj = snap.val();
+        if (adj) gameState.prayer.adjustments = adj;
+    });
+
+    setupPrayerUI();
+}
+
+// ── API fetch ────────────────────────────────────────────────────────────────
+
+async function fetchPrayerTimes() {
+    const loc = gameState.prayer.location;
+    if (!loc) return;
+
+    const today = new Date();
+    const dateStr = `${String(today.getDate()).padStart(2, '0')}-${String(today.getMonth() + 1).padStart(2, '0')}-${today.getFullYear()}`;
+    if (gameState.prayer.lastFetchDate === dateStr && gameState.prayer.times) return;
+
+    try {
+        let url;
+        if (loc._lat != null && loc._lon != null) {
+            // In-memory lat/lon from auto-detect this session
+            url = `https://api.aladhan.com/v1/timings/${dateStr}?latitude=${loc._lat}&longitude=${loc._lon}&method=5`;
+        } else {
+            // Loaded from Firebase (city+country only) — use city-based lookup
+            const cityName = loc.city || '';
+            const countryName = loc.country || '';
+            // Try to match city in PRAYER_LOCATIONS for lat/lon
+            let matched = null;
+            for (const c of PRAYER_LOCATIONS) {
+                if (c.country === countryName) {
+                    matched = c.cities.find(ci => ci.name === cityName);
+                    if (matched) break;
+                }
+            }
+            if (matched) {
+                url = `https://api.aladhan.com/v1/timings/${dateStr}?latitude=${matched.lat}&longitude=${matched.lon}&method=5`;
+            } else {
+                // Use Aladhan city-based API
+                url = `https://api.aladhan.com/v1/timingsByCity/${dateStr}?city=${encodeURIComponent(cityName)}&country=${encodeURIComponent(countryName)}&method=5`;
+            }
+        }
+        const res = await fetch(url);
+        const json = await res.json();
+        if (json.code === 200 && json.data && json.data.timings) {
+            const t = json.data.timings;
+            gameState.prayer.times = {};
+            for (const p of PRAYER_DATA) {
+                gameState.prayer.times[p.key] = t[p.key]; // e.g. "12:30"
+            }
+            gameState.prayer.lastFetchDate = dateStr;
+            computeNextPrayer();
+            updatePrayerPanelDOM();
+        }
+    } catch (e) {
+        console.error('[prayer] fetch failed:', e);
+    }
+}
+
+// ── Compute next prayer ──────────────────────────────────────────────────────
+
+function prayerTimeToMs(timeStr, adjMinutes) {
+    const [h, m] = timeStr.split(':').map(Number);
+    const d = new Date();
+    d.setHours(h, m + (adjMinutes || 0), 0, 0);
+    return d.getTime();
+}
+
+function computeNextPrayer() {
+    const pr = gameState.prayer;
+    if (!pr.times) return;
+
+    const now = Date.now();
+    const adj = pr.adjustments;
+    const dayMs = [];
+
+    for (let i = 0; i < PRAYER_DATA.length; i++) {
+        const p = PRAYER_DATA[i];
+        let ms = prayerTimeToMs(pr.times[p.key], adj[p.key] || 0);
+        // Siraj test mode: override next upcoming prayer to be 1 min from now
+        if (gameState.isSirajGhost && ms > now && !pr._sirajOverrideApplied) {
+            ms = now + 60000; // 1 minute from now
+            pr._sirajOverrideApplied = true;
+        }
+        dayMs.push({ ...p, timeMs: ms });
+    }
+
+    // Find first prayer that hasn't passed yet
+    let next = null;
+    for (let i = 0; i < dayMs.length; i++) {
+        if (dayMs[i].timeMs > now) {
+            const prevMs = i > 0 ? dayMs[i - 1].timeMs : prayerTimeToMs('00:00', 0);
+            next = { ...dayMs[i], prevTimeMs: prevMs };
+            break;
+        }
+    }
+    // All passed → next is tomorrow's Fajr
+    if (!next) {
+        const tmrw = new Date();
+        tmrw.setDate(tmrw.getDate() + 1);
+        tmrw.setHours(...pr.times.Fajr.split(':').map(Number), 0, 0);
+        next = { key: 'Fajr', arabic: PRAYER_DATA[0].arabic, timeMs: tmrw.getTime(), prevTimeMs: dayMs[dayMs.length - 1].timeMs };
+    }
+
+    pr.nextPrayer = next;
+
+    // Reset triggered flags at midnight
+    const todayStr = new Date().toDateString();
+    if (pr.lastDayCheck !== todayStr) {
+        pr.triggeredToday = {};
+        pr.lastDayCheck = todayStr;
+        pr._sirajOverrideApplied = false;
+        // Re-fetch times for new day
+        pr.lastFetchDate = null;
+        fetchPrayerTimes();
+    }
+}
+
+// ── DOM update ───────────────────────────────────────────────────────────────
+
+function updatePrayerPanelDOM() {
+    const pr = gameState.prayer;
+    if (!pr.times) return;
+
+    const now = Date.now();
+    const adj = pr.adjustments;
+
+    for (const p of PRAYER_DATA) {
+        const ms = prayerTimeToMs(pr.times[p.key], adj[p.key] || 0);
+        const d = new Date(ms);
+        let hrs = d.getHours(), ampm = hrs >= 12 ? 'م' : 'ص';
+        hrs = hrs % 12 || 12;
+        const tStr = `${hrs}:${String(d.getMinutes()).padStart(2, '0')} ${ampm}`;
+        const el = document.getElementById(`pt-${p.key}`);
+        if (el) el.textContent = tStr;
+
+        // Mark active / passed
+        const item = el?.closest('.prayer-icon-item');
+        if (item) {
+            const isPassed = ms <= now;
+            const isNext = pr.nextPrayer && pr.nextPrayer.key === p.key;
+            item.classList.toggle('passed', isPassed && !isNext);
+            item.classList.toggle('active', isNext);
+        }
+    }
+
+    // Next prayer info
+    if (pr.nextPrayer) {
+        const nel = document.getElementById('prayer-next-name');
+        const tel = document.getElementById('prayer-next-time');
+        if (nel) nel.textContent = pr.nextPrayer.arabic;
+        if (tel) {
+            const d = new Date(pr.nextPrayer.timeMs);
+            let hrs = d.getHours(), ampm = hrs >= 12 ? 'م' : 'ص';
+            hrs = hrs % 12 || 12;
+            tel.textContent = `${hrs}:${String(d.getMinutes()).padStart(2, '0')} ${ampm}`;
+        }
+
+        // Progress bar
+        const fill = document.getElementById('prayer-progress-fill');
+        if (fill) {
+            const total = pr.nextPrayer.timeMs - pr.nextPrayer.prevTimeMs;
+            const remaining = Math.max(0, pr.nextPrayer.timeMs - now);
+            // Fill from 0% (prayer just passed) → 100% (prayer right now)
+            const pct = total > 0 ? Math.max(0, Math.min(100, ((total - remaining) / total) * 100)) : 0;
+            fill.style.width = `${pct}%`;
+        }
+    }
+}
+
+// Call every ~1 s from the game loop to keep the panel live
+let _lastPrayerPanelUpdate = 0;
+function tickPrayerPanel() {
+    const now = Date.now();
+    if (now - _lastPrayerPanelUpdate < 1000) return;
+    _lastPrayerPanelUpdate = now;
+    if (!gameState.prayer.location || !gameState.prayer.times) return;
+    computeNextPrayer();
+    updatePrayerPanelDOM();
+}
+
+// ── Prayer trigger check ─────────────────────────────────────────────────────
+
+function checkPrayerTrigger() {
+    const pr = gameState.prayer;
+    if (!pr.nextPrayer || pr.isOverlayActive) return;
+    if (!gameState.pomodoro.active) return;
+
+    const now = Date.now();
+    if (now >= pr.nextPrayer.timeMs && !pr.triggeredToday[pr.nextPrayer.key]) {
+        triggerPrayerOverlay(pr.nextPrayer.key, pr.nextPrayer.arabic);
+    }
+}
+
+// ── Trigger overlay ──────────────────────────────────────────────────────────
+
+function triggerPrayerOverlay(prayerKey, arabicName) {
+    const pr = gameState.prayer;
+    pr.triggeredToday[prayerKey] = true;
+
+    // Save timer state
+    pr.pausedRemaining = Math.max(0, gameState.pomodoro.endTime - Date.now());
+    pr.pausedPhase = gameState.pomodoro.phase;
+    pr.overlayPrayer = prayerKey;
+    pr.isOverlayActive = true;
+    pr.overlayStartTime = Date.now();
+
+    // System notification
+    try {
+        if (Notification.permission === 'granted') {
+            new Notification(`🕌 وقت صلاة ${arabicName}`, { body: 'حان وقت الصلاة — الله أكبر' });
+        } else if (Notification.permission !== 'denied') {
+            Notification.requestPermission().then(p => {
+                if (p === 'granted') new Notification(`🕌 وقت صلاة ${arabicName}`, { body: 'حان وقت الصلاة — الله أكبر' });
+            });
+        }
+    } catch(e) {}
+
+    // Stop player movement so they don't stay stuck in sprint/walk animation
+    const _localPlayer = gameState.players[gameState.userId];
+    if (_localPlayer) { _localPlayer.isMoving = false; _localPlayer.isSprinting = false; }
+    gameState.joystick.active = false;
+    gameState.joystick.dx = 0; gameState.joystick.dy = 0;
+    gameState.joystick.magnitude = 0; gameState.joystick.sprinting = false;
+    ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']
+        .forEach(k => { gameState.keys[k] = false; });
+
+    // Fade out focus sounds and YT player so athan is heard clearly
+    if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(0, 2.0);
+    if (gameState.focusYTPlayer) gameState.focusYTPlayer.fadeOutAndPause(2000);
+
+    // Play athan via Web Audio API (works even in background/unfocused tab)
+    const _playAthan = () => {
+        if (!gameState.focusAudioEngine?.ctx) return;
+        const ctx = gameState.focusAudioEngine.ctx;
+        if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        const playBuffer = (decoded) => {
+            if (!gameState.prayer.isOverlayActive) return;
+            const src = ctx.createBufferSource();
+            src.buffer = decoded;
+            const g = ctx.createGain();
+            g.gain.setValueAtTime(0.9, ctx.currentTime);
+            src.connect(g);
+            g.connect(ctx.destination);
+            src.start();
+            gameState.prayer._webAudioAthanSource = src;
+            gameState.prayer._webAudioAthanGain = g;
+        };
+        if (gameState.prayer._athanBuffer) {
+            playBuffer(gameState.prayer._athanBuffer);
+        } else {
+            fetch('Sound/Prayer_CallToPrayer.mp3')
+                .then(r => r.arrayBuffer())
+                .then(buf => ctx.decodeAudioData(buf))
+                .then(decoded => { gameState.prayer._athanBuffer = decoded; playBuffer(decoded); })
+                .catch(() => {
+                    // Fallback to HTML Audio
+                    try { gameState.sounds.prayerCall.currentTime = 0; gameState.sounds.prayerCall.play().catch(() => {}); } catch(e) {}
+                });
+        }
+    };
+    _playAthan();
+
+    // After 6.5 s (from athan start) show the visual overlay
+    setTimeout(() => {
+        if (!pr.isOverlayActive) return; // dismissed early?
+        showPrayerOverlayDOM(prayerKey, arabicName);
+    }, 5900);
+}
+
+function showPrayerOverlayDOM(prayerKey, arabicName) {
+    const overlay = document.getElementById('prayer-overlay');
+    if (!overlay) return;
+
+    // Remove display:none, then next frame fade in
+    overlay.classList.remove('hidden');
+    requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add('active')));
+
+    // Icon — normalize key capitalisation (handles 'dhuhr' from test mode as well as 'Dhuhr')
+    const iconEl = document.getElementById('prayer-overlay-icon');
+    if (iconEl) {
+        const iconKey = prayerKey.charAt(0).toUpperCase() + prayerKey.slice(1);
+        iconEl.innerHTML = PRAYER_ICON_SVG[iconKey] || PRAYER_ICON_SVG[prayerKey] || '';
+    }
+
+    // Name
+    const nameEl = document.getElementById('prayer-overlay-name');
+    if (nameEl) nameEl.textContent = `وقت صلاة ${arabicName}`;
+
+    // Button: locked
+    const btn = document.getElementById('prayer-overlay-btn');
+    if (btn) { btn.disabled = true; btn.classList.remove('unlocked'); }
+
+    // Start rain
+    startPrayerRain();
+}
+
+// ── Prayer rain ───────────────────────────────────────────────────────────────
+let _prayerRainRAF = null;
+
+function startPrayerRain() {
+    const canvas = document.getElementById('prayer-rain-canvas');
+    if (!canvas) return;
+    stopPrayerRain(); // clear any previous run
+
+    const resize = () => { canvas.width = window.innerWidth; canvas.height = window.innerHeight; };
+    resize();
+    canvas._rainResizeHandler = resize;
+    window.addEventListener('resize', resize);
+
+    // 110 gentle drops — thin, slow, slightly angled left
+    const drops = Array.from({ length: 110 }, () => ({
+        x:       Math.random() * canvas.width,
+        y:       Math.random() * canvas.height,
+        len:     7 + Math.random() * 13,
+        speed:   0.9 + Math.random() * 1.6,
+        opacity: 0.08 + Math.random() * 0.18,
+        width:   0.4 + Math.random() * 0.6,
+    }));
+
+    const ctx = canvas.getContext('2d');
+    const draw = () => {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        for (const d of drops) {
+            ctx.beginPath();
+            ctx.strokeStyle = `rgba(180,230,225,${d.opacity})`;
+            ctx.lineWidth   = d.width;
+            ctx.moveTo(d.x, d.y);
+            ctx.lineTo(d.x - d.len * 0.18, d.y + d.len); // slight left lean
+            ctx.stroke();
+            d.y += d.speed;
+            d.x -= d.speed * 0.18;
+            if (d.y > canvas.height + d.len) { d.y = -d.len; d.x = Math.random() * canvas.width; }
+            if (d.x < -20)                   { d.x = canvas.width; }
+        }
+        _prayerRainRAF = requestAnimationFrame(draw);
+    };
+    draw();
+}
+
+function stopPrayerRain() {
+    if (_prayerRainRAF) { cancelAnimationFrame(_prayerRainRAF); _prayerRainRAF = null; }
+    const canvas = document.getElementById('prayer-rain-canvas');
+    if (!canvas) return;
+    if (canvas._rainResizeHandler) {
+        window.removeEventListener('resize', canvas._rainResizeHandler);
+        canvas._rainResizeHandler = null;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+
+function updatePrayerOverlayTimer() {
+    const pr = gameState.prayer;
+    if (!pr.isOverlayActive) return;
+
+    const elapsed = Date.now() - pr.overlayStartTime;
+    const remaining = Math.max(0, pr.prayerLockMs - elapsed);
+    const btn = document.getElementById('prayer-overlay-btn');
+    const timerEl = document.getElementById('prayer-overlay-timer');
+
+    if (remaining <= 0) {
+        // Unlock
+        if (btn) { btn.disabled = false; btn.classList.add('unlocked'); }
+        if (timerEl) timerEl.textContent = '';
+    } else {
+        const m = Math.floor(remaining / 60000);
+        const s = Math.floor((remaining % 60000) / 1000);
+        if (timerEl) timerEl.textContent = `${m}:${String(s).padStart(2, '0')}`;
+    }
+}
+
+function dismissPrayerOverlay() {
+    const pr = gameState.prayer;
+    if (!pr.isOverlayActive) return;
+
+    pr.isOverlayActive = false;
+
+    // Resume timer from where it was paused
+    gameState.pomodoro.endTime = Date.now() + pr.pausedRemaining;
+
+    // Update Firebase so observers see the correct endTime
+    if (gameState.pomodoro.laptopId !== null) {
+        const updates = {};
+        updates[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}/endTime`)] = gameState.pomodoro.endTime;
+        update(ref(database), updates);
+    }
+
+    // Stop athan if still playing
+    try { gameState.sounds.prayerCall.pause(); gameState.sounds.prayerCall.currentTime = 0; } catch (e) {}
+    try { gameState.prayer._webAudioAthanSource?.stop(); } catch (e) {}
+    gameState.prayer._webAudioAthanSource = null;
+
+    // Fade focus sounds + YT back in
+    if (gameState.focusAudioEngine && gameState.pomodoro.phase === 'work') {
+        gameState.focusAudioEngine.fadeToMaster(1.0, 2.0);
+        if (gameState.focusYTPlayer) {
+            const targetPct = gameState.focusYTPlayer.volume ?? 80;
+            gameState.focusYTPlayer.setVolumePercent(0);
+            gameState.focusYTPlayer.resume().then(() => {
+                let elapsed = 0;
+                const iv = setInterval(() => {
+                    elapsed += 50;
+                    gameState.focusYTPlayer.setVolumePercent(Math.min(targetPct, Math.round(targetPct * elapsed / 2000)));
+                    if (elapsed >= 2000) clearInterval(iv);
+                }, 50);
+            }).catch(() => { gameState.focusYTPlayer.setVolumePercent(targetPct); });
+        }
+    }
+
+    // Fade out overlay, then fully hide and stop rain
+    const _ov = document.getElementById('prayer-overlay');
+    if (_ov) {
+        _ov.classList.remove('active');
+        setTimeout(() => {
+            _ov.classList.add('hidden');
+            stopPrayerRain();
+        }, 880);
+    }
+
+    // Recalculate next prayer
+    pr.overlayPrayer = null;
+    computeNextPrayer();
+    updatePrayerPanelDOM();
+}
+
+// ── UI wiring ────────────────────────────────────────────────────────────────
+
+function setupPrayerUI() {
+    // Setup button → open location modal
+    document.getElementById('prayer-setup-btn')?.addEventListener('click', () => {
+        document.getElementById('prayer-loc-modal')?.classList.remove('hidden');
+    });
+
+    // Edit button → open edit modal
+    document.getElementById('prayer-edit-btn')?.addEventListener('click', () => {
+        openPrayerEditModal();
+    });
+
+    // Overlay dismiss button
+    document.getElementById('prayer-overlay-btn')?.addEventListener('click', () => {
+        if (!document.getElementById('prayer-overlay-btn')?.disabled) {
+            dismissPrayerOverlay();
+        }
+    });
+
+    // Location modal
+    setupPrayerLocationModal();
+
+    // Change location from edit modal
+    document.getElementById('prayer-change-loc')?.addEventListener('click', () => {
+        document.getElementById('prayer-edit-modal')?.classList.add('hidden');
+        document.getElementById('prayer-loc-modal')?.classList.remove('hidden');
+    });
+}
+
+function setupPrayerLocationModal() {
+    const modal = document.getElementById('prayer-loc-modal');
+    const closeBtn = document.getElementById('prayer-loc-close');
+    const autoBtn = document.getElementById('prayer-loc-auto');
+    const manualBtn = document.getElementById('prayer-loc-manual-btn');
+    const manualDiv = document.getElementById('prayer-loc-manual');
+    const countrySel = document.getElementById('prayer-country-select');
+    const citySel = document.getElementById('prayer-city-select');
+    const saveBtn = document.getElementById('prayer-loc-save');
+    const statusEl = document.getElementById('prayer-loc-status');
+
+    if (!modal) return;
+
+    closeBtn?.addEventListener('click', () => modal.classList.add('hidden'));
+
+    // Populate country select
+    if (countrySel) {
+        for (const c of PRAYER_LOCATIONS) {
+            const opt = document.createElement('option');
+            opt.value = c.country;
+            opt.textContent = c.country;
+            countrySel.appendChild(opt);
+        }
+    }
+
+    // Auto location — try browser geolocation first, then IP-based fallback
+    autoBtn?.addEventListener('click', async () => {
+        if (statusEl) statusEl.textContent = 'جارٍ تحديد الموقع…';
+
+        // Helper: reverse geocode lat/lon to city name
+        const reverseGeocode = async (lat, lon) => {
+            try {
+                const r = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json&accept-language=ar`);
+                const j = await r.json();
+                const city = j.address?.city || j.address?.town || j.address?.village || j.address?.state || 'تلقائي';
+                const country = j.address?.country || 'تلقائي';
+                return { city, country };
+            } catch { return { city: 'تلقائي', country: 'تلقائي' }; }
+        };
+
+        // Try browser geolocation
+        const tryBrowserGeo = () => new Promise((resolve, reject) => {
+            if (!navigator.geolocation) return reject('unsupported');
+            navigator.geolocation.getCurrentPosition(
+                (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+                (err) => reject(err),
+                { timeout: 8000, enableHighAccuracy: false }
+            );
+        });
+
+        // Try IP-based geolocation
+        const tryIpGeo = async () => {
+            const r = await fetch('https://ipapi.co/json/');
+            const j = await r.json();
+            if (j.latitude && j.longitude) return { lat: j.latitude, lon: j.longitude, city: j.city || 'تلقائي', country: j.country_name || 'تلقائي' };
+            throw new Error('IP geo failed');
+        };
+
+        try {
+            let coords, city, country;
+            try {
+                coords = await tryBrowserGeo();
+                const names = await reverseGeocode(coords.lat, coords.lon);
+                city = names.city; country = names.country;
+            } catch {
+                // Fallback to IP geolocation
+                const ipResult = await tryIpGeo();
+                coords = { lat: ipResult.lat, lon: ipResult.lon };
+                city = ipResult.city; country = ipResult.country;
+            }
+            const loc = { city, country };
+            // Store lat/lon only in memory for API call, not in Firebase
+            loc._lat = coords.lat; loc._lon = coords.lon;
+            savePrayerLocation(loc);
+            modal.classList.add('hidden');
+            if (statusEl) statusEl.textContent = '';
+        } catch (e) {
+            if (statusEl) statusEl.textContent = 'فشل تحديد الموقع — جرب الاختيار اليدوي';
+        }
+    });
+
+    // Manual toggle
+    manualBtn?.addEventListener('click', () => {
+        manualDiv?.classList.remove('hidden');
+    });
+
+    // Country change → populate cities
+    countrySel?.addEventListener('change', () => {
+        const sel = PRAYER_LOCATIONS.find(c => c.country === countrySel.value);
+        if (!sel || !citySel) return;
+        citySel.innerHTML = '<option value="">اختر المدينة</option>';
+        for (const city of sel.cities) {
+            const opt = document.createElement('option');
+            opt.value = city.name;
+            opt.textContent = city.name;
+            opt.dataset.lat = city.lat;
+            opt.dataset.lon = city.lon;
+            citySel.appendChild(opt);
+        }
+        citySel.classList.remove('hidden');
+        saveBtn?.classList.add('hidden');
+    });
+
+    // City change → show save
+    citySel?.addEventListener('change', () => {
+        if (citySel.value) saveBtn?.classList.remove('hidden');
+    });
+
+    // Save — only city/country saved to Firebase, lat/lon kept in memory for API
+    saveBtn?.addEventListener('click', () => {
+        const opt = citySel?.selectedOptions[0];
+        if (!opt || !opt.dataset.lat) return;
+        const loc = {
+            city: opt.value,
+            country: countrySel?.value || '',
+            // Keep lat/lon in memory only for accurate API call
+            _lat: parseFloat(opt.dataset.lat),
+            _lon: parseFloat(opt.dataset.lon),
+        };
+        savePrayerLocation(loc);
+        modal.classList.add('hidden');
+    });
+}
+
+function savePrayerLocation(loc) {
+    gameState.prayer.location = loc;
+    gameState.prayer.lastFetchDate = null; // force re-fetch
+    gameState.prayer._sirajOverrideApplied = false;
+    // Only save city + country to Firebase (no lat/lon for privacy)
+    const fbData = { city: loc.city || '', country: loc.country || '' };
+    update(ref(database), { [`users/${gameState.userId}/prayerLocation`]: fbData });
+    document.getElementById('prayer-blur-overlay')?.classList.add('hidden');
+    fetchPrayerTimes();
+}
+
+// ── Edit modal ───────────────────────────────────────────────────────────────
+
+function openPrayerEditModal() {
+    const pr = gameState.prayer;
+    if (!pr.times) return;
+    const modal = document.getElementById('prayer-edit-modal');
+    const rowsDiv = document.getElementById('prayer-edit-rows');
+    if (!modal || !rowsDiv) return;
+
+    rowsDiv.innerHTML = '';
+    const adj = { ...pr.adjustments };
+
+    for (const p of PRAYER_DATA) {
+        const baseTime = pr.times[p.key];
+        const cur = adj[p.key] || 0;
+        const row = document.createElement('div');
+        row.className = 'prayer-edit-row';
+        row.innerHTML = `
+            <span class="pe-name">${p.arabic}</span>
+            <span class="pe-time">${baseTime}</span>
+            <div class="pe-adj">
+                <button class="pe-minus">−</button>
+                <span class="pe-adj-val" data-key="${p.key}">${cur >= 0 ? '+' : ''}${cur}</span>
+                <button class="pe-plus">+</button>
+            </div>`;
+        row.querySelector('.pe-minus').addEventListener('click', () => {
+            adj[p.key] = (adj[p.key] || 0) - 1;
+            row.querySelector('.pe-adj-val').textContent = `${adj[p.key] >= 0 ? '+' : ''}${adj[p.key]}`;
+        });
+        row.querySelector('.pe-plus').addEventListener('click', () => {
+            adj[p.key] = (adj[p.key] || 0) + 1;
+            row.querySelector('.pe-adj-val').textContent = `${adj[p.key] >= 0 ? '+' : ''}${adj[p.key]}`;
+        });
+        rowsDiv.appendChild(row);
+    }
+
+    document.getElementById('prayer-edit-save')?.addEventListener('click', () => {
+        gameState.prayer.adjustments = adj;
+        update(ref(database), { [`users/${gameState.userId}/prayerAdjustments`]: adj });
+        computeNextPrayer();
+        updatePrayerPanelDOM();
+        modal.classList.add('hidden');
+    }, { once: true });
+
+    document.getElementById('prayer-edit-cancel')?.addEventListener('click', () => {
+        modal.classList.add('hidden');
+    }, { once: true });
+
+    document.getElementById('prayer-edit-close')?.addEventListener('click', () => {
+        modal.classList.add('hidden');
+    });
+
+    modal.classList.remove('hidden');
+}
+
+// ── Tick from game loop ──────────────────────────────────────────────────────
+// Called from the main game loop (updateLoop) every frame
+
+function updatePrayerSystem() {
+    tickPrayerPanel();
 }
 
 // EOF

@@ -762,27 +762,28 @@ body {
 .focus-sounds-panel {
     position: fixed;
     bottom: 25px;
-    left: 50%;
-    transform: translate(-50%, 150%) scale(0.95);
-    background: rgba(15, 23, 42, 0.85); /* Premium dark slate */
-    backdrop-filter: blur(16px) saturate(180%);
-    -webkit-backdrop-filter: blur(16px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: var(--radius-lg);
-    padding: 16px 24px;
-    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    right: 24px;
+    width: 260px;
+    transform: translateY(150%) scale(0.95);
+    background: rgba(10, 10, 14, 0.88);
+    backdrop-filter: blur(40px) saturate(160%);
+    -webkit-backdrop-filter: blur(40px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 18px;
+    padding: 18px 22px 14px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.04) inset;
     z-index: 1001;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 12px;
+    align-items: stretch;
+    gap: 14px;
     opacity: 0;
-    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    transition: transform 0.5s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.3s ease;
     pointer-events: none;
 }
 
 .focus-sounds-panel.active {
-    transform: translate(-50%, 0) scale(1);
+    transform: translateY(0) scale(1);
     opacity: 1;
     pointer-events: all;
 }
@@ -792,20 +793,20 @@ body {
     bottom: 180px;
     left: 50%;
     transform: translate(-50%, 100px) scale(0.95);
-    background: rgba(15, 23, 42, 0.85);
-    backdrop-filter: blur(16px) saturate(180%);
-    -webkit-backdrop-filter: blur(16px) saturate(180%);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: var(--radius-lg);
+    background: rgba(10, 10, 14, 0.88);
+    backdrop-filter: blur(40px) saturate(160%);
+    -webkit-backdrop-filter: blur(40px) saturate(160%);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
     padding: 12px 24px;
-    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    box-shadow: 0 20px 60px rgba(0,0,0,0.55), 0 0 0 0.5px rgba(255,255,255,0.04) inset;
     z-index: 1001;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 6px;
     opacity: 0;
-    transition: all 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    transition: transform 0.5s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.3s ease;
     pointer-events: none;
 }
 
@@ -815,19 +816,21 @@ body {
     left: 18px;
     bottom: 18px;
     width: 320px;
-    background: rgba(20, 20, 30, 0.92);
-    border-radius: 14px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+    background: rgba(10, 10, 14, 0.92);
+    border-radius: 16px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.65), 0 0 0 0.5px rgba(255,255,255,0.04) inset;
     padding: 14px;
     display: flex;
     flex-direction: column;
     gap: 10px;
     z-index: 1200;
-    backdrop-filter: blur(8px);
+    backdrop-filter: blur(40px) saturate(160%);
+    -webkit-backdrop-filter: blur(40px) saturate(160%);
+    border: 1px solid rgba(255,255,255,0.06);
     transform: translateY(120px);
     opacity: 0;
     pointer-events: none;
-    transition: transform 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55), opacity 0.3s;
+    transition: transform 0.5s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.3s ease;
 }
 .yt-focus-block.visible { transform: translateY(0); opacity: 1; pointer-events: all; }
 
@@ -959,18 +962,26 @@ body {
     pointer-events: all;
 }
 
+.task-panel-label {
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.35);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
 #current-task-input {
     background: transparent;
     border: none;
-    color: white;
-    font-size: 16px;
+    color: rgba(255,255,255,0.9);
+    font-size: 15px;
     font-family: 'Rubik', sans-serif;
     outline: none;
     text-align: center;
-    width: 250px;
+    width: 260px;
 }
 #current-task-input::placeholder {
-    color: rgba(255, 255, 255, 0.4);
+    color: rgba(255, 255, 255, 0.25);
 }
 
 .panel-header-row {
@@ -978,133 +989,158 @@ body {
     justify-content: space-between;
     align-items: center;
     width: 100%;
-    margin-bottom: 8px;
-    gap: 20px;
+    gap: 12px;
 }
 
 .overall-vol-container {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 
-.overall-vol-label {
-    font-size: 0.8rem;
-    font-weight: 600;
-    color: rgba(255, 255, 255, 0.6);
+.overall-vol-icon {
+    color: rgba(255,255,255,0.35);
+    flex-shrink: 0;
 }
 
 .overall-vol-slider {
-    width: 80px;
-    height: 4px;
+    width: 72px;
+    height: 3px;
     -webkit-appearance: none;
-    background: rgba(255, 255, 255, 0.25);
+    appearance: none;
     border-radius: 2px;
     outline: none;
     cursor: pointer;
+    border: none;
+    direction: ltr;
+    background: linear-gradient(
+        to right,
+        rgba(255,255,255,0.7) 0%,
+        rgba(255,255,255,0.7) var(--vp, 50%),
+        rgba(255,255,255,0.12) var(--vp, 50%),
+        rgba(255,255,255,0.12) 100%
+    );
 }
-
 .overall-vol-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 10px;
-    height: 10px;
+    width: 8px; height: 8px;
     border-radius: 50%;
-    background: var(--clr-blue);
-    cursor: pointer;
-    box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
-    transition: transform 0.2s;
+    background: white;
+    opacity: 0;
+    transition: opacity 0.15s;
 }
-
-.overall-vol-slider::-webkit-slider-thumb:hover {
-    transform: scale(1.3);
+.overall-vol-slider:hover::-webkit-slider-thumb { opacity: 1; }
+.overall-vol-slider::-moz-range-thumb {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: white; border: none; opacity: 0; transition: opacity 0.15s;
 }
+.overall-vol-slider:hover::-moz-range-thumb { opacity: 1; }
+.overall-vol-slider::-moz-range-track { background: transparent; }
 
 .panel-header {
-    font-size: 0.95rem;
-    font-weight: 700;
-    color: rgba(255, 255, 255, 0.8);
-    letter-spacing: 0.5px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+    letter-spacing: 0.02em;
 }
 
 .sound-controls {
-    display: grid;
-    grid-template-columns: repeat(5, 1fr);
-    gap: 16px 20px;
-    align-items: center;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
 }
 
 .sound-item {
     display: flex;
-    flex-direction: column;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    transition: background 0.15s;
+    cursor: pointer;
 }
+.sound-item:hover { background: rgba(255,255,255,0.04); }
 
 .sound-toggle-btn {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    background: rgba(255, 255, 255, 0.03);
-    color: rgba(255, 255, 255, 0.6);
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    border: none;
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.45);
     cursor: pointer;
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: all 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+    transition: all 0.2s ease;
+    flex-shrink: 0;
 }
 
 .sound-toggle-btn:hover {
-    color: white;
+    color: rgba(255,255,255,0.7);
     background: rgba(255, 255, 255, 0.08);
-    transform: scale(1.08);
 }
 
 .sound-item.active .sound-toggle-btn {
-    background: var(--clr-blue);
+    background: rgba(255, 255, 255, 0.12);
     color: white;
-    border-color: transparent;
-    box-shadow: 0 0 15px rgba(8, 111, 182, 0.4);
 }
 
 .sound-toggle-btn svg {
-    width: 20px;
-    height: 20px;
+    width: 16px;
+    height: 16px;
 }
 
+.sound-name {
+    flex: 1;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: rgba(255,255,255,0.45);
+    min-width: 0;
+    white-space: nowrap;
+}
+.sound-item.active .sound-name { color: rgba(255,255,255,0.8); }
+
 .sound-vol {
-    width: 60px;
-    height: 4px;
+    width: 80px;
+    height: 3px;
     -webkit-appearance: none;
-    background: rgba(255, 255, 255, 0.2);
+    appearance: none;
     border-radius: 2px;
     outline: none;
-    transition: background 0.3s;
     cursor: pointer;
+    border: none;
+    direction: ltr;
+    opacity: 0.4;
+    transition: opacity 0.15s;
+    background: linear-gradient(
+        to right,
+        rgba(255,255,255,0.7) 0%,
+        rgba(255,255,255,0.7) var(--vp, 50%),
+        rgba(255,255,255,0.12) var(--vp, 50%),
+        rgba(255,255,255,0.12) 100%
+    );
 }
+.sound-item.active .sound-vol { opacity: 1; }
+.sound-item:hover .sound-vol { opacity: 0.7; }
+.sound-item.active:hover .sound-vol { opacity: 1; }
 
 .sound-vol::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 10px;
-    height: 10px;
+    width: 8px; height: 8px;
     border-radius: 50%;
     background: white;
     cursor: pointer;
-    box-shadow: 0 0 5px rgba(0, 0, 0, 0.3);
-    transition: transform 0.2s;
+    opacity: 0;
+    transition: opacity 0.15s;
 }
-
-.sound-vol::-webkit-slider-thumb:hover {
-    transform: scale(1.3);
+.sound-vol:hover::-webkit-slider-thumb { opacity: 1; }
+.sound-vol::-moz-range-thumb {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: white; border: none; opacity: 0; transition: opacity 0.15s;
 }
-
-.sound-item.active .sound-vol {
-    background: rgba(8, 111, 182, 0.4);
-}
-
-.sound-item.active .sound-vol::-webkit-slider-thumb {
-    background: var(--clr-blue);
-}
+.sound-vol:hover::-moz-range-thumb { opacity: 1; }
+.sound-vol::-moz-range-track { background: transparent; }
 
 /* ===== LOBBY SELECTION SCREEN ===== */
 #lobby-screen {
@@ -1684,11 +1720,11 @@ body.is-mobile .focus-sounds-panel {
     overflow: hidden;
     flex-direction: column !important;
     align-items: stretch !important;
-    /* Snap transitions */
     transition: transform 0.38s cubic-bezier(0.34, 1.4, 0.64, 1) !important;
     overflow-y: auto;
     -webkit-overflow-scrolling: touch;
     will-change: transform;
+    background: rgba(10, 10, 14, 0.95) !important;
 }
 
 /* When hidden on mobile, fully off-screen */
@@ -1717,7 +1753,7 @@ body.is-mobile .focus-sounds-panel .sound-controls {
 }
 
 /* On mobile the YT block is part of the drawer, not fixed */
-body.is-mobile .yt-focus-block {
+body.is-mobile .focus-sounds-panel .yt-focus-block {
     position: relative !important;
     left: auto !important;
     bottom: auto !important;
@@ -1727,10 +1763,8 @@ body.is-mobile .yt-focus-block {
     pointer-events: all !important;
     border-radius: 12px !important;
     margin-top: 4px;
+    display: flex; flex-direction: column;
 }
-
-/* Hide YT block .visible requirement on mobile (always shown in drawer) */
-body.is-mobile .yt-focus-block { display: flex; flex-direction: column; }
 
 /* Task panel on mobile: center bottom above drawer handle */
 body.is-mobile .current-task-panel {
@@ -1748,12 +1782,7 @@ body.is-mobile #current-task-input {
     font-size: 15px;
 }
 
-/* Sound grid: 5 columns → 3 on narrow screens */
-@media (max-width: 400px) {
-    .sound-controls {
-        grid-template-columns: repeat(3, 1fr) !important;
-    }
-}
+/* Sound list already flex-column, no grid override needed */
 
 /* Race HUD on mobile: shift down a bit (no top bar) */
 body.is-mobile .race-hud { top: 70px; }
@@ -1912,17 +1941,58 @@ body.is-mobile .race-hud { top: 70px; }
 }
 .sp-close-btn:hover { background: rgba(255,60,60,0.22); color: rgba(255,120,120,0.9); }
 
+/* ── Gather roster: host-av + "+" + dotted members box ── */
+.sp-gather-roster {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 14px;
+}
+.sp-gather-host-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    flex-shrink: 0;
+}
+.sp-gather-host-label {
+    font-size: 9px;
+    color: rgba(255,255,255,0.3);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+}
+.sp-gather-host-av {
+    width: 42px !important;
+    height: 42px !important;
+    border-color: #3bb9ab !important;
+}
+.sp-gather-plus {
+    font-size: 20px;
+    font-weight: 200;
+    color: rgba(255,255,255,0.2);
+    flex-shrink: 0;
+    line-height: 1;
+    user-select: none;
+}
 .sp-gather-members {
-    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
-    min-height: 56px; margin-bottom: 14px;
-    padding: 10px 12px;
+    flex: 1;
+    display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+    min-height: 60px;
+    padding: 8px 10px;
     background: rgba(255,255,255,0.025);
     border-radius: 12px;
-    border: 1px dashed rgba(255,255,255,0.07);
+    border: 1.5px dashed rgba(255,255,255,0.12);
 }
 .sp-empty-hint { font-size: 12px; color: rgba(255,255,255,0.28); font-style: italic; }
 
-.sp-member-chip { display: flex; flex-direction: column; align-items: center; gap: 3px; position: relative; }
+.sp-member-chip {
+    display: flex; flex-direction: column; align-items: center; gap: 3px; position: relative;
+    transition: opacity 0.3s ease, transform 0.3s cubic-bezier(0.34,1.56,0.64,1);
+}
+.sp-member-chip.sp-chip-pending { opacity: 0.42; }
+.sp-member-chip.sp-chip-leaving { opacity: 0 !important; transform: scale(0.55) !important; pointer-events: none; }
+.sp-member-chip.sp-chip-entering { opacity: 0; transform: scale(0.55); }
+
 .sp-member-av {
     width: 38px; height: 38px; border-radius: 50%;
     background: rgba(255,255,255,0.09);
@@ -2080,9 +2150,17 @@ body.is-mobile .race-hud { top: 70px; }
     min-width: 180px;
     max-width: 230px;
     box-shadow: 0 4px 24px rgba(0,0,0,0.4), 0 0 0 1px rgba(59,185,171,0.10);
-    transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1), opacity 0.25s;
+    transition: transform 0.35s cubic-bezier(0.34,1.56,0.64,1), opacity 0.25s, right 0.45s cubic-bezier(0.34,1.4,0.64,1);
 }
 .sp-coop-tasks.hidden { transform: translateY(20px) !important; opacity: 0 !important; pointer-events: none !important; }
+
+/* When the focus sounds mixer is open, slide coop tasks to sit beside it (left of mixer) */
+body:has(#focus-sounds-panel.active) .sp-coop-tasks {
+    right: 300px;
+}
+body.is-mobile:has(#focus-sounds-panel.active) .sp-coop-tasks {
+    right: 12px;
+}
 .sp-coop-timer {
     text-align: center;
     font-size: 1.35rem;
@@ -2271,3 +2349,404 @@ body.is-mobile .sp-coop-tasks { right: 12px; bottom: 100px; max-width: calc(100v
 body.is-mobile .sp-join-panel { left: 12px; width: calc(100vw - 24px); max-width: 220px; top: auto; bottom: 170px; transform: none; }
 body.is-mobile .pomo-leave-btn { top: 50px; left: 14px; }
 body.is-mobile .pomo-leave-confirm { top: 85px; left: 14px; }
+
+/* ═══════════════════════════════════════════════════════
+   PRAYER TIMES PANEL
+   ═══════════════════════════════════════════════════════ */
+
+/* Hide YT + prayer panels until game starts (avoids login screen flash on mobile) */
+#yt-focus-block, #prayer-panel { display: none !important; }
+body.game-ready #yt-focus-block { display: flex !important; }
+body.game-ready #prayer-panel { display: flex !important; flex-direction: column !important; }
+
+/* Move YT player up to make room for prayer panel below */
+.yt-focus-block { bottom: 188px !important; }
+
+.prayer-panel {
+    position: fixed;
+    left: 18px; bottom: 18px;
+    width: 320px;
+    background: rgba(10, 10, 14, 0.92);
+    border-radius: 16px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.65), 0 0 0 0.5px rgba(255,255,255,0.04) inset;
+    padding: 14px 14px 10px;
+    display: flex; flex-direction: column; gap: 8px;
+    z-index: 1200;
+    backdrop-filter: blur(40px) saturate(160%);
+    -webkit-backdrop-filter: blur(40px) saturate(160%);
+    border: 1px solid rgba(255,255,255,0.06);
+    transform: translateY(120px);
+    opacity: 0; pointer-events: none;
+    transition: transform 0.5s cubic-bezier(0.34, 1.4, 0.64, 1), opacity 0.3s ease;
+    overflow: hidden;
+}
+.prayer-panel.visible { transform: translateY(0); opacity: 1; pointer-events: all; }
+.prayer-icons-row { transition: max-height 0.4s ease, opacity 0.3s ease; max-height: 80px; opacity: 1; overflow: hidden; }
+.prayer-panel.break-compact .prayer-icons-row { max-height: 0; opacity: 0; }
+.prayer-panel.break-compact .prayer-edit-btn { opacity: 0; pointer-events: none; }
+
+/* ── Blur overlay (no location set) ── */
+.prayer-blur-overlay {
+    position: absolute; inset: 0;
+    background: rgba(20,20,30,0.6);
+    backdrop-filter: blur(10px);
+    border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    z-index: 5;
+}
+.prayer-blur-overlay.hidden { display: none; }
+.prayer-setup-btn {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 10px;
+    color: rgba(255,255,255,0.85);
+    padding: 10px 16px;
+    font-family: inherit; font-size: 0.78rem; font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+}
+.prayer-setup-btn:hover { background: rgba(255,255,255,0.18); border-color: rgba(255,255,255,0.25); }
+
+/* ── Edit icon ── */
+.prayer-edit-btn {
+    position: absolute; top: 8px; left: 8px;
+    background: none; border: none;
+    color: rgba(255,255,255,0.3); cursor: pointer;
+    padding: 4px; border-radius: 6px;
+    transition: color 0.2s, background 0.2s; z-index: 3;
+}
+.prayer-edit-btn:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.08); }
+
+/* ── Next prayer section ── */
+.prayer-next { display: flex; flex-direction: column; gap: 4px; }
+.prayer-next-label {
+    font-size: 0.65rem; font-weight: 600;
+    color: rgba(255,255,255,0.35);
+    letter-spacing: 0.03em; text-align: center;
+}
+.prayer-next-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 0 2px;
+}
+.prayer-next-name {
+    font-size: 1.05rem; font-weight: 700;
+    color: rgba(255,255,255,0.92);
+}
+.prayer-next-time {
+    font-size: 0.92rem; font-weight: 600;
+    color: rgba(59,185,171,0.9);
+    font-variant-numeric: tabular-nums;
+}
+.prayer-progress-track {
+    height: 3px; border-radius: 2px;
+    background: rgba(255,255,255,0.08);
+    overflow: hidden;
+    direction: rtl;
+}
+.prayer-progress-fill {
+    height: 100%; border-radius: 2px;
+    background: linear-gradient(270deg, rgba(59,185,171,0.85), rgba(59,185,171,0.35));
+    transition: width 1s linear;
+    width: 0%;
+}
+
+/* ── 5 prayer icons row ── */
+.prayer-icons-row {
+    display: flex; justify-content: space-between;
+    gap: 2px; padding: 4px 0 2px;
+}
+.prayer-icon-item {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; gap: 3px; min-width: 0;
+}
+.prayer-icon-circle {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.06);
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.2s;
+}
+.prayer-icon-circle svg { width: 15px; height: 15px; color: rgba(255,255,255,0.55); }
+.prayer-icon-item.active .prayer-icon-circle { background: rgba(59,185,171,0.2); }
+.prayer-icon-item.active .prayer-icon-circle svg { color: rgba(59,185,171,0.9); }
+.prayer-icon-item.passed .prayer-icon-circle { opacity: 0.4; }
+.prayer-arabic {
+    font-size: 0.6rem; font-weight: 600;
+    color: rgba(255,255,255,0.55);
+    white-space: nowrap;
+}
+.prayer-item-time {
+    font-size: 0.55rem; font-weight: 500;
+    color: rgba(255,255,255,0.3);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── Location modal ── */
+.prayer-loc-modal, .prayer-edit-modal {
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,0.6);
+    backdrop-filter: blur(4px);
+    z-index: 9000;
+    display: flex; align-items: center; justify-content: center;
+}
+.prayer-loc-modal.hidden, .prayer-edit-modal.hidden { display: none; }
+.prayer-loc-content, .prayer-edit-content {
+    position: relative;
+    background: rgba(20,20,30,0.95);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 18px;
+    padding: 28px 24px 22px;
+    min-width: 280px; max-width: 340px;
+    display: flex; flex-direction: column; gap: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.7);
+    animation: slideUpFade 0.25s cubic-bezier(0.34,1.56,0.64,1);
+}
+.prayer-modal-close {
+    position: absolute; top: 10px; right: 12px;
+    background: none; border: none;
+    color: rgba(255,255,255,0.35); font-size: 1.1rem;
+    cursor: pointer; padding: 4px 6px; border-radius: 6px;
+    transition: color 0.15s, background 0.15s;
+}
+.prayer-modal-close:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.08); }
+.prayer-loc-header, .prayer-edit-header {
+    font-size: 1rem; font-weight: 700;
+    color: rgba(255,255,255,0.9); text-align: center;
+}
+.prayer-loc-subtitle {
+    font-size: 0.78rem; color: rgba(255,255,255,0.4);
+    text-align: center; margin-top: -6px;
+}
+.prayer-loc-btn {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px;
+    padding: 12px; width: 100%;
+    color: rgba(255,255,255,0.8);
+    font-family: inherit; font-size: 0.85rem; font-weight: 600;
+    cursor: pointer; transition: background 0.15s, border-color 0.15s;
+}
+.prayer-loc-btn:hover { background: rgba(255,255,255,0.14); border-color: rgba(255,255,255,0.2); }
+.prayer-loc-btn svg { color: rgba(59,185,171,0.8); flex-shrink: 0; }
+.prayer-loc-or {
+    text-align: center; font-size: 0.72rem;
+    color: rgba(255,255,255,0.25); font-weight: 600;
+}
+.prayer-loc-manual { display: flex; flex-direction: column; gap: 8px; }
+.prayer-loc-manual.hidden { display: none; }
+.prayer-loc-manual select {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 10px 12px;
+    color: white; font-family: inherit; font-size: 0.82rem;
+    outline: none; appearance: auto; cursor: pointer;
+}
+.prayer-loc-manual select.hidden { display: none; }
+.prayer-loc-save, .prayer-edit-save {
+    background: rgba(59,185,171,0.7);
+    border: none; border-radius: 10px;
+    padding: 10px; width: 100%;
+    color: white; font-family: inherit; font-size: 0.85rem; font-weight: 700;
+    cursor: pointer; transition: background 0.15s;
+}
+.prayer-loc-save.hidden { display: none; }
+.prayer-loc-save:hover, .prayer-edit-save:hover { background: rgba(59,185,171,0.9); }
+.prayer-loc-status {
+    text-align: center; font-size: 0.75rem;
+    color: rgba(255,200,100,0.8); min-height: 1.2em;
+}
+
+/* ── Edit modal rows ── */
+.prayer-edit-rows { display: flex; flex-direction: column; gap: 6px; }
+.prayer-edit-row {
+    display: flex; align-items: center; gap: 8px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 10px; padding: 8px 10px;
+}
+.prayer-edit-row .pe-name { flex: 1; font-size: 0.82rem; font-weight: 600; color: rgba(255,255,255,0.75); }
+.prayer-edit-row .pe-time { font-size: 0.78rem; color: rgba(255,255,255,0.4); font-variant-numeric: tabular-nums; margin-left: auto; }
+.prayer-edit-row .pe-adj {
+    display: flex; align-items: center; gap: 4px;
+}
+.prayer-edit-row .pe-adj button {
+    width: 26px; height: 26px; border-radius: 7px;
+    background: rgba(255,255,255,0.08); border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.7); font-size: 0.9rem; font-weight: 700;
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    font-family: inherit; transition: background 0.15s;
+}
+.prayer-edit-row .pe-adj button:hover { background: rgba(255,255,255,0.16); }
+.prayer-edit-row .pe-adj-val {
+    min-width: 32px; text-align: center;
+    font-size: 0.78rem; font-weight: 600;
+    color: rgba(255,255,255,0.65); font-variant-numeric: tabular-nums;
+}
+.prayer-edit-actions { display: flex; gap: 8px; }
+.prayer-edit-cancel {
+    flex: 1; background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 10px; padding: 10px;
+    color: rgba(255,255,255,0.6); font-family: inherit;
+    font-size: 0.82rem; font-weight: 600; cursor: pointer;
+    transition: background 0.15s;
+}
+.prayer-edit-cancel:hover { background: rgba(255,255,255,0.14); }
+.prayer-edit-save { flex: 1; }
+.prayer-edit-loc-row { text-align: center; }
+.prayer-change-loc {
+    background: none; border: none;
+    color: rgba(255,255,255,0.3);
+    font-family: inherit; font-size: 0.72rem; font-weight: 500;
+    cursor: pointer; text-decoration: underline;
+    transition: color 0.15s;
+}
+.prayer-change-loc:hover { color: rgba(255,255,255,0.6); }
+
+/* ── Prayer overlay (fullscreen) ── */
+.prayer-overlay {
+    position: fixed; inset: 0; z-index: 10000;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.85s ease;
+}
+.prayer-overlay.active {
+    opacity: 1;
+    pointer-events: all;
+}
+.prayer-overlay.hidden { display: none; }
+
+/* ── Rain canvas ── */
+#prayer-rain-canvas {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0.55;
+}
+.prayer-overlay-bg {
+    position: absolute; inset: 0;
+    background: linear-gradient(145deg, #040f0c 0%, #070d18 50%, #0c0714 100%);
+    animation: prayerBgShift 10s ease-in-out infinite alternate;
+}
+@keyframes prayerBgShift {
+    0%   { filter: hue-rotate(0deg) brightness(1); }
+    100% { filter: hue-rotate(20deg) brightness(1.08); }
+}
+.prayer-overlay-bg::after {
+    content: ''; position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 50% 30%, rgba(59,185,171,0.18) 0%, transparent 60%),
+                radial-gradient(ellipse at 20% 80%, rgba(30,100,90,0.12) 0%, transparent 50%);
+    animation: prayerGlow 6s ease-in-out infinite alternate;
+}
+@keyframes prayerGlow {
+    0%   { opacity: 0.6; transform: scale(1); }
+    100% { opacity: 1; transform: scale(1.05); }
+}
+
+/* ── Atmospheric fog layers ── */
+.prayer-fog {
+    position: absolute; inset: -40%; z-index: 0;
+    pointer-events: none;
+}
+.prayer-fog-layer {
+    position: absolute;
+    width: 200%; height: 160%;
+    top: -30%; left: -50%;
+    border-radius: 50%;
+    animation: fogDrift linear infinite;
+    will-change: transform;
+}
+.prayer-fog-layer:nth-child(1) {
+    background: radial-gradient(ellipse at 40% 50%, rgba(59,185,171,0.07) 0%, transparent 65%);
+    animation-duration: 28s;
+    filter: blur(30px);
+}
+.prayer-fog-layer:nth-child(2) {
+    background: radial-gradient(ellipse at 60% 60%, rgba(40,120,110,0.06) 0%, transparent 55%);
+    animation-duration: 42s;
+    animation-delay: -14s;
+    filter: blur(45px);
+}
+.prayer-fog-layer:nth-child(3) {
+    background: radial-gradient(ellipse at 50% 40%, rgba(80,160,150,0.05) 0%, transparent 50%);
+    animation-duration: 35s;
+    animation-delay: -7s;
+    filter: blur(60px);
+}
+.prayer-fog-layer:nth-child(4) {
+    background: radial-gradient(ellipse at 30% 55%, rgba(20,80,70,0.08) 0%, transparent 60%);
+    animation-duration: 55s;
+    animation-delay: -20s;
+    filter: blur(35px);
+}
+@keyframes fogDrift {
+    0%   { transform: translateX(0) translateY(0) scale(1); }
+    33%  { transform: translateX(-8%) translateY(3%) scale(1.04); }
+    66%  { transform: translateX(-15%) translateY(-2%) scale(0.98); }
+    100% { transform: translateX(-22%) translateY(4%) scale(1.02); }
+}
+.prayer-overlay-content {
+    position: relative; z-index: 1;
+    display: flex; flex-direction: column;
+    align-items: center; gap: 28px;
+    animation: slideUpFade 0.6s cubic-bezier(0.34,1.56,0.64,1);
+}
+.prayer-overlay-icon {
+    width: 80px; height: 80px;
+    border-radius: 50%;
+    background: rgba(59,185,171,0.12);
+    border: 1px solid rgba(59,185,171,0.2);
+    display: flex; align-items: center; justify-content: center;
+}
+.prayer-overlay-icon svg { width: 40px; height: 40px; color: rgba(59,185,171,0.85); }
+.prayer-overlay-name {
+    font-size: 1.6rem; font-weight: 800;
+    color: rgba(255,255,255,0.92);
+    text-align: center; letter-spacing: -0.01em;
+}
+.prayer-overlay-btn {
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+    background: rgba(59,185,171,0.2);
+    border: 1px solid rgba(59,185,171,0.3);
+    border-radius: 16px;
+    padding: 16px 36px;
+    color: rgba(255,255,255,0.5);
+    font-family: inherit; font-size: 1rem; font-weight: 700;
+    cursor: not-allowed;
+    transition: background 0.3s, color 0.3s, border-color 0.3s, transform 0.2s, box-shadow 0.3s;
+}
+.prayer-overlay-btn:disabled { opacity: 0.7; }
+.prayer-overlay-btn.unlocked {
+    cursor: pointer; color: white;
+    background: rgba(59,185,171,0.55);
+    border-color: rgba(59,185,171,0.6);
+    box-shadow: 0 4px 30px rgba(59,185,171,0.25);
+}
+.prayer-overlay-btn.unlocked:hover { background: rgba(59,185,171,0.7); transform: scale(1.03); }
+.prayer-overlay-btn.unlocked:active { transform: scale(0.97); }
+.prayer-overlay-timer {
+    font-size: 0.78rem; font-weight: 600;
+    color: rgba(255,255,255,0.35);
+    font-variant-numeric: tabular-nums;
+}
+.prayer-overlay-btn.unlocked .prayer-overlay-timer { display: none; }
+
+/* ── Mobile overrides ── */
+body.is-mobile .prayer-panel {
+    position: relative !important;
+    left: auto !important; bottom: auto !important;
+    width: 100% !important;
+    transform: none !important; opacity: 1 !important;
+    pointer-events: all !important;
+    border-radius: 12px !important;
+    margin-top: 4px;
+    box-shadow: none;
+}
+body.is-mobile .yt-focus-block { bottom: auto !important; }
+body.is-mobile .prayer-overlay-name { font-size: 1.3rem; }
+body.is-mobile .prayer-overlay-btn { padding: 14px 28px; font-size: 0.9rem; }
