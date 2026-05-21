@@ -1,75 +1,248 @@
-# Mdwnh Digital Workspace — Dev Notes
+# Mdwnh Digital Workspace — AI Dev Guide
 
-## Local Development Server
+> **This project is entirely vibe-coded.** Every line of JS/HTML/CSS was written by an AI model. Only the art assets and audio files are human-made. When Claude is working on this, it IS the developer — read this file carefully before touching anything.
 
-Always run a local server to test (required for ES modules + Firebase):
+---
+
+## Quick Start
 
 ```bash
-# Python (built-in, simplest)
+# Serve locally (required — ES modules + Firebase won't work from file://)
 python3 -m http.server 8080
-
-# Node.js alternatives
-npx serve .
-npx http-server . -p 8080 --cors
+# then open http://localhost:8080
 ```
 
-Then open **http://localhost:8080** in your browser.
+**Mobile testing:** `ipconfig getifaddr en0` → open `http://[IP]:8080` on phone (same WiFi).
 
-### Mobile testing on real device
-1. Connect phone to the same WiFi
-2. Find your Mac's local IP: `ipconfig getifaddr en0`
-3. Open `http://[YOUR_IP]:8080` on the phone
+**Never push to git unless the user explicitly asks.** Always test on localhost first.
+
+---
+
+## What This App Is
+
+A multiplayer collaborative Pomodoro workspace — players appear as avatars in a 2D pixel-art office. Arabic UI (RTL). Main features:
+
+| Feature | Description |
+|---|---|
+| **Pomodoro timer** | Per-laptop work/break cycles, persisted in Firebase |
+| **Shared Pomo (coop)** | Multiple players work a synchronized session together |
+| **Focus sounds panel** | Ambient audio mixer — 8 sounds, each with an on/off toggle and volume slider |
+| **YouTube focus player** | Paste a YouTube link, it plays embedded with loop support |
+| **Prayer times** | Live Adhan scheduling with overlay + rain effect |
+| **Minigames** | Racing (canvas-based) and Coffee-catching game; triggered by walking into zones |
+| **Mobile mode** | Full touch support — virtual joystick, pull-up sound drawer, focus-mode UI |
+
+**Language**: All UI text is Arabic. Keep it that way.
+
+---
+
+## File Map
+
+```
+game.js        ~8800 lines  — all game logic, classes, Firebase, rendering
+index.html       ~660 lines  — single page; all panels/overlays live here
+style.css       ~2800 lines  — all styling; mobile rules under body.is-mobile
+firebase-config.js           — exports { database, ref, onValue, update, get, onDisconnect, set }
+Sound/                       — UI/minigame sound effects (.mp3)
+Sound/Focus Sounds/          — ambient focus audio files (.mp3)
+Art/                         — sprite sheets, background image, assets
+pomo9.json                   — background tilemap/layout (don't edit)
+```
 
 ---
 
 ## Architecture
 
-- Pure frontend — no build step, vanilla ES modules
-- Firebase Realtime Database (europe-west1) handles all multiplayer state
-- `firebase-config.js` exports `{ database, ref, onValue, update, get, onDisconnect, set }`
+- **No build step** — pure vanilla ES modules. Edit and reload.
+- **Firebase Realtime Database** (europe-west1) handles ALL multiplayer state.
+- `lobbyPath(sub)` prefixes every Firebase path with `lobbies/{male|female}/{sub}` — male and female users never share data.
+- `serverNow()` returns Firebase server time offset-corrected — use it instead of `Date.now()` for any multiplayer timing.
+- The `gameState` object (line ~700) is the single source of truth for local state.
+- The game loop runs at 60fps via `requestAnimationFrame` → `update()` → `render()`.
 
-## Mobile / Responsive System
+### Key classes
 
-Mobile mode is detected purely by **window width < 1024px** — this fires on resize too, so you can test mobile layout by resizing the browser window.
-
-The `body.is-mobile` class is toggled by `setMobileClass()` in game.js and drives all mobile-specific CSS.
-
-### Mobile-only features
-| Feature | Notes |
-|---|---|
-| Virtual joystick | Bottom-left, tracks touch. Push >55% radius = sprint |
-| Pinch-to-zoom | Disabled during race |
-| Hold-to-sprint | Joystick displacement >55% of radius |
-| Focus drawer | Bottom sheet with `أصوات` label, drag up to reveal sounds + YT |
-| User card hide | Slides up (with خروج pill) during work phase, bounces back on break/end |
-| Race D-pad | Forward / Back / Left / Right buttons replace joystick during race |
-| Race camera | Rotates with car so car always drives "up" (lerps smoothly; desktop stays static) |
-| Siraj test mode | Hold الإخوة lobby button 800ms → spawns siraj ghost (same as Shift+click on desktop) |
-| Reduced particles | 10 wind particles on mobile (vs 30 on desktop) for performance |
-
-### Desktop-only features
-- Top-right floating user card (avatar + name + channel + count) — no logout button inside it
-- خروج pill floats separately on the left (same glass style as the user card)
-- Focus sounds panel floats at bottom-center as before
-- YouTube player floats at bottom-left
+| Class | Location | Purpose |
+|---|---|---|
+| `FocusAudioEngine` | line ~46 | Web Audio API ambient mixer |
+| `FocusYouTubePlayer` | line ~409 | YouTube IFrame API wrapper |
 
 ---
 
-## Design Language
+## Mobile / Responsive System
 
-Follow **Apple HIG** principles throughout the UI:
-- **Glass surfaces**: `rgba(18,18,18,0.68)` + `backdrop-filter: blur(20px) saturate(1.6)`
-- **Subtle borders**: `rgba(255,255,255,0.09)` — barely visible, not structural
-- **Shadows**: soft, low-spread (`0 4px 24px rgba(0,0,0,0.30)`) — depth without heaviness
-- **Typography**: `font-weight: 600` for primary labels, `rgba(255,255,255,0.42)` for secondary
-- **Letter spacing**: `-0.01em` on headings, `0.01-0.02em` on small labels
-- **Transitions**: `cubic-bezier(0.34, 1.56, 0.64, 1)` for spring-y interactive elements
-- **Pill shapes**: `border-radius: 50px` for standalone action buttons (خروج)
-- **No heavy drop shadows** — keep depth light and layered
+Mobile = `window.innerWidth < 1024`. Toggle with `setMobileClass()`. `body.is-mobile` drives all mobile CSS.
+
+**Critical CSS rule**: Never use `!important` on `transform` for `.focus-sounds-panel` or the mobile drawer. JS drag code sets `drawer.style.transform` inline, and `!important` silently beats inline styles — the drawer will appear broken (can't pull up).
+
+**Focus drawer**: Bottom-sheet on mobile. Drag handle pulls it up. State tracked by `.drawer-open` class. Children must have `flex-shrink: 0` or the prayer panel gets crushed when YouTube is open.
+
+**Focus mode** (`setMobileFocusMode(active)`): Hides joystick + user card during work phase. Joystick gets `.focus-hidden` class → opacity 0.
+
+---
+
+## Focus Audio Engine (the ambient sounds system)
+
+### Sound keys and their source files
+
+| Key | File | Label (Arabic) |
+|---|---|---|
+| `rain` | `Sound/Focus Sounds/Rain.mp3` | مطر |
+| `rain_muffled` | `Sound/Focus Sounds/Muffled rain.mp3` | مطر خافت |
+| `fire` | `Sound/Focus Sounds/Boiling.mp3` | موقد |
+| `forest` | `Sound/Focus Sounds/Forest.mp3` | غابة |
+| `brown` | `Sound/Focus Sounds/Brown Noise.mp3` | ضوضاء بنية |
+| `wind` | `Sound/Focus Sounds/Wind.mp3` | رياح |
+| `ocean` | `Sound/Focus Sounds/Ocean.mp3` | بحر |
+| `plane` | *(synthesized — Web Audio only)* | طائرة |
+
+### How it works
+
+1. `init()` creates `AudioContext` + `masterGain`, then calls `loadFocusSoundBuffers()` async.
+2. `loadFocusSoundBuffers()` fetches all 7 MP3 files → `decodeAudioData` → stores in `this.focusBuffers[key]`.
+3. `startSound(name)` for file-based sounds: creates `AudioBufferSourceNode`, sets `loop = true`, uses `loopStart`/`loopEnd` to skip file fade-in/fade-out edges (`fadePad = Math.min(2.0, duration * 0.08)`), calls `source.start(0, fadePad)`.
+4. Gain chain: `source → gainNode (sound.volume * baseVolumeScale) → masterGain (overallVolume) → destination`.
+5. `saveToFirebase()` writes `users/{userId}/focusMix` with active/volume per sound + overall volume.
+6. `applyState()` reads it back on login and restores UI + state. Old `stream` key data is silently ignored (safe migration from old key name).
+
+### baseVolumeScale
+File-based sounds use `1.0` (full file level). `plane` (synthesized) uses `0.09` (synthesized noise is much louder raw).
+
+### HTML data-sound keys must match engine keys exactly
+The HTML `<div class="sound-item" data-sound="KEY">` must match the key in `this.sounds`. If you add a new sound, add it to both.
+
+---
+
+## Shared Pomodoro (Coop) System
+
+State machine at `gameState.sharedPomo.phase`: `'idle' | 'gathering' | 'guest-waiting' | 'active'`
+
+### Key paths (via `spPath()`)
+- `sharedPomo/sessions/{hostId}` — gathering/invite coordination (deleted after 12s)
+- `sharedPomo/live/{hostId}` — active session live doc (participants, phase, time)
+- `sharedPomo/invites/{uid}` — incoming invite for a user
+
+### Host promotion (when host disconnects mid-session)
+`setupSpLiveListener` detects `data === null` → calls `handleHostLeft()`. Remaining members sort UIDs deterministically → elect lexicographically-first as new host. New host writes fresh live doc and sets up listener; others re-point to new host.
+
+### Solo-to-shared conversion
+Free player walks near solo worker → `checkNearbyCoopSession` → `showSoloJoinPanel`. Guest writes to `sp/live/{hostId}`. Host's `setupSoloUpgradeListener` fires → upgrades to `phase='active'`.
+
+### Coop animation
+`updateCoopAnimation()` only runs members still in `sp.activeGroupMembers`. Members who leave are removed via Set-filter in `setupSpLiveListener` and deleted from `sp.coopAnim.members`.
+
+---
+
+## Pomodoro Timer (per-laptop)
+
+Firebase path: `lobbyPath('pomodoro/{laptopId}')` — written by host, read by all.
+
+`startPomodoroPhase(phase)` handles `'work' | 'break' | 'end'`. Phase transitions fire audio cues (`focusAudioEngine.playEffect(...)`) and UI changes.
+
+`updatePomodoro()` runs every frame — drives the countdown, phase transitions, and the focus mask/fog effects.
+
+**Focus mask**: `drawFocusMask()` renders a dark vignette around the active laptop. Alpha driven by `gameState.focusAlpha` (lerped 0→1 on work start).
+
+---
+
+## Firebase Sync Patterns
+
+```js
+// Write (always use update, not set, unless replacing entire subtree)
+update(ref(database), { 'path/to/key': value });
+
+// Read once
+get(ref(database, path)).then(snap => snap.val());
+
+// Live listener (returns unsubscribe function)
+const unsub = onValue(ref(database, path), snap => { ... });
+
+// Cleanup on disconnect
+onDisconnect(ref(database, path)).remove();
+```
+
+**Always store the unsubscribe function** and call it on cleanup — leaking listeners causes double-updates and ghost data.
+
+---
+
+## Prayer System
+
+`initPrayerSystem()` → `fetchPrayerTimes()` (calls Adhan API) → schedules `checkPrayerTrigger()` to run each minute. On trigger: `triggerPrayerOverlay()` plays adhan sound + rain particles + full-screen overlay. User dismisses or it auto-expires.
+
+Prayer location stored in localStorage (`mdwnh_prayer_location`).
+
+---
+
+## Minigame Architecture
+
+**Gender separation**: All minigame paths go through `lobbyPath()` — male/female never share sessions.
+
+**Ready-sync protocol** (both games):
+1. Host creates session with `startTime: 0`
+2. Each client writes `participants/{uid}/ready: serverNow()` when entering
+3. Host waits for all `ready`, then sets `startTime = serverNow() + 3500`
+4. **Do NOT use a small offset** — clients need the full 3.5s window for 3-2-1 countdown
+
+### Race minigame
+Track is built from image pixel classification (`classifyRacePixel`). Physics: friction zones on/off-track. Camera rotates on mobile to always show car heading "up".
+
+### Coffee minigame
+Sugar falls from top. `progress = (serverNow() - spawnTime) / fallDuration` — computed by all clients independently (no physics sync needed). First writer wins the catch. Bad sugars (14% chance) give −3 pts.
+
+**Session lifetime rule**: `returnFromCoffee()` and `returnFromRace()` MUST write `null` to the session path. Forgetting this causes "can't play again" bugs.
+
+**Siraj ghost cleanup**: If `gameState.isSirajGhost`, set `onDisconnect` + 90s `setTimeout` to force-delete any minigame session the ghost created.
+
+---
+
+## Rendering Pipeline
+
+`render()` each frame:
+1. `drawFocusFog` — ambient fog in work room
+2. `drawPlayers` — all player avatars
+3. `drawTimers` — pomodoro badge stacks above laptops
+4. `drawCoopGroupLabels` — floating group labels (only if ≥2 members)
+5. `drawFocusMask` — dark vignette around active laptop
+6. `drawWindParticles` — decorative particles
+7. `drawConnections` — social connection lines between nearby players
+
+**DPR scaling**: Canvas is `viewport * dpr` physical, `viewport` CSS. All drawing uses `ctx.scale(dpr, dpr)` so use logical pixels everywhere. `gameState.dpr` holds the ratio.
+
+---
+
+## Common Bugs & Fixes (lessons learned)
+
+| Bug | Root cause | Fix |
+|---|---|---|
+| Drawer can't pull up on mobile | `!important` on `transform` beats JS inline style | Remove `!important` from all focus-sounds-panel `transform` rules |
+| Prayer panel crushed by YouTube | No `flex-shrink: 0` on drawer children | Add `body.is-mobile .focus-sounds-panel > * { flex-shrink: 0 }` |
+| Coop anim plays for departed members | Departed UIDs never removed from `activeGroupMembers` | Set-filter in `setupSpLiveListener` + delete from `coopAnim.members` |
+| Focus sound won't play after buffer not loaded | `!buf` returns early after gainNode already connected | Disconnect gainNode before early return: `gainNode.disconnect(); return;` |
+| Mobile leave button overlaps timer | `top: 50px` sits inside the 5.5rem (~88px) timer block | Use `top: 124px` |
+| Timer shows before countdown | `startTime` too close to `now` | Use `startTime = serverNow() + 3500` |
+| Session blocks replaying | Session never deleted | `returnFromCoffee/returnFromRace` must write `null` |
+| Solo-to-shared joiner name undefined | Malformed `.find()` on participant keys | `const joinerUid = uids.find(uid => uid !== gameState.userId)` |
+| Coop task panel hidden for guests | `shouldShow` required `sp.isHost` | Remove host check — show for all `sp.phase === 'active'` members |
+| Ghost movement snappy | Raw Firebase value applied directly | Lerp `displayX` toward `mugX` each frame in `updateCoffeeMode` |
+| Lobby stays visible after Siraj spawn | `startGame` only removes `login-screen` | Explicitly remove `active` from `lobby-screen` in `spawnSirajGhost` |
+
+---
+
+## Design Language (Apple HIG)
+
+- **Glass**: `rgba(18,18,18,0.68)` + `backdrop-filter: blur(20px) saturate(1.6)`
+- **Borders**: `rgba(255,255,255,0.09)` — barely visible
+- **Shadows**: `0 4px 24px rgba(0,0,0,0.30)` — soft, low spread
+- **Typography**: weight `600` primary, `rgba(255,255,255,0.42)` secondary
+- **Spring transitions**: `cubic-bezier(0.34, 1.56, 0.64, 1)`
+- **Pills**: `border-radius: 50px` for action buttons
+- **Colors**: dark theme, no bright whites, accent `rgba(255,255,255,0.85)`
+- **Arabic text**: always RTL-compatible; use `direction: rtl` where needed
 
 ---
 
 ## Key Constants (game.js)
+
 ```
 MOVE_SPEED = 5
 PLAYER_SIZE = 70
@@ -77,71 +250,39 @@ BG_SCALE = 0.5             → world ≈ 1195 × 875 px
 ROOM_COUNT = 2             → work room (top) + break room (bottom)
 RACE_LAPS = 3
 MOBILE_BREAKPOINT = 1024   (window.innerWidth)
-WIND_PARTICLE_COUNT = 30   (desktop)
-WIND_PARTICLE_COUNT_MOBILE = 10
+WIND_PARTICLE_COUNT = 30   (desktop)  / 10 (mobile)
 ```
 
-## Minigame Architecture
+---
 
-**Gender separation**: All minigame sessions live under `lobbies/{male|female}/minigames/...` — since `lobbyPath()` is always used, male and female lobbies never share sessions.
+## Shared Pomodoro Firebase Cleanup Rules
 
-**Multiple simultaneous games**: Each game type has its own session namespace (`minigames/race/sessions/` and `minigames/coffee/sessions/`). Within each type, multiple sessions can be active at the same time (each keyed by `{hostId}_{timestamp}`). Players in different sessions don't interact.
+`sharedPomo/sessions/{hostId}` is TEMPORARY — must not linger.
 
-**Ready-sync protocol** (both games):
-1. Host creates session with `startTime: 0`
-2. Each client writes `participants/{uid}/ready: serverNow()` when they enter the game
-3. Host watches Firebase: when all participants have `ready`, waits until `max(ready timestamps) + 1000ms`, then writes `startTime: serverNow() + 3500` (3.5 s gives the 3-2-1 countdown)
-4. 5-second fallback: if not all ready after 5s, host starts anyway
-5. **Do NOT set a small +500 offset** — clients need the full countdown window to render 3-2-1
+1. Host deletes it 12s after `startTime` in `launchSharedPomoWork`
+2. `cancelSharedPomo()` deletes it immediately
+3. `leaveSharedPomo()` removes only the local participant's entry
+4. Invite doc (`sharedPomo/invites/{uid}`) cleaned up on accept/decline/timeout
 
-### Coffee Minigame (`minigames/coffee/sessions/`)
-| Key constant | Value |
-|---|---|
-| `COFFEE_MATCH_MS` | 30000 (30s) |
-| `COFFEE_MUG_Y_FRAC` | 0.80 (mug at 80% screen height) |
-| `COFFEE_CATCH_HALF` | 52 px half-hitbox |
-| `COFFEE_ZONE_CX` | 280 world units (right of race zone) |
-
-Sugar spawning: host writes to `sessions/{key}/sugars/{id}`. Y position computed by all clients as `progress = (serverNow() - spawnTime) / fallDuration`. First player to write `caughtBy` claims the catch. Bad sugar (14% chance) = −3 pts + heavy shake (not elimination).
-
-Mug sync: `participants/{uid}/mugX` (0..1) updated every 80ms for ghost rendering. Ghost positions use client-side lerp (`mugVisuals[uid].displayX`) to hide Firebase latency — never apply lerp to the local mug.
-
-Session lifetime: `returnFromCoffee()` always deletes the session from Firebase (`lobbyPath('minigames/coffee/sessions/{key}') = null`) so the same player can start a new game immediately. **Forgetting this causes "can't play again" bugs.**
-
-**Siraj ghost cleanup**: Siraj test ghosts never trigger the normal logout/return flow, so their minigame sessions can linger. Fix applied in `startLocalCoffee`: if `gameState.isSirajGhost`, set `onDisconnect(...).remove()` on the session path AND a 90-second `setTimeout` that force-deletes it. Cancel the timer in `returnFromCoffee`. Apply the same pattern to any future minigame.
-
-## Common Minigame Pitfalls (lessons learned)
-
-| Issue | Root cause | Fix |
-|---|---|---|
-| Timer shows before game starts | `startTime` set too close to `now` | Use `startTime = serverNow() + 3500` to allow 3-2-1 countdown |
-| Session blocks replaying | Session never deleted from Firebase | `returnFromCoffee/returnFromRace` must write `null` to the session path |
-| Ghost movement is snappy | Raw Firebase value used directly | Lerp `displayX` toward `mugX` every frame in `updateCoffeeMode` |
-| HUD overlaps OS chrome | Element placed at top-center same as pomodoro pill | Coffee HUD lives on right side; check existing HTML elements before choosing position |
-| Ready sound missing for new game type | Sound only wired to race zone entry | Each zone needs its own "newly entered" diff check with `prevZonePlayers` |
-| Leaderboard not visible during countdown | HUD function returned early when `now < startTime` | Split: timer shown only when active, leaderboard shown always |
-| Results panel missing avatars | `results` only stores `username`/`score` | Look up avatar from `session.participants[uid].avatar` at draw time |
-| Siraj ghost sessions linger in Firebase | Ghost disconnects without calling `returnFromCoffee` | `onDisconnect` + 90s `setTimeout` in `startLocalCoffee` when `isSirajGhost`; cancel timer in `returnFromCoffee` |
-| Mug flash shows white rectangle (transparent bg) | `source-atop` on main canvas composites against everything drawn | Render mug to offscreen canvas, apply `source-atop` tint there, stamp result back |
-| Lobby screen stays visible after Siraj Shift+click | `spawnSirajGhost` calls `startGame` which only removes `login-screen` | Explicitly remove `active` from `lobby-screen` before calling `startGame` in `spawnSirajGhost` |
+---
 
 ## DPR Canvas Scaling
-Canvas is scaled by `window.devicePixelRatio` in `resizeCanvas()`:
-- `canvas.width/height = viewport * dpr` (physical)
-- `canvas.style.width/height = viewport + 'px'` (CSS logical)
-- `gameState.dpr` stores the current ratio
-- `render()` and `renderRace()` call `ctx.save(); ctx.scale(dpr, dpr)` so all drawing uses **logical pixels**
-- `drawFocusMask`: mCanvas stays physical for sharp gradients; player positions computed with `* dpr`; drawn via `ctx.drawImage(mCanvas, 0, 0, W, H)`
 
-## Shared Pomodoro Firebase Cleanup
+```
+canvas.width/height = viewport * dpr   (physical pixels)
+canvas.style.width/height = viewport   (CSS logical pixels)
+render(): ctx.save(); ctx.scale(dpr, dpr)  → all drawing in logical px
+drawFocusMask: uses physical mCanvas; player positions computed with * dpr
+```
 
-`sharedPomo/sessions/{hostId}` is a temporary coordination doc — it **must not linger** in Firebase after the session starts.
+---
 
-**Cleanup rules:**
-1. Host calls `update(... { [spPath('sessions/{id}')]: null })` 12 seconds after `startTime` in `launchSharedPomoWork` — enough time for all clients to receive the session and start.
-2. Host's `onDisconnect` for the laptop pomodoro path (`lobbyPath('pomodoro/{laptopId}')`) is set in `launchSharedPomoWork` to auto-remove if host disconnects mid-session.
-3. `cancelSharedPomo()` deletes the session immediately when host cancels before starting.
-4. `leaveSharedPomo()` removes only the local participant's entry from `participants/`.
-5. The invite doc (`sharedPomo/invites/{uid}`) is always cleaned up: on accept, decline, timeout (10s), or auto-expire timeout in `sendSpInvite`.
+## Adding a New Feature — Checklist
 
-**Do NOT leave `sharedPomo/sessions` docs alive indefinitely** — they are not permanent session records.
+1. **UI**: Add HTML in `index.html`. Follow glass design language. Arabic labels.
+2. **Styling**: Add CSS in `style.css`. Add `body.is-mobile` variants if needed. Never `!important` on transforms.
+3. **Logic**: Add to `game.js`. Wire Firebase sync if the state should persist.
+4. **Firebase keys**: Follow existing path patterns through `lobbyPath()`.
+5. **Mobile**: Test by resizing browser to <1024px. Check drawer, joystick, leave button positions.
+6. **Cleanup**: Store unsubscribe functions, call them on logout/leave/cleanup.
+7. **Test locally**, then tell the user to git push.
