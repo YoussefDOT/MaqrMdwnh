@@ -7196,12 +7196,18 @@ function exitPomoNow() {
     gameState.anim.active           = false;
     gameState.anim.phase            = 'none';
 
-    // Hide focus UI
+    // Hide all focus / pomo UI
     document.getElementById('focus-sounds-panel')?.classList.remove('active');
     document.getElementById('current-task-panel')?.classList.remove('active');
     document.getElementById('pomo-leave-btn')?.classList.add('hidden');
+    document.getElementById('pomodoro-large-timer')?.classList.add('hidden');
+    document.getElementById('pomodoro-small-timer')?.classList.add('hidden');
+    document.getElementById('pomo-leave-confirm1')?.classList.add('hidden');
+    document.getElementById('pomo-leave-confirm2')?.classList.add('hidden');
+    setMobileFocusMode(false);
 
-    updatePlayerPosition(gameState.players[gameState.userId]?.x || 0, gameState.players[gameState.userId]?.y || 0);
+    const local = gameState.players[gameState.userId];
+    updatePlayerPosition(local?.x || 0, local?.y || 0);
 }
 
 // ── Coop animation ────────────────────────────────────────────────────────────

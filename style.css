@@ -2135,6 +2135,7 @@ body.is-mobile .race-hud { top: 70px; }
 .sp-coop-leave-btn:hover { color: rgba(255,100,100,0.8); background: rgba(255,60,60,0.1); }
 
 /* ── Mid-session join panel ── */
+.sp-join-panel.hidden { display: none; }
 .sp-join-panel {
     position: fixed;
     left: 16px;
