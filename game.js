@@ -859,6 +859,7 @@ const gameState = {
         toastTimeout: null,
         unsubInvite: null,
         unsubSession: null,
+        unsubLive: null,
         coopAnim: {
             members: {},        // uid -> { orbitAngle, hammerT, hammering, state, stateTimer }
             emojiFloats: [],    // { wx, wy, emoji, age, maxAge, vy }
@@ -6306,47 +6307,18 @@ function drawPlayers(onlyLocal = false) {
             workScaleX = 1.0 - Math.sin(workT) * 0.04;
         }
 
-        // Coop animation: state-machine based playful movement for group members
+        // Coop animation: read lerped blend values computed in updateCoopAnimation
         const sp = gameState.sharedPomo;
         if (sp.phase === 'active' && sp.activeGroupMembers.length > 1
             && sp.activeGroupMembers.includes(player.userId)
             && gameState.isLockedIn && !tpData) {
-            const ca  = sp.coopAnim;
-            const mem = ca.members[player.userId];
+            const mem = sp.coopAnim.members[player.userId];
             if (mem) {
-                const syncBob = Math.sin(ca.syncBobPhase) * 3;
-                coopDY += syncBob;
-
-                switch (mem.state) {
-                    case 'orbit': {
-                        const r = 22;
-                        coopDX = Math.cos(mem.orbitAngle) * r;
-                        coopDY += Math.sin(mem.orbitAngle) * r * 0.4;
-                        break;
-                    }
-                    case 'jump': {
-                        // Squash at bottom, stretch at top
-                        const jumpPhase = (mem.stateProgress % 40) / 40;
-                        const jumpH = Math.abs(Math.sin(jumpPhase * Math.PI));
-                        coopDY -= jumpH * 18;
-                        workScaleX = 1.0 + (1 - jumpH) * 0.15; // squash wide at bottom
-                        workScaleY = 1.0 - (1 - jumpH) * 0.12;
-                        break;
-                    }
-                    case 'flip': {
-                        const flipT = Math.min(1, mem.stateProgress / 30);
-                        workScaleX = mem.flipSign * (1 - 2 * Math.abs(flipT - 0.5));
-                        break;
-                    }
-                    case 'hammer': {
-                        const shake = Math.sin(mem.stateProgress * 0.8) * 0.22;
-                        workScaleX = 1.0 + shake;
-                        workScaleY = 1.0 - shake * 0.5;
-                        coopDY -= Math.abs(shake) * 6;
-                        break;
-                    }
-                    // 'idle' — just the syncBob already applied
-                }
+                coopDX     = mem.dxBlend;
+                coopDY     = mem.dyBlend;
+                workScaleX = mem.scaleXBlend;
+                workScaleY = mem.scaleYBlend;
+                workAngle  = mem.angleBlend;
             }
         }
 
@@ -6692,12 +6664,22 @@ function confirmJoinCoopSession() {
     gameState.pomodoro.endTime       = data.endTime;
     gameState.pomodoro.transitioning = false;
 
-    // Write updated live participants so others can see we joined
+    // Write ourselves into the live doc so host + others see the update
     update(ref(database), {
         [spPath(`live/${data.hostId}/participants/${gameState.userId}`)]: {
             username: local.username, avatar: local.avatar || null,
         }
     });
+
+    // Show focus UI (same as normal pomo start)
+    const focusPanel = document.getElementById('focus-sounds-panel');
+    const taskPanel  = document.getElementById('current-task-panel');
+    if (focusPanel) focusPanel.classList.add('active');
+    if (taskPanel)  taskPanel.classList.add('active');
+    setMobileFocusMode(true);
+
+    // Listen for further participant changes (more late joiners)
+    setupSpLiveListener(data.hostId);
 
     showSpInfoToast('انضممت للجلسة!');
 }
@@ -6982,6 +6964,9 @@ function launchSharedPomoWork(session) {
             update(ref(database), { [spPath(`sessions/${sp.sessionId}`)]: null });
         }, delay + 12000);
 
+        // Listen to live doc so late joiners appear in our activeGroupMembers
+        setupSpLiveListener(sp.sessionId);
+
     } else {
         // Guest: teleport to a slot near the host's laptop, skip kidnap animation
         const local = gameState.players[gameState.userId];
@@ -7014,6 +6999,8 @@ function launchSharedPomoWork(session) {
             sp.agreedEndTime                 = session.endTime;
 
             startPomodoroPhase('work');
+            // Listen to live doc so late joiners appear in our activeGroupMembers
+            setupSpLiveListener(session.hostId || sp.sessionId);
         }, delay);
     }
 }
@@ -7049,6 +7036,7 @@ function onSpSessionCancelled() {
 function cleanupSpLocal(clearGroup = false) {
     const sp = gameState.sharedPomo;
     if (sp.unsubSession) { sp.unsubSession(); sp.unsubSession = null; }
+    if (sp.unsubLive)    { sp.unsubLive();    sp.unsubLive    = null; }
     if (sp.isHost && sp.sessionId) {
         update(ref(database), { [spPath(`live/${sp.sessionId}`)]: null });
     }
@@ -7058,6 +7046,38 @@ function cleanupSpLocal(clearGroup = false) {
     if (clearGroup) sp.activeGroupMembers = [];
     document.getElementById('sp-coop-tasks')?.classList.add('hidden');
     document.getElementById('sp-join-panel')?.classList.add('hidden');
+}
+
+// Listen to the live doc so late joiners appear in all members' activeGroupMembers
+function setupSpLiveListener(hostId) {
+    const sp = gameState.sharedPomo;
+    if (sp.unsubLive) { sp.unsubLive(); sp.unsubLive = null; }
+    sp.unsubLive = onValue(ref(database, spPath(`live/${hostId}`)), snap => {
+        const data = snap.val();
+        if (!data) return; // host deleted it — session over, nothing to do
+        const uids = Object.keys(data.participants || {});
+        if (!uids.length) return;
+        // Add any UIDs we don't know about yet
+        let changed = false;
+        for (const uid of uids) {
+            if (!sp.activeGroupMembers.includes(uid)) {
+                sp.activeGroupMembers.push(uid);
+                changed = true;
+            }
+        }
+        // Init animation state for newly discovered members
+        if (changed) {
+            for (const uid of sp.activeGroupMembers) {
+                if (!sp.coopAnim.members[uid]) {
+                    sp.coopAnim.members[uid] = {
+                        state: 'idle', stateTimer: 60 + Math.random() * 100, stateProgress: 0,
+                        orbitAngle: Math.random() * Math.PI * 2,
+                        dxBlend: 0, dyBlend: 0, scaleXBlend: 1, scaleYBlend: 1, angleBlend: 0,
+                    };
+                }
+            }
+        }
+    });
 }
 
 // ── Toast (invite) ────────────────────────────────────────────────────────────
@@ -7213,8 +7233,9 @@ function exitPomoNow() {
 // ── Coop animation ────────────────────────────────────────────────────────────
 
 const COOP_EMOJIS  = ['🔨','⚡','💡','✨','🚀','🎯','🔥','💪'];
-const COOP_STATES  = ['idle','orbit','jump','flip','hammer'];
-const COOP_SPREAD  = 60; // px between member home slots
+// jump and flip removed — jump was squashy/fast, flip caused 3D disappear
+const COOP_STATES  = ['idle','orbit','wiggle','hammer'];
+const COOP_SPREAD  = 90; // px between member home slots (wider)
 
 function updateCoopAnimation() {
     const sp = gameState.sharedPomo;
@@ -7222,18 +7243,19 @@ function updateCoopAnimation() {
     const ca = sp.coopAnim;
     const dt = gameState.dtFactor;
 
-    ca.syncBobPhase += 0.05 * dt;
-    ca.swapTimer    += dt;
+    ca.syncBobPhase += 0.04 * dt;
 
     for (let i = 0; i < sp.activeGroupMembers.length; i++) {
         const uid = sp.activeGroupMembers[i];
         if (!ca.members[uid]) {
             ca.members[uid] = {
                 state: 'idle',
-                stateTimer: 80 + Math.random() * 120,
+                stateTimer: 60 + Math.random() * 120,
                 stateProgress: 0,
                 orbitAngle: Math.random() * Math.PI * 2,
-                flipSign: 1,
+                dxBlend: 0, dyBlend: 0,
+                scaleXBlend: 1, scaleYBlend: 1,
+                angleBlend: 0,
             };
         }
         const m = ca.members[uid];
@@ -7243,28 +7265,56 @@ function updateCoopAnimation() {
         // Advance state machine
         if (m.stateTimer <= 0) {
             const nextStates = COOP_STATES.filter(s => s !== m.state);
-            m.state = nextStates[Math.floor(Math.random() * nextStates.length)];
-            m.stateTimer    = 60 + Math.random() * 160;
+            m.state         = nextStates[Math.floor(Math.random() * nextStates.length)];
+            m.stateTimer    = 70 + Math.random() * 150;
             m.stateProgress = 0;
-            if (m.state === 'flip') m.flipSign = Math.random() < 0.5 ? 1 : -1;
-            // Spawn emoji on hammer or sometimes orbit
-            if (m.state === 'hammer' || (m.state === 'orbit' && Math.random() < 0.3)) {
+            if (m.state === 'hammer' || (m.state === 'orbit' && Math.random() < 0.35)) {
                 const player = gameState.players[uid];
                 if (player) {
                     ca.emojiFloats.push({
-                        wx: player.renderX + (Math.random() - 0.5) * 20,
+                        wx: player.renderX + (Math.random() - 0.5) * 18,
                         wy: player.renderY - PLAYER_SIZE * 0.9,
                         emoji: COOP_EMOJIS[Math.floor(Math.random() * COOP_EMOJIS.length)],
-                        age: 0, maxAge: 65, vy: -0.55,
+                        age: 0, maxAge: 70, vy: -0.5,
                     });
                 }
             }
         }
 
-        if (m.state === 'orbit') m.orbitAngle += 0.018 * dt;
+        if (m.state === 'orbit') m.orbitAngle += 0.014 * dt;
+
+        // Compute target values for this state + syncBob
+        const syncBob = Math.sin(ca.syncBobPhase) * 3;
+        let tDX = 0, tDY = syncBob, tSX = 1, tSY = 1, tAngle = 0;
+
+        switch (m.state) {
+            case 'orbit':
+                tDX = Math.cos(m.orbitAngle) * 20;
+                tDY = syncBob + Math.sin(m.orbitAngle) * 9;
+                break;
+            case 'wiggle':
+                // side-to-side lean — scaleX stays positive so no disappearing
+                tAngle = Math.sin(m.stateProgress * 0.13) * 0.22;
+                break;
+            case 'hammer': {
+                const sh = Math.sin(m.stateProgress * 0.75) * 0.16;
+                tSX = 1 + sh; tSY = 1 - sh * 0.45;
+                tDY = syncBob - Math.abs(sh) * 4;
+                break;
+            }
+            // 'idle': just syncBob, all defaults
+        }
+
+        // Lerp toward target (smooth transitions between states)
+        const ls = 0.07 * dt; // lerp speed
+        m.dxBlend     += (tDX    - m.dxBlend)     * ls;
+        m.dyBlend     += (tDY    - m.dyBlend)     * ls;
+        m.scaleXBlend += (tSX    - m.scaleXBlend) * ls;
+        m.scaleYBlend += (tSY    - m.scaleYBlend) * ls;
+        m.angleBlend  += (tAngle - m.angleBlend)  * ls;
     }
 
-    // Age out floats
+    // Age out emoji floats
     for (let i = ca.emojiFloats.length - 1; i >= 0; i--) {
         const f = ca.emojiFloats[i];
         f.age += dt; f.wy += f.vy * dt;
