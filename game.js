@@ -1402,6 +1402,15 @@ function formatTime(sec) {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
+function formatDurationArabic(totalMins) {
+    totalMins = Math.max(0, Math.floor(totalMins));
+    if (totalMins < 60) return `${totalMins} دقيقة`;
+    const hours = Math.floor(totalMins / 60);
+    const mins  = totalMins % 60;
+    const hourStr = hours === 1 ? 'ساعة' : hours === 2 ? 'ساعتان' : `${hours} ساعات`;
+    return mins === 0 ? hourStr : `${hourStr} و${mins} دقيقة`;
+}
+
 function clearLocalPomodoroUi() {
     const largeTimer = document.getElementById('pomodoro-large-timer');
     const smallTimer = document.getElementById('pomodoro-small-timer');
@@ -1453,6 +1462,51 @@ function cleanupStalePomodoroState(laptopId, state) {
     }
 
     return false;
+}
+
+function cleanupAbandonedPomoSessions(pomoData) {
+    const THIRTY_MINS = 30 * 60 * 1000;
+    const TWO_HOURS   = 2 * 60 * 60 * 1000;
+    const FOUR_HOURS  = 4 * 60 * 60 * 1000;
+    const now = Date.now();
+
+    const uidsToCheck = new Set();
+    for (const state of Object.values(pomoData)) {
+        if (state?.claimedBy && state.claimedBy !== gameState.userId) {
+            uidsToCheck.add(state.claimedBy);
+        }
+    }
+    if (uidsToCheck.size === 0) return;
+
+    const uidChecks = [...uidsToCheck].map(uid =>
+        get(ref(database, `users/${uid}/activeInGame`))
+            .then(snap => ({ uid, online: snap.val() === true }))
+            .catch(() => ({ uid, online: false }))
+    );
+
+    Promise.all(uidChecks).then(results => {
+        const offlineUids = new Set(results.filter(r => !r.online).map(r => r.uid));
+        if (offlineUids.size === 0) return;
+
+        const updates = {};
+        for (const [laptopId, state] of Object.entries(pomoData)) {
+            if (!state?.claimedBy || !offlineUids.has(state.claimedBy)) continue;
+
+            const endTime   = state.endTime  || 0;
+            const createdAt = state.createdAt || 0;
+            // Free the device if: timer expired 30+ mins ago, OR session started 2+ hours ago
+            const isExpired = endTime   > 0 && now - endTime   > THIRTY_MINS;
+            const isVeryOld = createdAt > 0 && now - createdAt > TWO_HOURS;
+            if (!isExpired && !isVeryOld) continue;
+
+            // Preserve progress so the user can reclaim on next login (valid for 4 hours)
+            updates[`users/${state.claimedBy}/lastPomoSession`] = {
+                ...state, abandonedAt: now, laptopId: parseInt(laptopId)
+            };
+            updates[lobbyPath(`pomodoro/${laptopId}`)] = null;
+        }
+        if (Object.keys(updates).length > 0) update(ref(database), updates);
+    }).catch(() => {});
 }
 
 function getPomodoroEntry(data, laptopId) {
@@ -1922,6 +1976,9 @@ function startGame(userData) {
             }
         }
 
+        // Fire-and-forget: free devices abandoned by offline users for 30+ mins
+        cleanupAbandonedPomoSessions(pomoData);
+
         get(ref(database, `users/${gameState.userId}`)).then((snapshot) => {
             const data = snapshot.val();
             let spawnX = 0, spawnY = BG_HEIGHT / 4;
@@ -1935,6 +1992,49 @@ function startGame(userData) {
             // Restore persisted YouTube focus player if present
             if (data && data.focusPlayer && gameState.focusYTPlayer) {
                 gameState.focusYTPlayer.loadFromProfile(data.focusPlayer);
+            }
+
+            // Reclaim an abandoned session (saved by cleanupAbandonedPomoSessions on a previous login)
+            if (activeLaptopId === null && data?.lastPomoSession) {
+                const ls = data.lastPomoSession;
+                const FOUR_HOURS = 4 * 60 * 60 * 1000;
+                const now = Date.now();
+                const stillValid = ls.abandonedAt && (now - ls.abandonedAt < FOUR_HOURS) && ls.sessionsLeft > 0;
+                const freeLaptop = stillValid ? gameState.laptops.find(l => !l.claimedBy) : null;
+                if (freeLaptop) {
+                    const restoredPhase = ls.phase === 'break' ? 'break' : 'work';
+                    const phaseMins = restoredPhase === 'work' ? (ls.workDuration || 25) : (ls.breakDuration || 5);
+                    const newEndTime = now + phaseMins * 60000;
+                    const restoredDoc = {
+                        claimedBy: gameState.userId,
+                        phase: restoredPhase,
+                        endTime: newEndTime,
+                        workDuration: ls.workDuration,
+                        breakDuration: ls.breakDuration || 5,
+                        sessionsLeft: ls.sessionsLeft,
+                        totalSessions: ls.totalSessions,
+                        createdAt: ls.createdAt || now,
+                    };
+                    update(ref(database), {
+                        [lobbyPath(`pomodoro/${freeLaptop.id}`)]: restoredDoc,
+                        [`users/${gameState.userId}/lastPomoSession`]: null,
+                    });
+                    applyPomodoroStateToLaptop(freeLaptop, restoredDoc);
+                    activeLaptopId = freeLaptop.id;
+                    gameState.pomodoro.active       = true;
+                    gameState.pomodoro.laptopId     = freeLaptop.id;
+                    gameState.pomodoro.phase        = restoredPhase;
+                    gameState.pomodoro.endTime      = newEndTime;
+                    gameState.pomodoro.sessionsLeft = ls.sessionsLeft;
+                    gameState.pomodoro.workDuration = ls.workDuration;
+                    gameState.pomodoro.breakDuration = ls.breakDuration || 5;
+                    gameState.pomodoro.totalSessions = ls.totalSessions || ls.sessionsLeft || 1;
+                    gameState.pomodoro.createdAt    = ls.createdAt || now;
+                    locked = restoredPhase === 'work';
+                } else {
+                    // Stale or no free device — discard
+                    update(ref(database), { [`users/${gameState.userId}/lastPomoSession`]: null });
+                }
             }
 
             if (gameState.pomodoro.active && gameState.pomodoro.phase === 'work') {
@@ -3208,7 +3308,7 @@ function showSuccessModal(totalSessions, workDuration, taskText = '') {
     if (!modal) return;
 
     const totalMins = Math.floor(totalSessions * workDuration);
-    document.getElementById('success-total-time').textContent = `${totalMins} دقيقة`;
+    document.getElementById('success-total-time').textContent = formatDurationArabic(totalMins);
     document.getElementById('success-sessions-count').textContent = totalSessions;
     const taskEl = document.getElementById('success-task');
     if (taskEl) {
@@ -5905,21 +6005,24 @@ function updatePomodoro() {
     enforceAudioFailsafe();
     if (!gameState.pomodoro.active) return;
 
-    // Prayer pause — freeze timer completely
+    // Prayer overlay: in solo pomo freeze the timer; in shared pomo keep running (timer is shared)
     if (gameState.prayer.isOverlayActive) {
-        gameState.pomodoro.endTime = Date.now() + gameState.prayer.pausedRemaining;
-        const pr = gameState.prayer.pausedRemaining;
-        const frozenStr = `${Math.floor(pr / 60000).toString().padStart(2, '0')}:${Math.floor((pr % 60000) / 1000).toString().padStart(2, '0')}`;
-        const lg = document.getElementById('large-timer-text');
-        const sm = document.getElementById('small-timer-text');
-        if (gameState.pomodoro.phase === 'work' && lg) lg.textContent = frozenStr;
-        if (gameState.pomodoro.phase === 'break' && sm) sm.textContent = frozenStr;
         updatePrayerOverlayTimer();
-        return;
+        if (gameState.sharedPomo.phase !== 'active') {
+            gameState.pomodoro.endTime = Date.now() + gameState.prayer.pausedRemaining;
+            const pr = gameState.prayer.pausedRemaining;
+            const frozenStr = `${Math.floor(pr / 60000).toString().padStart(2, '0')}:${Math.floor((pr % 60000) / 1000).toString().padStart(2, '0')}`;
+            const lg = document.getElementById('large-timer-text');
+            const sm = document.getElementById('small-timer-text');
+            if (gameState.pomodoro.phase === 'work' && lg) lg.textContent = frozenStr;
+            if (gameState.pomodoro.phase === 'break' && sm) sm.textContent = frozenStr;
+            return;
+        }
+        // Shared pomo: fall through so the timer display and transitions keep updating normally
     }
 
-    // Check if prayer time arrived
-    checkPrayerTrigger();
+    // Check if prayer time arrived (skip if overlay already up)
+    if (!gameState.prayer.isOverlayActive) checkPrayerTrigger();
 
     const now = Date.now();
     const remaining = Math.max(0, gameState.pomodoro.endTime - now);
@@ -8328,9 +8431,14 @@ function triggerPrayerOverlay(prayerKey, arabicName) {
     const pr = gameState.prayer;
     pr.triggeredToday[prayerKey] = true;
 
-    // Save timer state
-    pr.pausedRemaining = Math.max(0, gameState.pomodoro.endTime - Date.now());
-    pr.pausedPhase = gameState.pomodoro.phase;
+    // Save timer state — only pause the timer in solo pomo; shared sessions keep running
+    if (gameState.sharedPomo.phase !== 'active') {
+        pr.pausedRemaining = Math.max(0, gameState.pomodoro.endTime - Date.now());
+        pr.pausedPhase = gameState.pomodoro.phase;
+    } else {
+        pr.pausedRemaining = 0;
+        pr.pausedPhase = null;
+    }
     pr.overlayPrayer = prayerKey;
     pr.isOverlayActive = true;
     pr.overlayStartTime = Date.now();
@@ -8506,14 +8614,15 @@ function dismissPrayerOverlay() {
 
     pr.isOverlayActive = false;
 
-    // Resume timer from where it was paused
-    gameState.pomodoro.endTime = Date.now() + pr.pausedRemaining;
-
-    // Update Firebase so observers see the correct endTime
-    if (gameState.pomodoro.laptopId !== null) {
-        const updates = {};
-        updates[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}/endTime`)] = gameState.pomodoro.endTime;
-        update(ref(database), updates);
+    // Resume timer — in solo pomo restore the frozen endTime and sync to Firebase;
+    // in shared pomo the timer was never frozen, so endTime is already correct for everyone
+    if (gameState.sharedPomo.phase !== 'active') {
+        gameState.pomodoro.endTime = Date.now() + pr.pausedRemaining;
+        if (gameState.pomodoro.laptopId !== null) {
+            const updates = {};
+            updates[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}/endTime`)] = gameState.pomodoro.endTime;
+            update(ref(database), updates);
+        }
     }
 
     // Stop athan if still playing
