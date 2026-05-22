@@ -962,33 +962,28 @@ body {
 /* ── Ad overlay (shown when a pre-roll ad is detected) ── */
 .yt-ad-overlay {
     position: absolute; inset: 0; z-index: 10;
-    background: rgba(8,8,14,0.97);
+    background: rgba(8,8,14,0.92);
     border-radius: 10px;
     display: flex; flex-direction: column;
     align-items: center; justify-content: center;
-    gap: 7px;
+    gap: 10px;
     opacity: 0; pointer-events: none;
-    transition: opacity 0.3s ease;
+    transition: opacity 0.25s ease;
 }
-.yt-ad-overlay.active { opacity: 1; pointer-events: all; }
-.yt-ad-icon-wrap {
-    width: 40px; height: 40px;
-    background: rgba(255,200,30,0.12);
-    border: 1px solid rgba(255,200,30,0.22);
+.yt-ad-overlay.active { opacity: 1; }
+.yt-ad-spinner {
+    width: 28px; height: 28px;
+    border: 3px solid rgba(255,255,255,0.10);
+    border-top-color: rgba(255,200,30,0.88);
     border-radius: 50%;
-    display: flex; align-items: center; justify-content: center;
-    color: rgba(255,200,30,0.80);
+    animation: ytAdSpin 0.75s linear infinite;
+    will-change: transform;
 }
+@keyframes ytAdSpin { to { transform: rotate(360deg); } }
 .yt-ad-label {
-    font-size: 11px; font-weight: 700;
-    color: rgba(255,255,255,0.50);
-    letter-spacing: 0.04em;
-}
-.yt-ad-overlay .yt-waveform { width: 100%; max-width: 180px; }
-.yt-ad-time {
-    font-size: 9.5px; font-weight: 600;
-    color: rgba(255,255,255,0.28);
-    font-variant-numeric: tabular-nums;
+    font-size: 12px; font-weight: 600;
+    color: rgba(255,255,255,0.60);
+    direction: rtl;
 }
 
 /* ── Sound loading indicator (buffer not yet ready) ── */

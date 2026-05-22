@@ -497,7 +497,6 @@ class FocusYouTubePlayer {
         this._loadedAt     = 0;
         this._lastCurrentTime = -999;
         this._stuckStartMs = 0;
-        this._adWaveAnimId = null;
     }
 
     _ensureApiLoaded() {
@@ -556,7 +555,6 @@ class FocusYouTubePlayer {
         this._isAdPlaying  = false;
         this._lastCurrentTime = -999;
         this._stuckStartMs = 0;
-        this._stopAdWave();
         const adOverlay = document.getElementById('yt-ad-overlay');
         if (adOverlay) adOverlay.classList.remove('active');
         try {
@@ -808,63 +806,15 @@ class FocusYouTubePlayer {
         if (!overlay) return;
         if (isAd) {
             this._adStartMs = Date.now();
-            // Mute for the duration of the ad
             try { this.player.setVolume(0); } catch(e) {}
-            // Pick a random ad icon
-            const icons = [
-                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
-                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>`,
-                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
-                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`,
-            ];
-            const iconWrap = document.getElementById('yt-ad-icon-wrap');
-            if (iconWrap) iconWrap.innerHTML = icons[Math.floor(Math.random() * icons.length)];
             overlay.classList.add('active');
-            this._startAdWave();
         } else {
             overlay.classList.remove('active');
-            this._stopAdWave();
-            // Restore volume when ad ends
             try { this.player.setVolume(this.volume); } catch(e) {}
             this._adStartMs = 0;
             this._stuckStartMs = 0;
-            this._lastCurrentTime = -999; // fresh comparison after ad ends
+            this._lastCurrentTime = -999;
         }
-    }
-
-    _startAdWave() {
-        if (this._adWaveAnimId) return;
-        const draw = () => {
-            const canvas = document.getElementById('yt-ad-waveform');
-            if (!canvas || !this._isAdPlaying) { this._adWaveAnimId = null; return; }
-            const W = canvas.getBoundingClientRect().width || 220;
-            const H = 22;
-            if (canvas.width !== Math.round(W)) canvas.width = Math.round(W);
-            canvas.height = H;
-            const ctx = canvas.getContext('2d');
-            ctx.clearRect(0, 0, W, H);
-            // Animated bar waveform — simulates live ad audio
-            const bars = 28;
-            const barW = W / bars;
-            const t = Date.now() / 300;
-            for (let i = 0; i < bars; i++) {
-                const h = (Math.sin(i * 0.8 + t) * 0.35 + Math.sin(i * 0.3 - t * 1.3) * 0.25 + 0.55) * H * 0.75;
-                ctx.fillStyle = 'rgba(255,200,30,0.50)';
-                ctx.fillRect(i * barW + barW * 0.1, (H - h) / 2, barW * 0.8, Math.max(2, h));
-            }
-            // Elapsed time counter
-            const timeEl = document.getElementById('yt-ad-time');
-            if (timeEl && this._adStartMs) {
-                const s = Math.floor((Date.now() - this._adStartMs) / 1000);
-                timeEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
-            }
-            this._adWaveAnimId = requestAnimationFrame(draw);
-        };
-        this._adWaveAnimId = requestAnimationFrame(draw);
-    }
-
-    _stopAdWave() {
-        if (this._adWaveAnimId) { cancelAnimationFrame(this._adWaveAnimId); this._adWaveAnimId = null; }
     }
 
     _ensureUiVisible(visible) {
