@@ -1849,48 +1849,63 @@ function setupUserSelection() {
     // The category name the player is allowed to see
     const allowedCategory = LOBBY_CONFIG[gameState.selectedLobby]?.categoryName;
 
+    // Show spinner immediately while waiting for Firebase
+    userListContainer.innerHTML = '<div class="loading-spinner"></div>';
+    let firstRender = true;
+
     onValue(usersRef, (snapshot) => {
         const users = snapshot.val();
         if (gameState.userId) return;
-        if (!users) {
-            userListContainer.innerHTML = '<div class="loading-users">لا يوجد مستخدمون متصلون حالياً.</div>';
-            return;
-        }
 
-        // Filter: only in-voice AND in the selected lobby's category
-        const onlineUsers = Object.entries(users).filter(([_, data]) =>
-            data.status === 'in-voice' &&
-            data.categoryName === allowedCategory
-        );
-
-        if (onlineUsers.length === 0) {
-            userListContainer.innerHTML = '<div class="loading-users">لا يوجد مستخدمون في قنوات الصوت حالياً.</div>';
-            return;
-        }
-        userListContainer.innerHTML = '';
-        onlineUsers.forEach(([userId, userData]) => {
-            const userItem = document.createElement('div');
-            const isActive = userData.activeInGame === true;
-            userItem.className = 'user-item' + (isActive ? ' disabled' : '');
-
-            const avatarHtml = userData.avatar
-                ? `<img src="${userData.avatar}" alt="${userData.username}">`
-                : `<div class="placeholder-avatar">${userData.username.charAt(0).toUpperCase()}</div>`;
-
-            const statusHtml = isActive ? '<div class="in-game-status">داخل اللعبة</div>' : '';
-
-            userItem.innerHTML = `
-                ${statusHtml}
-                <div class="avatar-circle">${avatarHtml}</div>
-                <div class="name">${userData.username}</div>
-                <div class="channel">${userData.channelName || 'قناة صوتية'}</div>
-            `;
-
-            if (!isActive) {
-                userItem.addEventListener('click', () => showConfirmModal({ userId, ...userData }));
+        const renderUsers = () => {
+            if (!users) {
+                userListContainer.innerHTML = '<div class="loading-users">لا يوجد مستخدمون متصلون حالياً.</div>';
+                return;
             }
-            userListContainer.appendChild(userItem);
-        });
+
+            // Filter: only in-voice AND in the selected lobby's category
+            const onlineUsers = Object.entries(users).filter(([_, data]) =>
+                data.status === 'in-voice' &&
+                data.categoryName === allowedCategory
+            );
+
+            if (onlineUsers.length === 0) {
+                userListContainer.innerHTML = '<div class="loading-users">لا يوجد مستخدمون في قنوات الصوت حالياً.</div>';
+                return;
+            }
+            userListContainer.innerHTML = '';
+            onlineUsers.forEach(([userId, userData]) => {
+                const userItem = document.createElement('div');
+                const isActive = userData.activeInGame === true;
+                userItem.className = 'user-item' + (isActive ? ' disabled' : '');
+
+                const avatarHtml = userData.avatar
+                    ? `<img src="${userData.avatar}" alt="${userData.username}">`
+                    : `<div class="placeholder-avatar">${userData.username.charAt(0).toUpperCase()}</div>`;
+
+                const statusHtml = isActive ? '<div class="in-game-status">داخل اللعبة</div>' : '';
+
+                userItem.innerHTML = `
+                    ${statusHtml}
+                    <div class="avatar-circle">${avatarHtml}</div>
+                    <div class="name">${userData.username}</div>
+                    <div class="channel">${userData.channelName || 'قناة صوتية'}</div>
+                `;
+
+                if (!isActive) {
+                    userItem.addEventListener('click', () => showConfirmModal({ userId, ...userData }));
+                }
+                userListContainer.appendChild(userItem);
+            });
+        };
+
+        if (firstRender) {
+            firstRender = false;
+            // Small delay so the login card entrance animation settles before cards appear
+            setTimeout(renderUsers, 200);
+        } else {
+            renderUsers();
+        }
     });
 }
 
