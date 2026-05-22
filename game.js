@@ -169,15 +169,25 @@ class FocusAudioEngine {
             wind:         'Sound/Focus Sounds/Wind.mp3',
             ocean:        'Sound/Focus Sounds/Ocean.mp3',
         };
-        for (const [key, url] of Object.entries(files)) {
+        // Load all sounds in parallel — each starts playing as soon as its own buffer is ready
+        // (previously sequential: one slow file blocked all others on mobile)
+        await Promise.all(Object.entries(files).map(async ([key, url]) => {
             try {
                 const response = await fetch(url);
                 const arrayBuffer = await response.arrayBuffer();
                 this.focusBuffers[key] = await this.ctx.decodeAudioData(arrayBuffer);
+                // Remove loading indicator now that this sound is buffered
+                const el = document.querySelector(`.sound-item[data-sound="${key}"]`);
+                if (el) el.classList.remove('sound-loading');
+                // If the user toggled this sound on while it was still loading, start it now
+                const sound = this.sounds[key];
+                if (sound?.active && !sound.nodes && this.ctx.state === 'running') {
+                    this.startSound(key);
+                }
             } catch(e) {
                 console.log(`Failed to load focus sound [${key}]:`, e);
             }
-        }
+        }));
     }
 
     playEffect(name) {
@@ -365,10 +375,18 @@ class FocusAudioEngine {
     toggle(name) {
         const sound = this.sounds[name];
         sound.active = !sound.active;
+        const el = document.querySelector(`.sound-item[data-sound="${name}"]`);
+        if (el) {
+            el.classList.toggle('active', sound.active);
+            // Show a pulsing loading state if the buffer hasn't arrived yet
+            const isBuffered = (this.focusBuffers[name] != null) || name === 'plane';
+            el.classList.toggle('sound-loading', sound.active && !isBuffered);
+        }
         if (sound.active) {
             this.startSound(name);
         } else {
             this.stopSound(name);
+            if (el) el.classList.remove('sound-loading');
         }
         this.saveToFirebase();
     }
@@ -473,6 +491,13 @@ class FocusYouTubePlayer {
         this._fading = false;
         this._wavePhase = 0;
         this._waveAnimId = null;
+        // Ad detection state
+        this._isAdPlaying  = false;
+        this._adStartMs    = 0;
+        this._loadedAt     = 0;
+        this._lastCurrentTime = -999;
+        this._stuckStartMs = 0;
+        this._adWaveAnimId = null;
     }
 
     _ensureApiLoaded() {
@@ -526,6 +551,14 @@ class FocusYouTubePlayer {
         await this.createPlayer();
         this.videoId = id;
         this.url = url;
+        // Reset ad detection for the new video
+        this._loadedAt     = Date.now();
+        this._isAdPlaying  = false;
+        this._lastCurrentTime = -999;
+        this._stuckStartMs = 0;
+        this._stopAdWave();
+        const adOverlay = document.getElementById('yt-ad-overlay');
+        if (adOverlay) adOverlay.classList.remove('active');
         try {
             if (this._playerReadyPromise) await this._playerReadyPromise;
             if (startPaused) {
@@ -644,7 +677,38 @@ class FocusYouTubePlayer {
             if (isPlaying) this._startWaveAnim(); else this._stopWaveAnim();
 
             const dur = this.player.getDuration() || 0;
-            const cur = this.player.getCurrentTime() || 0;
+            const cur = this.player.getCurrentTime() ?? 0;
+
+            // ── Ad detection ──────────────────────────────────────────
+            const now = Date.now();
+            const inGrace = now - (this._loadedAt || 0) < 2000;
+            if (isPlaying && !inGrace) {
+                // Negative currentTime is a known YouTube indicator of pre-roll ad
+                const adByNegative = cur < -0.1;
+                // currentTime frozen at same value for 2.5s+ while player says PLAYING → ad
+                let adByStuck = false;
+                if (this._lastCurrentTime > -900) {
+                    if (Math.abs(cur - this._lastCurrentTime) < 0.05) {
+                        if (!this._stuckStartMs) this._stuckStartMs = now;
+                        adByStuck = now - this._stuckStartMs > 2500;
+                    } else {
+                        this._stuckStartMs = 0;
+                    }
+                }
+                if ((adByNegative || adByStuck) && !this._isAdPlaying) {
+                    this._setAdMode(true);
+                } else if (!adByNegative && !adByStuck && this._isAdPlaying && cur > 1) {
+                    this._setAdMode(false);
+                }
+                // Failsafe: clear after 120s max
+                if (this._isAdPlaying && this._adStartMs && now - this._adStartMs > 120000) {
+                    this._setAdMode(false);
+                }
+                this._lastCurrentTime = cur;
+            } else if (!isPlaying) {
+                this._stuckStartMs = 0;
+            }
+            // ──────────────────────────────────────────────────────────
             const slider = document.getElementById('mini-yt-slider');
             const timeEl = document.getElementById('mini-yt-time');
             const titleEl = document.getElementById('mini-yt-title');
@@ -735,6 +799,68 @@ class FocusYouTubePlayer {
                 this._drawWaveform(dur > 0 ? cur / dur : 0);
             } catch(e) {}
         }
+    }
+
+    _setAdMode(isAd) {
+        if (isAd === this._isAdPlaying) return;
+        this._isAdPlaying = isAd;
+        const overlay = document.getElementById('yt-ad-overlay');
+        if (!overlay) return;
+        if (isAd) {
+            this._adStartMs = Date.now();
+            // Pick a random ad icon
+            const icons = [
+                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
+                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2L3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><line x1="3" y1="6" x2="21" y2="6"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>`,
+                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>`,
+                `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>`,
+            ];
+            const iconWrap = document.getElementById('yt-ad-icon-wrap');
+            if (iconWrap) iconWrap.innerHTML = icons[Math.floor(Math.random() * icons.length)];
+            overlay.classList.add('active');
+            this._startAdWave();
+        } else {
+            overlay.classList.remove('active');
+            this._stopAdWave();
+            this._adStartMs = 0;
+            this._stuckStartMs = 0;
+            this._lastCurrentTime = -999; // fresh comparison after ad ends
+        }
+    }
+
+    _startAdWave() {
+        if (this._adWaveAnimId) return;
+        const draw = () => {
+            const canvas = document.getElementById('yt-ad-waveform');
+            if (!canvas || !this._isAdPlaying) { this._adWaveAnimId = null; return; }
+            const W = canvas.getBoundingClientRect().width || 220;
+            const H = 22;
+            if (canvas.width !== Math.round(W)) canvas.width = Math.round(W);
+            canvas.height = H;
+            const ctx = canvas.getContext('2d');
+            ctx.clearRect(0, 0, W, H);
+            // Animated bar waveform — simulates live ad audio
+            const bars = 28;
+            const barW = W / bars;
+            const t = Date.now() / 300;
+            for (let i = 0; i < bars; i++) {
+                const h = (Math.sin(i * 0.8 + t) * 0.35 + Math.sin(i * 0.3 - t * 1.3) * 0.25 + 0.55) * H * 0.75;
+                ctx.fillStyle = 'rgba(255,200,30,0.50)';
+                ctx.fillRect(i * barW + barW * 0.1, (H - h) / 2, barW * 0.8, Math.max(2, h));
+            }
+            // Elapsed time counter
+            const timeEl = document.getElementById('yt-ad-time');
+            if (timeEl && this._adStartMs) {
+                const s = Math.floor((Date.now() - this._adStartMs) / 1000);
+                timeEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+            }
+            this._adWaveAnimId = requestAnimationFrame(draw);
+        };
+        this._adWaveAnimId = requestAnimationFrame(draw);
+    }
+
+    _stopAdWave() {
+        if (this._adWaveAnimId) { cancelAnimationFrame(this._adWaveAnimId); this._adWaveAnimId = null; }
     }
 
     _ensureUiVisible(visible) {
