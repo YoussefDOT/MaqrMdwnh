@@ -74,7 +74,8 @@ class FocusAudioEngine {
             timeBreak: null,
             timeReturn: null,
             kidnap: null,
-            yipee: null
+            yipee: null,
+            breakAdded: null,
         };
         this.focusBuffers = {
             rain: null,
@@ -116,10 +117,11 @@ class FocusAudioEngine {
                 const arrayBuffer = await response.arrayBuffer();
                 return await this.ctx.decodeAudioData(arrayBuffer);
             };
-            this.buffers.timeBreak = await loadBuffer('Sound/TimeBreak.mp3');
+            this.buffers.timeBreak  = await loadBuffer('Sound/TimeBreak.mp3');
             this.buffers.timeReturn = await loadBuffer('Sound/TimeReturn.mp3');
-            this.buffers.kidnap = await loadBuffer('Sound/LaptopGrab.mp3');
-            this.buffers.yipee = await loadBuffer('Sound/Yipee.mp3');
+            this.buffers.kidnap     = await loadBuffer('Sound/LaptopGrab.mp3');
+            this.buffers.yipee      = await loadBuffer('Sound/Yipee.mp3');
+            this.buffers.breakAdded = await loadBuffer('Sound/BreakAdded.mp3');
         } catch(e) {
             console.log("Failed to load Web Audio sound effects:", e);
         }
@@ -728,6 +730,7 @@ const gameState = {
         timeBreak:             new Audio('Sound/TimeBreak.mp3'),
         timeReturn:            new Audio('Sound/TimeReturn.mp3'),
         yipee:                 new Audio('Sound/Yipee.mp3'),
+        breakAdded:            new Audio('Sound/BreakAdded.mp3'),
         minigameReady:         new Audio('Sound/Minigame_Ready.mp3'),
         minigameButtonPressed: new Audio('Sound/Minigame_ButtonPressed.mp3'),
         minigameCountdown:       new Audio('Sound/Minigame_Racing_Countdown.mp3'),
@@ -876,6 +879,8 @@ const gameState = {
         breakPromptShown: false,
         breakVotes: {},          // uid → true (shared: who requested break)
         selectedBreakMins: 5,
+        workMsAtLastBreak: 0,    // totalWorkMs snapshot when last break started (for 25-min reset)
+        _breakEndTimer: null,    // setTimeout id for post-break kidnap delay
     },
     prayer: {
         location: null,            // { lat, lon, city, country }
@@ -898,6 +903,7 @@ const gameState = {
 gameState.sounds.kidnap.preload                = 'auto';
 gameState.sounds.timeBreak.preload             = 'auto';
 gameState.sounds.timeReturn.preload            = 'auto';
+gameState.sounds.breakAdded.preload            = 'auto';
 gameState.sounds.yipee.preload                 = 'auto';
 gameState.sounds.minigameReady.preload         = 'auto';
 gameState.sounds.minigameButtonPressed.preload = 'auto';
@@ -1022,7 +1028,8 @@ const easeOutBack = (x) => {
 };
 
 function isBreakActive() {
-    return gameState.pomodoro.active && gameState.pomodoro.phase === 'break';
+    return (gameState.pomodoro.active && gameState.pomodoro.phase === 'break')
+        || (gameState.freeMode.active && gameState.freeMode.phase === 'break');
 }
 
 function serverNow() {
@@ -3661,14 +3668,23 @@ function updatePlayerPosition(x, y) {
         updates[`users/${gameState.userId}/inFreeMode`] = fm.active || false;
         updates[`users/${gameState.userId}/freeWorkStartTime`] = isFreeModeWork ? (fm.workStartTime || 0) : null;
         updates[`users/${gameState.userId}/freeTotalWorkMs`] = isFreeModeWork ? (fm.totalWorkMs || 0) : null;
-        updates[`users/${gameState.userId}/coopHostId`] = (gameState.sharedPomo.phase === 'active' && gameState.sharedPomo.sessionId) ? gameState.sharedPomo.sessionId : (fm.active && fm.isShared ? gameState.sharedPomo.sessionId : null);
+        // coopHostId drives external coop animation + labels:
+        // — regular shared pomo (not free mode): always set when session active
+        // — shared free mode: only set during work phase (hide animation during breaks)
+        const _inRegularCoop = !fm.active && gameState.sharedPomo.phase === 'active' && gameState.sharedPomo.sessionId;
+        const _inFreeWorkCoop = fm.active && fm.isShared && fm.phase === 'work' && gameState.sharedPomo.sessionId;
+        updates[`users/${gameState.userId}/coopHostId`] = (_inRegularCoop || _inFreeWorkCoop) ? gameState.sharedPomo.sessionId : null;
     }
     update(ref(database), updates);
 }
 
 function checkCollision(x, y) {
     if (x < BOUNDS.minX || x > BOUNDS.maxX || y < BOUNDS.minY || y > BOUNDS.maxY) return true;
-    const inBreakDoor = isBreakActive() && isInDoorOpening(x);
+    // Door is passable if break is active, OR if the player is already inside the break room
+    // (allows exit even after session ends while player is inside)
+    const local = gameState.players[gameState.userId];
+    const playerInBreakRoom = local && local.y > ROOM_SEAM_Y + DOOR_HALF_HEIGHT;
+    const inBreakDoor = (isBreakActive() || playerInBreakRoom) && isInDoorOpening(x);
     if (Math.abs(y - ROOM_SEAM_Y) < DOOR_HALF_HEIGHT && !inBreakDoor) return true;
     const buffer = PLAYER_SIZE / 2;
     if (x > TABLE_BOX.minX - buffer && x < TABLE_BOX.maxX + buffer && y > TABLE_BOX.minY - buffer && y < TABLE_BOX.maxY + buffer) return true;
@@ -7834,27 +7850,12 @@ function setupSpLiveListener(hostId) {
             }
         }
 
-        // ── Free mode: sync phase changes + break votes ──────────────────────
+        // ── Free mode: sync session end ───────────────────────────────────────
         const fm = gameState.freeMode;
-        if (fm.active && fm.isShared) {
-            // Host ended the session
-            if (data.freePhase === 'ended' && !sp.isHost) {
+        if (fm.active && fm.isShared && !sp.isHost) {
+            // Host ended the session — guests follow
+            if (data.freePhase === 'ended') {
                 endFreeMode(); return;
-            }
-            // Host started a break — all guests follow
-            if (data.freePhase === 'break' && fm.phase === 'work' && !sp.isHost) {
-                const remoteDuration = data.freeBreakEndTime
-                    ? Math.max(1, Math.round((data.freeBreakEndTime - Date.now()) / 60000))
-                    : 5;
-                startFreeModeBreak(remoteDuration); return;
-            }
-            // Host resumed work — guests follow
-            if (data.freePhase === 'work' && fm.phase === 'break' && !sp.isHost) {
-                endFreeModeBreak(); return;
-            }
-            // Update break vote pill for host
-            if (sp.isHost && data.breakVotes) {
-                updateFreeBreakVotesPill(data.breakVotes);
             }
         }
     });
@@ -7894,6 +7895,8 @@ function startFreeMode(laptopId, isShared = false) {
     fm.breakPromptShown  = false;
     fm.breakVotes        = {};
     fm.selectedBreakMins = 5;
+    fm.workMsAtLastBreak = 0;
+    fm._breakEndTimer    = null;
 
     update(ref(database), { [lobbyPath(`pomodoro/${laptop.id}`)]: {
         claimedBy: gameState.userId,
@@ -7926,6 +7929,9 @@ function _startFreeModeWork() {
     // Always restore master volume when entering work — fixes case where masterGain
     // was left at 0 from prayer overlay or previous session teardown
     if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(1.0, 0.8);
+
+    // Resume YouTube player if one was active (paused on break start)
+    if (gameState.focusYTPlayer?.videoId) gameState.focusYTPlayer.resume();
 }
 
 function updateFreeMode() {
@@ -7957,14 +7963,17 @@ function updateFreeMode() {
         const elapsedMs = fm.totalWorkMs + (Date.now() - fm.workStartTime);
         if (timerEl) timerEl.textContent = formatTime(elapsedMs / 1000);
 
+        // Threshold is relative to work done SINCE the last break (not total session time)
+        const msSinceLastBreak = elapsedMs - (fm.workMsAtLastBreak || 0);
         const threshold = gameState.isSirajGhost ? 10000 : fm.nextBreakPromptMs;
-        if (!fm.breakPromptShown && elapsedMs >= threshold) {
+        if (!fm.breakPromptShown && msSinceLastBreak >= threshold) {
             fm.breakPromptShown = true;
             showFreeModeBreakPrompt();
         }
     } else if (fm.phase === 'break') {
         const remaining = Math.max(0, fm.breakEndTime - Date.now());
-        if (timerEl) timerEl.textContent = formatTime(remaining / 1000);
+        const smallText = document.getElementById('small-timer-text');
+        if (smallText) smallText.textContent = formatTime(remaining / 1000);
         if (remaining <= 0) endFreeModeBreak();
     }
 }
@@ -7973,16 +7982,10 @@ function showFreeModeBreakPrompt() {
     const fm    = gameState.freeMode;
     const label = document.getElementById('free-prompt-label');
     const prompt = document.getElementById('free-break-prompt');
-    const yesBtn  = document.getElementById('free-break-yes-btn');
-    const voteBtn = document.getElementById('free-break-vote-btn');
     if (!prompt) return;
 
     const totalMins = Math.floor((fm.totalWorkMs + (Date.now() - fm.workStartTime)) / 60000);
-    if (label) label.textContent = `عملت ${formatDurationArabic(totalMins)} — هل تحتاج راحة؟`;
-
-    const isGuestShared = fm.isShared && !gameState.sharedPomo.isHost;
-    if (yesBtn)  yesBtn.classList.toggle('hidden', isGuestShared);
-    if (voteBtn) voteBtn.classList.toggle('hidden', !isGuestShared);
+    if (label) label.textContent = `عملت ${formatDurationArabic(totalMins)} — هل تريد راحة؟`;
 
     prompt.classList.remove('hidden');
 }
@@ -7991,31 +7994,39 @@ function startFreeModeBreak(durationMins) {
     const fm = gameState.freeMode;
     if (fm.phase !== 'work') return;
 
-    fm.totalWorkMs      += Date.now() - fm.workStartTime;
-    fm.phase             = 'break';
-    fm.breakEndTime      = Date.now() + durationMins * 60000;
-    fm.breakPromptShown  = false;
-    fm.nextBreakPromptMs = 25 * 60 * 1000;
+    fm.totalWorkMs        += Date.now() - fm.workStartTime;
+    fm.workMsAtLastBreak   = fm.totalWorkMs;  // snapshot for next 25-min countdown
+    fm.phase               = 'break';
+    fm.breakEndTime        = Date.now() + durationMins * 60000;
+    fm.breakPromptShown    = false;
+    fm.nextBreakPromptMs   = 25 * 60 * 1000;
 
     gameState.isLockedIn = false;
     if (gameState.anim.active) { gameState.anim.active = false; gameState.anim.phase = 'none'; }
 
     document.getElementById('free-break-prompt')?.classList.add('hidden');
     document.getElementById('free-break-picker')?.classList.add('hidden');
+    document.getElementById('free-mode-panel')?.classList.add('hidden');
     document.getElementById('focus-sounds-panel')?.classList.remove('active');
     document.getElementById('current-task-panel')?.classList.remove('active');
     setMobileFocusMode(false);
+
+    // Show small استراحة timer (same as regular pomo break)
+    const smallTimer = document.getElementById('pomodoro-small-timer');
+    const smallText  = document.getElementById('small-timer-text');
+    if (smallTimer) smallTimer.classList.remove('hidden');
+    if (smallText)  smallText.textContent = formatTime(durationMins * 60);
+
     updatePomoLeaveBtn();
 
-    if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(0, 1.5);
+    // Pause YouTube player during break
+    if (gameState.focusYTPlayer?.videoId) gameState.focusYTPlayer.pause();
 
-    if (fm.isShared && gameState.sharedPomo.isHost) {
-        const hostId = gameState.sharedPomo.sessionId;
-        update(ref(database), {
-            [spPath(`live/${hostId}/freePhase`)]:        'break',
-            [spPath(`live/${hostId}/freeBreakEndTime`)]: fm.breakEndTime,
-            [spPath(`live/${hostId}/breakVotes`)]:       null,
-        });
+    if (gameState.focusAudioEngine) {
+        gameState.focusAudioEngine.playEffect('breakAdded');
+        gameState.focusAudioEngine.fadeToMaster(0, 1.5);
+    } else {
+        playSoundRobust(gameState.sounds.breakAdded);
     }
 }
 
@@ -8023,27 +8034,44 @@ function endFreeModeBreak() {
     const fm = gameState.freeMode;
     if (fm.phase !== 'break') return;
 
-    fm.phase         = 'work';
-    fm.workStartTime = Date.now();
-    fm.breakEndTime  = 0;
-    gameState.isLockedIn = true;
+    // Set phase to idle — _startFreeModeWork() fires at kidnap animation end
+    fm.phase        = 'idle';
+    fm.breakEndTime = 0;
 
-    document.getElementById('focus-sounds-panel')?.classList.add('active');
-    document.getElementById('current-task-panel')?.classList.add('active');
-    document.getElementById('free-votes-pill')?.classList.add('hidden');
-    setMobileFocusMode(true);
-    updatePomoLeaveBtn();
+    // Exit any active minigame first
+    if (gameState.race?.active)   returnFromRace(true);
+    if (gameState.coffee?.active) returnFromCoffee(true);
 
-    if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(1.0, 1.5);
+    // Hide the small break timer
+    document.getElementById('pomodoro-small-timer')?.classList.add('hidden');
 
-    if (fm.isShared && gameState.sharedPomo.isHost) {
-        update(ref(database), { [spPath(`live/${gameState.sharedPomo.sessionId}/freePhase`)]: 'work' });
+    // Play TimeReturn sound (Web Audio — works in background tabs)
+    if (gameState.focusAudioEngine) {
+        gameState.focusAudioEngine.playEffect('timeReturn');
+    } else {
+        playSoundRobust(gameState.sounds.timeReturn);
     }
+
+    const doKidnap = () => {
+        fm._breakEndTimer = null;
+        if (!fm.active || fm.phase !== 'idle') return; // session ended during wait
+        const laptop = gameState.laptops.find(l => l.id === fm.laptopId);
+        if (!laptop) { _startFreeModeWork(); return; }
+        startKidnapAnimation(laptop);
+        // _startFreeModeWork() fires automatically at animation end
+        // (updateAnimation: freeMode.active && freeMode.phase === 'idle')
+    };
+
+    // Wait 2 seconds then grab — same pattern as pomo break-to-work
+    fm._breakEndTimer = setTimeout(doKidnap, 2000);
 }
 
 function endFreeMode() {
     const fm = gameState.freeMode;
     if (!fm.active) return;
+
+    // Cancel pending post-break kidnap if session ends during 2-second wait
+    if (fm._breakEndTimer) { clearTimeout(fm._breakEndTimer); fm._breakEndTimer = null; }
 
     let totalMs = fm.totalWorkMs;
     if (fm.phase === 'work' && fm.workStartTime > 0) totalMs += Date.now() - fm.workStartTime;
@@ -8080,9 +8108,9 @@ function endFreeMode() {
     document.getElementById('free-votes-pill')?.classList.add('hidden');
     document.getElementById('focus-sounds-panel')?.classList.remove('active');
     document.getElementById('current-task-panel')?.classList.remove('active');
-    document.getElementById('pomo-leave-btn')?.classList.add('hidden');
-    document.getElementById('pomo-leave-confirm1')?.classList.add('hidden');
-    document.getElementById('pomo-leave-confirm2')?.classList.add('hidden');
+    document.getElementById('leave-wrap')?.classList.add('leave-wrap-hidden');
+    document.getElementById('pomo-leave-confirm1')?.classList.add('pomo-leave-confirm-hidden');
+    document.getElementById('pomo-leave-confirm2')?.classList.add('pomo-leave-confirm-hidden');
     document.getElementById('pomodoro-large-timer')?.classList.add('hidden');
     document.getElementById('pomodoro-small-timer')?.classList.add('hidden');
     setMobileFocusMode(false);
@@ -8133,36 +8161,6 @@ function showFreeModeSuccessModal(totalMins) {
     }
 }
 
-function voteForBreak() {
-    const sp = gameState.sharedPomo;
-    if (!sp.sessionId) return;
-    update(ref(database), { [spPath(`live/${sp.sessionId}/breakVotes/${gameState.userId}`)]: true });
-
-    const hostId = sp.activeGroupMembers.find(uid => uid !== gameState.userId);
-    const hostName = (hostId && gameState.players[hostId]?.username) || 'المضيف';
-    showSpInfoToast(`تم إرسال طلب الراحة لـ ${hostName}`);
-}
-
-function updateFreeBreakVotesPill(votes) {
-    const pill      = document.getElementById('free-votes-pill');
-    const avatarsEl = document.getElementById('free-votes-avatars');
-    if (!pill || !avatarsEl) return;
-
-    const voterIds = Object.keys(votes || {});
-    if (voterIds.length === 0) { pill.classList.add('hidden'); return; }
-
-    avatarsEl.innerHTML = '';
-    for (const uid of voterIds) {
-        const p  = gameState.players[uid];
-        const av = document.createElement('div');
-        av.className = 'free-votes-av';
-        av.innerHTML = p?.avatar
-            ? `<img src="${p.avatar}" alt="">`
-            : (p?.username || '?').charAt(0).toUpperCase();
-        avatarsEl.appendChild(av);
-    }
-    pill.classList.remove('hidden');
-}
 
 function setupFreeModeUI() {
     const freeBtn = document.getElementById('free-mode-btn');
@@ -8182,12 +8180,14 @@ function setupFreeModeUI() {
 
     document.getElementById('free-break-yes-btn')?.addEventListener('click', () => {
         document.getElementById('free-break-prompt')?.classList.add('hidden');
+        // Reset custom input and preset selection
+        const customInput = document.getElementById('fbp-custom');
+        if (customInput) { customInput.value = ''; customInput.classList.remove('active'); }
+        document.querySelectorAll('.fbp-btn').forEach(b => b.classList.remove('active'));
+        const defaultBtn = document.querySelector('.fbp-btn[data-val="5"]');
+        if (defaultBtn) defaultBtn.classList.add('active');
+        gameState.freeMode.selectedBreakMins = 5;
         document.getElementById('free-break-picker')?.classList.remove('hidden');
-    });
-
-    document.getElementById('free-break-vote-btn')?.addEventListener('click', () => {
-        voteForBreak();
-        document.getElementById('free-break-prompt')?.classList.add('hidden');
     });
 
     document.querySelectorAll('.fbp-btn').forEach(btn => {
@@ -8195,16 +8195,36 @@ function setupFreeModeUI() {
             document.querySelectorAll('.fbp-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
             gameState.freeMode.selectedBreakMins = parseInt(btn.dataset.val) || 5;
+            // Clear custom input when preset selected
+            const customInput = document.getElementById('fbp-custom');
+            if (customInput) { customInput.value = ''; customInput.classList.remove('active'); }
         });
     });
 
+    const customInput = document.getElementById('fbp-custom');
+    if (customInput) {
+        customInput.addEventListener('input', () => {
+            const val = Math.min(10, Math.max(1, parseInt(customInput.value) || 0));
+            if (customInput.value && val >= 1) {
+                // Deactivate preset buttons
+                document.querySelectorAll('.fbp-btn').forEach(b => b.classList.remove('active'));
+                customInput.classList.add('active');
+                gameState.freeMode.selectedBreakMins = val;
+            } else {
+                customInput.classList.remove('active');
+            }
+        });
+        customInput.addEventListener('blur', () => {
+            if (customInput.value) {
+                const clamped = Math.min(10, Math.max(1, parseInt(customInput.value) || 1));
+                customInput.value = clamped;
+                gameState.freeMode.selectedBreakMins = clamped;
+            }
+        });
+    }
+
     document.getElementById('free-break-go-btn')?.addEventListener('click', () => {
         startFreeModeBreak(gameState.freeMode.selectedBreakMins);
-    });
-
-    document.getElementById('free-votes-start-btn')?.addEventListener('click', () => {
-        document.getElementById('free-votes-pill')?.classList.add('hidden');
-        document.getElementById('free-break-picker')?.classList.remove('hidden');
     });
 }
 
@@ -8298,65 +8318,81 @@ function showSpInfoToast(message) {
 // ── Leave pomo ────────────────────────────────────────────────────────────────
 
 function setupPomoLeaveBtn() {
-    const leaveBtn = document.getElementById('pomo-leave-btn');
-    const c1 = document.getElementById('pomo-leave-confirm1');
-    const c2 = document.getElementById('pomo-leave-confirm2');
-    if (!leaveBtn || !c1 || !c2) return;
+    const wrap   = document.getElementById('leave-wrap');
+    const btn    = document.getElementById('pomo-leave-btn');
+    const c1     = document.getElementById('pomo-leave-confirm1');
+    const c2     = document.getElementById('pomo-leave-confirm2');
+    if (!wrap || !btn || !c1 || !c2) return;
 
-    leaveBtn.addEventListener('click', () => {
+    const HIDDEN = 'pomo-leave-confirm-hidden';
+    let _autoReset = null;
+
+    function resetToBtn() {
+        if (_autoReset) { clearTimeout(_autoReset); _autoReset = null; }
+        c1.classList.add(HIDDEN);
+        c2.classList.add(HIDDEN);
+    }
+
+    function showConfirm1() {
+        if (_autoReset) clearTimeout(_autoReset);
+        c2.classList.add(HIDDEN);
+        c1.classList.remove(HIDDEN);
+        // Auto-dismiss if user doesn't act within 4 seconds
+        _autoReset = setTimeout(resetToBtn, 4000);
+    }
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Shared test mode: Siraj host can't end session unilaterally
+        if (gameState.freeMode.active && gameState.freeMode.isShared && gameState.isSirajGhost) return;
+        showConfirm1();
+    });
+
+    document.getElementById('plc1-yes').addEventListener('click', (e) => {
+        e.stopPropagation();
+        resetToBtn();
         if (gameState.freeMode.active) {
-            // Shared test mode: host can't end unilaterally
-            if (gameState.freeMode.isShared && gameState.isSirajGhost) return;
-            // One-step confirm: toggle a confirm state on the button
-            if (leaveBtn.dataset.confirming === '1') {
-                leaveBtn.dataset.confirming = '';
-                leaveBtn.textContent = 'انهاء الجلسة';
-                endFreeMode();
-            } else {
-                leaveBtn.dataset.confirming = '1';
-                leaveBtn.textContent = 'تأكيد؟ اضغط مجدداً ✓';
-                setTimeout(() => {
-                    if (leaveBtn.dataset.confirming === '1') {
-                        leaveBtn.dataset.confirming = '';
-                        leaveBtn.textContent = 'انهاء الجلسة';
-                    }
-                }, 3000);
-            }
-            return;
+            endFreeMode();
+        } else {
+            // Pomodoro: second confirmation step
+            if (_autoReset) clearTimeout(_autoReset);
+            c2.classList.remove(HIDDEN);
+            _autoReset = setTimeout(resetToBtn, 4000);
         }
-        c2.classList.add('hidden');
-        c1.classList.remove('hidden');
     });
-
-    document.getElementById('plc1-yes')?.addEventListener('click', () => {
-        c1.classList.add('hidden');
-        c2.classList.remove('hidden');
+    document.getElementById('plc1-no').addEventListener('click', (e) => {
+        e.stopPropagation();
+        resetToBtn();
     });
-    document.getElementById('plc1-no')?.addEventListener('click', () => {
-        c1.classList.add('hidden');
-    });
-    document.getElementById('plc2-yes')?.addEventListener('click', () => {
-        c1.classList.add('hidden');
-        c2.classList.add('hidden');
+    document.getElementById('plc2-yes').addEventListener('click', (e) => {
+        e.stopPropagation();
+        resetToBtn();
         exitPomoNow();
     });
-    document.getElementById('plc2-no')?.addEventListener('click', () => {
-        c2.classList.add('hidden');
+    document.getElementById('plc2-no').addEventListener('click', (e) => {
+        e.stopPropagation();
+        resetToBtn();
     });
 }
 
 function updatePomoLeaveBtn() {
-    const btn = document.getElementById('pomo-leave-btn');
-    if (!btn) return;
+    const wrap = document.getElementById('leave-wrap');
+    const btn  = document.getElementById('pomo-leave-btn');
+    if (!wrap || !btn) return;
     if (gameState.freeMode.active) {
-        if (btn.dataset.confirming !== '1') btn.textContent = 'انهاء الجلسة';
-        btn.classList.remove('hidden');
+        btn.textContent = 'انهاء الجلسة';
+        wrap.classList.remove('leave-wrap-hidden');
         return;
     }
     btn.textContent = 'مغادرة الجلسة';
     const active = gameState.pomodoro.active &&
         (gameState.isLockedIn || gameState.pomodoro.phase === 'break');
-    btn.classList.toggle('hidden', !active);
+    wrap.classList.toggle('leave-wrap-hidden', !active);
+    // Hide confirm panels when wrapper hides
+    if (!active) {
+        document.getElementById('pomo-leave-confirm1')?.classList.add('pomo-leave-confirm-hidden');
+        document.getElementById('pomo-leave-confirm2')?.classList.add('pomo-leave-confirm-hidden');
+    }
 }
 
 function exitPomoNow() {
@@ -8407,11 +8443,11 @@ function exitPomoNow() {
     // Hide all focus / pomo UI
     document.getElementById('focus-sounds-panel')?.classList.remove('active');
     document.getElementById('current-task-panel')?.classList.remove('active');
-    document.getElementById('pomo-leave-btn')?.classList.add('hidden');
+    document.getElementById('leave-wrap')?.classList.add('leave-wrap-hidden');
+    document.getElementById('pomo-leave-confirm1')?.classList.add('pomo-leave-confirm-hidden');
+    document.getElementById('pomo-leave-confirm2')?.classList.add('pomo-leave-confirm-hidden');
     document.getElementById('pomodoro-large-timer')?.classList.add('hidden');
     document.getElementById('pomodoro-small-timer')?.classList.add('hidden');
-    document.getElementById('pomo-leave-confirm1')?.classList.add('hidden');
-    document.getElementById('pomo-leave-confirm2')?.classList.add('hidden');
     setMobileFocusMode(false);
 
     const local = gameState.players[gameState.userId];

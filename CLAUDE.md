@@ -111,6 +111,17 @@ File-based sounds use `1.0` (full file level). `plane` (synthesized) uses `0.09`
 ### HTML data-sound keys must match engine keys exactly
 The HTML `<div class="sound-item" data-sound="KEY">` must match the key in `this.sounds`. If you add a new sound, add it to both.
 
+### Sound preloading and background-tab rules
+**All sounds must be preloaded.** Every new sound file must be:
+1. Added as `new Audio('Sound/Filename.mp3')` in `gameState.sounds`
+2. Added to `FocusAudioEngine.buffers` with a `null` entry
+3. Loaded in `loadSoundEffects()` via `await loadBuffer(...)`
+4. Preloaded via `gameState.sounds.X.preload = 'auto'` after `gameState` declaration
+
+**Sounds must work in background tabs.** Use `focusAudioEngine.playEffect('key')` (Web Audio API) rather than `playSoundRobust(gameState.sounds.X)` (HTMLAudioElement) for any sound that must fire when the tab is not focused — e.g., session transitions (TimeReturn), kidnap sounds, prayer calls. HTMLAudioElement playback can be throttled/blocked by the browser in background tabs; Web Audio nodes play regardless.
+
+**Background-tab fast path**: `startKidnapAnimation` already handles `document.hidden` (skips animation, teleports instantly). For timed delays before kidnap (like the 2-second post-break wait), use `setTimeout` — it fires in background tabs (with some throttling). Store the timer ID in `fm._breakEndTimer` and clear it in `endFreeMode` to prevent orphaned timers.
+
 ---
 
 ## Shared Pomodoro (Coop) System

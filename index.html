@@ -123,7 +123,6 @@
                 <span id="free-prompt-label"></span>
                 <div class="free-prompt-btns">
                     <button id="free-break-yes-btn" class="free-prompt-yes">نعم</button>
-                    <button id="free-break-vote-btn" class="free-prompt-vote hidden">طلب راحة</button>
                 </div>
             </div>
         </div>
@@ -132,17 +131,11 @@
         <div id="free-break-picker" class="free-break-picker hidden">
             <div class="fbp-label">كم دقيقة للراحة؟</div>
             <div class="fbp-opts">
-                <button class="fbp-btn active" data-val="5">٥ دقائق</button>
-                <button class="fbp-btn" data-val="10">١٠ دقائق</button>
+                <button class="fbp-btn active" data-val="5">٥</button>
+                <button class="fbp-btn" data-val="10">١٠</button>
+                <input type="number" id="fbp-custom" class="fbp-custom" min="1" max="10" placeholder="؟" />
             </div>
             <button id="free-break-go-btn" class="fbp-confirm">ابدأ الراحة</button>
-        </div>
-
-        <!-- بيل طلبات الراحة (يظهر للمضيف في الوضع الحر المشترك) -->
-        <div id="free-votes-pill" class="free-votes-pill hidden">
-            <div id="free-votes-avatars" class="free-votes-avatars"></div>
-            <span class="free-votes-label">طلب الراحة</span>
-            <button id="free-votes-start-btn" class="free-votes-start">ابدأ الراحة</button>
         </div>
 
         <!-- مؤشر بومودورو الكبير (وقت العمل) -->
@@ -312,23 +305,23 @@
         </div>
     </div>
 
-    <!-- Pomo leave button (shown during any active pomo) -->
-    <button id="pomo-leave-btn" class="pomo-leave-btn hidden">مغادرة الجلسة</button>
-
-    <!-- Pomo leave confirmations -->
-    <div id="pomo-leave-confirm1" class="pomo-leave-confirm hidden">
-        <span class="plc-title">هل انت متأكد؟</span>
-        <div class="plc-btns">
-            <button id="plc1-yes" class="plc-btn-yes">نعم</button>
-            <button id="plc1-no"  class="plc-btn-no">لا</button>
+    <!-- Leave wrapper: always fixed at one position, children swap states -->
+    <div id="leave-wrap" class="leave-wrap leave-wrap-hidden">
+        <button id="pomo-leave-btn" class="pomo-leave-btn">مغادرة الجلسة</button>
+        <div id="pomo-leave-confirm1" class="pomo-leave-confirm pomo-leave-confirm-hidden">
+            <span class="plc-title">هل انت متأكد؟</span>
+            <div class="plc-btns">
+                <button id="plc1-yes" class="plc-btn-yes">نعم</button>
+                <button id="plc1-no"  class="plc-btn-no">لا</button>
+            </div>
         </div>
-    </div>
-    <div id="pomo-leave-confirm2" class="pomo-leave-confirm hidden">
-        <span class="plc-title">هل انت حقًا حقًا متأكد؟</span>
-        <span class="plc-sub">انت لها! تستطيع اكمال ما بدأته!</span>
-        <div class="plc-btns">
-            <button id="plc2-yes" class="plc-btn-yes">نعم، خروج</button>
-            <button id="plc2-no"  class="plc-btn-no">رجوع</button>
+        <div id="pomo-leave-confirm2" class="pomo-leave-confirm pomo-leave-confirm-hidden">
+            <span class="plc-title">هل انت حقًا حقًا متأكد؟</span>
+            <span class="plc-sub">انت لها! تستطيع اكمال ما بدأته!</span>
+            <div class="plc-btns">
+                <button id="plc2-yes" class="plc-btn-yes">نعم، خروج</button>
+                <button id="plc2-no"  class="plc-btn-no">رجوع</button>
+            </div>
         </div>
     </div>
 
@@ -641,8 +634,8 @@
         <!-- وضع الاختبار المتقدم (سراج فقط) -->
         <div id="test-mode-modal" class="modal-overlay">
             <div class="modal-content test-mode-content">
-                <h3 style="color:white;font-size:20px;font-weight:700;margin-bottom:6px;">وضع الاختبار ⚡</h3>
-                <p style="color:rgba(255,255,255,0.5);font-size:13px;margin-bottom:22px;">اختر مدة دقيقة</p>
+                <h3 style="color:rgba(255,152,50,0.9);font-size:17px;font-weight:800;margin-bottom:2px;letter-spacing:-0.01em;">وضع الاختبار ⚡</h3>
+                <p style="color:rgba(255,255,255,0.35);font-size:12px;margin-bottom:22px;">اضبط مدة الجلسة للاختبار السريع</p>
 
                 <div class="tm-row">
                     <span class="tm-label">العمل</span>
@@ -671,14 +664,16 @@
                     <input type="number" id="test-sessions" value="3" min="1" max="99" class="tm-sessions-input">
                 </div>
 
-                <div class="tm-row" style="margin-top:14px;flex-direction:column;align-items:flex-start;gap:8px;">
-                    <label style="display:flex;align-items:center;gap:10px;cursor:pointer;color:rgba(255,255,255,0.7);font-size:13px;font-weight:500;">
-                        <input type="checkbox" id="test-prayer-check" style="width:16px;height:16px;accent-color:#3bb9ab;cursor:pointer;">
+                <div class="tm-divider"></div>
+
+                <div class="tm-row" style="flex-direction:column;align-items:flex-end;gap:8px;margin-bottom:0;">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:rgba(255,255,255,0.65);font-size:13px;font-weight:600;">
                         تجربة الصلاة 🕌
+                        <input type="checkbox" id="test-prayer-check" style="width:15px;height:15px;accent-color:#3bb9ab;cursor:pointer;flex-shrink:0;">
                     </label>
-                    <span style="font-size:11px;color:rgba(255,255,255,0.3);padding-right:26px;">يُشغّل الأذان بعد ٥ ثوانٍ من البداية</span>
-                    <div id="test-prayer-picker" style="display:none;padding-right:26px;width:100%;">
-                        <select id="test-prayer-select" style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:8px;color:white;font-family:inherit;font-size:13px;padding:6px 10px;width:100%;cursor:pointer;">
+                    <span style="font-size:11px;color:rgba(255,255,255,0.25);">يُشغّل الأذان بعد ٥ ثوانٍ من البداية</span>
+                    <div id="test-prayer-picker" style="display:none;width:100%;">
+                        <select id="test-prayer-select" style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:white;font-family:inherit;font-size:13px;padding:8px 12px;width:100%;cursor:pointer;outline:none;">
                             <option value="Fajr">الفَجْر 🌅</option>
                             <option value="Dhuhr" selected>الظُّهْر ☀️</option>
                             <option value="Asr">العَصْر 🌤</option>
@@ -688,10 +683,10 @@
                     </div>
                 </div>
 
-                <div class="modal-actions" style="margin-top:24px;">
-                    <button id="test-mode-confirm" class="btn-primary" style="flex:1;">ابدأ بومودورو</button>
-                    <button id="test-mode-free" class="btn-secondary" style="flex:1;border-color:rgba(59,185,171,0.35);color:rgba(59,185,171,0.8);">🌿 وضع حر</button>
-                    <button id="test-mode-cancel" class="btn-secondary" style="flex:1;">إلغاء</button>
+                <div class="modal-actions" style="margin-top:22px;gap:8px;">
+                    <button id="test-mode-confirm" class="btn-primary" style="flex:1;font-size:14px;padding:12px 8px;">ابدأ بومودورو</button>
+                    <button id="test-mode-free" class="btn-secondary" style="flex:0 0 auto;padding:12px 14px;border-color:rgba(59,185,171,0.35);color:rgba(59,185,171,0.85);font-size:14px;">🌿 وضع حر</button>
+                    <button id="test-mode-cancel" class="btn-secondary" style="flex:0 0 auto;padding:12px 14px;font-size:14px;">إلغاء</button>
                 </div>
             </div>
         </div>
