@@ -808,6 +808,8 @@ class FocusYouTubePlayer {
         if (!overlay) return;
         if (isAd) {
             this._adStartMs = Date.now();
+            // Mute for the duration of the ad
+            try { this.player.setVolume(0); } catch(e) {}
             // Pick a random ad icon
             const icons = [
                 `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>`,
@@ -822,6 +824,8 @@ class FocusYouTubePlayer {
         } else {
             overlay.classList.remove('active');
             this._stopAdWave();
+            // Restore volume when ad ends
+            try { this.player.setVolume(this.volume); } catch(e) {}
             this._adStartMs = 0;
             this._stuckStartMs = 0;
             this._lastCurrentTime = -999; // fresh comparison after ad ends
