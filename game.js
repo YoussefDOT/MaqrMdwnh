@@ -495,29 +495,7 @@ class FocusYouTubePlayer {
         this._isAdPlaying  = false;
         this._adStartMs    = 0;
         this._loadedAt     = 0;
-        this._lastCurrentTime = -999;
-        this._stuckStartMs = 0;
-        this._initDebugMonitor();
-    }
-
-    _initDebugMonitor() {
-        const self = this;
-        const dbg = document.createElement('div');
-        dbg.style.cssText = 'position:fixed;top:0;left:0;right:0;background:red;color:#fff;font:bold 15px/1.6 monospace;padding:14px;z-index:999999;direction:ltr;text-align:left;word-break:break-all';
-        dbg.textContent = 'YT DEBUG: waiting for player...';
-        (document.body || document.documentElement).appendChild(dbg);
-        const msgs = [];
-        window.addEventListener('message', ev => {
-            if (typeof ev.data !== 'string') return;
-            try { const d = JSON.parse(ev.data); if (d.event || d.info) { msgs.push(JSON.stringify(d).slice(0,150)); if (msgs.length > 5) msgs.shift(); } } catch(e) {}
-        });
-        setInterval(() => {
-            if (!self.player || !self.ready) { dbg.textContent = 'YT DEBUG: player=' + !!self.player + ' ready=' + self.ready + ' | msgs:' + msgs.length; return; }
-            try {
-                const s = self.player.getPlayerState(), t = self.player.getCurrentTime(), d = self.player.getDuration(), vd = self.player.getVideoData();
-                dbg.textContent = 'S:' + s + ' T:' + (t||0).toFixed(1) + ' D:' + (d||0).toFixed(0) + ' VID:' + (vd?.video_id||'?') + ' OUR:' + (self.videoId||'?') + ' AD:' + self._isAdPlaying + '\nMSG:' + (msgs[msgs.length-1]||'none');
-            } catch(e) { dbg.textContent = 'YT DEBUG ERR: ' + e.message; }
-        }, 400);
+        this._wasAutoPlay  = false;
     }
 
     _ensureApiLoaded() {
@@ -574,8 +552,7 @@ class FocusYouTubePlayer {
         // Reset ad detection for the new video
         this._loadedAt     = Date.now();
         this._isAdPlaying  = false;
-        this._lastCurrentTime = -999;
-        this._stuckStartMs = 0;
+        this._wasAutoPlay  = !startPaused;
         const adOverlay = document.getElementById('yt-ad-overlay');
         if (adOverlay) adOverlay.classList.remove('active');
         try {
@@ -699,38 +676,22 @@ class FocusYouTubePlayer {
             const cur = this.player.getCurrentTime() ?? 0;
 
             // ── Ad detection ──────────────────────────────────────────
+            // YouTube keeps state = -1 (UNSTARTED) during pre-roll ads
+            // while dur > 0 (video metadata already loaded). When the ad
+            // ends the state flips to 1 (PLAYING).
             const now = Date.now();
-            const inGrace = now - (this._loadedAt || 0) < 2500;
-            const isActive = state === 1 || state === 3;
-            if (!inGrace) {
-                let isAd = false;
-                if (state === -2) isAd = true;
-                if (!isAd && cur < -0.1) isAd = true;
-                if (!isAd && isActive) {
-                    try {
-                        const vd = this.player.getVideoData();
-                        if (vd && vd.video_id && vd.video_id !== this.videoId) isAd = true;
-                    } catch(e) {}
-                }
-                if (!isAd && isActive && this._lastCurrentTime > -900) {
-                    if (Math.abs(cur - this._lastCurrentTime) < 0.05) {
-                        if (!this._stuckStartMs) this._stuckStartMs = now;
-                        if (now - this._stuckStartMs > 1200) isAd = true;
-                    } else {
-                        this._stuckStartMs = 0;
-                    }
-                }
-                if (isAd && !this._isAdPlaying) {
+            const inGrace = now - (this._loadedAt || 0) < 3000;
+            if (!inGrace && this._wasAutoPlay) {
+                if (state === -1 && dur > 0 && !this._isAdPlaying) {
                     this._setAdMode(true);
-                } else if (!isAd && this._isAdPlaying && cur > 0.5) {
+                } else if (this._isAdPlaying && state === 1) {
                     this._setAdMode(false);
+                    this._wasAutoPlay = false;
                 }
                 if (this._isAdPlaying && this._adStartMs && now - this._adStartMs > 120000) {
                     this._setAdMode(false);
+                    this._wasAutoPlay = false;
                 }
-                if (isActive) this._lastCurrentTime = cur;
-            } else if (state === 2 || state === 0 || state === -1) {
-                this._stuckStartMs = 0;
             }
             // ──────────────────────────────────────────────────────────
             const slider = document.getElementById('mini-yt-slider');
@@ -838,8 +799,6 @@ class FocusYouTubePlayer {
             overlay.classList.remove('active');
             try { this.player.unMute(); this.player.setVolume(this.volume); } catch(e) {}
             this._adStartMs = 0;
-            this._stuckStartMs = 0;
-            this._lastCurrentTime = -999;
         }
     }
 
