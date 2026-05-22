@@ -285,4 +285,12 @@ drawFocusMask: uses physical mCanvas; player positions computed with * dpr
 4. **Firebase keys**: Follow existing path patterns through `lobbyPath()`.
 5. **Mobile**: Test by resizing browser to <1024px. Check drawer, joystick, leave button positions.
 6. **Cleanup**: Store unsubscribe functions, call them on logout/leave/cleanup.
-7. **Test locally**, then tell the user to git push.
+7. **Edge case scan** (MANDATORY after every new feature): Think through:
+   - What happens if a user has this active and opens a pomo? (and vice versa)
+   - What happens in shared pomo mode? Free mode? Prayer overlay?
+   - What happens if the user closes the tab mid-feature?
+   - What if they're in the break room vs work room?
+   - What if Firebase write fails / is stale?
+   - Does `updatePlayerPosition` correctly reflect state to other users?
+   - Does cleanup happen on logout, tab close, and `endFreeMode`/`exitPomoNow`?
+8. **Test locally**, then tell the user to git push.

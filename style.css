@@ -2637,10 +2637,12 @@ body.game-ready #prayer-panel { display: flex !important; flex-direction: column
     pointer-events: none;
     opacity: 0.55;
 }
+/* ── Prayer bg — default (Dhuhr / blue calm) ── */
 .prayer-overlay-bg {
     position: absolute; inset: 0;
     background: linear-gradient(145deg, #040f0c 0%, #070d18 50%, #0c0714 100%);
     animation: prayerBgShift 10s ease-in-out infinite alternate;
+    transition: background 1.2s ease;
 }
 @keyframes prayerBgShift {
     0%   { filter: hue-rotate(0deg) brightness(1); }
@@ -2657,48 +2659,96 @@ body.game-ready #prayer-panel { display: flex !important; flex-direction: column
     100% { opacity: 1; transform: scale(1.05); }
 }
 
-/* ── Atmospheric fog layers ── */
+/* Fajr — sunrise, warm yellow */
+.prayer-overlay[data-prayer="fajr"] .prayer-overlay-bg {
+    background: linear-gradient(160deg, #0d0a00 0%, #1a1000 35%, #2a1c04 70%, #150d02 100%);
+}
+.prayer-overlay[data-prayer="fajr"] .prayer-overlay-bg::after {
+    background: radial-gradient(ellipse at 50% 20%, rgba(255,200,80,0.22) 0%, transparent 55%),
+                radial-gradient(ellipse at 25% 75%, rgba(200,120,30,0.10) 0%, transparent 45%);
+}
+
+/* Asr — reddish-brown, afternoon warmth */
+.prayer-overlay[data-prayer="asr"] .prayer-overlay-bg {
+    background: linear-gradient(145deg, #0f0603 0%, #1a0c06 45%, #120804 100%);
+}
+.prayer-overlay[data-prayer="asr"] .prayer-overlay-bg::after {
+    background: radial-gradient(ellipse at 55% 30%, rgba(180,70,30,0.20) 0%, transparent 55%),
+                radial-gradient(ellipse at 20% 80%, rgba(120,45,15,0.12) 0%, transparent 48%);
+}
+
+/* Maghrib — sunset: warm purple + golden glow */
+.prayer-overlay[data-prayer="maghrib"] .prayer-overlay-bg {
+    background: linear-gradient(140deg, #0c0414 0%, #180826 40%, #1a0c08 80%, #100614 100%);
+}
+.prayer-overlay[data-prayer="maghrib"] .prayer-overlay-bg::after {
+    background: radial-gradient(ellipse at 65% 25%, rgba(220,130,50,0.24) 0%, transparent 45%),
+                radial-gradient(ellipse at 35% 65%, rgba(130,40,160,0.18) 0%, transparent 55%),
+                radial-gradient(ellipse at 50% 50%, rgba(180,80,90,0.10) 0%, transparent 60%);
+}
+
+/* Isha — deep dark blue, stars */
+.prayer-overlay[data-prayer="isha"] .prayer-overlay-bg {
+    background: linear-gradient(150deg, #020612 0%, #04091f 50%, #060318 100%);
+}
+.prayer-overlay[data-prayer="isha"] .prayer-overlay-bg::after {
+    background: radial-gradient(ellipse at 50% 25%, rgba(30,60,180,0.18) 0%, transparent 55%),
+                radial-gradient(ellipse at 20% 75%, rgba(10,20,80,0.14) 0%, transparent 50%);
+}
+
+/* ── Fog layers — match prayer tones ── */
 .prayer-fog {
     position: absolute; inset: -40%; z-index: 0;
     pointer-events: none;
 }
 .prayer-fog-layer {
     position: absolute;
-    width: 200%; height: 160%;
-    top: -30%; left: -50%;
+    width: 220%; height: 180%;
+    top: -40%; left: -60%;
     border-radius: 50%;
-    animation: fogDrift linear infinite;
+    animation: fogDrift ease-in-out infinite alternate;
     will-change: transform;
 }
 .prayer-fog-layer:nth-child(1) {
-    background: radial-gradient(ellipse at 40% 50%, rgba(59,185,171,0.07) 0%, transparent 65%);
-    animation-duration: 28s;
-    filter: blur(30px);
+    background: radial-gradient(ellipse at 40% 50%, rgba(59,185,171,0.09) 0%, transparent 60%);
+    animation-duration: 9s;
+    filter: blur(28px);
 }
 .prayer-fog-layer:nth-child(2) {
-    background: radial-gradient(ellipse at 60% 60%, rgba(40,120,110,0.06) 0%, transparent 55%);
-    animation-duration: 42s;
-    animation-delay: -14s;
-    filter: blur(45px);
+    background: radial-gradient(ellipse at 60% 55%, rgba(40,120,110,0.08) 0%, transparent 55%);
+    animation-duration: 13s;
+    animation-delay: -4s;
+    filter: blur(42px);
 }
 .prayer-fog-layer:nth-child(3) {
-    background: radial-gradient(ellipse at 50% 40%, rgba(80,160,150,0.05) 0%, transparent 50%);
-    animation-duration: 35s;
-    animation-delay: -7s;
-    filter: blur(60px);
+    background: radial-gradient(ellipse at 50% 35%, rgba(80,160,150,0.06) 0%, transparent 50%);
+    animation-duration: 11s;
+    animation-delay: -6s;
+    filter: blur(55px);
 }
 .prayer-fog-layer:nth-child(4) {
-    background: radial-gradient(ellipse at 30% 55%, rgba(20,80,70,0.08) 0%, transparent 60%);
-    animation-duration: 55s;
-    animation-delay: -20s;
-    filter: blur(35px);
+    background: radial-gradient(ellipse at 30% 60%, rgba(20,80,70,0.10) 0%, transparent 58%);
+    animation-duration: 7s;
+    animation-delay: -2s;
+    filter: blur(32px);
 }
 @keyframes fogDrift {
-    0%   { transform: translateX(0) translateY(0) scale(1); }
-    33%  { transform: translateX(-8%) translateY(3%) scale(1.04); }
-    66%  { transform: translateX(-15%) translateY(-2%) scale(0.98); }
-    100% { transform: translateX(-22%) translateY(4%) scale(1.02); }
+    0%   { transform: translateX(0)    translateY(0)    rotate(0deg)   scale(1); }
+    25%  { transform: translateX(-12%) translateY(6%)   rotate(3deg)   scale(1.06); }
+    50%  { transform: translateX(-22%) translateY(-4%)  rotate(-2deg)  scale(0.95); }
+    75%  { transform: translateX(-10%) translateY(8%)   rotate(4deg)   scale(1.04); }
+    100% { transform: translateX(-28%) translateY(-6%)  rotate(-1deg)  scale(1.08); }
 }
+
+/* Prayer-specific fog tints */
+.prayer-overlay[data-prayer="fajr"]    .prayer-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 40% 50%, rgba(255,200,80,0.07) 0%, transparent 60%); }
+.prayer-overlay[data-prayer="fajr"]    .prayer-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 60% 55%, rgba(200,130,40,0.06) 0%, transparent 55%); }
+.prayer-overlay[data-prayer="asr"]     .prayer-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 40% 50%, rgba(180,70,30,0.08) 0%, transparent 60%); }
+.prayer-overlay[data-prayer="asr"]     .prayer-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 60% 55%, rgba(140,50,20,0.06) 0%, transparent 55%); }
+.prayer-overlay[data-prayer="maghrib"] .prayer-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 40% 50%, rgba(200,100,40,0.08) 0%, transparent 60%); }
+.prayer-overlay[data-prayer="maghrib"] .prayer-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 60% 55%, rgba(130,40,160,0.07) 0%, transparent 55%); }
+.prayer-overlay[data-prayer="isha"]    .prayer-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 40% 50%, rgba(30,60,180,0.07) 0%, transparent 60%); }
+.prayer-overlay[data-prayer="isha"]    .prayer-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 60% 55%, rgba(10,20,100,0.06) 0%, transparent 55%); }
 .prayer-overlay-content {
     position: relative; z-index: 1;
     display: flex; flex-direction: column;
@@ -2767,3 +2817,210 @@ body.is-mobile .prayer-icons-row { max-height: 100px; }
 body.is-mobile .yt-focus-block { bottom: auto !important; }
 body.is-mobile .prayer-overlay-name { font-size: 1.3rem; }
 body.is-mobile .prayer-overlay-btn { padding: 14px 28px; font-size: 0.9rem; }
+
+/* ═══════════════════════════════════════════════════════
+   FREE MODE
+   ═══════════════════════════════════════════════════════ */
+
+/* ── Count-up timer panel (top-center, mirrors .pomodoro-large) ── */
+.free-mode-panel {
+    position: absolute;
+    top: 40px; left: 50%;
+    transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center;
+    z-index: 1000; pointer-events: none;
+    text-shadow: 0 4px 20px rgba(0,0,0,0.8);
+}
+.free-mode-panel.hidden { display: none; }
+
+.free-timer-text {
+    font-size: 8rem; font-weight: 700; color: white;
+    line-height: 1; font-variant-numeric: tabular-nums;
+}
+.free-mode-label {
+    font-size: 1.1rem; font-weight: 600;
+    color: rgba(255,255,255,0.45);
+    letter-spacing: 0.04em;
+    margin-top: -6px;
+}
+
+/* Break prompt that appears below timer after 25 min */
+.free-break-prompt {
+    pointer-events: all;
+    margin-top: 14px;
+    background: rgba(14,14,14,0.78);
+    backdrop-filter: blur(16px) saturate(1.4);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px;
+    padding: 10px 16px 12px;
+    display: flex; flex-direction: column; align-items: center; gap: 10px;
+    min-width: 220px;
+    animation: fm-prompt-in 0.35s cubic-bezier(0.34,1.56,0.64,1);
+}
+.free-break-prompt.hidden { display: none; }
+@keyframes fm-prompt-in {
+    from { opacity: 0; transform: translateY(-8px) scale(0.95); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+#free-prompt-label {
+    font-size: 0.78rem; font-weight: 600; color: rgba(255,255,255,0.75);
+    text-align: center; line-height: 1.4;
+}
+.free-prompt-btns { display: flex; gap: 8px; }
+.free-prompt-yes, .free-prompt-vote {
+    padding: 7px 22px;
+    border-radius: 50px; border: none; cursor: pointer;
+    font-family: inherit; font-size: 0.82rem; font-weight: 700;
+    transition: all 0.18s cubic-bezier(0.34,1.56,0.64,1);
+}
+.free-prompt-yes {
+    background: rgba(59,185,171,0.9); color: white;
+}
+.free-prompt-yes:hover { background: #3bb9ab; transform: scale(1.05); }
+.free-prompt-vote {
+    background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.8);
+    border: 1px solid rgba(255,255,255,0.18);
+}
+.free-prompt-vote:hover { background: rgba(255,255,255,0.2); transform: scale(1.04); }
+.free-prompt-vote.hidden { display: none; }
+
+/* ── Break duration picker ── */
+.free-break-picker {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 3000;
+    background: rgba(14,14,14,0.96);
+    backdrop-filter: blur(24px) saturate(1.5);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 20px;
+    padding: 24px 28px;
+    display: flex; flex-direction: column; align-items: center; gap: 16px;
+    min-width: 240px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    animation: fm-picker-in 0.3s cubic-bezier(0.34,1.56,0.64,1);
+}
+.free-break-picker.hidden { display: none; }
+@keyframes fm-picker-in {
+    from { opacity: 0; transform: translate(-50%,-50%) scale(0.9); }
+    to   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+}
+.fbp-label {
+    font-size: 0.95rem; font-weight: 700; color: white;
+    letter-spacing: -0.01em;
+}
+.fbp-opts { display: flex; gap: 10px; }
+.fbp-btn {
+    padding: 9px 18px; border-radius: 50px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.14);
+    color: rgba(255,255,255,0.65); font-family: inherit;
+    font-size: 0.82rem; font-weight: 600; cursor: pointer;
+    transition: all 0.18s;
+}
+.fbp-btn.active {
+    background: rgba(59,185,171,0.25);
+    border-color: rgba(59,185,171,0.5);
+    color: #3bb9ab;
+}
+.fbp-btn:hover:not(.active) { background: rgba(255,255,255,0.14); color: white; }
+.fbp-confirm {
+    width: 100%; padding: 11px;
+    background: rgba(59,185,171,0.85); color: white;
+    border: none; border-radius: 50px;
+    font-family: inherit; font-size: 0.88rem; font-weight: 700;
+    cursor: pointer; transition: all 0.18s cubic-bezier(0.34,1.56,0.64,1);
+}
+.fbp-confirm:hover { background: #3bb9ab; transform: scale(1.03); }
+
+/* ── Break vote pill (shown to host) ── */
+.free-votes-pill {
+    position: fixed;
+    top: 140px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 1200;
+    display: flex; align-items: center; gap: 10px;
+    background: rgba(14,14,14,0.88);
+    backdrop-filter: blur(16px) saturate(1.4);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 50px;
+    padding: 8px 14px 8px 10px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+    animation: fm-pill-in 0.3s cubic-bezier(0.34,1.56,0.64,1);
+}
+.free-votes-pill.hidden { display: none; }
+@keyframes fm-pill-in {
+    from { opacity: 0; transform: translateX(-50%) translateY(-8px) scale(0.93); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+.free-votes-avatars { display: flex; gap: -4px; }
+.free-votes-av {
+    width: 26px; height: 26px; border-radius: 50%;
+    background: rgba(255,255,255,0.15);
+    border: 2px solid rgba(14,14,14,0.8);
+    overflow: hidden; margin-left: -4px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 0.65rem; font-weight: 700; color: white;
+    flex-shrink: 0;
+}
+.free-votes-av:first-child { margin-left: 0; }
+.free-votes-av img { width: 100%; height: 100%; object-fit: cover; }
+.free-votes-label {
+    font-size: 0.73rem; font-weight: 600;
+    color: rgba(255,255,255,0.55);
+    white-space: nowrap;
+}
+.free-votes-start {
+    padding: 5px 14px; border-radius: 50px;
+    background: rgba(59,185,171,0.22);
+    border: 1px solid rgba(59,185,171,0.4);
+    color: #3bb9ab; font-family: inherit;
+    font-size: 0.75rem; font-weight: 700;
+    cursor: pointer; white-space: nowrap;
+    transition: all 0.18s cubic-bezier(0.34,1.56,0.64,1);
+}
+.free-votes-start:hover { background: rgba(59,185,171,0.35); transform: scale(1.04); }
+
+/* ── "وضع حر" button in pomo modal ── */
+.free-mode-modal-btn {
+    flex-shrink: 0;
+    padding: 12px 16px;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 14px;
+    color: rgba(255,255,255,0.6); font-family: inherit;
+    font-size: 14px; font-weight: 600; cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1);
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+}
+.free-mode-modal-btn:hover {
+    background: rgba(255,255,255,0.08);
+    border-color: rgba(255,255,255,0.28);
+    color: white;
+    transform: scale(1.01);
+}
+
+/* ── "وضع حر" button in sp-gather panel ── */
+.sp-free-btn {
+    width: 100%; margin-top: 8px; padding: 10px;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 11px;
+    color: rgba(255,255,255,0.45); font-family: inherit;
+    font-size: 13px; font-weight: 600; cursor: pointer;
+    transition: all 0.2s cubic-bezier(0.34,1.56,0.64,1);
+    letter-spacing: -0.01em;
+}
+.sp-free-btn:not(:disabled):hover {
+    background: rgba(255,255,255,0.07);
+    border-color: rgba(255,255,255,0.22);
+    color: rgba(255,255,255,0.8);
+    transform: scale(1.01);
+}
+.sp-free-btn:disabled { opacity: 0.28; cursor: not-allowed; }
+
+/* ── Mobile tweaks for free mode ── */
+body.is-mobile .free-mode-panel { top: 16px; }
+body.is-mobile .free-timer-text { font-size: 5rem; }
+body.is-mobile .free-votes-pill { top: 124px; }

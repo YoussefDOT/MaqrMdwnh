@@ -208,12 +208,17 @@ class FocusAudioEngine {
 
     startSound(name) {
         if (!this.ctx) this.init();
-        if (this.ctx.state === 'suspended') {
-            this.ctx.resume().catch(e=>{});
-        }
 
         const sound = this.sounds[name];
         if (sound.nodes) return;
+
+        // If context is still suspended, wait for it to resume before creating nodes
+        if (this.ctx.state === 'suspended') {
+            this.ctx.resume().then(() => {
+                if (this.sounds[name].active) this.startSound(name);
+            }).catch(() => {});
+            return;
+        }
 
         const gainNode = this.ctx.createGain();
         gainNode.connect(this.masterGain);
@@ -309,7 +314,9 @@ class FocusAudioEngine {
 
     updateOverallVolume(val) {
         this.overallVolume = parseFloat(val);
-        if (this.masterGain && gameState.pomodoro.active && gameState.pomodoro.phase === 'work') {
+        const inWorkPhase = (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
+            || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
+        if (this.masterGain && inWorkPhase) {
             this.masterGain.gain.setValueAtTime(this.overallVolume, this.ctx.currentTime);
         }
         this.saveToFirebase();
@@ -350,7 +357,9 @@ class FocusAudioEngine {
             this.overallVolume = mixState.overallVolume;
             const slider = document.getElementById('overall-vol');
             if (slider) { slider.value = this.overallVolume; slider.style.setProperty('--vp', `${this.overallVolume * 100}%`); }
-            if (this.masterGain && gameState.pomodoro.active && gameState.pomodoro.phase === 'work') {
+            const _inWork = (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
+                || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
+            if (this.masterGain && _inWork) {
                 this.masterGain.gain.setValueAtTime(this.overallVolume, this.ctx.currentTime);
             }
         }
@@ -854,6 +863,19 @@ const gameState = {
         joinDetails: null,      // cached live session data for join panel
         extCoopAnims: {},       // uid → animMem for remote coop players (external observer view)
         unsubSoloUpgrade: null, // Firebase listener watching for incoming solo-join requests
+    },
+    freeMode: {
+        active: false,
+        laptopId: null,
+        isShared: false,
+        phase: 'idle',           // 'idle' | 'work' | 'break'
+        workStartTime: 0,        // ms timestamp when current work block began
+        totalWorkMs: 0,          // accumulated work ms before current block
+        breakEndTime: 0,
+        nextBreakPromptMs: 25 * 60 * 1000,
+        breakPromptShown: false,
+        breakVotes: {},          // uid → true (shared: who requested break)
+        selectedBreakMins: 5,
     },
     prayer: {
         location: null,            // { lat, lon, city, country }
@@ -1947,6 +1969,7 @@ function startGame(userData) {
     listenToCoffee();
     initSharedPomo();
     setupPomoLeaveBtn();
+    setupFreeModeUI();
     initPrayerSystem();
 
     // Track server time offset so race start/countdown is synchronized across clients
@@ -2093,6 +2116,7 @@ function startGame(userData) {
     const timerWorker = new Worker(timerWorkerUrl);
     timerWorker.onmessage = () => {
         updatePomodoro();
+        updateFreeMode();
     };
     timerWorker.postMessage('start');
 
@@ -2212,6 +2236,8 @@ function startKidnapAnimation(laptop) {
         gameState.isLockedIn = true;
         if (gameState.pomodoro.active && gameState.pomodoro.phase === 'wait') {
             startPomodoroPhase('work');
+        } else if (gameState.freeMode.active && gameState.freeMode.phase === 'idle') {
+            _startFreeModeWork();
         }
         return;
     }
@@ -3242,6 +3268,27 @@ function setupTestModeUI() {
 
     cancelBtn.addEventListener('click', () => modal.classList.remove('active'));
 
+    // Free mode test button
+    document.getElementById('test-mode-free')?.addEventListener('click', () => {
+        modal.classList.remove('active');
+        startFreeMode(null, false);
+        // Prayer test in free mode
+        const testPrayer = document.getElementById('test-prayer-check')?.checked;
+        if (testPrayer) {
+            const testPrayerKey = document.getElementById('test-prayer-select')?.value || 'Dhuhr';
+            const testPrayerData = PRAYER_DATA.find(p => p.key === testPrayerKey) || PRAYER_DATA[1];
+            setTimeout(() => {
+                if (gameState.freeMode.active) triggerPrayerOverlay(testPrayerData.key, testPrayerData.arabic);
+            }, 5000);
+        }
+    });
+
+    // Toggle prayer picker visibility when checkbox changes
+    document.getElementById('test-prayer-check')?.addEventListener('change', (e) => {
+        const picker = document.getElementById('test-prayer-picker');
+        if (picker) picker.style.display = e.target.checked ? 'block' : 'none';
+    });
+
     confirmBtn.addEventListener('click', () => {
         const getNum = (id, fallback = 0) => Math.max(0, parseInt(document.getElementById(id)?.value) || fallback);
         const workH = getNum('test-work-h');
@@ -3292,13 +3339,15 @@ function setupTestModeUI() {
         }
         startKidnapAnimation(laptop);
 
-        // Prayer test: fire athan 10 seconds into the session
+        // Prayer test: fire athan 5 seconds into the session
         if (testPrayer) {
+            const testPrayerKey = document.getElementById('test-prayer-select')?.value || 'Dhuhr';
+            const testPrayerData = PRAYER_DATA.find(p => p.key === testPrayerKey) || PRAYER_DATA[1];
             setTimeout(() => {
-                if (gameState.pomodoro.active) {
-                    triggerPrayerOverlay('dhuhr', 'الظهر');
+                if (gameState.pomodoro.active || gameState.freeMode.active) {
+                    triggerPrayerOverlay(testPrayerData.key, testPrayerData.arabic);
                 }
-            }, 10000);
+            }, 5000);
         }
     });
 }
@@ -3540,9 +3589,12 @@ function listenToPlayers() {
                             isMoving: userData.isMoving || false,
                             isSprinting: userData.isSprinting || false,
                             isLockedIn: userData.isLockedIn || false,
-                            isWorking:  userData.isWorking  || false,
-                            isOnBreak:  userData.isOnBreak  || false,
-                            coopHostId: userData.coopHostId || null,
+                            isWorking:          userData.isWorking  || false,
+                            isOnBreak:          userData.isOnBreak  || false,
+                            inFreeMode:         userData.inFreeMode || false,
+                            freeWorkStartTime:  userData.freeWorkStartTime || 0,
+                            freeTotalWorkMs:    userData.freeTotalWorkMs   || 0,
+                            coopHostId:         userData.coopHostId || null,
                         };
                     } else {
                         const player = gameState.players[userId];
@@ -3562,12 +3614,15 @@ function listenToPlayers() {
 
                         if (!isCurrentUser) {
                             setEntityTarget(player, userData.x || 0, userData.y || 0);
-                            player.isMoving = userData.isMoving || false;
-                            player.isSprinting = userData.isSprinting || false;
-                            player.isLockedIn = userData.isLockedIn || false;
-                            player.isWorking  = userData.isWorking  || false;
-                            player.isOnBreak  = userData.isOnBreak  || false;
-                            player.coopHostId = userData.coopHostId || null;
+                            player.isMoving          = userData.isMoving || false;
+                            player.isSprinting       = userData.isSprinting || false;
+                            player.isLockedIn        = userData.isLockedIn || false;
+                            player.isWorking         = userData.isWorking  || false;
+                            player.isOnBreak         = userData.isOnBreak  || false;
+                            player.inFreeMode        = userData.inFreeMode || false;
+                            player.freeWorkStartTime = userData.freeWorkStartTime || 0;
+                            player.freeTotalWorkMs   = userData.freeTotalWorkMs   || 0;
+                            player.coopHostId        = userData.coopHostId || null;
                         }
                     }
                     if (userData.avatar && !gameState.avatarCache[userId]) {
@@ -3599,9 +3654,14 @@ function updatePlayerPosition(x, y) {
         updates[`users/${gameState.userId}/isMoving`] = player.isMoving || false;
         updates[`users/${gameState.userId}/isSprinting`] = player.isSprinting || false;
         updates[`users/${gameState.userId}/isLockedIn`] = gameState.isLockedIn || false;
-        updates[`users/${gameState.userId}/isWorking`] = (gameState.isLockedIn && gameState.pomodoro.active && gameState.pomodoro.phase === 'work') || false;
-        updates[`users/${gameState.userId}/isOnBreak`] = (gameState.pomodoro.active && gameState.pomodoro.phase === 'break') || false;
-        updates[`users/${gameState.userId}/coopHostId`] = (gameState.sharedPomo.phase === 'active' && gameState.sharedPomo.sessionId) ? gameState.sharedPomo.sessionId : null;
+        const fm = gameState.freeMode;
+        const isFreeModeWork = fm.active && fm.phase === 'work';
+        updates[`users/${gameState.userId}/isWorking`] = (gameState.isLockedIn && gameState.pomodoro.active && gameState.pomodoro.phase === 'work') || isFreeModeWork || false;
+        updates[`users/${gameState.userId}/isOnBreak`] = (gameState.pomodoro.active && gameState.pomodoro.phase === 'break') || (fm.active && fm.phase === 'break') || false;
+        updates[`users/${gameState.userId}/inFreeMode`] = fm.active || false;
+        updates[`users/${gameState.userId}/freeWorkStartTime`] = isFreeModeWork ? (fm.workStartTime || 0) : null;
+        updates[`users/${gameState.userId}/freeTotalWorkMs`] = isFreeModeWork ? (fm.totalWorkMs || 0) : null;
+        updates[`users/${gameState.userId}/coopHostId`] = (gameState.sharedPomo.phase === 'active' && gameState.sharedPomo.sessionId) ? gameState.sharedPomo.sessionId : (fm.active && fm.isShared ? gameState.sharedPomo.sessionId : null);
     }
     update(ref(database), updates);
 }
@@ -3833,6 +3893,8 @@ function updateAnimation() {
 
             if (gameState.pomodoro.active && gameState.pomodoro.phase === 'wait') {
                 startPomodoroPhase('work');
+            } else if (gameState.freeMode.active && gameState.freeMode.phase === 'idle') {
+                _startFreeModeWork();
             } else if (gameState.pomodoro.active && gameState.pomodoro.phase === 'work' && gameState.focusYTPlayer && gameState.focusYTPlayer.videoId) {
                 gameState.focusYTPlayer.resume();
             }
@@ -4088,10 +4150,10 @@ function render() {
     }
     const prayerPanel = document.getElementById('prayer-panel');
     if (prayerPanel) {
-        const showPrayer = gameState.pomodoro.active;
+        const showPrayer = gameState.pomodoro.active || gameState.freeMode.active;
         prayerPanel.classList.toggle('visible', !!showPrayer);
-        // During breaks, show compact (just next prayer, no 5-icon row)
-        const isBreak = gameState.pomodoro.active && gameState.pomodoro.phase === 'break';
+        const isBreak = (gameState.pomodoro.active && gameState.pomodoro.phase === 'break')
+            || (gameState.freeMode.active && gameState.freeMode.phase === 'break');
         prayerPanel.classList.toggle('break-compact', isBreak);
     }
 }
@@ -6680,6 +6742,16 @@ function drawPlayers(onlyLocal = false) {
             ctx.font = '500 14px Rubik';
             ctx.textAlign = 'center';
             ctx.fillText(player.username, screenX, renderY + PLAYER_SIZE / 2 + 25);
+
+            // Free mode: show elapsed time + task in teal below the name
+            if (!isCurrentUser && player.inFreeMode && player.freeWorkStartTime > 0) {
+                const freeElapsedMs = (player.freeTotalWorkMs || 0) + (Date.now() - player.freeWorkStartTime);
+                const freeTimeStr = formatTime(freeElapsedMs / 1000);
+                const taskStr = player.currentTask ? ` · ${player.currentTask.slice(0, 14)}` : '';
+                ctx.fillStyle = `rgba(59, 185, 171, ${player.nameAlpha * 0.9})`;
+                ctx.font = '500 12px Rubik';
+                ctx.fillText(`🌿 ${freeTimeStr}${taskStr}`, screenX, renderY + PLAYER_SIZE / 2 + 41);
+            }
         }
     }
 }
@@ -6706,6 +6778,11 @@ function initSharedPomo() {
     sp.unsubInvite = onValue(inviteRef, snap => {
         const invite = snap.val();
         if (!invite) { if (sp.phase === 'idle' || sp.phase === 'gathering') hideSpToast(); return; }
+        // Free mode users can't accept invites — they must end their session first
+        if (gameState.freeMode.active) {
+            update(ref(database), { [spPath(`invites/${gameState.userId}`)]: null });
+            return;
+        }
         // Allow receiving invites when idle OR when hosting a gathering (can swap to guest)
         if (sp.phase !== 'idle' && sp.phase !== 'gathering') return;
         const age = Date.now() - (invite.sentAt || 0);
@@ -6755,12 +6832,12 @@ function updateSharedPomoProximity() {
     const local = gameState.players[gameState.userId];
     if (!local) { renderSpNearbyPanel([]); return; }
 
-    // Free players → invite panel
+    // Free players → invite panel (skip free-mode users — they can't be invited)
     const nearby = [];
     for (const p of Object.values(gameState.players)) {
         if (p.userId === gameState.userId) continue;
         if (!p.activeInGame) continue;
-        if (p.isWorking || p.isOnBreak) continue;
+        if (p.isWorking || p.isOnBreak || p.inFreeMode) continue;
         if (sp.session?.participants?.[p.userId]) continue;
         const dx = p.x - local.x, dy = p.y - local.y;
         if (dx*dx + dy*dy < SP_PROXIMITY_SQ) nearby.push({ p, d: dx*dx + dy*dy });
@@ -6905,15 +6982,23 @@ function showSpJoinPanel(hostId) {
     document.getElementById('sp-join-peek')?.addEventListener('click', () => {
         const data = gameState.sharedPomo.joinDetails;
         if (!data) return;
-        const remaining = Math.max(0, data.endTime - Date.now());
-        const mm = String(Math.floor(remaining / 60000)).padStart(2,'0');
-        const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2,'0');
         const timerEl = document.getElementById('sp-join-timer');
         const breakEl = document.getElementById('sp-join-break');
         const sessEl  = document.getElementById('sp-join-sess');
-        if (timerEl) timerEl.textContent = `${mm}:${ss}`;
-        if (breakEl) breakEl.textContent = `${data.breakDuration} د`;
-        if (sessEl)  sessEl.textContent  = data.sessionsLeft || '—';
+        const isFreeMode = !!data.freePhase;
+        if (isFreeMode) {
+            const elapsed = data.freeStartTime ? Date.now() - data.freeStartTime : 0;
+            if (timerEl) timerEl.textContent = formatTime(elapsed / 1000);
+            if (breakEl) breakEl.textContent = 'وضع حر';
+            if (sessEl)  sessEl.textContent  = '∞';
+        } else {
+            const remaining = Math.max(0, data.endTime - Date.now());
+            const mm = String(Math.floor(remaining / 60000)).padStart(2,'0');
+            const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2,'0');
+            if (timerEl) timerEl.textContent = `${mm}:${ss}`;
+            if (breakEl) breakEl.textContent = `${data.breakDuration} د`;
+            if (sessEl)  sessEl.textContent  = data.sessionsLeft || '—';
+        }
         document.getElementById('sp-join-details')?.classList.remove('hidden');
         document.getElementById('sp-join-confirm')?.classList.remove('hidden');
         document.getElementById('sp-join-peek')?.classList.add('hidden');
@@ -6935,9 +7020,6 @@ function confirmJoinCoopSession() {
 
     document.getElementById('sp-join-panel')?.classList.add('hidden');
 
-    const laptop = gameState.laptops.find(l => l.id === data.hostLaptopId);
-    if (!laptop) { showSpInfoToast('تعذر الدخول — اللابتوب غير متاح'); return; }
-
     const local = gameState.players[gameState.userId];
     if (!local) return;
 
@@ -6951,13 +7033,29 @@ function confirmJoinCoopSession() {
     sp.coopAnim.members = {};
     sp.coopAnim.emojiFloats = [];
 
+    // ── Free mode shared session join ─────────────────────────────────────────
+    if (data.freePhase) {
+        // startFreeMode(null, true) will find nearest free laptop and do kidnap animation
+        startFreeMode(null, true);
+        update(ref(database), {
+            [spPath(`live/${data.hostId}/participants/${gameState.userId}`)]: {
+                username: local.username, avatar: local.avatar || null,
+            }
+        });
+        setupSpLiveListener(data.hostId);
+        showSpInfoToast('انضممت للجلسة!');
+        return;
+    }
+
+    const laptop = gameState.laptops.find(l => l.id === data.hostLaptopId);
+    if (!laptop) { showSpInfoToast('تعذر الدخول — اللابتوب غير متاح'); return; }
+
     // Teleport to host's laptop sit point (coop animation handles visual spread)
     teleportEntity(local, laptop.sitX, laptop.sitY);
     updatePlayerPosition(laptop.sitX, laptop.sitY);
     gameState.isLockedIn = true;
 
     // Set pomo state using remaining time
-    const remaining = Math.max(5000, data.endTime - serverNow());
     gameState.pomodoro.active        = true;
     gameState.pomodoro.laptopId      = laptop.id;
     gameState.pomodoro.workDuration  = data.workDuration;
@@ -7390,13 +7488,15 @@ function renderSpGatherPanel(session) {
     }
     updateEmptyHint();
 
-    // Update start button
+    // Update start / free-mode buttons
     const startBtn = document.getElementById('sp-start-btn');
+    const freeBtn  = document.getElementById('sp-free-btn');
+    const hasReady = parts.some(([, p]) => p.status === 'ready');
     if (startBtn) {
-        const hasReady = parts.some(([, p]) => p.status === 'ready');
         startBtn.disabled = !hasReady;
         startBtn.textContent = hasReady ? 'نحن لها 🚀' : 'انتظر المشاركين…';
     }
+    if (freeBtn) freeBtn.disabled = !hasReady;
 }
 
 // ── Guest waiting panel ───────────────────────────────────────────────────────
@@ -7474,14 +7574,32 @@ function launchSharedPomoWork(session) {
     document.getElementById('sp-guest-wait')?.classList.add('hidden');
     gameState.isLockedIn = false;
 
-    if (gameState.pomodoro.active) return; // already in a session
+    if (gameState.pomodoro.active || gameState.freeMode.active) return; // already in a session
 
     // All participants share the host's laptop
     const laptop = gameState.laptops.find(l => l.id === session.hostLaptopId);
     if (!laptop) return; // host laptop not found — edge case
 
+    // ── Free mode shared session ──────────────────────────────────────────────
+    if (session.mode === 'free') {
+        const hostId = session.hostId || sp.sessionId;
+        // Host uses the pre-selected laptop; guests find their own nearest free laptop
+        startFreeMode(sp.isHost ? laptop.id : null, true);
+        if (sp.isHost) {
+            // Host: update the live doc with mode flag + free phase
+            update(ref(database), {
+                [spPath(`live/${hostId}/freePhase`)]: 'work',
+                [spPath(`live/${hostId}/freeStartTime`)]: Date.now(),
+            });
+            setTimeout(() => {
+                update(ref(database), { [spPath(`sessions/${sp.sessionId}`)]: null });
+            }, 12000);
+        }
+        setupSpLiveListener(hostId);
+        return;
+    }
+
     const isHost = sp.isHost;
-    const delay  = Math.max(0, session.startTime - serverNow());
 
     if (isHost) {
         // Host: claim the laptop and do kidnap animation
@@ -7715,7 +7833,403 @@ function setupSpLiveListener(hostId) {
                 }
             }
         }
+
+        // ── Free mode: sync phase changes + break votes ──────────────────────
+        const fm = gameState.freeMode;
+        if (fm.active && fm.isShared) {
+            // Host ended the session
+            if (data.freePhase === 'ended' && !sp.isHost) {
+                endFreeMode(); return;
+            }
+            // Host started a break — all guests follow
+            if (data.freePhase === 'break' && fm.phase === 'work' && !sp.isHost) {
+                const remoteDuration = data.freeBreakEndTime
+                    ? Math.max(1, Math.round((data.freeBreakEndTime - Date.now()) / 60000))
+                    : 5;
+                startFreeModeBreak(remoteDuration); return;
+            }
+            // Host resumed work — guests follow
+            if (data.freePhase === 'work' && fm.phase === 'break' && !sp.isHost) {
+                endFreeModeBreak(); return;
+            }
+            // Update break vote pill for host
+            if (sp.isHost && data.breakVotes) {
+                updateFreeBreakVotesPill(data.breakVotes);
+            }
+        }
     });
+}
+
+// ── Free mode ────────────────────────────────────────────────────────────────
+
+function startFreeMode(laptopId, isShared = false) {
+    if (gameState.pomodoro.active || gameState.freeMode.active) return;
+
+    let laptop = laptopId != null
+        ? gameState.laptops.find(l => l.id === laptopId)
+        : gameState.lastActiveLaptop;
+
+    // If no specific laptop and lastActiveLaptop is gone, find nearest free one
+    if (!laptop || (laptop.claimedBy && laptop.claimedBy !== gameState.userId)) {
+        const local = gameState.players[gameState.userId];
+        if (!local) return;
+        let best = Infinity;
+        for (const l of gameState.laptops) {
+            if (l.claimedBy) continue;
+            const d = (l.x - local.x) ** 2 + (l.y - local.y) ** 2;
+            if (d < best) { best = d; laptop = l; }
+        }
+    }
+    if (!laptop || (laptop.claimedBy && laptop.claimedBy !== gameState.userId)) return;
+
+    const fm = gameState.freeMode;
+    fm.active            = true;
+    fm.laptopId          = laptop.id;
+    fm.isShared          = isShared;
+    fm.phase             = 'idle';
+    fm.workStartTime     = 0;
+    fm.totalWorkMs       = 0;
+    fm.breakEndTime      = 0;
+    fm.nextBreakPromptMs = 25 * 60 * 1000;
+    fm.breakPromptShown  = false;
+    fm.breakVotes        = {};
+    fm.selectedBreakMins = 5;
+
+    update(ref(database), { [lobbyPath(`pomodoro/${laptop.id}`)]: {
+        claimedBy: gameState.userId,
+        phase:     'free-work',
+        mode:      'free',
+        createdAt: Date.now(),
+        endTime:   0,
+    }});
+    onDisconnect(ref(database, lobbyPath(`pomodoro/${laptop.id}`))).remove();
+
+    document.getElementById('pomodoro-modal')?.classList.remove('active');
+    updatePomoLeaveBtn();
+    startKidnapAnimation(laptop);
+}
+
+function _startFreeModeWork() {
+    const fm = gameState.freeMode;
+    fm.phase         = 'work';
+    fm.workStartTime = Date.now();
+    gameState.isLockedIn = true;
+
+    document.getElementById('free-mode-panel')?.classList.remove('hidden');
+    document.getElementById('pomodoro-large-timer')?.classList.add('hidden');
+    document.getElementById('pomodoro-small-timer')?.classList.add('hidden');
+    document.getElementById('focus-sounds-panel')?.classList.add('active');
+    document.getElementById('current-task-panel')?.classList.add('active');
+    setMobileFocusMode(true);
+    updatePomoLeaveBtn();
+
+    // Always restore master volume when entering work — fixes case where masterGain
+    // was left at 0 from prayer overlay or previous session teardown
+    if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(1.0, 0.8);
+}
+
+function updateFreeMode() {
+    const fm = gameState.freeMode;
+    if (!fm.active) return;
+
+    const timerEl = document.getElementById('free-timer-text');
+
+    // Prayer overlay: freeze the count-up timer while praying
+    if (gameState.prayer.isOverlayActive) {
+        updatePrayerOverlayTimer(); // keep the dismiss-button countdown ticking
+        if (fm.phase === 'work' && fm.workStartTime > 0) {
+            // Snapshot accumulated ms so resuming later is seamless
+            fm.totalWorkMs  += Date.now() - fm.workStartTime;
+            fm.workStartTime = 0;
+        }
+        return;
+    }
+
+    // Resume after prayer dismissed
+    if (fm.phase === 'work' && fm.workStartTime === 0) {
+        fm.workStartTime = Date.now();
+    }
+
+    // Check prayer trigger (only if pomodoro isn't already handling it)
+    if (!gameState.pomodoro.active && !gameState.prayer.isOverlayActive) checkPrayerTrigger();
+
+    if (fm.phase === 'work') {
+        const elapsedMs = fm.totalWorkMs + (Date.now() - fm.workStartTime);
+        if (timerEl) timerEl.textContent = formatTime(elapsedMs / 1000);
+
+        const threshold = gameState.isSirajGhost ? 10000 : fm.nextBreakPromptMs;
+        if (!fm.breakPromptShown && elapsedMs >= threshold) {
+            fm.breakPromptShown = true;
+            showFreeModeBreakPrompt();
+        }
+    } else if (fm.phase === 'break') {
+        const remaining = Math.max(0, fm.breakEndTime - Date.now());
+        if (timerEl) timerEl.textContent = formatTime(remaining / 1000);
+        if (remaining <= 0) endFreeModeBreak();
+    }
+}
+
+function showFreeModeBreakPrompt() {
+    const fm    = gameState.freeMode;
+    const label = document.getElementById('free-prompt-label');
+    const prompt = document.getElementById('free-break-prompt');
+    const yesBtn  = document.getElementById('free-break-yes-btn');
+    const voteBtn = document.getElementById('free-break-vote-btn');
+    if (!prompt) return;
+
+    const totalMins = Math.floor((fm.totalWorkMs + (Date.now() - fm.workStartTime)) / 60000);
+    if (label) label.textContent = `عملت ${formatDurationArabic(totalMins)} — هل تحتاج راحة؟`;
+
+    const isGuestShared = fm.isShared && !gameState.sharedPomo.isHost;
+    if (yesBtn)  yesBtn.classList.toggle('hidden', isGuestShared);
+    if (voteBtn) voteBtn.classList.toggle('hidden', !isGuestShared);
+
+    prompt.classList.remove('hidden');
+}
+
+function startFreeModeBreak(durationMins) {
+    const fm = gameState.freeMode;
+    if (fm.phase !== 'work') return;
+
+    fm.totalWorkMs      += Date.now() - fm.workStartTime;
+    fm.phase             = 'break';
+    fm.breakEndTime      = Date.now() + durationMins * 60000;
+    fm.breakPromptShown  = false;
+    fm.nextBreakPromptMs = 25 * 60 * 1000;
+
+    gameState.isLockedIn = false;
+    if (gameState.anim.active) { gameState.anim.active = false; gameState.anim.phase = 'none'; }
+
+    document.getElementById('free-break-prompt')?.classList.add('hidden');
+    document.getElementById('free-break-picker')?.classList.add('hidden');
+    document.getElementById('focus-sounds-panel')?.classList.remove('active');
+    document.getElementById('current-task-panel')?.classList.remove('active');
+    setMobileFocusMode(false);
+    updatePomoLeaveBtn();
+
+    if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(0, 1.5);
+
+    if (fm.isShared && gameState.sharedPomo.isHost) {
+        const hostId = gameState.sharedPomo.sessionId;
+        update(ref(database), {
+            [spPath(`live/${hostId}/freePhase`)]:        'break',
+            [spPath(`live/${hostId}/freeBreakEndTime`)]: fm.breakEndTime,
+            [spPath(`live/${hostId}/breakVotes`)]:       null,
+        });
+    }
+}
+
+function endFreeModeBreak() {
+    const fm = gameState.freeMode;
+    if (fm.phase !== 'break') return;
+
+    fm.phase         = 'work';
+    fm.workStartTime = Date.now();
+    fm.breakEndTime  = 0;
+    gameState.isLockedIn = true;
+
+    document.getElementById('focus-sounds-panel')?.classList.add('active');
+    document.getElementById('current-task-panel')?.classList.add('active');
+    document.getElementById('free-votes-pill')?.classList.add('hidden');
+    setMobileFocusMode(true);
+    updatePomoLeaveBtn();
+
+    if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(1.0, 1.5);
+
+    if (fm.isShared && gameState.sharedPomo.isHost) {
+        update(ref(database), { [spPath(`live/${gameState.sharedPomo.sessionId}/freePhase`)]: 'work' });
+    }
+}
+
+function endFreeMode() {
+    const fm = gameState.freeMode;
+    if (!fm.active) return;
+
+    let totalMs = fm.totalWorkMs;
+    if (fm.phase === 'work' && fm.workStartTime > 0) totalMs += Date.now() - fm.workStartTime;
+    const totalMins = Math.floor(totalMs / 60000);
+
+    if (fm.isShared && gameState.sharedPomo.isHost) {
+        update(ref(database), { [spPath(`live/${gameState.sharedPomo.sessionId}/freePhase`)]: 'ended' });
+    }
+
+    if (fm.laptopId != null) {
+        update(ref(database), { [lobbyPath(`pomodoro/${fm.laptopId}`)]: null });
+        const lp = gameState.laptops.find(l => l.id === fm.laptopId);
+        if (lp) { lp.claimedBy = null; lp.phase = 'none'; }
+    }
+
+    if (fm.isShared) cleanupSpLocal(true);
+
+    fm.active        = false;
+    fm.laptopId      = null;
+    fm.isShared      = false;
+    fm.phase         = 'idle';
+    fm.workStartTime = 0;
+    fm.totalWorkMs   = 0;
+    fm.breakEndTime  = 0;
+    fm.breakPromptShown = false;
+
+    gameState.isLockedIn  = false;
+    gameState.anim.active = false;
+    gameState.anim.phase  = 'none';
+
+    document.getElementById('free-mode-panel')?.classList.add('hidden');
+    document.getElementById('free-break-prompt')?.classList.add('hidden');
+    document.getElementById('free-break-picker')?.classList.add('hidden');
+    document.getElementById('free-votes-pill')?.classList.add('hidden');
+    document.getElementById('focus-sounds-panel')?.classList.remove('active');
+    document.getElementById('current-task-panel')?.classList.remove('active');
+    document.getElementById('pomo-leave-btn')?.classList.add('hidden');
+    document.getElementById('pomo-leave-confirm1')?.classList.add('hidden');
+    document.getElementById('pomo-leave-confirm2')?.classList.add('hidden');
+    document.getElementById('pomodoro-large-timer')?.classList.add('hidden');
+    document.getElementById('pomodoro-small-timer')?.classList.add('hidden');
+    setMobileFocusMode(false);
+
+    if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(0, 1.0);
+
+    const local = gameState.players[gameState.userId];
+    updatePlayerPosition(local?.x || 0, local?.y || 0);
+
+    showFreeModeSuccessModal(totalMins);
+}
+
+function showFreeModeSuccessModal(totalMins) {
+    const modal = document.getElementById('success-modal');
+    if (!modal) return;
+
+    document.getElementById('success-total-time').textContent = formatDurationArabic(totalMins);
+
+    const sessRow = document.getElementById('success-sessions-count')?.parentElement;
+    if (sessRow) sessRow.style.display = 'none';
+
+    const localPlayer = gameState.players[gameState.userId];
+    const nameEl      = document.getElementById('success-name');
+    const avatarImg   = document.getElementById('success-avatar-img');
+    const avatarText  = document.getElementById('success-avatar-text');
+
+    if (localPlayer) {
+        if (nameEl) nameEl.textContent = localPlayer.username;
+        if (localPlayer.avatar) {
+            if (avatarImg)  { avatarImg.src = localPlayer.avatar; avatarImg.style.display = 'block'; }
+            if (avatarText) avatarText.style.display = 'none';
+        } else {
+            if (avatarImg)  avatarImg.style.display = 'none';
+            if (avatarText) { avatarText.style.display = 'block'; avatarText.textContent = (localPlayer.username || '?').charAt(0).toUpperCase(); }
+        }
+    }
+
+    modal.classList.add('active');
+    document.getElementById('success-close').onclick = () => {
+        modal.classList.remove('active');
+        if (sessRow) sessRow.style.display = '';
+    };
+
+    if (gameState.focusAudioEngine) {
+        gameState.focusAudioEngine.playEffect('yipee');
+    } else {
+        playSoundRobust(gameState.sounds.yipee);
+    }
+}
+
+function voteForBreak() {
+    const sp = gameState.sharedPomo;
+    if (!sp.sessionId) return;
+    update(ref(database), { [spPath(`live/${sp.sessionId}/breakVotes/${gameState.userId}`)]: true });
+
+    const hostId = sp.activeGroupMembers.find(uid => uid !== gameState.userId);
+    const hostName = (hostId && gameState.players[hostId]?.username) || 'المضيف';
+    showSpInfoToast(`تم إرسال طلب الراحة لـ ${hostName}`);
+}
+
+function updateFreeBreakVotesPill(votes) {
+    const pill      = document.getElementById('free-votes-pill');
+    const avatarsEl = document.getElementById('free-votes-avatars');
+    if (!pill || !avatarsEl) return;
+
+    const voterIds = Object.keys(votes || {});
+    if (voterIds.length === 0) { pill.classList.add('hidden'); return; }
+
+    avatarsEl.innerHTML = '';
+    for (const uid of voterIds) {
+        const p  = gameState.players[uid];
+        const av = document.createElement('div');
+        av.className = 'free-votes-av';
+        av.innerHTML = p?.avatar
+            ? `<img src="${p.avatar}" alt="">`
+            : (p?.username || '?').charAt(0).toUpperCase();
+        avatarsEl.appendChild(av);
+    }
+    pill.classList.remove('hidden');
+}
+
+function setupFreeModeUI() {
+    const freeBtn = document.getElementById('free-mode-btn');
+    if (freeBtn) {
+        freeBtn.addEventListener('click', () => {
+            document.getElementById('pomodoro-modal')?.classList.remove('active');
+            startFreeMode(null, false);
+        });
+    }
+
+    const spFreeBtn = document.getElementById('sp-free-btn');
+    if (spFreeBtn) {
+        const fresh = spFreeBtn.cloneNode(true);
+        spFreeBtn.replaceWith(fresh);
+        fresh.addEventListener('click', () => { if (!fresh.disabled) startSharedFreeModeSession(); });
+    }
+
+    document.getElementById('free-break-yes-btn')?.addEventListener('click', () => {
+        document.getElementById('free-break-prompt')?.classList.add('hidden');
+        document.getElementById('free-break-picker')?.classList.remove('hidden');
+    });
+
+    document.getElementById('free-break-vote-btn')?.addEventListener('click', () => {
+        voteForBreak();
+        document.getElementById('free-break-prompt')?.classList.add('hidden');
+    });
+
+    document.querySelectorAll('.fbp-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            document.querySelectorAll('.fbp-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            gameState.freeMode.selectedBreakMins = parseInt(btn.dataset.val) || 5;
+        });
+    });
+
+    document.getElementById('free-break-go-btn')?.addEventListener('click', () => {
+        startFreeModeBreak(gameState.freeMode.selectedBreakMins);
+    });
+
+    document.getElementById('free-votes-start-btn')?.addEventListener('click', () => {
+        document.getElementById('free-votes-pill')?.classList.add('hidden');
+        document.getElementById('free-break-picker')?.classList.remove('hidden');
+    });
+}
+
+function startSharedFreeModeSession() {
+    const sp = gameState.sharedPomo;
+    if (!sp.isHost || !sp.sessionId) return;
+
+    const local = gameState.players[gameState.userId];
+    let hostLaptopId = null;
+    if (local) {
+        let best = Infinity;
+        for (const l of gameState.laptops) {
+            if (l.claimedBy) continue;
+            const d = (l.x - local.x) ** 2 + (l.y - local.y) ** 2;
+            if (d < best) { best = d; hostLaptopId = l.id; }
+        }
+    }
+
+    update(ref(database), {
+        [spPath(`sessions/${sp.sessionId}/phase`)]:        'active',
+        [spPath(`sessions/${sp.sessionId}/mode`)]:         'free',
+        [spPath(`sessions/${sp.sessionId}/startTime`)]:    serverNow(),
+        [spPath(`sessions/${sp.sessionId}/hostLaptopId`)]: hostLaptopId,
+    });
+    document.getElementById('sp-gather')?.classList.add('hidden');
 }
 
 // ── Toast (invite) ────────────────────────────────────────────────────────────
@@ -7790,6 +8304,26 @@ function setupPomoLeaveBtn() {
     if (!leaveBtn || !c1 || !c2) return;
 
     leaveBtn.addEventListener('click', () => {
+        if (gameState.freeMode.active) {
+            // Shared test mode: host can't end unilaterally
+            if (gameState.freeMode.isShared && gameState.isSirajGhost) return;
+            // One-step confirm: toggle a confirm state on the button
+            if (leaveBtn.dataset.confirming === '1') {
+                leaveBtn.dataset.confirming = '';
+                leaveBtn.textContent = 'انهاء الجلسة';
+                endFreeMode();
+            } else {
+                leaveBtn.dataset.confirming = '1';
+                leaveBtn.textContent = 'تأكيد؟ اضغط مجدداً ✓';
+                setTimeout(() => {
+                    if (leaveBtn.dataset.confirming === '1') {
+                        leaveBtn.dataset.confirming = '';
+                        leaveBtn.textContent = 'انهاء الجلسة';
+                    }
+                }, 3000);
+            }
+            return;
+        }
         c2.classList.add('hidden');
         c1.classList.remove('hidden');
     });
@@ -7814,13 +8348,19 @@ function setupPomoLeaveBtn() {
 function updatePomoLeaveBtn() {
     const btn = document.getElementById('pomo-leave-btn');
     if (!btn) return;
-    // Show during work (isLockedIn) AND during breaks so the user can exit mid-break
+    if (gameState.freeMode.active) {
+        if (btn.dataset.confirming !== '1') btn.textContent = 'انهاء الجلسة';
+        btn.classList.remove('hidden');
+        return;
+    }
+    btn.textContent = 'مغادرة الجلسة';
     const active = gameState.pomodoro.active &&
         (gameState.isLockedIn || gameState.pomodoro.phase === 'break');
     btn.classList.toggle('hidden', !active);
 }
 
 function exitPomoNow() {
+    if (gameState.freeMode.active) { endFreeMode(); return; }
     const sp = gameState.sharedPomo;
 
     // Leave coop session if in one
@@ -8194,7 +8734,7 @@ const PRAYER_LOCATIONS = [
 // ── Init ─────────────────────────────────────────────────────────────────────
 
 function initPrayerSystem() {
-    if (gameState.isSirajGhost) gameState.prayer.prayerLockMs = 10000; // 10 s for Siraj
+    if (gameState.isSirajGhost) gameState.prayer.prayerLockMs = 5000; // 5 s for Siraj
 
     // Preload athan buffer so it's ready for background playback
     const _preloadAthan = () => {
@@ -8510,6 +9050,10 @@ function showPrayerOverlayDOM(prayerKey, arabicName) {
     const overlay = document.getElementById('prayer-overlay');
     if (!overlay) return;
 
+    // Set prayer-specific theme
+    const normKey = prayerKey.charAt(0).toUpperCase() + prayerKey.slice(1).toLowerCase();
+    overlay.dataset.prayer = normKey.toLowerCase();
+
     // Remove display:none, then next frame fade in
     overlay.classList.remove('hidden');
     requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add('active')));
@@ -8631,7 +9175,9 @@ function dismissPrayerOverlay() {
     gameState.prayer._webAudioAthanSource = null;
 
     // Fade focus sounds + YT back in
-    if (gameState.focusAudioEngine && gameState.pomodoro.phase === 'work') {
+    const _inWorkPhase = gameState.pomodoro.phase === 'work'
+        || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
+    if (gameState.focusAudioEngine && _inWorkPhase) {
         gameState.focusAudioEngine.fadeToMaster(1.0, 2.0);
         if (gameState.focusYTPlayer) {
             const targetPct = gameState.focusYTPlayer.volume ?? 80;
