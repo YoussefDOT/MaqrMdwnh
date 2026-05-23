@@ -3575,7 +3575,7 @@ function setupModeSelectUI() {
     const modal = document.getElementById('mode-select-modal');
     if (!modal) return;
 
-    document.getElementById('mode-select-close')?.addEventListener('click', () => {
+    document.getElementById('mode-select-back')?.addEventListener('click', () => {
         modal.classList.remove('active');
     });
 
@@ -3587,11 +3587,6 @@ function setupModeSelectUI() {
     document.getElementById('mode-select-free')?.addEventListener('click', () => {
         modal.classList.remove('active');
         startFreeMode(null, false);
-    });
-
-    document.getElementById('mode-select-test')?.addEventListener('click', () => {
-        modal.classList.remove('active');
-        document.getElementById('test-mode-modal').classList.add('active');
     });
 }
 

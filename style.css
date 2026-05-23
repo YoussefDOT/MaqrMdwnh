@@ -3510,8 +3510,11 @@ body.is-mobile .lobby-bg {
 
 /* ── وضع التجربة (siraj test link) ─────────────────────────────── */
 .siraj-test-link {
-    display: block;
-    margin: 20px auto 0;
+    position: fixed;
+    bottom: 18px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 500;
     background: none;
     border: none;
     color: rgba(255,255,255,0.18);
@@ -3519,11 +3522,13 @@ body.is-mobile .lobby-bg {
     font-size: 12px;
     font-weight: 500;
     cursor: pointer;
-    padding: 4px 8px;
+    padding: 6px 12px;
     letter-spacing: 0.02em;
     transition: color 0.18s;
+    white-space: nowrap;
 }
 .siraj-test-link:hover { color: rgba(255,255,255,0.45); }
+body.game-ready .siraj-test-link { display: none; }
 
 /* siraj password modal input */
 .siraj-pw-input {
@@ -3571,34 +3576,19 @@ body.is-mobile .lobby-bg {
     gap: 16px;
 }
 
-.mode-select-close-btn {
-    position: absolute;
-    top: 14px;
-    left: 16px;
+.mode-select-back-btn {
     background: none;
     border: none;
-    color: rgba(255,255,255,0.30);
-    font-size: 22px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 4px 8px;
-    transition: color 0.15s;
-}
-.mode-select-close-btn:hover { color: rgba(255,255,255,0.70); }
-
-.mode-select-test-link {
-    background: none;
-    border: none;
-    color: rgba(255,152,50,0.55);
+    color: rgba(255,255,255,0.35);
     font-family: inherit;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    padding: 4px 10px;
+    padding: 4px 12px;
     letter-spacing: 0.03em;
     transition: color 0.15s;
 }
-.mode-select-test-link:hover { color: rgba(255,152,50,0.90); }
+.mode-select-back-btn:hover { color: rgba(255,255,255,0.70); }
 
 .mode-select-content {
     padding: 28px 24px;
