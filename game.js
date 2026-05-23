@@ -2180,8 +2180,7 @@ function setupUserSelection() {
                 if (!data || data.status !== 'in-voice') return false;
                 if (data.categoryName === allowedCategory) return true;
                 if (data.categoryName === WAJEHA_CAT) {
-                    // Include if saved lobby matches, or if no lobby saved yet (show in both lists)
-                    return !data.lobby || data.lobby === gameState.selectedLobby;
+                    return true; // Always show — they join whatever lobby is currently selected
                 }
                 return false;
             })
@@ -2247,12 +2246,9 @@ function setupModal() {
         const user = gameState.selectedUser;
         modal.classList.remove('active');
         if (user.categoryName === '📺 واجهة المدونة') {
-            if (user.lobby && LOBBY_CONFIG[user.lobby]) {
-                gameState.selectedLobby = user.lobby;
-                startGame(user);
-            } else {
-                showWajehaGenderPicker(user);
-            }
+            // Trust the lobby selected on the lobby screen. Save it so listenToPlayers can find them.
+            update(ref(database), { [`users/${user.userId}/lobby`]: gameState.selectedLobby });
+            startGame(user);
         } else {
             startGame(user);
         }
@@ -4153,6 +4149,7 @@ function updatePlayerPosition(x, y) {
     const updates = {};
     updates[`users/${gameState.userId}/x`] = x;
     updates[`users/${gameState.userId}/y`] = y;
+    updates[`users/${gameState.userId}/lobby`] = gameState.selectedLobby;
     if (player) {
         updates[`users/${gameState.userId}/isMoving`] = player.isMoving || false;
         updates[`users/${gameState.userId}/isSprinting`] = player.isSprinting || false;
