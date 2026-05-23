@@ -1276,14 +1276,16 @@ body {
 .sound-vol::-moz-range-track { background: transparent; }
 
 /* ===== LOBBY SELECTION SCREEN ===== */
-#lobby-screen {
+#lobby-screen,
+#discord-welcome-screen {
     justify-content: center;
     align-items: center;
     background: #080a0f;
     overflow: hidden;
 }
 
-#lobby-screen::before {
+#lobby-screen::before,
+#discord-welcome-screen::before {
     content: '';
     position: absolute; inset: 0; z-index: 0; pointer-events: none;
     background:
@@ -1385,6 +1387,166 @@ body {
     font-size: 1.25rem;
     font-weight: 700;
     color: rgba(255,255,255,0.85);
+}
+
+/* ===== Discord OAuth: separator + login button on lobby screen ===== */
+
+.lobby-divider {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    margin-top: 32px;
+}
+
+.lobby-divider .divider-line {
+    flex: 1;
+    height: 1px;
+    background: rgba(255,255,255,0.12);
+}
+
+.lobby-divider .divider-text {
+    font-size: 0.92rem;
+    color: rgba(255,255,255,0.42);
+    font-weight: 500;
+    padding: 0 6px;
+    letter-spacing: 0.02em;
+}
+
+.discord-login-btn {
+    margin-top: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 14px 28px;
+    background: #5865F2;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 50px;
+    font-size: 1.02rem;
+    font-weight: 600;
+    font-family: var(--font-main);
+    cursor: pointer;
+    transition: background 0.2s, transform 0.28s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.2s;
+    box-shadow: 0 4px 20px rgba(88,101,242,0.32);
+}
+
+.discord-login-btn:hover {
+    background: #4752C4;
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: 0 8px 28px rgba(88,101,242,0.45);
+}
+
+.discord-login-btn:active { transform: scale(0.97); }
+
+.discord-login-btn .discord-logo {
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+}
+
+.discord-login-btn.loading {
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+/* ===== Discord welcome-back screen (returning OAuth user) ===== */
+
+.discord-welcome-card {
+    margin: 24px 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 18px 22px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.11);
+    border-radius: 20px;
+    width: 100%;
+}
+
+.discord-welcome-avatar {
+    width: 56px;
+    height: 56px;
+    border-radius: 50%;
+    object-fit: cover;
+    border: 1px solid rgba(255,255,255,0.18);
+    flex-shrink: 0;
+}
+
+.discord-welcome-details {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    min-width: 0;
+}
+
+.discord-welcome-name {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: rgba(255,255,255,0.92);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+}
+
+.discord-welcome-lobby {
+    font-size: 0.82rem;
+    color: rgba(255,255,255,0.62);
+    padding: 3px 12px;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 50px;
+    font-weight: 500;
+}
+
+.btn-enter-game {
+    margin-top: 26px;
+    padding: 16px 56px;
+    background: rgba(255,255,255,0.95);
+    color: #1a1a1a;
+    border: none;
+    border-radius: 50px;
+    font-size: 1.1rem;
+    font-weight: 700;
+    font-family: var(--font-main);
+    cursor: pointer;
+    transition: background 0.2s, transform 0.28s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.2s;
+    box-shadow: 0 4px 24px rgba(255,255,255,0.12);
+}
+
+.btn-enter-game:hover {
+    background: #fff;
+    transform: translateY(-3px) scale(1.03);
+    box-shadow: 0 10px 32px rgba(255,255,255,0.20);
+}
+
+.btn-enter-game:active { transform: scale(0.97); }
+
+.btn-switch-account {
+    margin-top: 14px;
+    padding: 8px 18px;
+    background: transparent;
+    color: rgba(255,255,255,0.42);
+    border: none;
+    font-size: 0.88rem;
+    font-family: var(--font-main);
+    cursor: pointer;
+    transition: color 0.2s;
+}
+
+.btn-switch-account:hover { color: rgba(255,255,255,0.75); }
+
+/* First-time lobby chooser modal uses .lobby-btn from earlier — just tighten spacing */
+#discord-first-lobby-modal .lobby-buttons {
+    margin-top: 8px;
+}
+
+#discord-first-lobby-modal .modal-content p strong {
+    color: rgba(255,200,90,0.85);
+    font-weight: 600;
 }
 
 .pomodoro-back-btn {

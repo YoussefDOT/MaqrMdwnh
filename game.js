@@ -43,6 +43,209 @@ function raceSessionPath(subpath) {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// ─── Discord OAuth (Implicit Grant — no server / no secret) ──────────────────
+// Lets users log in from anywhere without joining a Discord VC. The returned
+// Discord user ID matches the same `users/{id}` key the bot writes, so a single
+// account flows through both paths with no mapping table.
+const DISCORD_CLIENT_ID = '1505168261157752972';
+const DISCORD_SCOPE = 'identify';
+const DISCORD_SESSION_KEY = 'mdwnh_discord_session';
+
+// Returns the exact redirect URI registered for the current host.
+// Discord matches strictly so we hardcode known-good values.
+function getDiscordRedirectUri() {
+    const host = window.location.hostname;
+    if (host === 'localhost' || host === '127.0.0.1') {
+        return window.location.pathname === '/' ? 'http://localhost:8080/' : 'http://localhost:8080';
+    }
+    return 'https://youssefdot.github.io/MdwnhCafe/';
+}
+
+function getDiscordAuthorizeUrl() {
+    const params = new URLSearchParams({
+        client_id:    DISCORD_CLIENT_ID,
+        response_type: 'token',
+        redirect_uri: getDiscordRedirectUri(),
+        scope:        DISCORD_SCOPE
+    });
+    return `https://discord.com/oauth2/authorize?${params.toString()}`;
+}
+
+function saveDiscordSession(token, expiresInSec) {
+    localStorage.setItem(DISCORD_SESSION_KEY, JSON.stringify({
+        token,
+        expiresAt: Date.now() + (expiresInSec * 1000)
+    }));
+}
+
+function loadDiscordSession() {
+    try {
+        const raw = localStorage.getItem(DISCORD_SESSION_KEY);
+        if (!raw) return null;
+        const s = JSON.parse(raw);
+        if (!s?.token) return null;
+        if (s.expiresAt && Date.now() > s.expiresAt) return null;
+        return s;
+    } catch { return null; }
+}
+
+function clearDiscordSession() {
+    localStorage.removeItem(DISCORD_SESSION_KEY);
+}
+
+async function fetchDiscordUser(token) {
+    try {
+        const res = await fetch('https://discord.com/api/users/@me', {
+            headers: { Authorization: `Bearer ${token}` }
+        });
+        if (!res.ok) return null;
+        const data = await res.json();
+        let avatarUrl;
+        if (data.avatar) {
+            avatarUrl = `https://cdn.discordapp.com/avatars/${data.id}/${data.avatar}.png?size=128`;
+        } else {
+            // Default discord avatar — new system uses (id >> 22) % 6
+            const idx = Number((BigInt(data.id) >> 22n) % 6n);
+            avatarUrl = `https://cdn.discordapp.com/embed/avatars/${idx}.png`;
+        }
+        return {
+            id:       data.id,
+            username: data.global_name || data.username,
+            avatar:   avatarUrl
+        };
+    } catch { return null; }
+}
+
+// Parse #access_token=... from URL on OAuth callback. Saves session + cleans URL.
+function parseDiscordOauthHash() {
+    if (!window.location.hash) return false;
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    const token = params.get('access_token');
+    if (!token) return false;
+    const expiresIn = parseInt(params.get('expires_in') || '604800', 10); // 7d default
+    saveDiscordSession(token, expiresIn);
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+    return true;
+}
+
+// Determine the user's lobby from existing Firebase data.
+// Returns 'male' | 'female' | null (null => caller shows first-time chooser).
+async function resolveUserLobby(discordId) {
+    const snap = await get(ref(database, `users/${discordId}`));
+    const data = snap.val();
+    if (!data) return null;
+    if (data.lobby && LOBBY_CONFIG[data.lobby]) return data.lobby;
+    if (data.categoryName) {
+        for (const [key, cfg] of Object.entries(LOBBY_CONFIG)) {
+            if (cfg.categoryName === data.categoryName) return key;
+        }
+    }
+    return null;
+}
+
+async function enterGameAsDiscordUser(user, lobby) {
+    gameState.selectedLobby = lobby;
+
+    // Pin `lobby` permanently. Only seed username/avatar if Firebase doesn't
+    // already have them — when the user is in a VC the bot owns those fields.
+    const snap = await get(ref(database, `users/${user.id}`));
+    const existing = snap.val() || {};
+    const updates = { [`users/${user.id}/lobby`]: lobby };
+    if (!existing.username) updates[`users/${user.id}/username`] = user.username;
+    if (!existing.avatar)   updates[`users/${user.id}/avatar`]   = user.avatar;
+    await update(ref(database), updates);
+
+    document.getElementById('lobby-screen')?.classList.remove('active');
+    document.getElementById('login-screen')?.classList.remove('active');
+    document.getElementById('discord-welcome-screen')?.classList.remove('active');
+    document.getElementById('discord-first-lobby-modal')?.classList.remove('active');
+
+    startGame({
+        userId:      user.id,
+        username:    existing.username || user.username,
+        channelName: existing.channelName || 'Discord',
+        avatar:      existing.avatar || user.avatar
+    });
+}
+
+function showDiscordWelcomeScreen(user, lobby) {
+    const screen = document.getElementById('discord-welcome-screen');
+    const lobbyScreen = document.getElementById('lobby-screen');
+    if (!screen) return;
+
+    document.getElementById('discord-welcome-avatar').src = user.avatar;
+    document.getElementById('discord-welcome-name').textContent = user.username;
+    document.getElementById('discord-welcome-lobby').textContent = LOBBY_CONFIG[lobby]?.label || lobby;
+
+    if (lobbyScreen) lobbyScreen.classList.remove('active');
+    screen.classList.add('active');
+
+    document.getElementById('discord-welcome-enter').onclick = () => {
+        enterGameAsDiscordUser(user, lobby);
+    };
+    document.getElementById('discord-welcome-logout').onclick = () => {
+        clearDiscordSession();
+        screen.classList.remove('active');
+        if (lobbyScreen) lobbyScreen.classList.add('active');
+    };
+}
+
+function showDiscordFirstLobbyChooser(user) {
+    const modal = document.getElementById('discord-first-lobby-modal');
+    if (!modal) return;
+    document.getElementById('discord-first-name').textContent = user.username;
+
+    const buttonsWrap = document.getElementById('discord-first-lobby-buttons');
+    buttonsWrap.innerHTML = '';
+    for (const [lobbyId, cfg] of Object.entries(LOBBY_CONFIG)) {
+        const btn = document.createElement('button');
+        btn.className = `lobby-btn ${cfg.iconClass || ''}`;
+        btn.dataset.lobby = lobbyId;
+        btn.innerHTML = `
+            <div class="lobby-icon" aria-hidden="true"></div>
+            <div class="lobby-label">${cfg.label}</div>
+        `;
+        btn.addEventListener('click', () => {
+            modal.classList.remove('active');
+            enterGameAsDiscordUser(user, lobbyId);
+        });
+        buttonsWrap.appendChild(btn);
+    }
+    modal.classList.add('active');
+}
+
+function setupDiscordLoginButton() {
+    const btn = document.getElementById('discord-login-btn');
+    if (!btn) return;
+    btn.addEventListener('click', () => {
+        btn.classList.add('loading');
+        window.location.href = getDiscordAuthorizeUrl();
+    });
+}
+
+// Main OAuth entry — called once on init.
+async function initDiscordOAuth() {
+    setupDiscordLoginButton();
+    parseDiscordOauthHash();
+
+    const session = loadDiscordSession();
+    if (!session) return;
+
+    const user = await fetchDiscordUser(session.token);
+    if (!user) {
+        clearDiscordSession();
+        return;
+    }
+
+    const lobby = await resolveUserLobby(user.id);
+    if (lobby) {
+        showDiscordWelcomeScreen(user, lobby);
+    } else {
+        showDiscordFirstLobbyChooser(user);
+    }
+}
+// ─────────────────────────────────────────────────────────────────────────────
+
 class FocusAudioEngine {
     constructor() {
         this.ctx = null;
@@ -1748,6 +1951,7 @@ function init() {
     setupModal();
     initWindParticles();
     initLaptops();
+    initDiscordOAuth();      // Discord button on lobby; auto-resume if session exists
 }
 
 function loadAssets() {
