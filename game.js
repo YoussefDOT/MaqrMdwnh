@@ -2158,9 +2158,17 @@ function setupUserSelection() {
         const users = snapshot.val();
         if (gameState.userId) return;
 
+        const WAJEHA_CAT = '📺 واجهة المدونة';
         const onlineUsers = users
-            ? Object.entries(users).filter(([_, data]) =>
-                data.status === 'in-voice' && data.categoryName === allowedCategory)
+            ? Object.entries(users).filter(([_, data]) => {
+                if (!data || data.status !== 'in-voice') return false;
+                if (data.categoryName === allowedCategory) return true;
+                if (data.categoryName === WAJEHA_CAT) {
+                    // Include if saved lobby matches, or if no lobby saved yet (show in both lists)
+                    return !data.lobby || data.lobby === gameState.selectedLobby;
+                }
+                return false;
+            })
             : [];
 
         // Skip re-render + animation replay if the visible list hasn't changed
@@ -2218,7 +2226,41 @@ function setupModal() {
     const cancelBtn = document.getElementById('modal-cancel');
     const confirmBtn = document.getElementById('modal-confirm');
     cancelBtn.addEventListener('click', () => { modal.classList.remove('active'); gameState.selectedUser = null; });
-    confirmBtn.addEventListener('click', () => { if (gameState.selectedUser) { startGame(gameState.selectedUser); modal.classList.remove('active'); } });
+    confirmBtn.addEventListener('click', () => {
+        if (!gameState.selectedUser) return;
+        const user = gameState.selectedUser;
+        modal.classList.remove('active');
+        if (user.categoryName === '📺 واجهة المدونة') {
+            if (user.lobby && LOBBY_CONFIG[user.lobby]) {
+                gameState.selectedLobby = user.lobby;
+                startGame(user);
+            } else {
+                showWajehaGenderPicker(user);
+            }
+        } else {
+            startGame(user);
+        }
+    });
+}
+
+function showWajehaGenderPicker(userData) {
+    const modal = document.getElementById('gender-picker-modal');
+    const wrap  = document.getElementById('gender-picker-buttons');
+    if (!modal || !wrap) return;
+    wrap.innerHTML = '';
+    for (const [lobbyId, cfg] of Object.entries(LOBBY_CONFIG)) {
+        const btn = document.createElement('button');
+        btn.className = `lobby-btn ${cfg.iconClass || ''}`;
+        btn.innerHTML = `<div class="lobby-icon" aria-hidden="true"></div><div class="lobby-label">${cfg.label}</div>`;
+        btn.addEventListener('click', () => {
+            modal.classList.remove('active');
+            gameState.selectedLobby = lobbyId;
+            update(ref(database), { [`users/${userData.userId}/lobby`]: lobbyId });
+            startGame(userData);
+        });
+        wrap.appendChild(btn);
+    }
+    modal.classList.add('active');
 }
 
 function showConfirmModal(userData) {
@@ -3957,7 +3999,17 @@ function doLogout() {
 }
 
 function setupLogout() {
-    document.getElementById('logout-btn').addEventListener('click', doLogout);
+    const confirmModal = document.getElementById('logout-confirm-modal');
+    document.getElementById('logout-btn').addEventListener('click', () => {
+        confirmModal.classList.add('active');
+    });
+    document.getElementById('logout-confirm-yes').addEventListener('click', () => {
+        confirmModal.classList.remove('active');
+        doLogout();
+    });
+    document.getElementById('logout-confirm-no').addEventListener('click', () => {
+        confirmModal.classList.remove('active');
+    });
 }
 
 function initializePlayerPosition() {
@@ -4123,6 +4175,7 @@ function updateCamera() {
 
 function handleMovement() {
     if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive) return;
+    if (document.querySelector('.modal-overlay.active')) return;
     const player = gameState.players[gameState.userId];
     if (!player) return;
     let dx = 0, dy = 0;
@@ -8656,50 +8709,55 @@ function setupFreeModeUI() {
     const spFreeBtn = document.getElementById('sp-free-btn');
     if (spFreeBtn) spFreeBtn.style.display = 'none';
 
-    document.getElementById('free-break-yes-btn')?.addEventListener('click', () => {
-        document.getElementById('free-break-prompt')?.classList.add('hidden');
-        // Reset custom input and preset selection
+    const openPicker = () => {
         const customInput = document.getElementById('fbp-custom');
-        if (customInput) { customInput.value = ''; customInput.classList.remove('active'); }
+        if (customInput) { customInput.value = ''; customInput.classList.remove('visible'); }
         document.querySelectorAll('.fbp-btn').forEach(b => b.classList.remove('active'));
         const defaultBtn = document.querySelector('.fbp-btn[data-val="5"]');
         if (defaultBtn) defaultBtn.classList.add('active');
         gameState.freeMode.selectedBreakMins = 5;
         document.getElementById('free-break-picker')?.classList.remove('hidden');
+    };
+
+    document.getElementById('free-break-yes-btn')?.addEventListener('click', () => {
+        document.getElementById('free-break-prompt')?.classList.add('hidden');
+        openPicker();
     });
 
     document.querySelectorAll('.fbp-btn').forEach(btn => {
         btn.addEventListener('click', () => {
+            const customInput = document.getElementById('fbp-custom');
             document.querySelectorAll('.fbp-btn').forEach(b => b.classList.remove('active'));
             btn.classList.add('active');
-            gameState.freeMode.selectedBreakMins = parseInt(btn.dataset.val) || 5;
-            // Clear custom input when preset selected
-            const customInput = document.getElementById('fbp-custom');
-            if (customInput) { customInput.value = ''; customInput.classList.remove('active'); }
+            if (btn.dataset.val === 'custom') {
+                if (customInput) { customInput.classList.add('visible'); customInput.focus(); }
+                // keep selectedBreakMins at last value until user types
+            } else {
+                if (customInput) { customInput.value = ''; customInput.classList.remove('visible'); }
+                gameState.freeMode.selectedBreakMins = parseInt(btn.dataset.val) || 5;
+            }
         });
     });
 
     const customInput = document.getElementById('fbp-custom');
     if (customInput) {
         customInput.addEventListener('input', () => {
-            const val = Math.min(10, Math.max(1, parseInt(customInput.value) || 0));
-            if (customInput.value && val >= 1) {
-                // Deactivate preset buttons
-                document.querySelectorAll('.fbp-btn').forEach(b => b.classList.remove('active'));
-                customInput.classList.add('active');
-                gameState.freeMode.selectedBreakMins = val;
-            } else {
-                customInput.classList.remove('active');
-            }
+            const val = Math.min(60, Math.max(1, parseInt(customInput.value) || 0));
+            if (customInput.value && val >= 1) gameState.freeMode.selectedBreakMins = val;
         });
         customInput.addEventListener('blur', () => {
             if (customInput.value) {
-                const clamped = Math.min(10, Math.max(1, parseInt(customInput.value) || 1));
+                const clamped = Math.min(60, Math.max(1, parseInt(customInput.value) || 1));
                 customInput.value = clamped;
                 gameState.freeMode.selectedBreakMins = clamped;
             }
         });
     }
+
+    document.getElementById('fbp-back-btn')?.addEventListener('click', () => {
+        document.getElementById('free-break-picker')?.classList.add('hidden');
+        document.getElementById('free-break-prompt')?.classList.remove('hidden');
+    });
 
     document.getElementById('free-break-go-btn')?.addEventListener('click', () => {
         startFreeModeBreak(gameState.freeMode.selectedBreakMins);

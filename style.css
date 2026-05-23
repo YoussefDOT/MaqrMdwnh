@@ -3312,21 +3312,22 @@ body.is-mobile .prayer-overlay-btn { padding: 14px 28px; font-size: 0.9rem; }
     color: #3bb9ab;
 }
 .fbp-btn:hover:not(.active) { background: rgba(255,255,255,0.14); color: white; }
-.fbp-custom {
-    width: 70px; padding: 8px 12px;
+.fbp-custom::placeholder { color: rgba(255,255,255,0.30); }
+.fbp-custom { display: none; }
+.fbp-custom.visible {
+    display: block;
+    width: 100%; padding: 10px 14px;
     background: rgba(255,255,255,0.08);
     border: 1px solid rgba(255,255,255,0.14);
     border-radius: 50px; color: white;
-    font-family: inherit; font-size: 0.82rem; font-weight: 600;
-    text-align: center; outline: none;
+    font-family: inherit; font-size: 0.9rem; font-weight: 600;
+    text-align: center; outline: none; box-sizing: border-box;
     transition: border-color 0.18s;
     -moz-appearance: textfield;
 }
+.fbp-custom.visible:focus { border-color: rgba(59,185,171,0.6); }
 .fbp-custom::-webkit-outer-spin-button,
 .fbp-custom::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
-.fbp-custom:focus { border-color: rgba(59,185,171,0.6); }
-.fbp-custom.active { border-color: rgba(59,185,171,0.5); background: rgba(59,185,171,0.15); color: #3bb9ab; }
-.fbp-custom::placeholder { color: rgba(255,255,255,0.30); }
 .fbp-confirm {
     width: 100%; padding: 11px;
     background: rgba(59,185,171,0.85); color: white;
@@ -3335,6 +3336,14 @@ body.is-mobile .prayer-overlay-btn { padding: 14px 28px; font-size: 0.9rem; }
     cursor: pointer; transition: all 0.18s cubic-bezier(0.34,1.56,0.64,1);
 }
 .fbp-confirm:hover { background: #3bb9ab; transform: scale(1.03); }
+.fbp-back {
+    background: none; border: none;
+    color: rgba(255,255,255,0.35);
+    font-family: inherit; font-size: 0.82rem; font-weight: 600;
+    cursor: pointer; padding: 2px 8px;
+    transition: color 0.15s;
+}
+.fbp-back:hover { color: rgba(255,255,255,0.70); }
 
 /* ── Break vote pill (shown to host) ── */
 .free-votes-pill {

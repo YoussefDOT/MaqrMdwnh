@@ -204,11 +204,14 @@
         <div id="free-break-picker" class="free-break-picker hidden">
             <div class="fbp-label">كم دقيقة للراحة؟</div>
             <div class="fbp-opts">
-                <button class="fbp-btn active" data-val="5">٥</button>
-                <button class="fbp-btn" data-val="10">١٠</button>
-                <input type="number" id="fbp-custom" class="fbp-custom" min="1" max="10" placeholder="؟" />
+                <button class="fbp-btn" data-val="3">3</button>
+                <button class="fbp-btn active" data-val="5">5</button>
+                <button class="fbp-btn" data-val="10">10</button>
+                <button class="fbp-btn fbp-custom-btn" data-val="custom">مخصص</button>
             </div>
+            <input type="number" id="fbp-custom" class="fbp-custom hidden" min="1" max="60" placeholder="دقائق" />
             <button id="free-break-go-btn" class="fbp-confirm">ابدأ الراحة</button>
+            <button id="fbp-back-btn" class="fbp-back">رجوع</button>
         </div>
 
         <!-- مؤشر بومودورو الكبير (وقت العمل) -->
@@ -418,6 +421,27 @@
                 <button id="plc2-yes" class="plc-btn-yes">نعم، خروج</button>
                 <button id="plc2-no"  class="plc-btn-no">رجوع</button>
             </div>
+        </div>
+    </div>
+
+    <!-- تأكيد الخروج من الموقع -->
+    <div id="logout-confirm-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width:320px;padding:36px 32px;text-align:center;">
+            <h3>الخروج من الموقع</h3>
+            <p>هل تريد الخروج؟</p>
+            <div class="modal-actions">
+                <button id="logout-confirm-yes" class="btn-primary">نعم، خروج</button>
+                <button id="logout-confirm-no" class="btn-secondary">لا</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- اختيار الصالة لمستخدمي واجهة المدونة -->
+    <div id="gender-picker-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width:340px;padding:40px 32px;text-align:center;">
+            <h3>اختر صالتك</h3>
+            <p>اختر الصالة التي تنتمي إليها</p>
+            <div id="gender-picker-buttons" class="lobby-buttons" style="margin-top:20px;justify-content:center;"></div>
         </div>
     </div>
 
