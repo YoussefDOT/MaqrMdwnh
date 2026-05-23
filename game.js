@@ -2543,7 +2543,7 @@ function setupControls() {
             gameState.activeCoffeeZone &&
             Math.hypot(clickWorld.x - COFFEE_BTN_CX, clickWorld.y - COFFEE_BTN_CY) < COFFEE_BTN_R + 24;
         if (clickedCoffeeBtn) { triggerCoffeeTeleport(); return; }
-        if (gameState.pomodoro.active) return; // Completely disable starting another Pomodoro
+        if (gameState.pomodoro.active || gameState.freeMode.active) return;
         if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
             if (gameState.activeLaptop.claimedBy) return;
             const testBtn = document.getElementById('pomodoro-test');
@@ -3008,7 +3008,7 @@ function initMobileControls() {
             }
 
             // Open laptop / pomodoro modal
-            if (gameState.pomodoro.active) return;
+            if (gameState.pomodoro.active || gameState.freeMode.active) return;
             if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
                 if (gameState.activeLaptop.claimedBy) return;
                 const testBtn = document.getElementById('pomodoro-test');
@@ -3884,6 +3884,9 @@ function doLogout() {
             const cleanups = { [`users/${gameState.userId}`]: null };
             if (gameState.pomodoro.active && gameState.pomodoro.laptopId) {
                 cleanups[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}`)] = null;
+            }
+            if (gameState.freeMode.active && gameState.freeMode.laptopId != null) {
+                cleanups[lobbyPath(`pomodoro/${gameState.freeMode.laptopId}`)] = null;
             }
             const raceSession = gameState.race.session;
             const raceSessionKey = gameState.race.sessionKey;
@@ -6411,8 +6414,8 @@ function drawFocusMask(W, H) {
 function drawPrompt(laptop) {
     const ctx = gameState.ctx;
 
-    // If already in a Pomodoro, don't show prompt to start another one
-    if (gameState.pomodoro.active) {
+    // If already in a Pomodoro or free mode, don't show prompt to start another one
+    if (gameState.pomodoro.active || gameState.freeMode.active) {
         if (laptop.claimedBy && laptop.claimedBy !== gameState.userId) {
             let ownerName = "شخص آخر";
             const owner = gameState.players[laptop.claimedBy];
@@ -8521,7 +8524,13 @@ function endFreeMode() {
     if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(0, 1.0);
 
     const local = gameState.players[gameState.userId];
-    updatePlayerPosition(local?.x || 0, local?.y || 0);
+    if (local && isInBreakRoom(local.y)) {
+        const exitY = ROOM_SEAM_Y - 80;
+        teleportEntity(local, local.x, exitY);
+        updatePlayerPosition(local.x, exitY);
+    } else {
+        updatePlayerPosition(local?.x || 0, local?.y || 0);
+    }
 
     showFreeModeSuccessModal(totalMins, getCurrentTaskText());
 }
@@ -8708,13 +8717,25 @@ function showSpToast(invite) {
         btn.replaceWith(fresh);
         fresh.addEventListener('click', id === 'sp-toast-yes' ? acceptSpInvite : declineSpInvite);
     });
+
+    // Watch the session doc — if host cancels before we accept, dismiss immediately
+    if (sp.toastSessionUnsub) { sp.toastSessionUnsub(); sp.toastSessionUnsub = null; }
+    sp.toastSessionUnsub = onValue(ref(database, spPath(`sessions/${invite.sessionId}`)), snap => {
+        if (!snap.val() && sp.pendingInvite?.sessionId === invite.sessionId) {
+            hideSpToast();
+            update(ref(database), { [spPath(`invites/${gameState.userId}`)]: null });
+            sp.pendingInvite = null;
+            showSpInfoToast('المضيف الغى الجلسة المشتركة');
+        }
+    });
 }
 
 function hideSpToast() {
     const sp = gameState.sharedPomo;
     document.getElementById('sp-invite-toast')?.classList.add('hidden');
-    if (sp.toastInterval) { clearInterval(sp.toastInterval); sp.toastInterval = null; }
-    if (sp.toastTimeout)  { clearTimeout(sp.toastTimeout);   sp.toastTimeout  = null; }
+    if (sp.toastInterval)      { clearInterval(sp.toastInterval);  sp.toastInterval     = null; }
+    if (sp.toastTimeout)       { clearTimeout(sp.toastTimeout);    sp.toastTimeout      = null; }
+    if (sp.toastSessionUnsub)  { sp.toastSessionUnsub();           sp.toastSessionUnsub = null; }
 }
 
 function showSpInfoToast(message) {
@@ -8827,6 +8848,8 @@ function exitPomoNow() {
     // Leave coop session if in one
     if (sp.phase === 'active') {
         if (sp.isHost) {
+            // Unsubscribe before deleting so our own write doesn't trigger handleHostLeft
+            if (sp.unsubLive) { sp.unsubLive(); sp.unsubLive = null; }
             update(ref(database), {
                 [spPath(`live/${sp.sessionId}`)]: null,
                 [spPath(`sessions/${sp.sessionId}`)]: null,
@@ -8876,7 +8899,14 @@ function exitPomoNow() {
     setMobileFocusMode(false);
 
     const local = gameState.players[gameState.userId];
-    updatePlayerPosition(local?.x || 0, local?.y || 0);
+    // If leaving while in the break room, eject to work room (door is only passable during a break)
+    if (local && isInBreakRoom(local.y)) {
+        const exitY = ROOM_SEAM_Y - 80;
+        teleportEntity(local, local.x, exitY);
+        updatePlayerPosition(local.x, exitY);
+    } else {
+        updatePlayerPosition(local?.x || 0, local?.y || 0);
+    }
 }
 
 // ── Coop animation ────────────────────────────────────────────────────────────
@@ -9419,7 +9449,7 @@ function tickPrayerPanel() {
 function checkPrayerTrigger() {
     const pr = gameState.prayer;
     if (!pr.nextPrayer || pr.isOverlayActive) return;
-    if (!gameState.pomodoro.active) return;
+    if (!gameState.pomodoro.active && !gameState.freeMode.active) return;
 
     const now = Date.now();
     if (now >= pr.nextPrayer.timeMs && !pr.triggeredToday[pr.nextPrayer.key]) {
