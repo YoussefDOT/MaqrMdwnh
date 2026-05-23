@@ -3929,10 +3929,12 @@ function listenToPlayers() {
         if (users) {
             const currentIdsInSnapshot = new Set();
             for (const [userId, userData] of Object.entries(users)) {
-                // Hard separation: skip anyone not in the same lobby category
-                if (userData.categoryName !== allowedCategory) continue;
+                // Hard separation: VC users matched by categoryName; OAuth users matched by lobby field.
+                const inCorrectLobby = userData.categoryName === allowedCategory
+                    || userData.lobby === gameState.selectedLobby;
+                if (!inCorrectLobby) continue;
 
-                if (userData.status === 'in-voice') {
+                if (userData.status === 'in-voice' || userData.activeInGame === true) {
                     currentIdsInSnapshot.add(userId);
                     const isCurrentUser = userId === gameState.userId;
                     if (!gameState.players[userId]) {
