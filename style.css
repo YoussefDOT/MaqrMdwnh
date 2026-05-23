@@ -3345,6 +3345,16 @@ body.is-mobile .prayer-overlay-btn { padding: 14px 28px; font-size: 0.9rem; }
 }
 .fbp-back:hover { color: rgba(255,255,255,0.70); }
 
+.input-max-error {
+    display: block;
+    font-size: 11px;
+    color: rgba(255,80,80,0.90);
+    min-height: 14px;
+    margin-top: 4px;
+    text-align: right;
+    direction: rtl;
+}
+
 /* ── Break vote pill (shown to host) ── */
 .free-votes-pill {
     position: fixed;

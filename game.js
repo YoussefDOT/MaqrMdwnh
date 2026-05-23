@@ -27,6 +27,22 @@ const LOBBY_CONFIG = {
 // Tracks temp Siraj ghost user IDs so they're deleted on disconnect
 const sirajGhosts = [];
 
+// Convert Arabic-Indic digits (٠١٢٣٤٥٦٧٨٩) to Western (0-9)
+const normalizeArabicNums = s => s.replace(/[٠١٢٣٤٥٦٧٨٩]/g, d => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)));
+
+function setupArabicNumeralSupport() {
+    document.querySelectorAll('input[inputmode="numeric"]').forEach(input => {
+        input.addEventListener('input', () => {
+            const converted = normalizeArabicNums(input.value);
+            if (converted !== input.value) {
+                const pos = input.selectionStart;
+                input.value = converted;
+                try { input.setSelectionRange(pos, pos); } catch (_) {}
+            }
+        });
+    });
+}
+
 // Returns a Firebase path scoped to the active lobby.
 // All minigame and pomodoro data is segregated per lobby.
 function lobbyPath(subpath) {
@@ -2386,6 +2402,7 @@ function startGame(userData) {
     gameState.ctx = gameState.canvas.getContext('2d');
     resizeCanvas();
     setupControls();
+    setupArabicNumeralSupport();
     setupModeSelectUI();
     setupPomodoroUI();
     setupTestModeUI();
@@ -3662,8 +3679,16 @@ function setupPomodoroUI() {
         input.addEventListener('input', () => {
             if (input.value) {
                 btns.forEach(b => b.classList.remove('active'));
+                if (type === 'break') {
+                    const errEl = document.getElementById('break-max-error');
+                    if (errEl) errEl.textContent = parseInt(input.value) > 15 ? 'الحد الأقصى ١٥ دقيقة' : '';
+                }
             } else {
                 btns[0].classList.add('active');
+                if (type === 'break') {
+                    const errEl = document.getElementById('break-max-error');
+                    if (errEl) errEl.textContent = '';
+                }
             }
         });
     });
@@ -3682,7 +3707,7 @@ function setupPomodoroUI() {
         };
 
         const workMins = getVal('work', 25);
-        const breakMins = getVal('break', 5);
+        const breakMins = Math.min(15, getVal('break', 5));
         const sessions = getVal('session', 1);
 
         modal.classList.remove('active');
@@ -8742,14 +8767,22 @@ function setupFreeModeUI() {
     const customInput = document.getElementById('fbp-custom');
     if (customInput) {
         customInput.addEventListener('input', () => {
-            const val = Math.min(60, Math.max(1, parseInt(customInput.value) || 0));
-            if (customInput.value && val >= 1) gameState.freeMode.selectedBreakMins = val;
+            const val = Math.min(15, Math.max(1, parseInt(customInput.value) || 0));
+            const errEl = document.getElementById('fbp-max-error');
+            if (customInput.value) {
+                gameState.freeMode.selectedBreakMins = val;
+                if (errEl) errEl.textContent = parseInt(customInput.value) > 15 ? 'الحد الأقصى ١٥ دقيقة' : '';
+            } else {
+                if (errEl) errEl.textContent = '';
+            }
         });
         customInput.addEventListener('blur', () => {
             if (customInput.value) {
-                const clamped = Math.min(60, Math.max(1, parseInt(customInput.value) || 1));
+                const clamped = Math.min(15, Math.max(1, parseInt(customInput.value) || 1));
                 customInput.value = clamped;
                 gameState.freeMode.selectedBreakMins = clamped;
+                const errEl = document.getElementById('fbp-max-error');
+                if (errEl) errEl.textContent = '';
             }
         });
     }

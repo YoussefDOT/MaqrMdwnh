@@ -209,7 +209,8 @@
                 <button class="fbp-btn" data-val="10">10</button>
                 <button class="fbp-btn fbp-custom-btn" data-val="custom">مخصص</button>
             </div>
-            <input type="number" id="fbp-custom" class="fbp-custom hidden" min="1" max="60" placeholder="دقائق" />
+            <input type="text" inputmode="numeric" id="fbp-custom" class="fbp-custom" placeholder="دقائق" />
+            <span id="fbp-max-error" class="input-max-error"></span>
             <button id="free-break-go-btn" class="fbp-confirm">ابدأ الراحة</button>
             <button id="fbp-back-btn" class="fbp-back">رجوع</button>
         </div>
@@ -267,7 +268,7 @@
                         <button class="opt-btn" data-val="15">15</button>
                         <button class="opt-btn active" data-val="25">25</button>
                         <button class="opt-btn" data-val="50">50</button>
-                        <input type="number" class="custom-input" id="custom-work" placeholder="مخصص" min="1">
+                        <input type="text" inputmode="numeric" class="custom-input" id="custom-work" placeholder="مخصص">
                     </div>
                 </div>
 
@@ -277,8 +278,9 @@
                         <button class="opt-btn active" data-val="5">5</button>
                         <button class="opt-btn" data-val="10">10</button>
                         <button class="opt-btn" data-val="15">15</button>
-                        <input type="number" class="custom-input" id="custom-break" placeholder="مخصص" min="1">
+                        <input type="text" inputmode="numeric" class="custom-input" id="custom-break" placeholder="مخصص">
                     </div>
+                    <span id="break-max-error" class="input-max-error"></span>
                 </div>
 
                 <div class="setting-group">
@@ -287,7 +289,7 @@
                         <button class="opt-btn active" data-val="1">1</button>
                         <button class="opt-btn" data-val="2">2</button>
                         <button class="opt-btn" data-val="3">3</button>
-                        <input type="number" class="custom-input" id="custom-session" placeholder="مخصص" min="1">
+                        <input type="text" inputmode="numeric" class="custom-input" id="custom-session" placeholder="مخصص">
                     </div>
                 </div>
             </div>
@@ -342,7 +344,7 @@
                 <div class="sp-cfg-opts" id="sp-cfg-work-opts">
                     <button class="sp-opt active" data-val="25">25</button>
                     <button class="sp-opt" data-val="50">50</button>
-                    <input id="sp-cfg-work" type="number" class="sp-cfg-input" placeholder="د" min="1" max="180">
+                    <input id="sp-cfg-work" type="text" inputmode="numeric" class="sp-cfg-input" placeholder="د">
                 </div>
             </div>
             <div class="sp-cfg-row">
@@ -350,7 +352,7 @@
                 <div class="sp-cfg-opts" id="sp-cfg-break-opts">
                     <button class="sp-opt active" data-val="5">5</button>
                     <button class="sp-opt" data-val="10">10</button>
-                    <input id="sp-cfg-break" type="number" class="sp-cfg-input" placeholder="د" min="1" max="60">
+                    <input id="sp-cfg-break" type="text" inputmode="numeric" class="sp-cfg-input" placeholder="د">
                 </div>
             </div>
             <div class="sp-cfg-row">
@@ -359,7 +361,7 @@
                     <button class="sp-opt active" data-val="1">1</button>
                     <button class="sp-opt" data-val="2">2</button>
                     <button class="sp-opt" data-val="3">3</button>
-                    <input id="sp-cfg-sess" type="number" class="sp-cfg-input" placeholder="مخصص" min="1" max="20">
+                    <input id="sp-cfg-sess" type="text" inputmode="numeric" class="sp-cfg-input" placeholder="مخصص">
                 </div>
             </div>
         </div>
@@ -765,28 +767,28 @@
                 <div class="tm-row">
                     <span class="tm-label">العمل</span>
                     <div class="tm-fields">
-                        <div class="tm-field"><input type="number" id="test-work-h" value="0" min="0" max="23"><span>س</span></div>
+                        <div class="tm-field"><input type="text" inputmode="numeric" id="test-work-h" value="0"><span>س</span></div>
                         <div class="tm-sep">:</div>
-                        <div class="tm-field"><input type="number" id="test-work-m" value="0" min="0" max="59"><span>د</span></div>
+                        <div class="tm-field"><input type="text" inputmode="numeric" id="test-work-m" value="0"><span>د</span></div>
                         <div class="tm-sep">:</div>
-                        <div class="tm-field"><input type="number" id="test-work-s" value="5" min="0" max="59"><span>ث</span></div>
+                        <div class="tm-field"><input type="text" inputmode="numeric" id="test-work-s" value="5"><span>ث</span></div>
                     </div>
                 </div>
 
                 <div class="tm-row">
                     <span class="tm-label">الراحة</span>
                     <div class="tm-fields">
-                        <div class="tm-field"><input type="number" id="test-break-h" value="0" min="0" max="23"><span>س</span></div>
+                        <div class="tm-field"><input type="text" inputmode="numeric" id="test-break-h" value="0"><span>س</span></div>
                         <div class="tm-sep">:</div>
-                        <div class="tm-field"><input type="number" id="test-break-m" value="1" min="0" max="59"><span>د</span></div>
+                        <div class="tm-field"><input type="text" inputmode="numeric" id="test-break-m" value="1"><span>د</span></div>
                         <div class="tm-sep">:</div>
-                        <div class="tm-field"><input type="number" id="test-break-s" value="0" min="0" max="59"><span>ث</span></div>
+                        <div class="tm-field"><input type="text" inputmode="numeric" id="test-break-s" value="0"><span>ث</span></div>
                     </div>
                 </div>
 
                 <div class="tm-row tm-sessions-row">
                     <span class="tm-label">الجلسات</span>
-                    <input type="number" id="test-sessions" value="3" min="1" max="99" class="tm-sessions-input">
+                    <input type="text" inputmode="numeric" id="test-sessions" value="3" class="tm-sessions-input">
                 </div>
 
                 <div class="tm-divider"></div>
