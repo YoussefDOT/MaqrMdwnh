@@ -2830,6 +2830,14 @@ function setupRaceUI() {
 
 // ─── Mobile UI helpers ────────────────────────────────────────────────────────
 
+/** Hide or restore leave-wrap and logout-btn during minigames */
+function setMinigameHideUI(hidden) {
+    const leaveWrap = document.getElementById('leave-wrap');
+    const logoutBtn = document.getElementById('logout-btn');
+    if (leaveWrap) leaveWrap.style.visibility = hidden ? 'hidden' : '';
+    if (logoutBtn) logoutBtn.style.visibility = hidden ? 'hidden' : '';
+}
+
 /** Show/hide user card during focus work phase (mobile only) */
 function setMobileFocusMode(active) {
     const card     = document.getElementById('user-card');
@@ -3332,6 +3340,7 @@ function startLocalRace(session) {
     gameState.race.carVisuals = {};
     // Show mobile race d-pad (hide joystick during race)
     showMobileRaceButtons(true);
+    setMinigameHideUI(true);
     // Remember previous zoom and double it for race view
     gameState.race.prevZoom = gameState.zoom || 1;
     gameState.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, (gameState.race.prevZoom || 1) * 2));
@@ -3553,6 +3562,7 @@ function returnFromRace(clearPanel) {
     hideRaceHud();
     // Hide mobile race d-pad and restore joystick
     showMobileRaceButtons(false);
+    setMinigameHideUI(false);
 }
 
 function formatRaceTime(ms) {
@@ -4799,6 +4809,7 @@ function startLocalCoffee(session) {
     // Hide mobile joystick — coffee uses touch-drag on the canvas instead
     const _jy = document.getElementById('mobile-joystick');
     if (_jy) _jy.style.display = 'none';
+    setMinigameHideUI(true);
     const participant = session.participants[gameState.userId];
     gameState.coffee.active          = true;
     gameState.coffee.localResultSent = false;
@@ -4931,6 +4942,7 @@ function returnFromCoffee(clearState) {
     if (_uc) _uc.style.display = '';
     const _jy = document.getElementById('mobile-joystick');
     if (_jy) _jy.style.display = '';
+    setMinigameHideUI(false);
     // Delete the session from Firebase so the same player can start a new one
     const sessionKeyToDelete = gameState.coffee.sessionKey;
     if (sessionKeyToDelete) {
