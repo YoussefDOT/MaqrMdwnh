@@ -6776,6 +6776,19 @@ function drawTimers() {
             return;
         }
 
+        if (laptop.phase === 'free-work') {
+            const hostPlayer = gameState.players[laptop.claimedBy];
+            const taskText = hostPlayer?.currentTask ? `أعمل على ${hostPlayer.currentTask}` : '';
+            if (hostPlayer?.freeWorkStartTime > 0) {
+                const elapsedMs = (hostPlayer.freeTotalWorkMs || 0) + (now - hostPlayer.freeWorkStartTime);
+                const timeStr = `🌿 ${formatTime(elapsedMs / 1000)}`;
+                drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText: timeStr, color: '#3bb9ab' });
+            } else if (taskText) {
+                drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText: '🌿', color: '#3bb9ab' });
+            }
+            return;
+        }
+
         if (laptop.phase !== 'work' && laptop.phase !== 'break') return;
 
         const remaining = Math.max(0, laptop.endTime - now);
