@@ -2037,84 +2037,103 @@ function setupLobbySelection() {
             <div class="lobby-icon" aria-hidden="true"></div>
             <div class="lobby-label">${cfg.label}</div>
         `;
-        btn.addEventListener('click', (e) => {
-            if (e.shiftKey && lobbyId === 'male') {
-                spawnSirajGhost();
-                return;
-            }
+        btn.addEventListener('click', () => {
             gameState.selectedLobby = lobbyId;
             lobbyScreen.classList.remove('active');
             loginScreen.classList.add('active');
             setupUserSelection();   // now that a lobby is chosen, build the user list
         });
 
-        // Mobile: long-press الإخوة button (800ms) → spawn siraj ghost (like Shift+click on desktop)
-        if (lobbyId === 'male') {
-            let sirajHoldTimer = null;
-            btn.addEventListener('touchstart', () => {
-                sirajHoldTimer = setTimeout(() => {
-                    sirajHoldTimer = null;
-                    // Light haptic if available
-                    if (navigator.vibrate) navigator.vibrate(40);
-                    spawnSirajGhost();
-                }, 800);
-            }, { passive: true });
-            const cancelSirajHold = () => {
-                if (sirajHoldTimer) { clearTimeout(sirajHoldTimer); sirajHoldTimer = null; }
-            };
-            btn.addEventListener('touchend', cancelSirajHold, { passive: true });
-            btn.addEventListener('touchmove', cancelSirajHold, { passive: true });
-            btn.addEventListener('touchcancel', cancelSirajHold, { passive: true });
-        }
-
         buttonsWrap.appendChild(btn);
+    }
+
+    // وضع التجربة — password-gated siraj ghost entry
+    const sirajLink = document.getElementById('siraj-test-link');
+    const sirajPwModal = document.getElementById('siraj-pw-modal');
+    const sirajPwInput = document.getElementById('siraj-pw-input');
+    const sirajPwError = document.getElementById('siraj-pw-error');
+    const sirajPwConfirm = document.getElementById('siraj-pw-confirm');
+    const sirajPwCancel = document.getElementById('siraj-pw-cancel');
+
+    if (sirajLink && sirajPwModal) {
+        sirajLink.addEventListener('click', () => {
+            sirajPwInput.value = '';
+            sirajPwError.textContent = '';
+            sirajPwModal.classList.add('active');
+            setTimeout(() => sirajPwInput.focus(), 80);
+        });
+
+        const attemptSirajLogin = () => {
+            if (sirajPwInput.value === 'siraj') {
+                sirajPwModal.classList.remove('active');
+                spawnSirajGhost();
+            } else {
+                sirajPwError.textContent = 'كلمة المرور غير صحيحة';
+                sirajPwInput.value = '';
+                sirajPwInput.focus();
+            }
+        };
+
+        sirajPwConfirm.addEventListener('click', attemptSirajLogin);
+        sirajPwInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') attemptSirajLogin(); });
+        sirajPwCancel.addEventListener('click', () => { sirajPwModal.classList.remove('active'); });
     }
 }
 
 async function spawnSirajGhost() {
+    const loadingOverlay = document.getElementById('siraj-loading-overlay');
+    if (loadingOverlay) loadingOverlay.classList.add('active');
+
     const hue = Math.floor(Math.random() * 360);
     const sirajId = `siraj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 
-    // Render hue-shifted siraj avatar to a data URL
-    let avatarDataUrl = 'Art/siraj.png';
-    try {
-        const img = await new Promise((resolve, reject) => {
-            const i = new Image();
-            i.onload = () => resolve(i);
-            i.onerror = reject;
-            i.src = 'Art/siraj.png';
-        });
-        const offscreen = document.createElement('canvas');
-        offscreen.width = img.naturalWidth;
-        offscreen.height = img.naturalHeight;
-        const octx = offscreen.getContext('2d');
-        octx.filter = `hue-rotate(${hue}deg)`;
-        octx.drawImage(img, 0, 0);
-        avatarDataUrl = offscreen.toDataURL('image/png');
-    } catch (_) {}
+    // Build avatar and write to Firebase in parallel
+    const avatarPromise = new Promise((resolve) => {
+        const i = new Image();
+        i.onload = () => {
+            try {
+                const offscreen = document.createElement('canvas');
+                offscreen.width = i.naturalWidth;
+                offscreen.height = i.naturalHeight;
+                const octx = offscreen.getContext('2d');
+                octx.filter = `hue-rotate(${hue}deg)`;
+                octx.drawImage(i, 0, 0);
+                resolve(offscreen.toDataURL('image/png'));
+            } catch (_) { resolve('Art/siraj.png'); }
+        };
+        i.onerror = () => resolve('Art/siraj.png');
+        i.src = 'Art/siraj.png';
+    });
 
-    await set(ref(database, `users/${sirajId}`), {
+    // Write placeholder first so Firebase write starts immediately
+    const placeholderWrite = set(ref(database, `users/${sirajId}`), {
         username: 'سراج',
         status: 'in-voice',
         categoryName: LOBBY_CONFIG.male.categoryName,
         channelName: 'اختبار',
-        avatar: avatarDataUrl,
+        avatar: 'Art/siraj.png',
         activeInGame: false,
         x: 0,
         y: 0
     });
 
-    // Delete entire user on disconnect (not just set activeInGame=false)
+    const [avatarDataUrl] = await Promise.all([avatarPromise, placeholderWrite]);
+
+    // Patch avatar with hue-shifted version if we got one
+    if (avatarDataUrl !== 'Art/siraj.png') {
+        await set(ref(database, `users/${sirajId}/avatar`), avatarDataUrl);
+    }
+
     onDisconnect(ref(database, `users/${sirajId}`)).remove();
     sirajGhosts.push(sirajId);
 
     gameState.isSirajGhost = true;
     gameState.selectedLobby = 'male';
-    // Hide lobby + login screens before entering game
     const _ls = document.getElementById('lobby-screen');
     const _li = document.getElementById('login-screen');
     if (_ls) _ls.classList.remove('active');
     if (_li) _li.classList.remove('active');
+    if (loadingOverlay) loadingOverlay.classList.remove('active');
     startGame({
         userId: sirajId,
         username: 'سراج',
@@ -2325,6 +2344,7 @@ function startGame(userData) {
     gameState.ctx = gameState.canvas.getContext('2d');
     resizeCanvas();
     setupControls();
+    setupModeSelectUI();
     setupPomodoroUI();
     setupTestModeUI();
     setupRaceUI();
@@ -2546,9 +2566,7 @@ function setupControls() {
         if (gameState.pomodoro.active || gameState.freeMode.active) return;
         if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
             if (gameState.activeLaptop.claimedBy) return;
-            const testBtn = document.getElementById('pomodoro-test');
-            if (testBtn) testBtn.style.display = gameState.isSirajGhost ? 'block' : 'none';
-            document.getElementById('pomodoro-modal').classList.add('active');
+            showLaptopModeSelect();
         }
     });
 
@@ -3007,13 +3025,11 @@ function initMobileControls() {
                 }
             }
 
-            // Open laptop / pomodoro modal
+            // Open laptop / mode select
             if (gameState.pomodoro.active || gameState.freeMode.active) return;
             if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
                 if (gameState.activeLaptop.claimedBy) return;
-                const testBtn = document.getElementById('pomodoro-test');
-                if (testBtn) testBtn.style.display = gameState.isSirajGhost ? 'block' : 'none';
-                document.getElementById('pomodoro-modal').classList.add('active');
+                showLaptopModeSelect();
             }
         }, { passive: true });
     }
@@ -3545,6 +3561,31 @@ function formatRaceTime(ms) {
     const secs = Math.floor((ms % 60000) / 1000);
     const millis = Math.floor(ms % 1000);
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}.${millis.toString().padStart(3, '0')}`;
+}
+
+function showLaptopModeSelect() {
+    if (gameState.isSirajGhost) {
+        document.getElementById('test-mode-modal').classList.add('active');
+    } else {
+        document.getElementById('mode-select-modal').classList.add('active');
+    }
+}
+
+function setupModeSelectUI() {
+    const modal = document.getElementById('mode-select-modal');
+    if (!modal) return;
+
+    document.getElementById('mode-select-pomo')?.addEventListener('click', () => {
+        modal.classList.remove('active');
+        const testBtn = document.getElementById('pomodoro-test');
+        if (testBtn) testBtn.style.display = 'none';
+        document.getElementById('pomodoro-modal').classList.add('active');
+    });
+
+    document.getElementById('mode-select-free')?.addEventListener('click', () => {
+        modal.classList.remove('active');
+        startFreeMode(null, false);
+    });
 }
 
 function setupPomodoroUI() {

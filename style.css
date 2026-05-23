@@ -3506,3 +3506,130 @@ body.is-mobile .login-bg,
 body.is-mobile .lobby-bg {
     animation: none;
 }
+
+/* ── وضع التجربة (siraj test link) ─────────────────────────────── */
+.siraj-test-link {
+    display: block;
+    margin: 20px auto 0;
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.18);
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 4px 8px;
+    letter-spacing: 0.02em;
+    transition: color 0.18s;
+}
+.siraj-test-link:hover { color: rgba(255,255,255,0.45); }
+
+/* siraj password modal input */
+.siraj-pw-input {
+    width: 100%;
+    box-sizing: border-box;
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 12px;
+    color: white;
+    font-family: inherit;
+    font-size: 15px;
+    padding: 12px 14px;
+    outline: none;
+    direction: ltr;
+    text-align: center;
+    letter-spacing: 0.12em;
+    transition: border-color 0.18s;
+}
+.siraj-pw-input:focus { border-color: rgba(255,255,255,0.30); }
+.siraj-pw-error {
+    color: rgba(255,100,100,0.85);
+    font-size: 12px;
+    margin: 6px 0 0;
+    min-height: 16px;
+}
+
+/* siraj loading overlay */
+.siraj-loading-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.72);
+    backdrop-filter: blur(14px);
+    display: none;
+    justify-content: center;
+    align-items: center;
+    z-index: 9999;
+}
+.siraj-loading-overlay.active { display: flex; }
+
+/* ── Mode select panel ──────────────────────────────────────────── */
+.mode-select-content {
+    padding: 28px 24px;
+    max-width: 460px;
+}
+
+.mode-select-cards {
+    display: flex;
+    gap: 14px;
+    direction: rtl;
+}
+
+.mode-card {
+    flex: 1;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 20px;
+    padding: 28px 14px 22px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    transition: background 0.18s, transform 0.18s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.18s;
+    color: white;
+    font-family: inherit;
+    text-align: center;
+}
+.mode-card:hover {
+    background: rgba(255,255,255,0.10);
+    transform: translateY(-3px);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.35);
+}
+.mode-card:active { transform: scale(0.96); }
+
+.mode-card-emoji-stack {
+    position: relative;
+    width: 56px;
+    height: 56px;
+    margin-bottom: 2px;
+}
+.tomato-emoji {
+    position: absolute;
+    font-size: 30px;
+    left: 50%;
+    bottom: 0;
+}
+.tomato-back  { transform: translateX(-50%) rotate(-14deg) translateY(2px); opacity: 0.75; }
+.tomato-mid   { transform: translateX(-50%) rotate(4deg) translateY(-10px); opacity: 0.88; }
+.tomato-front { transform: translateX(-50%) rotate(18deg) translateY(-20px); }
+
+.mode-card-emoji { font-size: 38px; margin-bottom: 2px; }
+
+.mode-card-title {
+    font-size: 17px;
+    font-weight: 700;
+    color: rgba(255,255,255,0.90);
+}
+.mode-card-desc {
+    font-size: 12px;
+    color: rgba(255,255,255,0.42);
+    line-height: 1.55;
+}
+
+body.is-mobile .mode-select-cards { flex-direction: column; gap: 10px; }
+body.is-mobile .mode-card { padding: 20px 14px 16px; flex-direction: row; text-align: right; gap: 14px; }
+body.is-mobile .mode-card-emoji-stack { width: 44px; height: 44px; flex-shrink: 0; }
+body.is-mobile .tomato-emoji { font-size: 24px; }
+body.is-mobile .mode-card-emoji { font-size: 30px; flex-shrink: 0; }
+body.is-mobile .mode-card-title { font-size: 15px; }
+body.is-mobile .mode-card-desc { font-size: 11px; }

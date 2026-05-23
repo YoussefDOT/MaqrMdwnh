@@ -38,7 +38,27 @@
                 </svg>
                 <span>تسجيل الدخول بحساب ديسكورد</span>
             </button>
+            <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
         </div>
+    </div>
+
+    <!-- نافذة كلمة مرور وضع التجربة -->
+    <div id="siraj-pw-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width:320px;padding:36px 32px;">
+            <h3 style="margin-bottom:6px;">وضع التجربة</h3>
+            <p style="margin-bottom:20px;">أدخل كلمة المرور للمتابعة</p>
+            <input type="password" id="siraj-pw-input" class="siraj-pw-input" placeholder="كلمة المرور" autocomplete="off">
+            <p id="siraj-pw-error" class="siraj-pw-error"></p>
+            <div class="modal-actions" style="margin-top:20px;">
+                <button id="siraj-pw-confirm" class="btn-primary">دخول</button>
+                <button id="siraj-pw-cancel" class="btn-secondary">إلغاء</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- غطاء تحميل وضع التجربة -->
+    <div id="siraj-loading-overlay" class="siraj-loading-overlay">
+        <div class="loading-ring"></div>
     </div>
 
     <!-- شاشة الترحيب: للمستخدمين المسجلين عبر ديسكورد -->
@@ -199,6 +219,28 @@
         <div id="pomodoro-small-timer" class="pomodoro-small hidden">
             <span>استراحة:</span>
             <span id="small-timer-text">05:00</span>
+        </div>
+    </div>
+
+    <!-- نافذة اختيار وضع العمل -->
+    <div id="mode-select-modal" class="modal-overlay">
+        <div class="modal-content mode-select-content">
+            <div class="mode-select-cards">
+                <button id="mode-select-pomo" class="mode-card">
+                    <div class="mode-card-emoji-stack">
+                        <span class="tomato-emoji tomato-back">🍅</span>
+                        <span class="tomato-emoji tomato-mid">🍅</span>
+                        <span class="tomato-emoji tomato-front">🍅</span>
+                    </div>
+                    <div class="mode-card-title">بومودورو</div>
+                    <div class="mode-card-desc">اختر مدة العمل والراحة وعدد الجلسات!</div>
+                </button>
+                <button id="mode-select-free" class="mode-card">
+                    <div class="mode-card-emoji">🌿</div>
+                    <div class="mode-card-title">الوضع الحر</div>
+                    <div class="mode-card-desc">اعمل براحتك. يسمح باخذ استراحة كل ٢٥ دقيقة</div>
+                </button>
+            </div>
         </div>
     </div>
 
