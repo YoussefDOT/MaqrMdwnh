@@ -146,13 +146,14 @@ async function resolveUserLobby(discordId) {
 async function enterGameAsDiscordUser(user, lobby) {
     gameState.selectedLobby = lobby;
 
-    // Pin `lobby` permanently. Only seed username/avatar if Firebase doesn't
-    // already have them — when the user is in a VC the bot owns those fields.
     const snap = await get(ref(database, `users/${user.id}`));
     const existing = snap.val() || {};
-    const updates = { [`users/${user.id}/lobby`]: lobby };
+    const updates = {
+        [`users/${user.id}/lobby`]:       lobby,
+        [`users/${user.id}/avatar`]:      user.avatar,   // always refresh from Discord
+        [`users/${user.id}/channelName`]: null,          // clear stale VC channel
+    };
     if (!existing.username) updates[`users/${user.id}/username`] = user.username;
-    if (!existing.avatar)   updates[`users/${user.id}/avatar`]   = user.avatar;
     await update(ref(database), updates);
 
     document.getElementById('lobby-screen')?.classList.remove('active');
@@ -163,8 +164,8 @@ async function enterGameAsDiscordUser(user, lobby) {
     startGame({
         userId:      user.id,
         username:    existing.username || user.username,
-        channelName: existing.channelName || 'Discord',
-        avatar:      existing.avatar || user.avatar
+        channelName: null,
+        avatar:      user.avatar
     });
 }
 
