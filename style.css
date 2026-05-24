@@ -2046,8 +2046,11 @@ body.is-mobile .pomodoro-small {
 
 /* ── Mobile Focus Drawer ──────────────────────────── */
 
-/* On mobile the focus-sounds-panel becomes a bottom drawer */
-body.is-mobile .focus-sounds-panel {
+/* Focus sounds panel is hidden entirely on mobile */
+body.is-mobile .focus-sounds-panel { display: none !important; }
+
+/* (kept for reference — original mobile drawer styles below are now inactive) */
+body.is-mobile .focus-sounds-panel--DISABLED {
     position: fixed !important;
     bottom: 0 !important;
     left: 0 !important;
@@ -4151,10 +4154,9 @@ body.azkar-active .sound-item .sound-vol { display: none; }
 body.azkar-active .sound-name { font-size: 0.72rem; }
 body.azkar-active .yt-focus-block { display: none !important; }
 
-/* On mobile we still want the drawer accessible; reset desktop scale and keep drawer working */
+/* Sounds panel is hidden on mobile entirely — including during azkar */
 body.is-mobile.azkar-active .focus-sounds-panel {
-    transform: none;
-    opacity: 1;
+    display: none !important;
 }
 
 /* When azkar overlay is open, hide the azkar button + confirm to avoid double UI */
@@ -4173,8 +4175,8 @@ body.is-mobile .azkar-confirm { padding: 9px 10px; }
 body.is-mobile .azkar-confirm-q { font-size: 0.72rem; margin-bottom: 7px; }
 body.is-mobile .azkar-confirm-btn { padding: 7px 8px; font-size: 0.74rem; }
 
-/* On mobile the -200px bottom extension would shift centered content off-screen */
-body.is-mobile .azkar-overlay { bottom: 0; }
+/* On mobile: no bottom extension and no compensating padding — just fill the viewport */
+body.is-mobile .azkar-overlay { bottom: 0; padding-bottom: 0; }
 
 body.is-mobile .azkar-overlay-content {
     width: 96vw;
