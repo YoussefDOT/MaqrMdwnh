@@ -10862,11 +10862,17 @@ function setupAzkarTimePicker() {
         }, { passive: false });
     });
 
-    // Apply
+    // Apply — also clears azkarCompleted so the button appears fresh for the new time window
     setBtn?.addEventListener('click', () => {
         _azkarFakeHour = tpH;
         _azkarFakeMin  = tpM;
         spoofBtn.title = `الوقت التجريبي: ${fmt2(tpH)}:${fmt2(tpM)}`;
+        // Clear local completion state
+        gameState.azkar.completed = {};
+        // Clear from Firebase
+        if (gameState.userId) {
+            update(ref(database), { [`users/${gameState.userId}/azkarCompleted`]: null }).catch(() => {});
+        }
         gameState.azkar._lastButtonRefresh = 0; // force immediate button refresh
         _close(); // _close keeps active class when fake time is set
     });
