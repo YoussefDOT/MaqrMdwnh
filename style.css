@@ -3846,6 +3846,7 @@ body.is-mobile .mode-card-desc { font-size: 11px; }
     z-index: 10000;
     display: flex; align-items: center; justify-content: center;
     overflow: hidden;
+    padding-bottom: 200px; /* compensate for bottom extension so content stays centred */
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.65s ease;
@@ -4069,7 +4070,7 @@ body.azkar-active { overflow: hidden; }
     transition: background 0.3s, color 0.3s, border-color 0.3s, transform 0.25s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.3s;
     flex-shrink: 0;
 }
-.azkar-finish-btn:disabled { opacity: 0.7; }
+.azkar-finish-btn:not(.unlocked) { opacity: 0.7; pointer-events: all; }
 .azkar-finish-btn.unlocked {
     cursor: pointer;
     color: #fff;
@@ -4129,6 +4130,7 @@ body.azkar-active .focus-sounds-panel {
     transform-origin: bottom right;
     opacity: 0.92;
     z-index: 10001;
+    pointer-events: all;
     background: rgba(10,10,14,0.10);
     border-color: rgba(255,255,255,0.10);
     transition: transform 0.45s cubic-bezier(0.34,1.56,0.64,1),
@@ -4393,7 +4395,7 @@ body.is-mobile .azkar-focus-float-btn {
     position: fixed;
     top: 14px;
     right: 14px;
-    z-index: 1500;
+    z-index: 9500;
     padding: 7px 14px;
     border-radius: 50px;
     border: 1px solid rgba(255,255,255,0.14);

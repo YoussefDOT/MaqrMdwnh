@@ -10502,17 +10502,20 @@ function updateAzkarButton() {
         }
     }
 
-    // Mobile floating button: show when card is focus-hidden and normal button is hidden
+    // Mobile floating button: show when card is focus-hidden and azkar conditions are met
     const floatBtn = document.getElementById('azkar-focus-float-btn');
     if (floatBtn && isMobile()) {
         const cardHidden = document.getElementById('user-card')?.classList.contains('focus-hidden');
-        const floatShouldShow = shouldShow && cardHidden;
-        floatBtn.classList.toggle('hidden', !floatShouldShow);
+        const floatShouldShow = shouldShow && !!cardHidden;
+        // Use style.display directly — avoids any CSS class specificity issues
+        floatBtn.style.display = floatShouldShow ? 'flex' : 'none';
         if (floatShouldShow && type) {
             floatBtn.textContent = type === 'morning' ? 'أذكار الصباح' : 'أذكار المساء';
             floatBtn.classList.toggle('morning', type === 'morning');
             floatBtn.classList.toggle('evening', type === 'evening');
         }
+    } else if (floatBtn) {
+        floatBtn.style.display = 'none'; // always hidden on desktop
     }
 }
 
@@ -10742,13 +10745,14 @@ function updateAzkarFinishTimer() {
     const btn = document.getElementById('azkar-finish-btn');
     const timerEl = document.getElementById('azkar-finish-timer');
     if (remaining <= 0) {
-        if (btn) { btn.disabled = false; btn.classList.add('unlocked'); }
+        if (btn) { btn.removeAttribute('disabled'); btn.classList.add('unlocked'); }
         if (timerEl) timerEl.textContent = '';
     } else {
         const m = Math.floor(remaining / 60000);
         const s = Math.floor((remaining % 60000) / 1000);
         if (timerEl) timerEl.textContent = `${m}:${String(s).padStart(2, '0')}`;
-        if (btn) { btn.disabled = true; btn.classList.remove('unlocked'); }
+        // Don't use disabled — it leaks taps on iOS. Use class only; click handler checks .unlocked.
+        if (btn) { btn.removeAttribute('disabled'); btn.classList.remove('unlocked'); }
     }
 }
 
@@ -10945,7 +10949,7 @@ function setupAzkarUI() {
 
     document.getElementById('azkar-finish-btn')?.addEventListener('click', () => {
         const fb = document.getElementById('azkar-finish-btn');
-        if (fb?.disabled) return;
+        if (!fb?.classList.contains('unlocked')) return; // still locked
         closeAzkarOverlay(true);
     });
 
