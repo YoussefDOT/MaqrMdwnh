@@ -10845,14 +10845,16 @@ function setupAzkarTimePicker() {
         });
     });
 
-    // Scroll wheel support on the value displays — 1 unit per tick, accumulated for trackpads
+    // Scroll wheel — normalize by deltaMode so one physical click = one unit on any mouse
     const _scrollAcc = { h: 0, m: 0 };
     [hEl, mEl].forEach(el => {
         el.addEventListener('wheel', (e) => {
             e.preventDefault();
             const key = el === hEl ? 'h' : 'm';
-            _scrollAcc[key] += e.deltaY;
-            if (Math.abs(_scrollAcc[key]) >= 50) {
+            // Normalize: pixels(0)→as-is, lines(1)→×40, pages(2)→×800
+            const norm = e.deltaMode === 0 ? e.deltaY : e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY * 800;
+            _scrollAcc[key] += norm;
+            if (Math.abs(_scrollAcc[key]) >= 40) {
                 const dir = _scrollAcc[key] > 0 ? -1 : 1;
                 _scrollAcc[key] = 0;
                 if (key === 'h') tpH = (tpH + dir + 24) % 24;
