@@ -4132,8 +4132,19 @@ function listenToPlayers() {
                     currentIdsInSnapshot.add(userId);
                     const isCurrentUser = userId === gameState.userId;
                     if (!gameState.players[userId]) {
-                        const spawnX = userData.x || 0;
-                        const spawnY = userData.y || 0;
+                        // If this is a VC ghost with no saved position, assign a random
+                        // non-overlapping spawn and persist it so they inherit it on login.
+                        let spawnX = userData.x || 0;
+                        let spawnY = userData.y || 0;
+                        if (!isCurrentUser && !userData.x) {
+                            const ghostSpawn = getRandomSpawnPosition();
+                            spawnX = ghostSpawn.x;
+                            spawnY = ghostSpawn.y;
+                            update(ref(database), {
+                                [`users/${userId}/x`]: spawnX,
+                                [`users/${userId}/y`]: spawnY,
+                            });
+                        }
                         gameState.players[userId] = {
                             userId,
                             username: userData.username,
