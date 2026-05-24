@@ -2465,7 +2465,8 @@ function startGame(userData) {
 
         get(ref(database, `users/${gameState.userId}`)).then((snapshot) => {
             const data = snapshot.val();
-            let spawnX = 0, spawnY = BG_HEIGHT / 4;
+            const _defaultSpawn = getRandomSpawnPosition();
+            let spawnX = _defaultSpawn.x, spawnY = _defaultSpawn.y;
             let locked = false;
 
             // Restore Focus Mix from User Profile instead of session!
@@ -4069,9 +4070,33 @@ function setupLogout() {
     });
 }
 
+// Returns a spawn position in the shaded left area of the work room that
+// doesn't overlap any already-loaded player. Falls back gracefully.
+function getRandomSpawnPosition() {
+    const SPAWN_MIN_X = -450;
+    const SPAWN_MAX_X = -100;
+    const SPAWN_MIN_Y = 100;
+    const SPAWN_MAX_Y = 370;
+    const MIN_DIST = PLAYER_SIZE + 15;
+
+    const others = Object.values(gameState.players).filter(p => p.userId !== gameState.userId);
+
+    for (let attempt = 0; attempt < 40; attempt++) {
+        const x = SPAWN_MIN_X + Math.random() * (SPAWN_MAX_X - SPAWN_MIN_X);
+        const y = SPAWN_MIN_Y + Math.random() * (SPAWN_MAX_Y - SPAWN_MIN_Y);
+        if (checkCollision(x, y)) continue;
+        const blocked = others.some(p => {
+            const dx = (p.renderX ?? p.x) - x;
+            const dy = (p.renderY ?? p.y) - y;
+            return Math.sqrt(dx * dx + dy * dy) < MIN_DIST;
+        });
+        if (!blocked) return { x, y };
+    }
+    return { x: -250, y: BG_HEIGHT / 4 };
+}
+
 function initializePlayerPosition() {
-    const spawnX = 0;
-    const spawnY = BG_HEIGHT / 4;
+    const { x: spawnX, y: spawnY } = getRandomSpawnPosition();
     if (!gameState.players[gameState.userId]) {
         gameState.players[gameState.userId] = {
             userId: gameState.userId,
