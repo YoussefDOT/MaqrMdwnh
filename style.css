@@ -3469,8 +3469,8 @@ body.is-mobile .yt-focus-block {
 }
 
 body.is-mobile .prayer-panel {
-    backdrop-filter: blur(4px) !important;
-    -webkit-backdrop-filter: blur(4px) !important;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
 }
 
 body.is-mobile .user-card {
@@ -3565,6 +3565,18 @@ body.is-mobile .azkar-focus-float-btn {
 body.is-mobile .logout-pill {
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
+}
+
+/* ── NUCLEAR: no glassmorphism on mobile ────────────────────────────
+   backdrop-filter is the single most expensive CSS property on mobile
+   GPUs — it requires compositing the entire background behind every
+   filtered element. One rule kills all of them. Elements keep their
+   semi-opaque backgrounds so they still look distinct against the game.
+   RULE: never add backdrop-filter to any selector that is visible on
+   mobile. This rule lives last so it beats all non-!important rules. */
+body.is-mobile * {
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
 }
 
 /* ── وضع التجربة (siraj test link) ─────────────────────────────── */

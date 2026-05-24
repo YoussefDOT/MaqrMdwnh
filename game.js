@@ -1396,7 +1396,7 @@ const POSITION_LERP_SPEED = 0.22;
 const MIN_ZOOM = 0.4;
 const MAX_ZOOM = 2.0;
 const WIND_PARTICLE_COUNT = 30;      // desktop
-const WIND_PARTICLE_COUNT_MOBILE = 10; // mobile (performance)
+const WIND_PARTICLE_COUNT_MOBILE = 0;  // mobile — disabled (performance)
 
 // Easing Functions
 const easeOutExpo = (x) => x === 1 ? 1 : 1 - Math.pow(2, -10 * x);
@@ -4564,6 +4564,7 @@ function updateAnimation() {
 }
 
 function spawnDust(x, y, amount, isDragging = false) {
+    if (isMobile()) return; // particles disabled on mobile for performance
     for (let i = 0; i < amount; i++) {
         gameState.dustParticles.push({
             x: x + (Math.random() - 0.5) * 30,
@@ -7291,6 +7292,7 @@ function drawFocusFog(W, H) {
 }
 
 function drawConnections() {
+    if (isMobile()) return; // decorative — skip on mobile for performance
     const ctx = gameState.ctx;
     const channelGroups = {};
     for (const player of Object.values(gameState.players)) {
