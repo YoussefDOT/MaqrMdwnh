@@ -10845,14 +10845,20 @@ function setupAzkarTimePicker() {
         });
     });
 
-    // Scroll wheel support on the value displays
+    // Scroll wheel support on the value displays — 1 unit per tick, accumulated for trackpads
+    const _scrollAcc = { h: 0, m: 0 };
     [hEl, mEl].forEach(el => {
         el.addEventListener('wheel', (e) => {
             e.preventDefault();
-            const dir = e.deltaY > 0 ? -1 : 1;
-            if (el === hEl) tpH = (tpH + dir + 24) % 24;
-            else            tpM = (tpM + dir * 5 + 60) % 60;
-            _updatePreview();
+            const key = el === hEl ? 'h' : 'm';
+            _scrollAcc[key] += e.deltaY;
+            if (Math.abs(_scrollAcc[key]) >= 50) {
+                const dir = _scrollAcc[key] > 0 ? -1 : 1;
+                _scrollAcc[key] = 0;
+                if (key === 'h') tpH = (tpH + dir + 24) % 24;
+                else             tpM = (tpM + dir + 60) % 60;
+                _updatePreview();
+            }
         }, { passive: false });
     });
 
