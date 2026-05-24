@@ -1256,6 +1256,24 @@ const gameState = {
         triggeredToday: {},        // { Fajr: true, ... } avoid re-triggering same prayer
         lastDayCheck: null,        // date string to reset triggers at midnight
     },
+    azkar: {
+        active: false,             // overlay open
+        type: null,                // 'morning' | 'evening'
+        startTime: 0,              // overlay opened at
+        minLockMs: 180000,         // 3 min lock before انتهيت enables (5 s for Siraj)
+        counts: [],                // remaining count per zikr index
+        currentIndex: 0,
+        completed: {},             // { morning: 'YYYY-MM-DD', evening: 'YYYY-MM-DD' }
+        // saved-state to restore on close
+        pausedPomoRemaining: 0,
+        pausedPomoPhase: null,
+        pausedFreeWorkStart: 0,
+        pausedFreeWorkSnap: 0,
+        ytWasPlaying: false,
+        ytVolumeBefore: 80,
+        focusMobileWasActive: false,
+        _lastButtonRefresh: 0,
+    },
 };
 
 // Preload all sounds so they fire instantly with no lag
@@ -2447,6 +2465,7 @@ function startGame(userData) {
     setupPomoLeaveBtn();
     setupFreeModeUI();
     initPrayerSystem();
+    setupAzkarUI();
 
     // Track server time offset so race start/countdown is synchronized across clients
     const offsetRef = ref(database, '.info/serverTimeOffset');
@@ -4708,6 +4727,7 @@ function gameLoop(timestamp) {
         updateCoopTaskPanel();
         updatePomoLeaveBtn();
         updatePrayerSystem();
+        updateAzkarSystem();
         render();
     } catch (e) {
         console.error('[gameLoop crash — loop kept alive]', e);
@@ -6732,6 +6752,19 @@ function updatePomodoro() {
     enforceAudioFailsafe();
     if (!gameState.pomodoro.active) return;
 
+    // Azkar overlay: in solo pomo freeze the timer (shared pomo blocks azkar entirely)
+    if (gameState.azkar.active && gameState.sharedPomo.phase !== 'active') {
+        const az = gameState.azkar;
+        gameState.pomodoro.endTime = Date.now() + az.pausedPomoRemaining;
+        const pr = az.pausedPomoRemaining;
+        const frozenStr = `${Math.floor(pr / 60000).toString().padStart(2, '0')}:${Math.floor((pr % 60000) / 1000).toString().padStart(2, '0')}`;
+        const lg = document.getElementById('large-timer-text');
+        const sm = document.getElementById('small-timer-text');
+        if (gameState.pomodoro.phase === 'work' && lg) lg.textContent = frozenStr;
+        if (gameState.pomodoro.phase === 'break' && sm) sm.textContent = frozenStr;
+        return;
+    }
+
     // Prayer overlay: in solo pomo freeze the timer; in shared pomo keep running (timer is shared)
     if (gameState.prayer.isOverlayActive) {
         updatePrayerOverlayTimer();
@@ -8710,6 +8743,18 @@ function updateFreeMode() {
 
     const timerEl = document.getElementById('free-timer-text');
 
+    // Azkar overlay: freeze the count-up timer (and break countdown) while reading
+    if (gameState.azkar.active) {
+        if (fm.phase === 'work' && fm.workStartTime > 0) {
+            fm.totalWorkMs  += Date.now() - fm.workStartTime;
+            fm.workStartTime = 0;
+        }
+        if (fm.phase === 'break' && gameState.azkar.pausedFreeWorkSnap > 0) {
+            fm.breakEndTime = Date.now() + gameState.azkar.pausedFreeWorkSnap;
+        }
+        return;
+    }
+
     // Prayer overlay: freeze the count-up timer while praying
     if (gameState.prayer.isOverlayActive) {
         updatePrayerOverlayTimer(); // keep the dismiss-button countdown ticking
@@ -9848,6 +9893,10 @@ function checkPrayerTrigger() {
 // ── Trigger overlay ──────────────────────────────────────────────────────────
 
 function triggerPrayerOverlay(prayerKey, arabicName) {
+    // Prayer takes priority over azkar — close azkar without marking complete
+    if (gameState.azkar && gameState.azkar.active) {
+        closeAzkarOverlay(false);
+    }
     const pr = gameState.prayer;
     pr.triggeredToday[prayerKey] = true;
 
@@ -10328,6 +10377,445 @@ function openPrayerEditModal() {
 
 function updatePrayerSystem() {
     tickPrayerPanel();
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// AZKAR (Morning / Evening remembrance) System
+// ═════════════════════════════════════════════════════════════════════════════
+
+// Each item: { text, highlight, count }
+// `highlight` is the leading phrase rendered in bold; `text` is the rest of the zikr.
+// `count` is repetition (1 unless specified). For "مائة مرة أو أكثر" we default to 100.
+const AZKAR_MORNING = [
+    { highlight: 'قراءة آية الكرسي:', text: '{اللهُ لَا إِلَهَ إِلَّا هُوَ الْحَيُّ الْقَيُّومُ لَا تَأْخُذُهُ سِنَةٌ وَلَا نَوْمٌ لَهُ مَا فِي السَّمَاوَاتِ وَمَا فِي الْأَرْضِ مَنْ ذَا الَّذِي يَشْفَعُ عِنْدَهُ إِلَّا بِإِذْنِهِ يَعْلَمُ مَا بَيْنَ أَيْدِيهِمْ وَمَا خَلْفَهُمْ وَلَا يُحِيطُونَ بِشَيْءٍ مِنْ عِلْمِهِ إِلَّا بِمَا شَاءَ وَسِعَ كُرْسِيُّهُ السَّمَاوَاتِ وَالْأَرْضَ وَلَا يَؤُودُهُ حِفْظُهُمَا وَهُوَ الْعَلِيُّ الْعَظِيمُ} (البقرة:255).' , count: 1 },
+    { highlight: '', text: 'أصبحنا على فطرة الإسلام وكلِمة الإخلاص، ودين نبينا محمد ﷺ، ومِلَّةِ أبينا إبراهيم، حنيفاً مسلماً، وما كان من المشركين.', count: 1 },
+    { highlight: '', text: 'رضيت بالله رباً، وبالإسلام ديناً، وبمحمد ﷺ نبياً.', count: 1 },
+    { highlight: '', text: 'اللهم إني أسألك علماً نافعاً، ورزقاً طيباً، وعملاً متقبلاً.', count: 1 },
+    { highlight: '', text: 'اللهم بك أصبحنا، وبك أمسينا، وبك نحيا، وبك نموت، وإليك النشور.', count: 1 },
+    { highlight: '', text: 'لا إله إلا الله وحده، لا شريك له، له الملك، وله الحمد، وهو على كل شيء قدير.', count: 1 },
+    { highlight: '', text: 'يا حيُّ يا قيوم برحمتك أستغيثُ، أصلح لي شأني كله، ولا تَكلني إلى نفسي طَرْفَةَ عينٍ أبدًا.', count: 1 },
+    { highlight: 'سيد الاستغفار:', text: 'اللهم أنت ربي، لا إله إلا أنت، خلقتني وأنا عبدُك، وأنا على عهدِك ووعدِك ما استطعتُ، أعوذ بك من شر ما صنعتُ، أبوءُ لَكَ بنعمتكَ عليّ، وأبوء بذنبي، فاغفر لي، فإنه لا يغفرُ الذنوب إلا أنت.', count: 1 },
+    { highlight: '', text: 'اللهم فاطر السموات والأرض، عالم الغيب والشهادة، رب كل شيء ومليكه، أشهد أن لا إله إلا أنت، أعوذ بك من شر نفسي، ومن شر الشيطان وشركه، وأن أقترف على نفسي سوءاً، أو أجره إلى مسلم.', count: 1 },
+    { highlight: '', text: 'أصبحنا وأصبح الملك لله، والحمد لله، ولا إله إلا الله وحده لا شريك له، له الملك وله الحمد، وهو على كل شيء قدير، أسألك خير ما في هذا اليوم، وخير ما بعده، وأعوذ بك من شر هذا اليوم، وشر ما بعده، وأعوذ بك من الكسل وسوء الكِبَر، وأعوذ بك من عذاب النار وعذاب القبر.', count: 1 },
+    { highlight: '', text: 'اللهم إني أسألك العفو والعافية في الدنيا والآخرة، اللهم إني أسألك العفو والعافية في ديني ودنياي وأهلي ومالي، اللهم استر عوراتي، وآمن روعاتي، واحفظني من بين يدي، ومن خلفي، وعن يميني، وعن شمالي، ومن فوقي، وأعوذ بك أن أُغتال من تحتي.', count: 1 },
+    { highlight: '', text: 'بسم الله الذي لا يضر مع اسمه شيءٌ في الأرض ولا في السماء، وهو السميع العليم.', count: 3 },
+    { highlight: '', text: 'سبحان الله عدد خلقه، سبحان الله رضا نفسه، سبحان الله زنة عرشه، سبحان الله مداد كلماته.', count: 3 },
+    { highlight: '', text: 'اللهم عافني في بدني، اللهم عافني في سمعي، اللهم عافني في بصري، لا إله إلا أنت. اللهم إني أعوذ بك من الكفر والفقر، اللهم إني أعوذ بك من عذاب القبر، لا إله إلا أنت.', count: 3 },
+    { highlight: '', text: 'قراءة سور: الإخلاص، والفلق، والناس.', count: 3 },
+    { highlight: '', text: '{حسبي الله لا إله إلا هو عليه توكلت وهو رب العرش العظيم} (التوبة:129).', count: 7 },
+    { highlight: '', text: 'اللهم إني أصبحت أُشهدك، وأُشهد حملة عرشك، وملائكتك، وجميع خلقك أنك أنت الله، وحدك لا شريك لك، وأن محمداً عبدك ورسولك.', count: 4 },
+    { highlight: '', text: 'لا إله إلا الله وحده، لا شريك له، له الملك، وله الحمد، يحيي ويميت، وهو على كل شيء قدير.', count: 10 },
+    { highlight: '', text: 'سبحان الله العظيم وبحمده.', count: 100 },
+    { highlight: '', text: 'أستغفر الله.', count: 100 },
+    { highlight: '', text: 'سبحان الله، والحمد لله، والله أكبر، لا إله إلا الله وحده، لا شريك له، له الملك، وله الحمد، وهو على كل شيء قدير.', count: 100 },
+];
+
+const AZKAR_EVENING = [
+    { highlight: 'قراءة آية الكرسي:', text: '{اللهُ لَا إِلَهَ إِلَّا هُوَ الْحَيُّ الْقَيُّومُ لَا تَأْخُذُهُ سِنَةٌ وَلَا نَوْمٌ لَهُ مَا فِي السَّمَاوَاتِ وَمَا فِي الْأَرْضِ مَنْ ذَا الَّذِي يَشْفَعُ عِنْدَهُ إِلَّا بِإِذْنِهِ يَعْلَمُ مَا بَيْنَ أَيْدِيهِمْ وَمَا خَلْفَهُمْ وَلَا يُحِيطُونَ بِشَيْءٍ مِنْ عِلْمِهِ إِلَّا بِمَا شَاءَ وَسِعَ كُرْسِيُّهُ السَّمَاوَاتِ وَالْأَرْضَ وَلَا يَؤُودُهُ حِفْظُهُمَا وَهُوَ الْعَلِيُّ الْعَظِيمُ} (البقرة:255).', count: 1 },
+    { highlight: '', text: 'أمسينا على فطرة الإسلام وكلِمة الإخلاص، ودين نبينا محمد ﷺ، ومِلَّةِ أبينا إبراهيم، حنيفاً مسلماً، وما كان من المشركين.', count: 1 },
+    { highlight: '', text: 'رضيت بالله رباً، وبالإسلام ديناً، وبمحمد ﷺ نبياً.', count: 1 },
+    { highlight: '', text: 'اللهم بك أمسينا، وبك أصبحنا، وبك نحيا، وبك نموت، وإليك المصير.', count: 1 },
+    { highlight: '', text: 'لا إله إلا الله وحده، لا شريك له، له الملك، وله الحمد، وهو على كل شيء قدير.', count: 1 },
+    { highlight: '', text: 'يا حيُّ يا قيوم برحمتك أستغيثُ، أصلح لي شأني كله، ولا تَكلني إلى نفسي طَرْفَةَ عينٍ أبدًا.', count: 1 },
+    { highlight: 'سيد الاستغفار:', text: 'اللهم أنت ربي، لا إله إلا أنت، خلقتني وأنا عبدُك، وأنا على عهدِك ووعدِك ما استطعتُ، أعوذ بك من شر ما صنعتُ، أبوءُ لَكَ بنعمتكَ عليّ، وأبوء بذنبي، فاغفر لي، فإنه لا يغفرُ الذنوب إلا أنت.', count: 1 },
+    { highlight: '', text: 'اللهم فاطر السموات والأرض، عالم الغيب والشهادة، رب كل شيء ومليكه، أشهد أن لا إله إلا أنت، أعوذ بك من شر نفسي، ومن شر الشيطان وشركه، وأن أقترف على نفسي سوءاً، أو أجره إلى مسلم.', count: 1 },
+    { highlight: '', text: 'أمسينا وأمسى الملك لله، والحمد لله، لا إله إلا الله وحده لا شريك له، اللهم إني أسألك من خير ما في هذه الليلة، وخير ما بعدها، اللهم إني أعوذ بك من شر هذه الليلة وشر ما بعدها، اللهم إني أعوذ بك من الكسل وسوء الكِبَر، وأعوذ بك من عذاب في النار وعذاب في القبر.', count: 1 },
+    { highlight: '', text: 'اللهم إني أسألك العفو والعافية في الدنيا والآخرة، اللهم إني أسألك العفو والعافية في ديني ودنياي وأهلي ومالي، اللهم استر عوراتي، وآمن روعاتي، واحفظني من بين يدي، ومن خلفي، وعن يميني، وعن شمالي، ومن فوقي، وأعوذ بك أن أُغتال من تحتي.', count: 1 },
+    { highlight: '', text: 'بسم الله الذي لا يضر مع اسمه شيءٌ في الأرض ولا في السماء، وهو السميع العليم.', count: 3 },
+    { highlight: '', text: 'أعوذ بكلمات الله التامَّات من شر ما خلق.', count: 3 },
+    { highlight: '', text: 'اللهم عافني في بدني، اللهم عافني في سمعي، اللهم عافني في بصري، لا إله إلا أنت. اللهم إني أعوذ بك من الكفر والفقر، اللهم إني أعوذ بك من عذاب القبر، لا إله إلا أنت.', count: 3 },
+    { highlight: '', text: 'قراءة سور: الإخلاص، والفلق، والناس.', count: 3 },
+    { highlight: '', text: '{حسبي الله لا إله إلا هو عليه توكلت وهو رب العرش العظيم} (التوبة:129).', count: 7 },
+    { highlight: '', text: 'اللهم إني أمسيت أُشهدك، وأُشهد حملة عرشك، وملائكتك، وجميع خلقك، أنك أنت الله، وحدك لا شريك لك، وأن محمداً عبدك ورسولك.', count: 4 },
+    { highlight: '', text: 'لا إله إلا الله وحده، لا شريك له، له الملك، وله الحمد، يحيي ويميت، وهو على كل شيء قدير.', count: 10 },
+    { highlight: '', text: 'سبحان الله العظيم وبحمده.', count: 100 },
+    { highlight: '', text: 'أستغفر الله.', count: 100 },
+    { highlight: '', text: 'سبحان الله، والحمد لله، والله أكبر، لا إله إلا الله وحده، لا شريك له، له الملك، وله الحمد، وهو على كل شيء قدير.', count: 100 },
+];
+
+// Fallback prayer windows for Cairo when no location yet (approximate year-round)
+const AZKAR_FALLBACK_TIMES = { Fajr: '04:30', Dhuhr: '12:00', Asr: '15:30', Maghrib: '18:00', Isha: '19:30' };
+
+// Returns 'morning' (Fajr→Dhuhr), 'evening' (Asr→Isha), or null
+function getCurrentAzkarType() {
+    const times = (gameState.prayer && gameState.prayer.times) ? gameState.prayer.times : AZKAR_FALLBACK_TIMES;
+    const toMin = (s) => { if (!s) return null; const [h, m] = s.split(':').map(Number); return h * 60 + m; };
+    const fajr  = toMin(times.Fajr);
+    const dhuhr = toMin(times.Dhuhr);
+    const asr   = toMin(times.Asr);
+    const isha  = toMin(times.Isha);
+    if (fajr == null || dhuhr == null || asr == null || isha == null) return null;
+    const now = new Date();
+    const cur = now.getHours() * 60 + now.getMinutes();
+    if (cur >= fajr && cur < dhuhr) return 'morning';
+    if (cur >= asr && cur < isha)   return 'evening';
+    return null;
+}
+
+function _todayDateStr() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function updateAzkarButton() {
+    const btn = document.getElementById('azkar-btn');
+    const confirm = document.getElementById('azkar-confirm');
+    if (!btn) return;
+
+    // Throttle to ~1/s (called from main loop)
+    const now = Date.now();
+    if (now - gameState.azkar._lastButtonRefresh < 1000) return;
+    gameState.azkar._lastButtonRefresh = now;
+
+    const type = getCurrentAzkarType();
+    const inSharedPomo = gameState.sharedPomo && gameState.sharedPomo.phase && gameState.sharedPomo.phase !== 'idle';
+    const inPrayerOverlay = gameState.prayer && gameState.prayer.isOverlayActive;
+    const azkarOpen = gameState.azkar.active;
+    const today = _todayDateStr();
+    const doneToday = type && gameState.azkar.completed && gameState.azkar.completed[type] === today;
+
+    const shouldShow = !!type && !inSharedPomo && !inPrayerOverlay && !azkarOpen && !doneToday;
+    btn.classList.toggle('hidden', !shouldShow);
+    if (!shouldShow) {
+        confirm?.classList.add('hidden');
+        return;
+    }
+
+    const label = document.getElementById('azkar-btn-label');
+    if (type === 'morning') {
+        btn.classList.add('morning'); btn.classList.remove('evening');
+        if (label) label.textContent = 'أذكار الصباح';
+    } else {
+        btn.classList.add('evening'); btn.classList.remove('morning');
+        if (label) label.textContent = 'أذكار المساء';
+    }
+}
+
+function showAzkarConfirm() {
+    const confirm = document.getElementById('azkar-confirm');
+    confirm?.classList.remove('hidden');
+}
+function hideAzkarConfirm() {
+    document.getElementById('azkar-confirm')?.classList.add('hidden');
+}
+
+function markAzkarCompleted(type) {
+    const today = _todayDateStr();
+    gameState.azkar.completed = gameState.azkar.completed || {};
+    gameState.azkar.completed[type] = today;
+    if (gameState.userId) {
+        update(ref(database), { [`users/${gameState.userId}/azkarCompleted`]: gameState.azkar.completed }).catch(() => {});
+    }
+    updateAzkarButton();
+}
+
+function loadAzkarCompletedFromFirebase() {
+    if (!gameState.userId) return;
+    get(ref(database, `users/${gameState.userId}/azkarCompleted`)).then(snap => {
+        const v = snap.val() || {};
+        gameState.azkar.completed = v;
+        updateAzkarButton();
+    }).catch(() => {});
+}
+
+function openAzkarOverlay(type) {
+    const az = gameState.azkar;
+    if (az.active) return;
+
+    az.active = true;
+    az.type = type;
+    az.startTime = Date.now();
+    az.currentIndex = 0;
+    const list = type === 'morning' ? AZKAR_MORNING : AZKAR_EVENING;
+    az.counts = list.map(z => z.count);
+
+    // Siraj: shorter lock for testing
+    az.minLockMs = gameState.isSirajGhost ? 5000 : 180000;
+
+    document.body.classList.add('azkar-active');
+    const overlay = document.getElementById('azkar-overlay');
+    if (overlay) {
+        overlay.dataset.mode = type;
+        overlay.classList.remove('hidden');
+        requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add('active')));
+    }
+
+    // ── Pause pomodoro / freeMode timers ──
+    // Solo pomo: snapshot remaining ms (we'll keep extending endTime in update loop)
+    if (gameState.pomodoro.active && gameState.sharedPomo.phase !== 'active') {
+        az.pausedPomoRemaining = Math.max(0, gameState.pomodoro.endTime - Date.now());
+        az.pausedPomoPhase = gameState.pomodoro.phase;
+    }
+    // Free mode: snapshot accumulated work, freeze workStartTime
+    if (gameState.freeMode.active) {
+        const fm = gameState.freeMode;
+        if (fm.phase === 'work' && fm.workStartTime > 0) {
+            fm.totalWorkMs  += Date.now() - fm.workStartTime;
+            fm.workStartTime = 0;
+        }
+        if (fm.phase === 'break') {
+            az.pausedFreeWorkSnap = Math.max(0, fm.breakEndTime - Date.now());
+        }
+    }
+
+    // Stop player movement
+    const _local = gameState.players[gameState.userId];
+    if (_local) { _local.isMoving = false; _local.isSprinting = false; }
+    if (gameState.joystick) { gameState.joystick.active = false; gameState.joystick.dx = 0; gameState.joystick.dy = 0; gameState.joystick.magnitude = 0; gameState.joystick.sprinting = false; }
+    ['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','ShiftLeft','ShiftRight']
+        .forEach(k => { if (gameState.keys) gameState.keys[k] = false; });
+
+    // ── Stop YouTube (remember if was playing so we can restore) ──
+    if (gameState.focusYTPlayer) {
+        try {
+            const state = gameState.focusYTPlayer.player?.getPlayerState?.() ?? -1;
+            az.ytWasPlaying = (state === 1 /* PLAYING */);
+            az.ytVolumeBefore = gameState.focusYTPlayer.volume ?? 80;
+        } catch (e) { az.ytWasPlaying = false; }
+        gameState.focusYTPlayer.fadeOutAndPause(1200);
+    }
+    // Show "انتهي من أذكارك" overlay above YT
+    document.getElementById('yt-azkar-overlay')?.classList.add('active');
+
+    // On mobile: un-hide user card / logout if they were hidden by focus mode (we need an exit)
+    az.focusMobileWasActive = document.body.classList.contains('mobile-focus-mode') ||
+        document.querySelector('.user-card.focus-hidden') != null;
+
+    // Render & start lock timer
+    renderAzkarList();
+    updateAzkarFinishTimer();
+}
+
+function _ar(n) {
+    const map = ['٠','١','٢','٣','٤','٥','٦','٧','٨','٩'];
+    return String(n).split('').map(c => map[c] || c).join('');
+}
+
+function renderAzkarList() {
+    const az = gameState.azkar;
+    const listEl = document.getElementById('azkar-list');
+    const titleEl = document.getElementById('azkar-title');
+    const progEl = document.getElementById('azkar-progress');
+    if (!listEl) return;
+
+    const items = az.type === 'morning' ? AZKAR_MORNING : AZKAR_EVENING;
+    if (titleEl) titleEl.textContent = az.type === 'morning' ? 'أذكار الصباح' : 'أذكار المساء';
+    const completedCount = az.counts.filter(c => c === 0).length;
+    if (progEl) progEl.textContent = `${_ar(completedCount)} / ${_ar(items.length)}`;
+
+    listEl.innerHTML = '';
+    items.forEach((z, i) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'azkar-item';
+        wrap.style.animationDelay = `${Math.min(i, 12) * 50}ms`;
+        if (i === az.currentIndex) wrap.classList.add('current');
+        if (az.counts[i] === 0) { wrap.classList.add('done'); wrap.classList.remove('current'); }
+
+        const txt = document.createElement('div');
+        txt.className = 'azkar-item-text';
+        // Compose: bold highlight (if any), then the rest
+        if (z.highlight && z.highlight.trim()) {
+            const hi = document.createElement('span');
+            hi.className = 'azkar-highlight';
+            hi.textContent = z.highlight + ' ';
+            txt.appendChild(hi);
+        }
+        txt.appendChild(document.createTextNode(z.text));
+        wrap.appendChild(txt);
+
+        const footer = document.createElement('div');
+        footer.className = 'azkar-item-footer';
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'azkar-count-btn';
+        btn.dataset.idx = String(i);
+        const remaining = az.counts[i];
+        if (remaining > 0) {
+            btn.textContent = _ar(remaining);
+        } else {
+            btn.classList.add('done');
+            btn.textContent = '✓';
+            btn.disabled = true;
+        }
+        btn.addEventListener('click', () => onAzkarCountClick(i));
+        footer.appendChild(btn);
+        wrap.appendChild(footer);
+
+        listEl.appendChild(wrap);
+
+        if (i < items.length - 1) {
+            const sep = document.createElement('div');
+            sep.className = 'azkar-sep';
+            listEl.appendChild(sep);
+        }
+    });
+}
+
+function onAzkarCountClick(idx) {
+    const az = gameState.azkar;
+    if (!az.active) return;
+    if (az.counts[idx] <= 0) return;
+    az.counts[idx] -= 1;
+    const items = az.type === 'morning' ? AZKAR_MORNING : AZKAR_EVENING;
+    const listEl = document.getElementById('azkar-list');
+    const itemEls = listEl?.querySelectorAll('.azkar-item');
+    if (!itemEls) return;
+    const itemEl = itemEls[idx];
+    const btn = itemEl?.querySelector('.azkar-count-btn');
+
+    if (az.counts[idx] === 0) {
+        // Mark done
+        if (btn) { btn.classList.add('done'); btn.textContent = '✓'; btn.disabled = true; }
+        itemEl?.classList.add('done');
+        itemEl?.classList.remove('current');
+
+        // Update progress label
+        const progEl = document.getElementById('azkar-progress');
+        const completedCount = az.counts.filter(c => c === 0).length;
+        if (progEl) progEl.textContent = `${_ar(completedCount)} / ${_ar(items.length)}`;
+
+        // Advance to next non-done index
+        let next = idx + 1;
+        while (next < items.length && az.counts[next] === 0) next++;
+        if (next < items.length) {
+            az.currentIndex = next;
+            itemEls.forEach((el, j) => el.classList.toggle('current', j === next));
+            // Smooth scroll to next
+            const nextEl = itemEls[next];
+            if (nextEl) {
+                setTimeout(() => {
+                    nextEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 220);
+            }
+        }
+    } else {
+        if (btn) btn.textContent = _ar(az.counts[idx]);
+    }
+}
+
+function updateAzkarFinishTimer() {
+    const az = gameState.azkar;
+    if (!az.active) return;
+    const elapsed = Date.now() - az.startTime;
+    const remaining = Math.max(0, az.minLockMs - elapsed);
+    const btn = document.getElementById('azkar-finish-btn');
+    const timerEl = document.getElementById('azkar-finish-timer');
+    if (remaining <= 0) {
+        if (btn) { btn.disabled = false; btn.classList.add('unlocked'); }
+        if (timerEl) timerEl.textContent = '';
+    } else {
+        const m = Math.floor(remaining / 60000);
+        const s = Math.floor((remaining % 60000) / 1000);
+        if (timerEl) timerEl.textContent = `${m}:${String(s).padStart(2, '0')}`;
+        if (btn) { btn.disabled = true; btn.classList.remove('unlocked'); }
+    }
+}
+
+function closeAzkarOverlay(markDone) {
+    const az = gameState.azkar;
+    if (!az.active) return;
+    az.active = false;
+
+    // Resume pomodoro endTime (solo)
+    if (gameState.pomodoro.active && gameState.sharedPomo.phase !== 'active') {
+        if (az.pausedPomoRemaining > 0) {
+            gameState.pomodoro.endTime = Date.now() + az.pausedPomoRemaining;
+            if (gameState.pomodoro.laptopId !== null) {
+                const updates = {};
+                updates[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}/endTime`)] = gameState.pomodoro.endTime;
+                update(ref(database), updates).catch(() => {});
+            }
+        }
+    }
+    // Resume free-mode
+    if (gameState.freeMode.active) {
+        const fm = gameState.freeMode;
+        if (fm.phase === 'work' && fm.workStartTime === 0) {
+            fm.workStartTime = Date.now();
+        }
+        if (fm.phase === 'break' && az.pausedFreeWorkSnap > 0) {
+            fm.breakEndTime = Date.now() + az.pausedFreeWorkSnap;
+        }
+    }
+
+    // Restore YouTube
+    document.getElementById('yt-azkar-overlay')?.classList.remove('active');
+    if (gameState.focusYTPlayer && az.ytWasPlaying) {
+        const targetPct = az.ytVolumeBefore || gameState.focusYTPlayer.volume || 80;
+        try {
+            gameState.focusYTPlayer.setVolumePercent(0);
+            gameState.focusYTPlayer.resume().then(() => {
+                let e = 0;
+                const iv = setInterval(() => {
+                    e += 50;
+                    gameState.focusYTPlayer.setVolumePercent(Math.min(targetPct, Math.round(targetPct * e / 1500)));
+                    if (e >= 1500) clearInterval(iv);
+                }, 50);
+            }).catch(() => { gameState.focusYTPlayer.setVolumePercent(targetPct); });
+        } catch (e) {}
+    }
+    az.ytWasPlaying = false;
+
+    // Fade out overlay
+    const overlay = document.getElementById('azkar-overlay');
+    if (overlay) {
+        overlay.classList.remove('active');
+        setTimeout(() => { overlay.classList.add('hidden'); }, 700);
+    }
+    document.body.classList.remove('azkar-active');
+
+    if (markDone && az.type) markAzkarCompleted(az.type);
+
+    az.type = null;
+    az.pausedPomoRemaining = 0;
+    az.pausedFreeWorkSnap = 0;
+    az.pausedPomoPhase = null;
+    updateAzkarButton();
+}
+
+function setupAzkarUI() {
+    const btn = document.getElementById('azkar-btn');
+    btn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const confirm = document.getElementById('azkar-confirm');
+        if (confirm && !confirm.classList.contains('hidden')) hideAzkarConfirm();
+        else showAzkarConfirm();
+    });
+
+    document.getElementById('azkar-confirm-yes')?.addEventListener('click', () => {
+        const type = getCurrentAzkarType();
+        if (type) markAzkarCompleted(type);
+        hideAzkarConfirm();
+    });
+
+    document.getElementById('azkar-confirm-no')?.addEventListener('click', () => {
+        const type = getCurrentAzkarType();
+        hideAzkarConfirm();
+        if (type) openAzkarOverlay(type);
+    });
+
+    document.getElementById('azkar-finish-btn')?.addEventListener('click', () => {
+        const fb = document.getElementById('azkar-finish-btn');
+        if (fb?.disabled) return;
+        closeAzkarOverlay(true);
+    });
+
+    // Click anywhere outside the user card hides the confirm popup
+    document.addEventListener('click', (e) => {
+        const card = document.getElementById('user-card');
+        if (!card) return;
+        if (!card.contains(e.target)) hideAzkarConfirm();
+    });
+
+    loadAzkarCompletedFromFirebase();
+}
+
+// Called every frame; lightweight (button update is throttled, timer only when overlay open).
+function updateAzkarSystem() {
+    if (gameState.azkar.active) {
+        updateAzkarFinishTimer();
+    }
+    updateAzkarButton();
 }
 
 // EOF

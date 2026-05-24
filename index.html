@@ -154,6 +154,23 @@
             <div class="user-card-bottom">
                 <span id="player-count" class="user-card-count">0 مستخدمين</span>
             </div>
+            <!-- زر الأذكار: يظهر فجر→ظهر (الصباح) أو عصر→عشاء (المساء) -->
+            <button id="azkar-btn" class="azkar-btn hidden" type="button">
+                <span class="azkar-btn-glow"></span>
+                <svg class="azkar-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 12a9 9 0 1 0 9-9"/>
+                    <path d="M12 7v5l3 2"/>
+                </svg>
+                <span id="azkar-btn-label" class="azkar-btn-label">أذكار الصباح</span>
+            </button>
+            <!-- شريط التأكيد: يظهر بعد ضغط زر الأذكار -->
+            <div id="azkar-confirm" class="azkar-confirm hidden">
+                <span class="azkar-confirm-q">هل قرأت الأذكار؟</span>
+                <div class="azkar-confirm-row">
+                    <button id="azkar-confirm-no" class="azkar-confirm-btn azkar-confirm-no" type="button">لا</button>
+                    <button id="azkar-confirm-yes" class="azkar-confirm-btn azkar-confirm-yes" type="button">نعم</button>
+                </div>
+            </div>
         </div>
 
         <!-- زر الخروج (يسار الشاشة، مستقل عن بطاقة المستخدم) -->
@@ -608,6 +625,14 @@
                     <div class="yt-ad-spinner"></div>
                     <span class="yt-ad-label">انتظر.. إعلان</span>
                 </div>
+                <!-- يظهر فوق مشغل اليوتيوب أثناء قراءة الأذكار -->
+                <div id="yt-azkar-overlay" class="yt-azkar-overlay">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M12 2a7 7 0 0 1 7 7c0 4-3 6-3 9H8c0-3-3-5-3-9a7 7 0 0 1 7-7z"/>
+                        <path d="M9 21h6"/>
+                    </svg>
+                    <span>انتهي من أذكارك</span>
+                </div>
                 <div class="yt-ambient" aria-hidden="true">
                     <img id="yt-ambient-img" src="" alt="">
                 </div>
@@ -763,6 +788,27 @@
                 <button id="prayer-overlay-btn" class="prayer-overlay-btn" disabled>
                     <span id="prayer-overlay-btn-text">صليت.. الحمدلله ♥️</span>
                     <span id="prayer-overlay-timer" class="prayer-overlay-timer">3:00</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- شاشة الأذكار (ملء الشاشة) -->
+        <div id="azkar-overlay" class="azkar-overlay hidden">
+            <div class="azkar-overlay-bg"></div>
+            <div class="azkar-fog">
+                <div class="azkar-fog-layer"></div>
+                <div class="azkar-fog-layer"></div>
+                <div class="azkar-fog-layer"></div>
+            </div>
+            <div class="azkar-overlay-content">
+                <div class="azkar-header">
+                    <div id="azkar-title" class="azkar-title">أذكار الصباح</div>
+                    <div id="azkar-progress" class="azkar-progress">٠ / ٠</div>
+                </div>
+                <div id="azkar-list" class="azkar-list"></div>
+                <button id="azkar-finish-btn" class="azkar-finish-btn" disabled type="button">
+                    <span class="azkar-finish-label">انتهيت</span>
+                    <span id="azkar-finish-timer" class="azkar-finish-timer">3:00</span>
                 </button>
             </div>
         </div>

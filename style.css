@@ -3679,3 +3679,507 @@ body.is-mobile .tomato-emoji { font-size: 24px; }
 body.is-mobile .mode-card-emoji { font-size: 30px; flex-shrink: 0; }
 body.is-mobile .mode-card-title { font-size: 15px; }
 body.is-mobile .mode-card-desc { font-size: 11px; }
+
+/* ══════════════════════════════════════════════════════
+   AZKAR — Morning/Evening remembrance feature
+   ══════════════════════════════════════════════════════ */
+
+/* — Azkar button on the user card — */
+.azkar-btn {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 4px;
+    padding: 9px 14px;
+    border-radius: 14px;
+    border: 1px solid rgba(255,255,255,0.18);
+    font-family: inherit;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: -0.005em;
+    cursor: pointer;
+    overflow: hidden;
+    isolation: isolate;
+    transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1),
+                background 0.3s ease,
+                border-color 0.3s ease,
+                box-shadow 0.3s ease;
+    animation: azkarPulse 2.4s ease-in-out infinite;
+    -webkit-tap-highlight-color: transparent;
+}
+.azkar-btn.hidden { display: none; }
+.azkar-btn:hover { transform: translateY(-1px) scale(1.02); }
+.azkar-btn:active { transform: scale(0.97); }
+
+.azkar-btn-icon {
+    width: 14px; height: 14px;
+    flex-shrink: 0;
+    opacity: 0.9;
+}
+.azkar-btn-label { white-space: nowrap; }
+
+.azkar-btn-glow {
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    z-index: -1;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+.azkar-btn::before {
+    /* sweeping shimmer */
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(120deg, transparent 30%, rgba(255,255,255,0.25) 50%, transparent 70%);
+    background-size: 200% 100%;
+    background-position: 200% 0;
+    animation: azkarShimmer 3.2s ease-in-out infinite;
+    pointer-events: none;
+}
+
+/* Morning theme — sky white (warm soft daylight) */
+.azkar-btn.morning {
+    background: linear-gradient(140deg, rgba(255,250,240,0.92) 0%, rgba(220,235,255,0.85) 100%);
+    color: #1f2a3d;
+    border-color: rgba(255,255,255,0.7);
+    box-shadow: 0 6px 22px rgba(140,190,255,0.30),
+                0 1px 0 rgba(255,255,255,0.6) inset,
+                0 0 0 0 rgba(255,240,200,0.6);
+}
+.azkar-btn.morning .azkar-btn-glow {
+    background: radial-gradient(ellipse at 50% 50%, rgba(255,235,160,0.45) 0%, transparent 70%);
+    opacity: 1;
+    filter: blur(10px);
+}
+
+/* Evening theme — midnight blue */
+.azkar-btn.evening {
+    background: linear-gradient(140deg, #11214a 0%, #1a2b5f 55%, #0d1633 100%);
+    color: rgba(220,230,255,0.95);
+    border-color: rgba(120,150,220,0.45);
+    box-shadow: 0 6px 22px rgba(20,40,90,0.55),
+                0 1px 0 rgba(255,255,255,0.10) inset,
+                0 0 18px rgba(80,120,220,0.30);
+}
+.azkar-btn.evening .azkar-btn-glow {
+    background: radial-gradient(ellipse at 50% 50%, rgba(120,160,255,0.40) 0%, transparent 70%);
+    opacity: 1;
+    filter: blur(10px);
+}
+
+@keyframes azkarPulse {
+    0%, 100% { transform: scale(1); }
+    50%      { transform: scale(1.04); }
+}
+@keyframes azkarShimmer {
+    0%   { background-position: 200% 0; }
+    60%  { background-position: -100% 0; }
+    100% { background-position: -100% 0; }
+}
+
+/* — Confirm popup (inline under user card) — */
+.azkar-confirm {
+    margin-top: 6px;
+    padding: 10px 12px;
+    background: rgba(18,18,18,0.78);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 14px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.30);
+    animation: azkarConfirmIn 0.32s cubic-bezier(0.34,1.56,0.64,1);
+}
+.azkar-confirm.hidden { display: none; }
+.azkar-confirm-q {
+    display: block;
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.90);
+    text-align: center;
+    margin-bottom: 9px;
+    font-weight: 600;
+}
+.azkar-confirm-row {
+    display: flex;
+    gap: 8px;
+}
+.azkar-confirm-btn {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 10px;
+    font-family: inherit;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1),
+                background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+}
+.azkar-confirm-btn:active { transform: scale(0.96); }
+.azkar-confirm-no {
+    /* highlighted as the "open azkar list" action */
+    background: rgba(59,185,171,0.55);
+    color: #fff;
+    border-color: rgba(59,185,171,0.70);
+    box-shadow: 0 4px 14px rgba(59,185,171,0.32);
+}
+.azkar-confirm-no:hover { background: rgba(59,185,171,0.72); }
+.azkar-confirm-yes {
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.70);
+    border-color: rgba(255,255,255,0.10);
+}
+.azkar-confirm-yes:hover { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.92); }
+
+@keyframes azkarConfirmIn {
+    0%   { opacity: 0; transform: translateY(-4px) scale(0.97); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* — Fullscreen azkar overlay — */
+.azkar-overlay {
+    position: fixed; inset: 0; z-index: 10000;
+    display: flex; align-items: center; justify-content: center;
+    overflow: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.65s ease;
+}
+.azkar-overlay.active {
+    opacity: 1;
+    pointer-events: all;
+}
+.azkar-overlay.hidden { display: none; }
+
+.azkar-overlay-bg {
+    position: absolute; inset: 0;
+    transition: background 1.2s ease;
+}
+.azkar-overlay[data-mode="morning"] .azkar-overlay-bg {
+    /* same family as Dhuhr — calm sky blue */
+    background: linear-gradient(155deg, #04101e 0%, #08233f 35%, #0a2848 60%, #0b1c33 85%, #050f1f 100%);
+}
+.azkar-overlay[data-mode="morning"] .azkar-overlay-bg::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 50% 25%, rgba(80,160,235,0.22) 0%, transparent 55%),
+                radial-gradient(ellipse at 30% 80%, rgba(160,200,255,0.10) 0%, transparent 50%);
+    animation: prayerGlow 7s ease-in-out infinite alternate;
+}
+.azkar-overlay[data-mode="evening"] .azkar-overlay-bg {
+    /* same family as Isha */
+    background: linear-gradient(150deg, #020612 0%, #04091f 50%, #060318 100%);
+}
+.azkar-overlay[data-mode="evening"] .azkar-overlay-bg::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 50% 25%, rgba(30,60,180,0.20) 0%, transparent 55%),
+                radial-gradient(ellipse at 20% 75%, rgba(10,20,80,0.16) 0%, transparent 50%);
+    animation: prayerGlow 7s ease-in-out infinite alternate;
+}
+body.is-mobile .azkar-overlay-bg::after { display: none; }
+
+.azkar-fog {
+    position: absolute; inset: -40%;
+    pointer-events: none; z-index: 0;
+}
+.azkar-fog-layer {
+    position: absolute;
+    width: 220%; height: 180%;
+    top: -40%; left: -60%;
+    border-radius: 50%;
+    animation: fogDrift ease-in-out infinite alternate;
+    will-change: transform;
+    filter: blur(40px);
+}
+.azkar-overlay[data-mode="morning"] .azkar-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 50% 60%, rgba(120,170,235,0.10) 0%, transparent 55%); animation-duration: 11s; }
+.azkar-overlay[data-mode="morning"] .azkar-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 50% 30%, rgba(180,210,255,0.08) 0%, transparent 50%); animation-duration: 14s; animation-delay: -5s; }
+.azkar-overlay[data-mode="morning"] .azkar-fog-layer:nth-child(3) { background: radial-gradient(ellipse at 30% 50%, rgba(80,130,200,0.08) 0%, transparent 55%); animation-duration: 9s; animation-delay: -3s; }
+.azkar-overlay[data-mode="evening"] .azkar-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 50% 50%, rgba(30,60,180,0.08) 0%, transparent 60%); animation-duration: 11s; }
+.azkar-overlay[data-mode="evening"] .azkar-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 60% 30%, rgba(80,100,200,0.06) 0%, transparent 55%); animation-duration: 14s; animation-delay: -5s; }
+.azkar-overlay[data-mode="evening"] .azkar-fog-layer:nth-child(3) { background: radial-gradient(ellipse at 30% 60%, rgba(10,20,100,0.10) 0%, transparent 58%); animation-duration: 9s; animation-delay: -3s; }
+
+.azkar-overlay-content {
+    position: relative;
+    z-index: 2;
+    width: min(680px, 92vw);
+    max-height: 86vh;
+    display: flex; flex-direction: column;
+    align-items: stretch;
+    gap: 18px;
+    padding: 26px 8px 0;
+    animation: slideUpFade 0.6s cubic-bezier(0.34,1.56,0.64,1);
+}
+
+.azkar-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: 0 16px;
+}
+.azkar-title {
+    font-size: 1.45rem;
+    font-weight: 800;
+    color: rgba(255,255,255,0.94);
+    letter-spacing: -0.01em;
+}
+.azkar-progress {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.45);
+    font-variant-numeric: tabular-nums;
+}
+
+.azkar-list {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 6px 14px 12px;
+    scroll-behavior: smooth;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255,255,255,0.18) transparent;
+    mask-image: linear-gradient(180deg, transparent 0, #000 18px, #000 calc(100% - 32px), transparent 100%);
+    -webkit-mask-image: linear-gradient(180deg, transparent 0, #000 18px, #000 calc(100% - 32px), transparent 100%);
+}
+.azkar-list::-webkit-scrollbar { width: 6px; }
+.azkar-list::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 6px; }
+.azkar-list::-webkit-scrollbar-track { background: transparent; }
+
+.azkar-item {
+    position: relative;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 18px;
+    padding: 18px 20px 18px;
+    margin-bottom: 14px;
+    color: rgba(255,255,255,0.86);
+    font-size: 1.02rem;
+    line-height: 1.85;
+    text-align: right;
+    direction: rtl;
+    opacity: 0;
+    transform: translateY(10px);
+    animation: azkarItemIn 0.55s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    transition: background 0.4s ease, border-color 0.4s ease, opacity 0.4s ease, transform 0.4s ease;
+}
+.azkar-item.current {
+    background: rgba(255,255,255,0.085);
+    border-color: rgba(255,255,255,0.18);
+    box-shadow: 0 6px 28px rgba(0,0,0,0.30);
+}
+.azkar-item.done {
+    opacity: 0.42;
+}
+.azkar-item.done .azkar-item-text { color: rgba(255,255,255,0.55); }
+
+.azkar-item-text {
+    color: inherit;
+    font-weight: 400;
+}
+.azkar-item-text .azkar-highlight {
+    font-weight: 800;
+    color: rgba(255,255,255,0.99);
+}
+.azkar-overlay[data-mode="morning"] .azkar-item-text .azkar-highlight {
+    color: #cfe6ff;
+    text-shadow: 0 0 18px rgba(160,200,255,0.30);
+}
+.azkar-overlay[data-mode="evening"] .azkar-item-text .azkar-highlight {
+    color: #c9d6ff;
+    text-shadow: 0 0 18px rgba(110,140,220,0.30);
+}
+
+.azkar-sep {
+    height: 1px;
+    margin: 2px 28px 14px;
+    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.12) 50%, transparent 100%);
+}
+
+.azkar-item-footer {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    margin-top: 14px;
+}
+.azkar-count-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 54px;
+    height: 38px;
+    padding: 0 14px;
+    border-radius: 50px;
+    border: 1.5px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.92);
+    font-family: inherit;
+    font-size: 1rem;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    cursor: pointer;
+    transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1),
+                background 0.25s ease, border-color 0.25s ease, color 0.25s ease, opacity 0.25s ease;
+}
+.azkar-overlay[data-mode="morning"] .azkar-count-btn {
+    background: rgba(110,170,240,0.18);
+    border-color: rgba(140,190,250,0.40);
+    color: #e6f1ff;
+}
+.azkar-overlay[data-mode="morning"] .azkar-count-btn:hover { background: rgba(110,170,240,0.30); }
+.azkar-overlay[data-mode="evening"] .azkar-count-btn {
+    background: rgba(80,110,200,0.20);
+    border-color: rgba(110,140,220,0.42);
+    color: #dbe4ff;
+}
+.azkar-overlay[data-mode="evening"] .azkar-count-btn:hover { background: rgba(80,110,200,0.32); }
+.azkar-count-btn:active { transform: scale(0.92); }
+.azkar-count-btn.done {
+    background: rgba(59,185,171,0.30);
+    border-color: rgba(59,185,171,0.55);
+    color: #fff;
+    cursor: default;
+}
+
+@keyframes azkarItemIn {
+    0%   { opacity: 0; transform: translateY(14px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+
+.azkar-finish-btn {
+    align-self: center;
+    margin-top: 4px;
+    margin-bottom: 18px;
+    display: inline-flex; flex-direction: column;
+    align-items: center; gap: 4px;
+    background: rgba(255,255,255,0.07);
+    border: 1.5px solid rgba(255,255,255,0.12);
+    border-radius: 50px;
+    padding: 14px 44px;
+    color: rgba(255,255,255,0.38);
+    font-family: inherit;
+    font-size: 1.02rem;
+    font-weight: 800;
+    cursor: not-allowed;
+    transition: background 0.3s, color 0.3s, border-color 0.3s, transform 0.25s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.3s;
+    flex-shrink: 0;
+}
+.azkar-finish-btn:disabled { opacity: 0.7; }
+.azkar-finish-btn.unlocked {
+    cursor: pointer;
+    color: #fff;
+    background: rgba(59,185,171,0.55);
+    border-color: rgba(59,185,171,0.68);
+    box-shadow: 0 6px 28px rgba(59,185,171,0.30);
+}
+.azkar-overlay[data-mode="morning"] .azkar-finish-btn.unlocked {
+    background: rgba(110,170,240,0.50);
+    border-color: rgba(150,200,255,0.65);
+    box-shadow: 0 6px 28px rgba(110,170,240,0.32);
+}
+.azkar-overlay[data-mode="evening"] .azkar-finish-btn.unlocked {
+    background: rgba(110,140,220,0.55);
+    border-color: rgba(140,170,240,0.65);
+    box-shadow: 0 6px 28px rgba(110,140,220,0.30);
+}
+.azkar-finish-btn.unlocked:hover { transform: translateY(-1px) scale(1.03); }
+.azkar-finish-btn.unlocked:active { transform: scale(0.97); }
+.azkar-finish-timer {
+    font-size: 0.7rem; font-weight: 600;
+    color: rgba(255,255,255,0.32);
+    font-variant-numeric: tabular-nums;
+}
+.azkar-finish-btn.unlocked .azkar-finish-timer { display: none; }
+
+/* — YouTube pause overlay during azkar — */
+.yt-azkar-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 12;
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    background: rgba(10,15,30,0.78);
+    backdrop-filter: blur(8px) saturate(1.2);
+    -webkit-backdrop-filter: blur(8px) saturate(1.2);
+    color: rgba(220,230,255,0.95);
+    font-size: 0.92rem;
+    font-weight: 700;
+    text-align: center;
+    border-radius: inherit;
+    pointer-events: all;
+    cursor: not-allowed;
+}
+.yt-azkar-overlay svg {
+    width: 32px; height: 32px;
+    color: rgba(160,200,255,0.9);
+}
+.yt-azkar-overlay.active { display: flex; animation: azkarConfirmIn 0.35s ease; }
+
+/* — Compact focus sounds panel while azkar is active — */
+body.azkar-active .focus-sounds-panel {
+    transform: translateY(0) scale(0.88);
+    transform-origin: bottom right;
+    opacity: 0.92;
+    transition: transform 0.45s cubic-bezier(0.34,1.56,0.64,1), opacity 0.4s ease;
+}
+body.azkar-active .yt-focus-block { display: none !important; }
+
+/* On mobile we still want the drawer accessible; reset desktop scale and keep drawer working */
+body.is-mobile.azkar-active .focus-sounds-panel {
+    transform: none;
+    opacity: 1;
+}
+
+/* When azkar overlay is open, hide the azkar button + confirm to avoid double UI */
+body.azkar-active .azkar-btn,
+body.azkar-active .azkar-confirm { display: none; }
+
+/* Mobile tweaks for azkar */
+body.is-mobile .azkar-btn {
+    margin-top: 4px;
+    padding: 7px 12px;
+    font-size: 0.74rem;
+    border-radius: 12px;
+}
+body.is-mobile .azkar-btn-icon { width: 12px; height: 12px; }
+body.is-mobile .azkar-confirm { padding: 9px 10px; }
+body.is-mobile .azkar-confirm-q { font-size: 0.72rem; margin-bottom: 7px; }
+body.is-mobile .azkar-confirm-btn { padding: 7px 8px; font-size: 0.74rem; }
+
+body.is-mobile .azkar-overlay-content {
+    width: 96vw;
+    max-height: 92vh;
+    padding: 16px 0 0;
+    gap: 12px;
+}
+body.is-mobile .azkar-title { font-size: 1.18rem; }
+body.is-mobile .azkar-progress { font-size: 0.78rem; }
+body.is-mobile .azkar-list { padding: 4px 10px 8px; }
+body.is-mobile .azkar-item {
+    padding: 14px 14px;
+    font-size: 0.92rem;
+    line-height: 1.75;
+    border-radius: 14px;
+    margin-bottom: 10px;
+}
+body.is-mobile .azkar-count-btn { min-width: 46px; height: 34px; font-size: 0.92rem; }
+body.is-mobile .azkar-finish-btn { padding: 11px 32px; font-size: 0.92rem; margin-bottom: 14px; }
+body.is-mobile .yt-azkar-overlay { font-size: 0.78rem; }
+body.is-mobile .yt-azkar-overlay svg { width: 26px; height: 26px; }
+
+/* Mobile: don't hide the user card during azkar — it'd take away the only exit */
+body.is-mobile.azkar-active .user-card.focus-hidden {
+    transform: none;
+    opacity: 1;
+    pointer-events: all;
+}
+body.is-mobile.azkar-active .logout-pill.focus-hidden {
+    transform: none;
+    opacity: 1;
+    pointer-events: all;
+}
