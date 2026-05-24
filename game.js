@@ -10436,6 +10436,10 @@ const AZKAR_EVENING = [
 // Fallback prayer windows for Cairo when no location yet (approximate year-round)
 const AZKAR_FALLBACK_TIMES = { Fajr: '04:30', Dhuhr: '12:00', Asr: '15:30', Maghrib: '18:00', Isha: '19:30' };
 
+// Siraj-only: fake current time for testing azkar windows (cleared on page unload / logout)
+let _azkarFakeHour = null; // 0-23, or null = use real time
+let _azkarFakeMin  = null;
+
 // Returns 'morning' (Fajr→Dhuhr), 'evening' (Asr→Isha), or null
 function getCurrentAzkarType() {
     const times = (gameState.prayer && gameState.prayer.times) ? gameState.prayer.times : AZKAR_FALLBACK_TIMES;
@@ -10445,8 +10449,13 @@ function getCurrentAzkarType() {
     const asr   = toMin(times.Asr);
     const isha  = toMin(times.Isha);
     if (fajr == null || dhuhr == null || asr == null || isha == null) return null;
-    const now = new Date();
-    const cur = now.getHours() * 60 + now.getMinutes();
+    let cur;
+    if (_azkarFakeHour !== null) {
+        cur = _azkarFakeHour * 60 + (_azkarFakeMin || 0);
+    } else {
+        const now = new Date();
+        cur = now.getHours() * 60 + now.getMinutes();
+    }
     if (cur >= fajr && cur < dhuhr) return 'morning';
     if (cur >= asr && cur < isha)   return 'evening';
     return null;
@@ -10530,7 +10539,7 @@ function openAzkarOverlay(type) {
     az.counts = list.map(z => z.count);
 
     // Siraj: shorter lock for testing
-    az.minLockMs = gameState.isSirajGhost ? 5000 : 180000;
+    az.minLockMs = gameState.isSirajGhost ? 3000 : 180000;
 
     document.body.classList.add('azkar-active');
     const overlay = document.getElementById('azkar-overlay');
@@ -10773,6 +10782,100 @@ function closeAzkarOverlay(markDone) {
     updateAzkarButton();
 }
 
+function setupAzkarTimePicker() {
+    const spoofBtn = document.getElementById('azkar-time-spoof-btn');
+    const modal    = document.getElementById('azkar-time-picker-modal');
+    const hEl      = document.getElementById('azkar-tp-h');
+    const mEl      = document.getElementById('azkar-tp-m');
+    const preview  = document.getElementById('azkar-tp-preview');
+    const setBtn   = document.getElementById('azkar-tp-set');
+    const clearBtn = document.getElementById('azkar-tp-close-x'); // alias below
+    const clearBtn2= document.getElementById('azkar-tp-clear');
+    const closeBtn = document.getElementById('azkar-tp-close');
+    if (!spoofBtn || !modal) return;
+
+    let tpH = _azkarFakeHour !== null ? _azkarFakeHour : new Date().getHours();
+    let tpM = _azkarFakeMin  !== null ? _azkarFakeMin  : new Date().getMinutes();
+
+    function fmt2(n) { return String(n).padStart(2, '0'); }
+
+    function _updatePreview() {
+        hEl.textContent = fmt2(tpH);
+        mEl.textContent = fmt2(tpM);
+        // compute what azkar type this would yield using real prayer times
+        const times = (gameState.prayer && gameState.prayer.times) ? gameState.prayer.times : AZKAR_FALLBACK_TIMES;
+        const toMin = (s) => { if (!s) return null; const [h, m] = s.split(':').map(Number); return h * 60 + m; };
+        const fajr  = toMin(times.Fajr);
+        const dhuhr = toMin(times.Dhuhr);
+        const asr   = toMin(times.Asr);
+        const isha  = toMin(times.Isha);
+        const cur   = tpH * 60 + tpM;
+        let label = 'خارج النافذة';
+        if (fajr != null && dhuhr != null && cur >= fajr && cur < dhuhr) label = 'أذكار الصباح 🌅';
+        else if (asr != null && isha != null && cur >= asr && cur < isha)  label = 'أذكار المساء 🌙';
+        preview.textContent = label;
+    }
+
+    function _open() {
+        tpH = _azkarFakeHour !== null ? _azkarFakeHour : new Date().getHours();
+        tpM = _azkarFakeMin  !== null ? _azkarFakeMin  : new Date().getMinutes();
+        _updatePreview();
+        modal.classList.remove('hidden');
+        spoofBtn.classList.add('active');
+    }
+    function _close() {
+        modal.classList.add('hidden');
+        // Keep 'active' styling on the button when a fake time is in effect
+        if (_azkarFakeHour === null) spoofBtn.classList.remove('active');
+    }
+
+    spoofBtn.addEventListener('click', (e) => { e.stopPropagation(); _open(); });
+
+    modal.addEventListener('click', (e) => { if (e.target === modal) _close(); });
+    closeBtn?.addEventListener('click', _close);
+
+    // Arrow buttons
+    modal.querySelectorAll('.azkar-tp-arrow').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const field = btn.dataset.field;
+            const isUp  = btn.classList.contains('azkar-tp-up');
+            if (field === 'h') { tpH = (tpH + (isUp ? 1 : -1) + 24) % 24; }
+            if (field === 'm') { tpM = (tpM + (isUp ? 5 : -5) + 60) % 60; }
+            _updatePreview();
+        });
+    });
+
+    // Scroll wheel support on the value displays
+    [hEl, mEl].forEach(el => {
+        el.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const dir = e.deltaY > 0 ? -1 : 1;
+            if (el === hEl) tpH = (tpH + dir + 24) % 24;
+            else            tpM = (tpM + dir * 5 + 60) % 60;
+            _updatePreview();
+        }, { passive: false });
+    });
+
+    // Apply
+    setBtn?.addEventListener('click', () => {
+        _azkarFakeHour = tpH;
+        _azkarFakeMin  = tpM;
+        spoofBtn.title = `الوقت التجريبي: ${fmt2(tpH)}:${fmt2(tpM)}`;
+        gameState.azkar._lastButtonRefresh = 0; // force immediate button refresh
+        _close(); // _close keeps active class when fake time is set
+    });
+
+    // Clear fake time
+    clearBtn2?.addEventListener('click', () => {
+        _azkarFakeHour = null;
+        _azkarFakeMin  = null;
+        spoofBtn.title = 'تغيير الوقت (سراج)';
+        spoofBtn.classList.remove('active');
+        gameState.azkar._lastButtonRefresh = 0;
+        _close();
+    });
+}
+
 function setupAzkarUI() {
     const btn = document.getElementById('azkar-btn');
     btn?.addEventListener('click', (e) => {
@@ -10808,6 +10911,12 @@ function setupAzkarUI() {
     });
 
     loadAzkarCompletedFromFirebase();
+
+    // Show time-spoof button only for Siraj
+    if (gameState.isSirajGhost) {
+        document.getElementById('azkar-time-spoof-btn')?.classList.remove('hidden');
+        setupAzkarTimePicker();
+    }
 }
 
 // Called every frame; lightweight (button update is throttled, timer only when overlay open).

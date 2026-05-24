@@ -362,3 +362,9 @@ drawFocusMask: uses physical mCanvas; player positions computed with * dpr
    - Does `updatePlayerPosition` correctly reflect state to other users?
    - Does cleanup happen on logout, tab close, and `endFreeMode`/`exitPomoNow`?
 8. **Test locally**, then tell the user to git push.
+
+---
+
+## Testing Policy
+
+**Do NOT use the browser preview tool to verify small changes** (bug fixes, single-line edits, minor tweaks). Only run the preview verification workflow for major new additions (new overlays, new panels, new game systems). For small changes, trust the code and push directly.

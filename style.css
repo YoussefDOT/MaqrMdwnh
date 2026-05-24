@@ -4183,3 +4183,178 @@ body.is-mobile.azkar-active .logout-pill.focus-hidden {
     opacity: 1;
     pointer-events: all;
 }
+
+/* ── Azkar Time-Spoof Button (Siraj only) ────────────────────────────────── */
+.azkar-time-spoof-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: rgba(255,200,80,0.12);
+    border: 1px solid rgba(255,200,80,0.28);
+    color: rgba(255,200,80,0.75);
+    cursor: pointer;
+    margin-top: 6px;
+    transition: background 0.2s, color 0.2s, transform 0.15s;
+    flex-shrink: 0;
+}
+.azkar-time-spoof-btn:hover { background: rgba(255,200,80,0.22); color: rgba(255,200,80,1); transform: scale(1.08); }
+.azkar-time-spoof-btn.active { background: rgba(255,200,80,0.25); color: rgba(255,200,80,1); border-color: rgba(255,200,80,0.6); }
+.azkar-time-spoof-btn svg { width: 15px; height: 15px; pointer-events: none; }
+.azkar-time-spoof-btn.hidden { display: none; }
+
+/* ── Azkar Time Picker Modal ─────────────────────────────────────────────── */
+.azkar-tp-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 9900;
+    background: rgba(0,0,0,0.55);
+    backdrop-filter: blur(6px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.azkar-tp-backdrop.hidden { display: none; }
+
+.azkar-tp-panel {
+    position: relative;
+    background: rgba(18,18,24,0.92);
+    backdrop-filter: blur(24px) saturate(1.6);
+    border: 1px solid rgba(255,200,80,0.18);
+    border-radius: 24px;
+    box-shadow: 0 8px 48px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,200,80,0.06);
+    padding: 32px 40px 28px;
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0;
+    direction: rtl;
+    text-align: center;
+}
+
+.azkar-tp-title {
+    font-size: 1rem;
+    font-weight: 700;
+    color: rgba(255,200,80,0.92);
+    margin-bottom: 4px;
+    letter-spacing: -0.01em;
+}
+.azkar-tp-subtitle {
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.28);
+    margin-bottom: 24px;
+}
+
+.azkar-tp-wheels {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 18px;
+}
+.azkar-tp-col {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+}
+.azkar-tp-arrow {
+    background: none;
+    border: none;
+    color: rgba(255,200,80,0.55);
+    font-size: 0.8rem;
+    cursor: pointer;
+    padding: 2px 10px;
+    border-radius: 8px;
+    transition: color 0.15s, background 0.15s;
+    line-height: 1;
+}
+.azkar-tp-arrow:hover { color: rgba(255,200,80,1); background: rgba(255,200,80,0.1); }
+
+.azkar-tp-val {
+    font-size: 2.6rem;
+    font-weight: 800;
+    color: rgba(255,255,255,0.92);
+    min-width: 72px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 14px;
+    padding: 8px 0;
+    letter-spacing: -0.02em;
+    user-select: none;
+    transition: color 0.1s;
+}
+.azkar-tp-unit {
+    font-size: 0.65rem;
+    color: rgba(255,255,255,0.3);
+    margin-top: 2px;
+}
+.azkar-tp-sep {
+    font-size: 2rem;
+    font-weight: 700;
+    color: rgba(255,255,255,0.3);
+    margin-bottom: 22px;
+    align-self: center;
+}
+
+.azkar-tp-preview {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: rgba(255,200,80,0.75);
+    background: rgba(255,200,80,0.07);
+    border: 1px solid rgba(255,200,80,0.15);
+    border-radius: 30px;
+    padding: 5px 18px;
+    margin-bottom: 22px;
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.azkar-tp-actions {
+    display: flex;
+    gap: 8px;
+    width: 100%;
+}
+.azkar-tp-btn {
+    flex: 1;
+    padding: 10px 0;
+    border-radius: 50px;
+    font-family: inherit;
+    font-size: 0.88rem;
+    font-weight: 700;
+    cursor: pointer;
+    border: none;
+    transition: opacity 0.15s, transform 0.12s;
+}
+.azkar-tp-btn:active { transform: scale(0.97); }
+.azkar-tp-btn-accent {
+    background: rgba(255,200,80,0.88);
+    color: rgba(20,15,0,0.95);
+}
+.azkar-tp-btn-accent:hover { opacity: 0.9; }
+.azkar-tp-btn-ghost {
+    background: rgba(255,255,255,0.07);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.55);
+}
+.azkar-tp-btn-ghost:hover { background: rgba(255,255,255,0.12); }
+
+.azkar-tp-close {
+    position: absolute;
+    top: 12px;
+    left: 14px;
+    background: none;
+    border: none;
+    color: rgba(255,255,255,0.25);
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 8px;
+    transition: color 0.15s, background 0.15s;
+    line-height: 1;
+}
+.azkar-tp-close:hover { color: rgba(255,255,255,0.7); background: rgba(255,255,255,0.07); }

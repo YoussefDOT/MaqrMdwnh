@@ -171,6 +171,14 @@
                     <button id="azkar-confirm-yes" class="azkar-confirm-btn azkar-confirm-yes" type="button">نعم</button>
                 </div>
             </div>
+            <!-- زر تغيير الوقت (سراج فقط) -->
+            <button id="azkar-time-spoof-btn" class="azkar-time-spoof-btn hidden" type="button" title="تغيير الوقت (سراج)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="9"/>
+                    <polyline points="12 7 12 12 15 15"/>
+                    <path d="M19.5 4.5l-1 1M4.5 4.5l1 1"/>
+                </svg>
+            </button>
         </div>
 
         <!-- زر الخروج (يسار الشاشة، مستقل عن بطاقة المستخدم) -->
@@ -870,6 +878,35 @@
                     <button id="test-mode-free" class="btn-secondary" style="flex:0 0 auto;padding:12px 14px;border-color:rgba(59,185,171,0.35);color:rgba(59,185,171,0.85);font-size:14px;">🌿 وضع حر</button>
                     <button id="test-mode-cancel" class="btn-secondary" style="flex:0 0 auto;padding:12px 14px;font-size:14px;">إلغاء</button>
                 </div>
+            </div>
+        </div>
+
+        <!-- منتقي الوقت للأذكار — سراج فقط -->
+        <div id="azkar-time-picker-modal" class="azkar-tp-backdrop hidden" aria-hidden="true">
+            <div class="azkar-tp-panel" role="dialog">
+                <div class="azkar-tp-title">ضبط الوقت التجريبي</div>
+                <div class="azkar-tp-subtitle">سراج فقط · يُعاد ضبطه عند الخروج</div>
+                <div class="azkar-tp-wheels">
+                    <div class="azkar-tp-col">
+                        <button class="azkar-tp-arrow azkar-tp-up" data-field="h" type="button">▲</button>
+                        <div id="azkar-tp-h" class="azkar-tp-val">12</div>
+                        <button class="azkar-tp-arrow azkar-tp-dn" data-field="h" type="button">▼</button>
+                        <div class="azkar-tp-unit">ساعة</div>
+                    </div>
+                    <div class="azkar-tp-sep">:</div>
+                    <div class="azkar-tp-col">
+                        <button class="azkar-tp-arrow azkar-tp-up" data-field="m" type="button">▲</button>
+                        <div id="azkar-tp-m" class="azkar-tp-val">00</div>
+                        <button class="azkar-tp-arrow azkar-tp-dn" data-field="m" type="button">▼</button>
+                        <div class="azkar-tp-unit">دقيقة</div>
+                    </div>
+                </div>
+                <div class="azkar-tp-preview" id="azkar-tp-preview">—</div>
+                <div class="azkar-tp-actions">
+                    <button id="azkar-tp-clear" class="azkar-tp-btn azkar-tp-btn-ghost" type="button">إلغاء الضبط</button>
+                    <button id="azkar-tp-set" class="azkar-tp-btn azkar-tp-btn-accent" type="button">تطبيق</button>
+                </div>
+                <button id="azkar-tp-close" class="azkar-tp-close" type="button" aria-label="إغلاق">✕</button>
             </div>
         </div>
 
