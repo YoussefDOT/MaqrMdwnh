@@ -1237,6 +1237,8 @@ const gameState = {
         selectedBreakMins: 5,
         workMsAtLastBreak: 0,    // totalWorkMs snapshot when last break started (for 25-min reset)
         _breakEndTimer: null,    // setTimeout id for post-break kidnap delay
+        _lastSavedAt: 0,         // last time we wrote totalWorkMs to Firebase
+        needsResume: false,      // set on login restore; _startFreeModeWork fires on first tick
     },
     prayer: {
         location: null,            // { lat, lon, city, country }
@@ -1832,7 +1834,8 @@ function clearPomodoroSession(laptopId) {
 }
 
 function cleanupStalePomodoroState(laptopId, state) {
-    if (!state || !shouldExpirePomodoroAfterCurrentTimer(state)) return false;
+    if (!state || state.mode === 'free') return false; // free mode has its own 1-hour expiry
+    if (!shouldExpirePomodoroAfterCurrentTimer(state)) return false;
 
     const timerFinished = state.phase === 'wait' || !state.endTime || Date.now() >= state.endTime;
     if (timerFinished) {
@@ -1852,9 +1855,10 @@ function cleanupStalePomodoroState(laptopId, state) {
 }
 
 function cleanupAbandonedPomoSessions(pomoData) {
-    const THIRTY_MINS = 30 * 60 * 1000;
-    const TWO_HOURS   = 2 * 60 * 60 * 1000;
-    const FOUR_HOURS  = 4 * 60 * 60 * 1000;
+    const THIRTY_MINS        = 30 * 60 * 1000;
+    const TWO_HOURS          = 2 * 60 * 60 * 1000;
+    const FOUR_HOURS         = 4 * 60 * 60 * 1000;
+    const FREE_MODE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour for free mode sessions
     const now = Date.now();
 
     const uidsToCheck = new Set();
@@ -1878,6 +1882,15 @@ function cleanupAbandonedPomoSessions(pomoData) {
         const updates = {};
         for (const [laptopId, state] of Object.entries(pomoData)) {
             if (!state?.claimedBy || !offlineUids.has(state.claimedBy)) continue;
+
+            // Free mode sessions: expire after 1 hour away
+            if (state.mode === 'free') {
+                const savedAt = state.savedAt || state.createdAt || 0;
+                if (savedAt && now - savedAt > FREE_MODE_EXPIRY_MS) {
+                    updates[lobbyPath(`pomodoro/${laptopId}`)] = null;
+                }
+                continue;
+            }
 
             const endTime   = state.endTime  || 0;
             const createdAt = state.createdAt || 0;
@@ -1911,6 +1924,7 @@ function applyPomodoroStateToLaptop(laptop, state) {
     laptop.claimedBy = state.claimedBy || null;
     laptop.endTime = state.endTime || 0;
     laptop.phase = state.phase || 'none';
+    laptop.mode = state.mode || null;
     laptop.workDuration = state.workDuration;
     laptop.breakDuration = state.breakDuration;
     laptop.sessionsLeft = state.sessionsLeft;
@@ -2442,22 +2456,55 @@ function startGame(userData) {
         const pomoData = pomoSnapshot.val() || {};
         syncLaptopsFromPomodoro(pomoData);
         let activeLaptopId = null;
+        let restoringFreeMode = false;
+        const FREE_MODE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
         for (const [lapId, state] of Object.entries(pomoData)) {
-            if (cleanupStalePomodoroState(lapId, state)) continue;
-            if (state && state.claimedBy === gameState.userId) {
-                activeLaptopId = parseInt(lapId);
-                gameState.pomodoro.active = true;
-                gameState.pomodoro.laptopId = activeLaptopId;
-                gameState.pomodoro.phase = state.phase;
-                gameState.pomodoro.endTime = state.endTime;
-                gameState.pomodoro.sessionsLeft = state.sessionsLeft;
-                gameState.pomodoro.workDuration = state.workDuration;
-                gameState.pomodoro.breakDuration = state.breakDuration || 5;
-                gameState.pomodoro.totalSessions = state.totalSessions || state.sessionsLeft || 1;
-                gameState.pomodoro.createdAt = state.createdAt || Date.now();
+            if (!state || state.claimedBy !== gameState.userId) continue;
 
+            if (state.mode === 'free') {
+                // Free mode save — check if < 1 hour old
+                const savedAt = state.savedAt || state.createdAt || 0;
+                if (!savedAt || Date.now() - savedAt > FREE_MODE_EXPIRY_MS) {
+                    // Expired — clean up
+                    update(ref(database), { [lobbyPath(`pomodoro/${lapId}`)]: null });
+                } else {
+                    activeLaptopId = parseInt(lapId);
+                    restoringFreeMode = true;
+                    const fm = gameState.freeMode;
+                    fm.active        = true;
+                    fm.laptopId      = activeLaptopId;
+                    fm.isShared      = false;
+                    fm.phase         = 'idle'; // _startFreeModeWork fires via needsResume
+                    fm.totalWorkMs   = state.totalWorkMs || 0;
+                    fm.workStartTime = 0;
+                    fm.breakEndTime  = 0;
+                    fm.breakPromptShown = false;
+                    fm.needsResume   = true;
+                    // Restore laptop doc to active state and re-register onDisconnect
+                    update(ref(database), {
+                        [lobbyPath(`pomodoro/${lapId}/phase`)]: 'free-work',
+                        [lobbyPath(`pomodoro/${lapId}/savedAt`)]: 0,
+                    });
+                    onDisconnect(ref(database, lobbyPath(`pomodoro/${lapId}`))).update({
+                        phase: 'wait',
+                        savedAt: { '.sv': 'timestamp' },
+                    });
+                }
                 break;
             }
+
+            if (cleanupStalePomodoroState(lapId, state)) continue;
+            activeLaptopId = parseInt(lapId);
+            gameState.pomodoro.active = true;
+            gameState.pomodoro.laptopId = activeLaptopId;
+            gameState.pomodoro.phase = state.phase;
+            gameState.pomodoro.endTime = state.endTime;
+            gameState.pomodoro.sessionsLeft = state.sessionsLeft;
+            gameState.pomodoro.workDuration = state.workDuration;
+            gameState.pomodoro.breakDuration = state.breakDuration || 5;
+            gameState.pomodoro.totalSessions = state.totalSessions || state.sessionsLeft || 1;
+            gameState.pomodoro.createdAt = state.createdAt || Date.now();
+            break;
         }
 
         // Fire-and-forget: free devices abandoned by offline users for 30+ mins
@@ -2534,7 +2581,7 @@ function startGame(userData) {
                 if (laptop) {
                     spawnX = laptop.sitX;
                     spawnY = laptop.sitY;
-                    if (gameState.pomodoro.phase === 'work' || gameState.pomodoro.phase === 'wait') locked = true;
+                    if (!restoringFreeMode && (gameState.pomodoro.phase === 'work' || gameState.pomodoro.phase === 'wait')) locked = true;
                 }
             } else if (data && (data.x !== undefined && data.y !== undefined) && data.x !== 0 && !checkCollision(data.x, data.y) && !isInBreakRoom(data.y)) {
                 spawnX = data.x;
@@ -4035,6 +4082,8 @@ function doLogout() {
         } else {
             const logoutCleanups = {};
             if (gameState.freeMode.active && gameState.freeMode.laptopId != null) {
+                // Cancel the onDisconnect so explicit logout fully clears the session
+                onDisconnect(ref(database, lobbyPath(`pomodoro/${gameState.freeMode.laptopId}`))).cancel();
                 logoutCleanups[lobbyPath(`pomodoro/${gameState.freeMode.laptopId}`)] = null;
             }
             // Clean up shared pomo live doc on explicit logout so Firebase isn't left dirty
@@ -8558,13 +8607,21 @@ function startFreeMode(laptopId, isShared = false) {
     fm._breakEndTimer    = null;
 
     update(ref(database), { [lobbyPath(`pomodoro/${laptop.id}`)]: {
-        claimedBy: gameState.userId,
-        phase:     'free-work',
-        mode:      'free',
-        createdAt: Date.now(),
-        endTime:   0,
+        claimedBy:   gameState.userId,
+        phase:       'free-work',
+        mode:        'free',
+        createdAt:   Date.now(),
+        endTime:     0,
+        totalWorkMs: 0,
+        breakEndTime: 0,
+        savedAt:     0,
     }});
-    onDisconnect(ref(database, lobbyPath(`pomodoro/${laptop.id}`))).remove();
+    // On disconnect: keep laptop claimed but mark as 'wait' so others see the AFK badge.
+    // Don't remove — we want to restore on reconnect.
+    onDisconnect(ref(database, lobbyPath(`pomodoro/${laptop.id}`))).update({
+        phase: 'wait',
+        savedAt: { '.sv': 'timestamp' },
+    });
 
     document.getElementById('pomodoro-modal')?.classList.remove('active');
     updatePomoLeaveBtn();
@@ -8593,9 +8650,31 @@ function _startFreeModeWork() {
     if (gameState.focusYTPlayer?.videoId) gameState.focusYTPlayer.fadeInAndResume(1500);
 }
 
+function saveFreeModStateToFirebase() {
+    const fm = gameState.freeMode;
+    if (!fm.active || fm.laptopId == null) return;
+    let currentTotalMs = fm.totalWorkMs;
+    if (fm.phase === 'work' && fm.workStartTime > 0) {
+        currentTotalMs += Date.now() - fm.workStartTime;
+    }
+    fm._lastSavedAt = Date.now();
+    update(ref(database), {
+        [lobbyPath(`pomodoro/${fm.laptopId}/totalWorkMs`)]: currentTotalMs,
+        [lobbyPath(`pomodoro/${fm.laptopId}/breakEndTime`)]: fm.phase === 'break' ? fm.breakEndTime : 0,
+        [lobbyPath(`pomodoro/${fm.laptopId}/savedAt`)]: Date.now(),
+    });
+}
+
 function updateFreeMode() {
     const fm = gameState.freeMode;
     if (!fm.active) return;
+
+    // On login restore, start work on the first frame of the game loop
+    if (fm.needsResume) {
+        fm.needsResume = false;
+        _startFreeModeWork();
+        return;
+    }
 
     const timerEl = document.getElementById('free-timer-text');
 
@@ -8617,6 +8696,11 @@ function updateFreeMode() {
 
     // Check prayer trigger (only if pomodoro isn't already handling it)
     if (!gameState.pomodoro.active && !gameState.prayer.isOverlayActive) checkPrayerTrigger();
+
+    // Periodically persist totalWorkMs so it's available if the tab closes
+    if (fm.phase === 'work' && fm.workStartTime > 0 && Date.now() - fm._lastSavedAt > 15000) {
+        saveFreeModStateToFirebase();
+    }
 
     if (fm.phase === 'work') {
         const elapsedMs = fm.totalWorkMs + (Date.now() - fm.workStartTime);
@@ -8660,6 +8744,7 @@ function startFreeModeBreak(durationMins) {
     fm.breakPromptShown    = false;
     fm.nextBreakPromptMs   = 25 * 60 * 1000;
 
+    saveFreeModStateToFirebase();
     gameState.isLockedIn = false;
     if (gameState.anim.active) { gameState.anim.active = false; gameState.anim.phase = 'none'; }
 
@@ -8742,6 +8827,8 @@ function endFreeMode() {
     }
 
     if (fm.laptopId != null) {
+        // Cancel the onDisconnect 'wait' handler so explicit end doesn't trigger it
+        onDisconnect(ref(database, lobbyPath(`pomodoro/${fm.laptopId}`))).cancel();
         update(ref(database), { [lobbyPath(`pomodoro/${fm.laptopId}`)]: null });
         const lp = gameState.laptops.find(l => l.id === fm.laptopId);
         if (lp) { lp.claimedBy = null; lp.phase = 'none'; }
