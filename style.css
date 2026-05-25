@@ -2046,11 +2046,8 @@ body.is-mobile .pomodoro-small {
 
 /* ── Mobile Focus Drawer ──────────────────────────── */
 
-/* Focus sounds panel is hidden entirely on mobile */
-body.is-mobile .focus-sounds-panel { display: none !important; }
-
-/* (kept for reference — original mobile drawer styles below are now inactive) */
-body.is-mobile .focus-sounds-panel--DISABLED {
+/* On mobile the focus-sounds-panel becomes a bottom drawer */
+body.is-mobile .focus-sounds-panel {
     position: fixed !important;
     bottom: 0 !important;
     left: 0 !important;

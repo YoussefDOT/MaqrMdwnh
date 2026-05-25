@@ -31,7 +31,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Prayer times** | Live Adhan scheduling with overlay + rain effect |
 | **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock |
 | **Minigames** | Racing (canvas-based) and Coffee-catching game; triggered by walking into zones |
-| **Mobile mode** | Full touch support — virtual joystick, focus-mode UI (no sounds drawer on mobile) |
+| **Mobile mode** | Full touch support — virtual joystick, pull-up sounds drawer, focus-mode UI |
 
 **Language**: All UI text is Arabic. Keep it that way.
 
@@ -76,7 +76,7 @@ Mobile = `window.innerWidth < 1024`. Toggle with `setMobileClass()`. `body.is-mo
 
 **Critical CSS rule**: Never use `!important` on `transform` for `.focus-sounds-panel`. JS drag code sets `drawer.style.transform` inline, and `!important` silently beats inline styles.
 
-**Focus sounds panel**: Desktop only. `body.is-mobile .focus-sounds-panel { display: none !important }` — the mobile sounds drawer has been removed entirely. Do not re-add it.
+**Focus sounds panel**: Mobile has a bottom-sheet pull-up drawer. Hidden during azkar (`body.is-mobile.azkar-active .focus-sounds-panel { display: none !important }`) — do not show it during azkar on mobile.
 
 **Focus mode** (`setMobileFocusMode(active)`): Hides joystick + user card during work phase. Joystick gets `.focus-hidden` class → opacity 0. User card slides off-screen with `transform: translateY(-140%)` + `pointer-events: none`.
 
