@@ -4084,6 +4084,8 @@ function listenToPomodoro() {
 }
 
 function doLogout() {
+    _azkarFakeHour = null;
+    _azkarFakeMin  = null;
     if (gameState.userId) {
         if (gameState.isSirajGhost) {
             const cleanups = { [`users/${gameState.userId}`]: null };
@@ -8053,6 +8055,7 @@ function acceptSpInvite() {
     const sp = gameState.sharedPomo;
     const invite = sp.pendingInvite;
     if (!invite) return;
+    if (gameState.azkar?.active) closeAzkarOverlay(false);
     hideSpToast();
 
     // Guest hears accepted sound immediately
@@ -10573,6 +10576,14 @@ function openAzkarOverlay(type) {
     if (gameState.pomodoro.active && gameState.sharedPomo.phase !== 'active') {
         az.pausedPomoRemaining = Math.max(0, gameState.pomodoro.endTime - Date.now());
         az.pausedPomoPhase = gameState.pomodoro.phase;
+        // Push the frozen endTime to Firebase so other lobby members watching
+        // this laptop don't see it expire while the user is in azkar.
+        if (gameState.pomodoro.laptopId !== null) {
+            update(ref(database), {
+                [lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}/endTime`)]:
+                    Date.now() + az.pausedPomoRemaining
+            }).catch(() => {});
+        }
     }
     // Free mode: snapshot accumulated work, freeze workStartTime
     if (gameState.freeMode.active) {
