@@ -10692,9 +10692,18 @@ function renderAzkarList() {
             btn.textContent = '✓';
             btn.disabled = true;
         }
-        btn.addEventListener('click', () => onAzkarCountClick(i));
+        btn.addEventListener('click', (e) => {
+            if (document.body.classList.contains('is-mobile')) e.stopPropagation();
+            onAzkarCountClick(i);
+        });
         footer.appendChild(btn);
         wrap.appendChild(footer);
+
+        // Mobile: tap anywhere on the row triggers the count, not just the tiny button
+        wrap.addEventListener('click', () => {
+            if (!document.body.classList.contains('is-mobile')) return;
+            onAzkarCountClick(i);
+        });
 
         listEl.appendChild(wrap);
 

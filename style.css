@@ -4190,6 +4190,12 @@ body.is-mobile .azkar-item {
     line-height: 1.75;
     border-radius: 14px;
     margin-bottom: 10px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: rgba(255,255,255,0.06);
+}
+body.is-mobile .azkar-item:not(.done):active {
+    background: rgba(255,255,255,0.07);
+    transition: background 0.08s;
 }
 body.is-mobile .azkar-count-btn { min-width: 46px; height: 34px; font-size: 0.92rem; }
 body.is-mobile .azkar-finish-btn { padding: 11px 32px; font-size: 0.92rem; margin-bottom: 14px; }
