@@ -1078,6 +1078,16 @@ const gameState = {
         coffeeMug:      new Image(),
         coffeeSugar:    new Image(),
         coffeeBadSugar: new Image(),
+        laptopBossZone: new Image(),
+        bossBg:         new Image(),
+        bossGround:     new Image(),
+        bossHeart:      new Image(),
+        bossHeartDead:  new Image(),
+        bossIdle:       new Image(),
+        bossAnticipation: new Image(),
+        bossAttack:     new Image(),
+        bossWeak:       new Image(),
+        bossShield:     new Image(),
     },
     sounds: {
         kidnap:                new Audio('Sound/LaptopGrab.mp3'),
@@ -1121,6 +1131,9 @@ const gameState = {
     raceZonePlayers: [],
     activeCoffeeZone: false,
     coffeeZonePlayers: [],
+    activeLaptopBossZone: false,
+    laptopBossZonePlayers: [],
+    laptopBossButtons: { left: false, right: false, jump: false, jumpPressed: false },
     coffee: {
         session:            null,
         sessionKey:         null,
@@ -1164,6 +1177,20 @@ const gameState = {
         startTimeScheduled: false,
         readyFallbackTimer: null,
         applausePlayed: false,
+    },
+
+    // Laptop boss fight state
+    laptopBoss: {
+        session: null,
+        sessionKey: null,
+        activeSessions: {},
+        active: false,
+        teleportAnim: null,
+        returnPoint: null,
+        local: null,         // local game state — populated when game starts
+        showResultsInGame: false,
+        resultsButtonRect: null,
+        _sirajCleanupTimer: null,
     },
 
     // Mobile joystick state
@@ -1372,6 +1399,26 @@ const COFFEE_MUG_Y_FRAC  = 0.80;  // mug center Y as fraction of screen H
 const COFFEE_SUGAR_W     = 48;
 const COFFEE_SUGAR_H     = 48;
 const COFFEE_CATCH_HALF  = 52;    // half-width of catch hitbox
+
+// Laptop boss fight minigame — to the left of the race teleporter
+const LAPTOP_BOSS_ZONE_IMG_W = 160;
+const LAPTOP_BOSS_ZONE_IMG_H = 175;
+const LAPTOP_BOSS_ZONE_CX    = -280;
+const LAPTOP_BOSS_ZONE_CY    = BREAK_ROOM_CENTER_Y + 120;
+const LAPTOP_BOSS_ZONE_RECT  = { x: -345, y: BREAK_ROOM_CENTER_Y + 40, w: 130, h: 148 };
+const LAPTOP_BOSS_BTN_CX     = -280;
+const LAPTOP_BOSS_BTN_CY     = BREAK_ROOM_CENTER_Y + 192;
+const LAPTOP_BOSS_BTN_R      = 26;
+// Boss sprite frame metrics (every sheet is 38px tall, 45px wide per frame)
+const BOSS_FRAME_W = 45;
+const BOSS_FRAME_H = 38;
+const BOSS_IDLE_FRAMES         = 3;
+const BOSS_ANTICIPATION_FRAMES = 8;
+const BOSS_ATTACK_FRAMES       = 10;
+const BOSS_WEAK_FRAMES         = 12;
+const BOSS_SPRITE_SCALE        = 4;   // 45×38 → 180×152
+const BOSS_MAX_HEALTH          = 3;
+const PLAYER_BOSS_MAX_HEALTH   = 3;
 
 // World Boundaries (Updated for new BG size)
 const BOUNDS = {
@@ -2024,6 +2071,16 @@ function loadAssets() {
     gameState.assets.coffeeMug.src      = 'Art/Coffee mug.png';
     gameState.assets.coffeeSugar.src    = 'Art/Sugar.png';
     gameState.assets.coffeeBadSugar.src = 'Art/Bad suger.png';
+    gameState.assets.laptopBossZone.src   = 'Art/Laptop.png?v=2';
+    gameState.assets.bossBg.src           = 'Art/LaptopBossFight/BG.png';
+    gameState.assets.bossGround.src       = 'Art/LaptopBossFight/Ground.png';
+    gameState.assets.bossHeart.src        = 'Art/LaptopBossFight/Heart.png';
+    gameState.assets.bossHeartDead.src    = 'Art/LaptopBossFight/HeartDead.png';
+    gameState.assets.bossIdle.src         = 'Art/LaptopBossFight/laptop_idle.png';
+    gameState.assets.bossAnticipation.src = 'Art/LaptopBossFight/laptop_anticipation.png';
+    gameState.assets.bossAttack.src       = 'Art/LaptopBossFight/laptop_attack_release.png';
+    gameState.assets.bossWeak.src         = 'Art/LaptopBossFight/laptop_weak.png';
+    gameState.assets.bossShield.src       = 'Art/LaptopBossFight/Laptop_Sheild.png';
 }
 
 function initWindParticles() {
@@ -2461,6 +2518,7 @@ function startGame(userData) {
     listenToPomodoro();
     listenToRace();
     listenToCoffee();
+    listenToLaptopBoss();
     initSharedPomo();
     setupPomoLeaveBtn();
     setupFreeModeUI();
@@ -2708,6 +2766,10 @@ function setupControls() {
             gameState.activeCoffeeZone &&
             Math.hypot(clickWorld.x - COFFEE_BTN_CX, clickWorld.y - COFFEE_BTN_CY) < COFFEE_BTN_R + 24;
         if (clickedCoffeeBtn) { triggerCoffeeTeleport(); return; }
+        const clickedBossBtn = player && isBreakActive() && isInBreakRoom(player.y) &&
+            gameState.activeLaptopBossZone &&
+            Math.hypot(clickWorld.x - LAPTOP_BOSS_BTN_CX, clickWorld.y - LAPTOP_BOSS_BTN_CY) < LAPTOP_BOSS_BTN_R + 24;
+        if (clickedBossBtn) { triggerLaptopBossTeleport(); return; }
         if (gameState.pomodoro.active || gameState.freeMode.active) return;
         if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
             if (gameState.activeLaptop.claimedBy) return;
@@ -2735,6 +2797,13 @@ function setupControls() {
             const pad = isMobile() ? 10 : 0; // larger tap target on mobile
             if (cbtn && cx >= cbtn.x - pad && cx <= cbtn.x + cbtn.w + pad && cy >= cbtn.y - pad && cy <= cbtn.y + cbtn.h + pad) {
                 returnFromCoffee(true);
+            }
+        }
+        if (gameState.laptopBoss && gameState.laptopBoss.showResultsInGame) {
+            const bbtn = gameState.laptopBoss.resultsButtonRect;
+            const pad = isMobile() ? 10 : 0;
+            if (bbtn && cx >= bbtn.x - pad && cx <= bbtn.x + bbtn.w + pad && cy >= bbtn.y - pad && cy <= bbtn.y + bbtn.h + pad) {
+                returnFromLaptopBoss(true);
             }
         }
     });
@@ -3162,6 +3231,23 @@ function initMobileControls() {
                 gameState.activeCoffeeZone &&
                 Math.hypot(clickWorld.x - COFFEE_BTN_CX, clickWorld.y - COFFEE_BTN_CY) < COFFEE_BTN_R + 24;
             if (clickedCoffeeBtn) { triggerCoffeeTeleport(); return; }
+            const clickedBossBtn = player && isBreakActive() && isInBreakRoom(player.y) &&
+                gameState.activeLaptopBossZone &&
+                Math.hypot(clickWorld.x - LAPTOP_BOSS_BTN_CX, clickWorld.y - LAPTOP_BOSS_BTN_CY) < LAPTOP_BOSS_BTN_R + 24;
+            if (clickedBossBtn) { triggerLaptopBossTeleport(); return; }
+
+            // Boss results overlay return button
+            if (gameState.laptopBoss && gameState.laptopBoss.showResultsInGame) {
+                const rect = canvas.getBoundingClientRect();
+                const cx = t.clientX - rect.left;
+                const cy = t.clientY - rect.top;
+                const bbtn = gameState.laptopBoss.resultsButtonRect;
+                const pad = 10;
+                if (bbtn && cx >= bbtn.x - pad && cx <= bbtn.x + bbtn.w + pad && cy >= bbtn.y - pad && cy <= bbtn.y + bbtn.h + pad) {
+                    returnFromLaptopBoss(true);
+                    return;
+                }
+            }
 
             // Check results button tap
             if (gameState.race && gameState.race.showResultsInGame) {
@@ -3259,6 +3345,30 @@ function initMobileControls() {
     setupDpadBtn('race-btn-left', 'left');
     setupDpadBtn('race-btn-right','right');
     setupDpadBtn('race-btn-bwd',  'backward');
+
+    // ── Mobile boss-fight buttons ─────────────────────────────────────
+    const setupBossBtn = (id, key, isJump) => {
+        const btn = document.getElementById(id);
+        if (!btn) return;
+        const setPressed = (val) => {
+            gameState.laptopBossButtons[key] = val;
+            btn.classList.toggle('pressed', val);
+            if (isJump && val) {
+                // edge-trigger for variable jump height
+                gameState.laptopBossButtons.jumpPressed = true;
+            }
+        };
+        btn.addEventListener('touchstart', (e) => { e.preventDefault(); setPressed(true); if (navigator.vibrate) navigator.vibrate(14); }, { passive: false });
+        btn.addEventListener('touchend',   (e) => { e.preventDefault(); setPressed(false); }, { passive: false });
+        btn.addEventListener('touchcancel',()=> setPressed(false));
+        // Also mouse for desktop testing
+        btn.addEventListener('mousedown',  (e) => { e.preventDefault(); setPressed(true); });
+        btn.addEventListener('mouseup',    (e) => { e.preventDefault(); setPressed(false); });
+        btn.addEventListener('mouseleave', () => setPressed(false));
+    };
+    setupBossBtn('boss-btn-left',  'left');
+    setupBossBtn('boss-btn-right', 'right');
+    setupBossBtn('boss-btn-jump',  'jump', true);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -4482,6 +4592,30 @@ function updateInteractions() {
         gameState.activeCoffeeZone = false;
     }
 
+    // Laptop boss zone (single-player, but mirrors race/coffee patterns)
+    const prevBossZonePlayers = gameState.laptopBossZonePlayers || [];
+    gameState.laptopBossZonePlayers = isBreakActive() ? Object.values(gameState.players).filter(p => {
+        if (!(p.x >= LAPTOP_BOSS_ZONE_RECT.x && p.x <= LAPTOP_BOSS_ZONE_RECT.x + LAPTOP_BOSS_ZONE_RECT.w &&
+              p.y >= LAPTOP_BOSS_ZONE_RECT.y && p.y <= LAPTOP_BOSS_ZONE_RECT.y + LAPTOP_BOSS_ZONE_RECT.h)) return false;
+        const sessions = Object.values(gameState.laptopBoss.activeSessions || {});
+        return !sessions.some(s => s && s.phase !== 'finished' && s.participants?.[p.userId]);
+    }) : [];
+    if (!gameState.laptopBoss.active) {
+        const prevBossIds = new Set(prevBossZonePlayers.map(p => p.userId));
+        gameState.laptopBossZonePlayers.filter(p => !prevBossIds.has(p.userId)).forEach(p => {
+            const dist = Math.hypot(p.x - player.x, p.y - player.y);
+            const vol  = Math.max(0, 1 - Math.max(0, dist - 80) / 370);
+            if (vol > 0.04) playMinigameReadySound(vol);
+        });
+    }
+    if (isBreakActive() && isInBreakRoom(player.y)) {
+        gameState.activeLaptopBossZone =
+            player.x >= LAPTOP_BOSS_ZONE_RECT.x && player.x <= LAPTOP_BOSS_ZONE_RECT.x + LAPTOP_BOSS_ZONE_RECT.w &&
+            player.y >= LAPTOP_BOSS_ZONE_RECT.y && player.y <= LAPTOP_BOSS_ZONE_RECT.y + LAPTOP_BOSS_ZONE_RECT.h;
+    } else {
+        gameState.activeLaptopBossZone = false;
+    }
+
     const baseAlpha = gameState.isLockedIn ? 0.475 : 0.4;
     let targetAlpha = 0;
     if (gameState.isLockedIn) {
@@ -4692,7 +4826,15 @@ function gameLoop(timestamp) {
         updatePomodoro();
         updateTeleportAnim();
         updateCoffeeTeleportAnim();
+        updateLaptopBossTeleportAnim();
         cleanupStaleRaceSession(gameState.race.session);
+        if (gameState.laptopBoss.active && gameState.laptopBoss.session &&
+            (gameState.laptopBoss.session.phase === 'active' || gameState.laptopBoss.session.phase === 'finished')) {
+            updateLaptopBoss();
+            renderLaptopBoss();
+            requestAnimationFrame(gameLoop);
+            return;
+        }
         if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'race') {
             updateRaceMode();
             updateRaceCarVisuals();
@@ -4771,6 +4913,7 @@ function render() {
     drawBreakDoor();
     drawRaceMachine();
     drawCoffeeMachine();
+    drawLaptopBossMachine();
 
     drawConnections();
 
@@ -4788,6 +4931,7 @@ function render() {
     drawBreakDoor();
     drawRaceHint();
     drawCoffeeHint();
+    drawLaptopBossHint();
 
     // Blue locked-in circle: solo pomo only, not coop (coop has its own ring)
     if (gameState.isLockedIn && gameState.sharedPomo.phase !== 'active') {
@@ -6199,7 +6343,7 @@ function updateTeleportAnim() {
 }
 
 function drawTeleportOverlay(W, H) {
-    const anim = gameState.race.teleportAnim || gameState.coffee.teleportAnim;
+    const anim = gameState.race.teleportAnim || gameState.coffee.teleportAnim || gameState.laptopBoss.teleportAnim;
     if (!anim || anim.screenAlpha < 0.01) return;
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
@@ -8867,6 +9011,7 @@ function endFreeModeBreak() {
     // Exit any active minigame first
     if (gameState.race?.active)   returnFromRace(true);
     if (gameState.coffee?.active) returnFromCoffee(true);
+    if (gameState.laptopBoss?.active) returnFromLaptopBoss(true);
 
     // Hide the small break timer
     document.getElementById('pomodoro-small-timer')?.classList.add('hidden');
@@ -11001,6 +11146,1479 @@ function updateAzkarSystem() {
         updateAzkarFinishTimer();
     }
     updateAzkarButton();
+}
+
+// ─── Laptop Boss Fight Minigame ───────────────────────────────────────────────
+// Single-player platformer boss fight. Mirrors the race/coffee minigame structure
+// (Firebase session, teleport animation, return point) but the gameplay is local-only.
+
+function laptopBossSessionPath(sub) {
+    const k = gameState.laptopBoss.sessionKey;
+    if (!k) return null;
+    return lobbyPath(`minigames/laptop-boss/sessions/${k}${sub ? '/' + sub : ''}`);
+}
+
+function drawLaptopBossMachine() {
+    if (!isBreakActive()) return;
+    const ctx = gameState.ctx;
+    const img = gameState.assets.laptopBossZone;
+    if (!img || !img.complete || !img.naturalWidth) return;
+
+    const cx = LAPTOP_BOSS_ZONE_CX;
+    const cy = LAPTOP_BOSS_ZONE_CY;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    if (gameState.activeLaptopBossZone && !gameState.laptopBoss.teleportAnim) {
+        ctx.shadowBlur  = 28;
+        ctx.shadowColor = 'rgba(180, 80, 255, 0.7)';
+    }
+    ctx.drawImage(img, cx - LAPTOP_BOSS_ZONE_IMG_W / 2, cy - LAPTOP_BOSS_ZONE_IMG_H / 2, LAPTOP_BOSS_ZONE_IMG_W, LAPTOP_BOSS_ZONE_IMG_H);
+    ctx.shadowBlur = 0;
+
+    const zonePlayers = gameState.laptopBossZonePlayers;
+    if (zonePlayers.length > 0 && !gameState.laptopBoss.teleportAnim) {
+        drawBossReadyList(ctx, cx, cy - LAPTOP_BOSS_ZONE_IMG_H / 2 - 6, zonePlayers);
+    }
+    ctx.restore();
+}
+
+function drawBossReadyList(ctx, cx, bottomY, players) {
+    const rowH = 34, listW = 158, padTop = 22;
+    const listH = players.length * rowH + padTop + 4;
+    const listX = cx - listW / 2;
+    const listY = bottomY - listH - 6;
+
+    ctx.save();
+    ctx.fillStyle = 'rgba(18, 8, 28, 0.90)';
+    drawRoundedRectPath(ctx, listX, listY, listW, listH, 10);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(180,100,255,0.18)';
+    ctx.lineWidth   = 1;
+    drawRoundedRectPath(ctx, listX, listY, listW, listH, 10);
+    ctx.stroke();
+
+    ctx.fillStyle = 'rgba(220,180,255,0.85)';
+    ctx.font      = 'bold 12px Rubik';
+    ctx.textAlign = 'center';
+    ctx.fillText('جاهز للقتال ⚔', cx, listY + 15);
+
+    players.forEach((p, i) => {
+        const rowY    = listY + padTop + i * rowH;
+        const avatarR = 12;
+        const avatarX = listX + 22;
+        const avatarCY = rowY + rowH / 2;
+
+        ctx.beginPath();
+        ctx.arc(avatarX, avatarCY, avatarR, 0, Math.PI * 2);
+        ctx.fillStyle = p.userId === gameState.userId ? COLORS.blue : '#444';
+        ctx.fill();
+
+        const avImg = gameState.avatarCache[p.userId];
+        if (avImg && avImg !== 'failed') {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(avatarX, avatarCY, avatarR, 0, Math.PI * 2);
+            ctx.clip();
+            ctx.drawImage(avImg, avatarX - avatarR, avatarCY - avatarR, avatarR * 2, avatarR * 2);
+            ctx.restore();
+        }
+        ctx.fillStyle = 'white';
+        ctx.font      = '13px Rubik';
+        ctx.textAlign = 'left';
+        ctx.fillText((p.username || '?').slice(0, 12), listX + 40, avatarCY + 4);
+        ctx.fillStyle = '#c084fc';
+        ctx.font      = 'bold 11px Rubik';
+        ctx.textAlign = 'right';
+        ctx.fillText('✓', listX + listW - 8, avatarCY + 4);
+    });
+    ctx.restore();
+}
+
+function drawLaptopBossHint() {
+    if (!gameState.activeLaptopBossZone) return;
+    if (gameState.laptopBoss.teleportAnim) return;
+    const ctx = gameState.ctx;
+    ctx.save();
+    ctx.fillStyle   = 'white';
+    ctx.font        = 'bold 13px Rubik';
+    ctx.textAlign   = 'center';
+    ctx.shadowBlur  = 6;
+    ctx.shadowColor = 'black';
+    ctx.fillText('اضغط زر البدء', LAPTOP_BOSS_BTN_CX, LAPTOP_BOSS_BTN_CY - LAPTOP_BOSS_BTN_R - 10);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+function listenToLaptopBoss() {
+    onValue(ref(database, lobbyPath('minigames/laptop-boss/sessions')), (snap) => {
+        const sessions = snap.val() || {};
+        const active = {};
+        const now = Date.now();
+        for (const [key, s] of Object.entries(sessions)) {
+            if (!s) continue;
+            // Stale cleanup — sessions older than 15 min go away
+            if (s.createdAt && now - s.createdAt > 15 * 60 * 1000) {
+                update(ref(database), { [lobbyPath(`minigames/laptop-boss/sessions/${key}`)]: null });
+                continue;
+            }
+            active[key] = s;
+        }
+        gameState.laptopBoss.activeSessions = active;
+
+        let myKey = null, mySession = null;
+        for (const [key, s] of Object.entries(active)) {
+            if (s.participants?.[gameState.userId]) { myKey = key; mySession = s; break; }
+        }
+
+        if (!mySession) {
+            if (gameState.laptopBoss.active) returnFromLaptopBoss(false);
+            gameState.laptopBoss.session = null;
+            gameState.laptopBoss.sessionKey = null;
+            return;
+        }
+
+        gameState.laptopBoss.session = mySession;
+        gameState.laptopBoss.sessionKey = myKey;
+
+        if (mySession.phase === 'teleporting') {
+            if (!gameState.laptopBoss.teleportAnim) {
+                const elapsed = Math.max(0, (serverNow() - (mySession.teleportAt || serverNow())) / 1000);
+                gameState.laptopBoss.teleportAnim = {
+                    t: elapsed, phase: 'fly', flyProgress: 0, screenAlpha: 0,
+                    pendingSession: null, gameStarted: false, sessionCreated: false,
+                    isHost: mySession.hostId === gameState.userId,
+                    players: [{
+                        userId: gameState.userId,
+                        startX: (gameState.players[gameState.userId]?.x) || 0,
+                        startY: (gameState.players[gameState.userId]?.y) || 0,
+                    }],
+                };
+            }
+        } else if (mySession.phase === 'active') {
+            if (gameState.laptopBoss.teleportAnim) {
+                gameState.laptopBoss.teleportAnim.pendingSession = gameState.laptopBoss.teleportAnim.pendingSession || mySession;
+            } else {
+                startLocalLaptopBoss(mySession);
+            }
+        } else if (mySession.phase === 'finished') {
+            gameState.laptopBoss.active = true;
+            gameState.laptopBoss.session = mySession;
+            gameState.laptopBoss.showResultsInGame = true;
+        }
+    });
+}
+
+async function triggerLaptopBossTeleport() {
+    if (!gameState.userId || !isBreakActive()) return;
+    if (gameState.laptopBoss.teleportAnim) return;
+    if (gameState.laptopBoss.active) return;
+    const player = gameState.players[gameState.userId];
+    if (!player) return;
+
+    playSoundRobust(gameState.sounds.minigameButtonPressed);
+
+    const alreadyIn = Object.values(gameState.laptopBoss.activeSessions || {}).some(
+        s => s && s.participants?.[gameState.userId]
+    );
+    if (alreadyIn) return;
+
+    const sessionId = `${gameState.userId}_${Date.now()}`;
+    // Single-player game — safe to auto-remove session on disconnect.
+    onDisconnect(ref(database, lobbyPath(`minigames/laptop-boss/sessions/${sessionId}`))).remove();
+
+    update(ref(database), {
+        [lobbyPath(`minigames/laptop-boss/sessions/${sessionId}`)]: {
+            id:         sessionId,
+            hostId:     gameState.userId,
+            phase:      'teleporting',
+            createdAt:  Date.now(),
+            teleportAt: serverNow(),
+            participants: {
+                [gameState.userId]: {
+                    username:    player.username || gameState.currentUser || 'لاعب',
+                    avatar:      player.avatar || '',
+                    returnPoint: { x: player.x, y: player.y },
+                }
+            }
+        }
+    });
+}
+
+function createLaptopBossSession() {
+    if (!gameState.laptopBoss.sessionKey) return;
+    update(ref(database), {
+        [laptopBossSessionPath('phase')]:     'active',
+        [laptopBossSessionPath('startTime')]: serverNow() + 800,  // tiny lead-in so player can settle
+    });
+}
+
+function updateLaptopBossTeleportAnim() {
+    const anim = gameState.laptopBoss.teleportAnim;
+    if (!anim) return;
+    const FLY_DUR = 0.45, FADE_DUR = 0.30, HOLD_DUR = 0.40, FADEIN_DUR = 0.60;
+    anim.t += gameState.dtFactor / 60;
+
+    const tryStart = () => {
+        if (anim.pendingSession && !anim.gameStarted) {
+            anim.gameStarted = true;
+            startLocalLaptopBoss(anim.pendingSession);
+        }
+    };
+
+    if (anim.t < FLY_DUR) {
+        anim.phase = 'fly'; anim.flyProgress = anim.t / FLY_DUR; anim.screenAlpha = 0;
+    } else if (anim.t < FLY_DUR + FADE_DUR) {
+        anim.phase = 'fade'; anim.flyProgress = 1;
+        anim.screenAlpha = (anim.t - FLY_DUR) / FADE_DUR;
+    } else if (anim.t < FLY_DUR + FADE_DUR + HOLD_DUR) {
+        anim.phase = 'hold'; anim.flyProgress = 1; anim.screenAlpha = 1;
+        if (anim.isHost && !anim.sessionCreated) {
+            anim.sessionCreated = true;
+            createLaptopBossSession();
+        }
+        tryStart();
+    } else if (anim.t < FLY_DUR + FADE_DUR + HOLD_DUR + FADEIN_DUR) {
+        anim.phase = 'fadein'; anim.flyProgress = 1;
+        anim.screenAlpha = 1 - (anim.t - FLY_DUR - FADE_DUR - HOLD_DUR) / FADEIN_DUR;
+        tryStart();
+    } else {
+        tryStart();
+        gameState.laptopBoss.teleportAnim = null;
+    }
+}
+
+function startLocalLaptopBoss(session) {
+    if (gameState.laptopBoss.active && gameState.laptopBoss.local) return;
+
+    // Hide world UI; show our own mobile controls
+    const _uc = document.getElementById('user-card');
+    if (_uc) _uc.style.display = 'none';
+    const _jy = document.getElementById('mobile-joystick');
+    if (_jy) _jy.style.display = 'none';
+    setMinigameHideUI(true);
+    showMobileBossButtons(true);
+
+    const participant = session.participants?.[gameState.userId] || {};
+    gameState.laptopBoss.active        = true;
+    gameState.laptopBoss.returnPoint   = participant.returnPoint || null;
+
+    const canvas = gameState.canvas;
+    const dpr = gameState.dpr || 1;
+    const W = canvas ? canvas.width / dpr : window.innerWidth;
+    const H = canvas ? canvas.height / dpr : window.innerHeight;
+    const groundY = H * 0.84;
+
+    // Reduce particle counts on mobile for weaker devices
+    const lowEnd = isMobile();
+    const auraCount = lowEnd ? 14 : 22;
+    const windCount = lowEnd ? 10 : 20;
+
+    gameState.laptopBoss.local = {
+        // Player
+        player: {
+            x: W * 0.82, y: groundY - 36,
+            vx: 0, vy: 0,
+            w: 72, h: 72,
+            onGround: true,
+            coyoteT: 0,
+            jumpHoldT: 0,
+            jumping: false,
+            invulnT: 0,
+            flashRedT: 0,
+            flashWhiteT: 0,
+            squashT: 1,
+            health: PLAYER_BOSS_MAX_HEALTH,
+            dead: false,
+            fallDoneT: 0,
+        },
+        // Boss
+        boss: {
+            x: W * 0.22, y: H * 0.42,
+            baseY: H * 0.42,
+            floatT: 0,
+            state: 'intro',         // intro → idle → grab/attack → weak → ...
+            stateT: 0,
+            stateDur: 1.0,
+            attackCount: 0,         // number of grab/attack since last weak (resets to 0 after weak)
+            scoopStartX: 0, scoopStartY: 0,
+            scoopTargetX: 0, scoopTargetY: 0,
+            scoopProgress: 0,
+            grabTargetX: 0, grabTargetY: 0,    // locked at end of phase 1 of grab
+            grabPullStartT: 0,                  // time at which pull started
+            grabHitFired: false,
+            attackHitFired: false,
+            scale: 1,
+            scaleTarget: 1,
+            health: BOSS_MAX_HEALTH,
+            flashWhiteT: 0,
+            knockbackX: 0, knockbackY: 0,
+            recoveryFromX: 0, recoveryFromY: 0,
+            motionTrail: [],        // {x,y,t} for motion blur
+            endFallVy: 0,
+            offScreen: false,
+            attacksThisCycle: 0,    // 0..3 then weak
+            shieldAlpha: 0.10,      // rendered over boss when NOT in weak state
+            shieldScale: 1.0,       // animates up on weak entry, down on exit
+            reboundVX: 0, reboundVY: 0, // physics velocity during rebound
+            _trailTimer: 0,
+        },
+        // World
+        groundY,
+        W, H,
+        // FX
+        particles: [],
+        floatTexts: [],
+        screenShakeX: 0, screenShakeY: 0, shakeT: 0, shakeAmp: 0,
+        aura: Array.from({ length: auraCount }, (_, i) => ({
+            angle: (Math.PI * 2 * i) / auraCount,
+            speed: 0.0009 + Math.random() * 0.0006,
+            r: 70 + Math.random() * 18,
+            phase: Math.random() * Math.PI * 2,
+        })),
+        windParticles: Array.from({ length: windCount }, () => ({
+            x: Math.random() * W,
+            y: Math.random() * H,
+            vx: -(0.4 + Math.random() * 0.9),
+            size: 1 + Math.floor(Math.random() * 2),
+            len: 4 + Math.floor(Math.random() * 5),
+            alpha: 0.08 + Math.random() * 0.18,
+        })),
+        // Weak-state stepping platform (one-way, jumps through from below)
+        stair: { alpha: 0, x: 0, y: 0, w: 170, h: 14 },
+        // Avatar image
+        avatarImg: gameState.avatarCache[gameState.userId] || null,
+        groundImpact: null, // { x, t, maxT } shockwave ring
+        outcome: null, // 'win' | 'lose' | null
+        outcomeT: 0,
+        startedAt: Date.now(),
+        introT: 0,
+        // Touch input ids
+        _touchLeftId: null,
+        _touchRightId: null,
+        _touchJumpId: null,
+    };
+
+    setupBossKeyHandlers();
+    setupBossTouchHandlers();
+
+    // Siraj ghost cleanup
+    if (gameState.isSirajGhost && gameState.laptopBoss.sessionKey) {
+        const cleanupPath = lobbyPath(`minigames/laptop-boss/sessions/${gameState.laptopBoss.sessionKey}`);
+        onDisconnect(ref(database, cleanupPath)).remove();
+        if (gameState.laptopBoss._sirajCleanupTimer) clearTimeout(gameState.laptopBoss._sirajCleanupTimer);
+        gameState.laptopBoss._sirajCleanupTimer = setTimeout(() => {
+            update(ref(database), { [cleanupPath]: null });
+            gameState.laptopBoss._sirajCleanupTimer = null;
+        }, 90000);
+    }
+
+    // Mark player as "working" so others see them as busy
+    update(ref(database), { [`users/${gameState.userId}/isWorking`]: true });
+}
+
+function setupBossKeyHandlers() {
+    if (gameState.laptopBoss._keyDownHandler) return;
+    gameState.laptopBoss._keyDownHandler = (e) => {
+        if (!gameState.laptopBoss.active) return;
+        if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+            e.preventDefault();
+            gameState.laptopBossButtons.jump = true;
+            gameState.laptopBossButtons.jumpPressed = true;
+        }
+    };
+    gameState.laptopBoss._keyUpHandler = (e) => {
+        if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
+            gameState.laptopBossButtons.jump = false;
+        }
+    };
+    window.addEventListener('keydown', gameState.laptopBoss._keyDownHandler);
+    window.addEventListener('keyup', gameState.laptopBoss._keyUpHandler);
+}
+
+function setupBossTouchHandlers() {
+    // Wired once in initMobileControls()
+}
+
+function showMobileBossButtons(show) {
+    const dpad = document.getElementById('mobile-boss-btns');
+    const joystick = document.getElementById('mobile-joystick');
+    if (dpad) dpad.classList.toggle('hidden', !show);
+    if (joystick && isMobile()) joystick.style.display = show ? 'none' : '';
+    if (!show) {
+        gameState.laptopBossButtons.left = false;
+        gameState.laptopBossButtons.right = false;
+        gameState.laptopBossButtons.jump = false;
+        gameState.laptopBossButtons.jumpPressed = false;
+    }
+}
+
+function returnFromLaptopBoss(clearState) {
+    if (gameState.laptopBoss._sirajCleanupTimer) {
+        clearTimeout(gameState.laptopBoss._sirajCleanupTimer);
+        gameState.laptopBoss._sirajCleanupTimer = null;
+    }
+    if (gameState.laptopBoss._keyDownHandler) {
+        window.removeEventListener('keydown', gameState.laptopBoss._keyDownHandler);
+        gameState.laptopBoss._keyDownHandler = null;
+    }
+    if (gameState.laptopBoss._keyUpHandler) {
+        window.removeEventListener('keyup', gameState.laptopBoss._keyUpHandler);
+        gameState.laptopBoss._keyUpHandler = null;
+    }
+    // Restore world UI
+    const _uc = document.getElementById('user-card');
+    if (_uc) _uc.style.display = '';
+    const _jy = document.getElementById('mobile-joystick');
+    if (_jy) _jy.style.display = '';
+    setMinigameHideUI(false);
+    showMobileBossButtons(false);
+
+    const sessionKeyToDelete = gameState.laptopBoss.sessionKey;
+    if (sessionKeyToDelete) {
+        update(ref(database), { [lobbyPath(`minigames/laptop-boss/sessions/${sessionKeyToDelete}`)]: null });
+    }
+
+    const player = gameState.players[gameState.userId];
+    const returnPoint = gameState.laptopBoss.returnPoint;
+    if (player && returnPoint) {
+        teleportEntity(player, returnPoint.x, returnPoint.y);
+        updatePlayerPosition(returnPoint.x, returnPoint.y);
+    }
+    gameState.laptopBoss.active = false;
+    gameState.laptopBoss.local = null;
+    gameState.laptopBoss.session = null;
+    gameState.laptopBoss.sessionKey = null;
+    gameState.laptopBoss.showResultsInGame = false;
+    gameState.laptopBoss.resultsButtonRect = null;
+    if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/isWorking`]: false });
+}
+
+// ─── Boss game tick ───────────────────────────────────────────────────────────
+
+const BOSS_GRAVITY = 0.6;                 // per-frame at 60fps; multiplied by dtFactor
+const BOSS_JUMP_VEL = -15.5;             // initial jump velocity
+const BOSS_JUMP_HOLD_BOOST = -0.62;      // extra upward accel while holding jump
+const BOSS_JUMP_HOLD_MAX = 12;           // frames of hold boost
+const BOSS_MOVE_ACCEL = 2.2;
+const BOSS_MOVE_MAX = 7.5;
+const BOSS_MOVE_FRICTION = 0.80;
+const BOSS_COYOTE_MAX = 8;
+
+function bossSpawnParticles(local, x, y, count, opts = {}) {
+    const color = opts.color || 'rgba(220,180,255,0.9)';
+    const speed = opts.speed || 4;
+    const life = opts.life || 30;
+    const size = opts.size || 4;
+    for (let i = 0; i < count; i++) {
+        const angle = (Math.PI * 2 * i / count) + (Math.random() - 0.5) * 0.6;
+        const sp = speed * (0.6 + Math.random() * 0.8);
+        local.particles.push({
+            x, y, vx: Math.cos(angle) * sp, vy: Math.sin(angle) * sp,
+            life, maxLife: life, color, size,
+        });
+    }
+}
+
+function bossAddShake(local, amp) {
+    local.shakeAmp = Math.max(local.shakeAmp || 0, amp);
+    local.shakeT = 10;
+}
+
+function bossFloatText(local, x, y, text, color) {
+    local.floatTexts.push({ x, y, text, color: color || '#ff4d6d', life: 60, maxLife: 60, vy: -1.2 });
+}
+
+function bossSetState(boss, state, dur) {
+    boss.state = state;
+    boss.stateT = 0;
+    boss.stateDur = dur;
+}
+
+function updateLaptopBoss() {
+    const local = gameState.laptopBoss.local;
+    if (!local) return;
+    const dt = Math.min(2, gameState.dtFactor || 1);
+    const session = gameState.laptopBoss.session;
+
+    // Hard exit if break ends mid-fight
+    if (!isBreakActive()) {
+        if (session && session.hostId === gameState.userId) {
+            update(ref(database), { [lobbyPath(`minigames/laptop-boss/sessions/${gameState.laptopBoss.sessionKey}`)]: null });
+        }
+        returnFromLaptopBoss(false);
+        return;
+    }
+
+    // Prayer overlay or azkar steal priority — pause boss
+    if (gameState.prayer?.isOverlayActive || gameState.azkar?.active) {
+        // freeze updates
+        return;
+    }
+
+    const player = local.player;
+    const boss = local.boss;
+
+    // ── Input ────────────────────────────────────────────────────────────────
+    const k = gameState.keys || {};
+    const leftHeld  = !!(k['ArrowLeft']  || k['KeyA'] || gameState.laptopBossButtons.left);
+    const rightHeld = !!(k['ArrowRight'] || k['KeyD'] || gameState.laptopBossButtons.right);
+    const jumpHeld  = !!(k['Space'] || k['ArrowUp'] || k['KeyW'] || gameState.laptopBossButtons.jump);
+
+    // ── Player physics ───────────────────────────────────────────────────────
+    if (!player.dead && !boss.grabbedPlayer) {
+        // Horizontal
+        if (leftHeld && !rightHeld) player.vx -= BOSS_MOVE_ACCEL * dt;
+        else if (rightHeld && !leftHeld) player.vx += BOSS_MOVE_ACCEL * dt;
+        else {
+            // Friction when no input
+            player.vx *= Math.pow(BOSS_MOVE_FRICTION, dt);
+            if (Math.abs(player.vx) < 0.05) player.vx = 0;
+        }
+        player.vx = Math.max(-BOSS_MOVE_MAX, Math.min(BOSS_MOVE_MAX, player.vx));
+
+        // Coyote tracking
+        if (player.onGround) player.coyoteT = BOSS_COYOTE_MAX;
+        else player.coyoteT = Math.max(0, player.coyoteT - dt);
+
+        // Jump
+        if (gameState.laptopBossButtons.jumpPressed && (player.onGround || player.coyoteT > 0)) {
+            player.vy = BOSS_JUMP_VEL;
+            player.onGround = false;
+            player.jumping = true;
+            player.jumpHoldT = BOSS_JUMP_HOLD_MAX;
+            player.coyoteT = 0;
+            // Squash for jump anim
+            player.squashT = 0.5;
+            // Tiny dust
+            bossSpawnParticles(local, player.x, player.y + player.h / 2, 4, { color: 'rgba(160,160,180,0.6)', speed: 1.5, life: 18, size: 3 });
+        }
+        gameState.laptopBossButtons.jumpPressed = false; // consume edge
+
+        // Variable jump height
+        if (player.jumping && jumpHeld && player.jumpHoldT > 0 && player.vy < 0) {
+            player.vy += BOSS_JUMP_HOLD_BOOST * dt;
+            player.jumpHoldT -= dt;
+        } else if (!jumpHeld) {
+            player.jumping = false;
+            player.jumpHoldT = 0;
+        }
+
+        // Gravity
+        player.vy += BOSS_GRAVITY * dt;
+        player.vy = Math.min(18, player.vy);
+
+        // Integrate
+        player.x += player.vx * dt;
+        player.y += player.vy * dt;
+
+        // Bounds (world walls)
+        const halfW = player.w / 2;
+        if (player.x < halfW) { player.x = halfW; player.vx = 0; }
+        if (player.x > local.W - halfW) { player.x = local.W - halfW; player.vx = 0; }
+
+        // Ground collision (offset +10 so player sits flush with visual floor)
+        const feetY = player.y + player.h / 2;
+        const groundSnap = local.groundY + 10;
+        if (feetY >= groundSnap) {
+            player.y = groundSnap - player.h / 2;
+            const wasFalling = player.vy > 4;
+            player.vy = 0;
+            if (!player.onGround && wasFalling) {
+                bossSpawnParticles(local, player.x, groundSnap, 5, { color: 'rgba(140,140,160,0.55)', speed: 2, life: 18, size: 3 });
+                player.squashT = 0.5;
+            }
+            player.onGround = true;
+            player.jumping = false;
+            player.jumpHoldT = 0;
+        } else {
+            // One-way stair platform: land only when falling down onto top face
+            const stair = local.stair;
+            const prevFeetY = feetY - player.vy * dt;
+            if (stair.alpha > 0.1 && player.vy > 0 &&
+                prevFeetY <= stair.y && feetY >= stair.y &&
+                player.x + player.w / 2 > stair.x && player.x - player.w / 2 < stair.x + stair.w) {
+                player.y = stair.y - player.h / 2;
+                player.vy = 0;
+                if (!player.onGround) {
+                    bossSpawnParticles(local, player.x, stair.y, 5, { color: 'rgba(140,140,160,0.55)', speed: 2, life: 18, size: 3 });
+                    player.squashT = 0.5;
+                }
+                player.onGround = true;
+                player.jumping = false;
+                player.jumpHoldT = 0;
+            } else {
+                player.onGround = false;
+            }
+        }
+    } else {
+        // Death fall — keep falling till offscreen
+        player.vy += BOSS_GRAVITY * dt;
+        player.y += player.vy * dt;
+        if (player.y > local.H + 200 && !player.fallDoneT) {
+            player.fallDoneT = Date.now();
+            local.outcome = 'lose';
+            local.outcomeT = 0;
+        }
+    }
+
+    // Visual timers
+    if (player.invulnT > 0) player.invulnT -= dt;
+    if (player.flashRedT > 0) player.flashRedT -= dt;
+    if (player.flashWhiteT > 0) player.flashWhiteT -= dt;
+    player.squashT += (1 - player.squashT) * 0.16 * dt;
+
+    // ── Boss AI ──────────────────────────────────────────────────────────────
+    boss.floatT += dt / 60;
+    boss.stateT += dt;
+
+    // Float anim when not in motion states
+    const floatingStates = ['intro', 'idle', 'grab_predict', 'grab_shoot', 'grab_hold', 'grab_release_kidnap', 'attack_anticipate', 'attack_return', 'weak'];
+    if (floatingStates.includes(boss.state)) {
+        boss.y = boss.baseY + Math.sin(boss.floatT * Math.PI) * 20;
+    }
+
+    // Scale ease toward target
+    boss.scale += (boss.scaleTarget - boss.scale) * 0.12 * dt;
+    if (boss.flashWhiteT > 0) boss.flashWhiteT -= dt;
+
+    // State machine
+    const startedActive = session && session.startTime && serverNow() >= session.startTime;
+
+    if (boss.state === 'intro') {
+        // Wait for startTime to elapse
+        if (startedActive) {
+            bossSetState(boss, 'idle', 90); // 1.5s @ 60fps
+        }
+    } else if (boss.state === 'idle') {
+        if (boss.stateT >= boss.stateDur) {
+            // Pick next attack: grab or scoop
+            boss.attacksThisCycle++;
+            if (boss.attacksThisCycle > 3) {
+                // Go to weak
+                bossSetState(boss, 'weak', 60 * 3); // 3 s weak window
+                boss.attacksThisCycle = 0;
+                bossSpawnParticles(local, boss.x, boss.y, 14, { color: 'rgba(120,80,255,0.85)', speed: 5, life: 36, size: 4 });
+            } else {
+                const grabRoll = Math.random() < 0.5;
+                if (grabRoll) {
+                    boss.grabHitFired = false;
+                    bossSetState(boss, 'grab_predict', 60 * 1.2);  // 1.2s
+                } else {
+                    boss.scaleTarget = 1.15;
+                    boss.attackHitFired = false;
+                    bossSetState(boss, 'attack_anticipate', 60 * 0.8); // 0.8s
+                }
+            }
+        }
+    } else if (boss.state === 'grab_predict') {
+        if (boss.stateT >= boss.stateDur) {
+            // Lock target at player's current position and shoot
+            boss.grabTargetX = player.x;
+            boss.grabTargetY = player.y;
+            bossSetState(boss, 'grab_shoot', 60 * 0.35); // line extends over 0.35s
+        }
+    } else if (boss.state === 'grab_shoot') {
+        if (boss.stateT >= boss.stateDur) {
+            // Check if player is still near the locked target
+            const gdx = player.x - boss.grabTargetX;
+            const gdy = player.y - boss.grabTargetY;
+            if (Math.hypot(gdx, gdy) < 60 && player.invulnT <= 0 && !player.dead) {
+                // Hit — start kidnap pull
+                boss.grabbedPlayer = true;
+                boss.grabPullStartX = player.x;
+                boss.grabPullStartY = player.y;
+                boss.grabDamageFired = false;
+                bossSetState(boss, 'grab_pull', 60 * 0.45);
+            } else {
+                // Miss
+                bossSetState(boss, 'idle', 60 * 1.5);
+            }
+        }
+    } else if (boss.state === 'grab_pull') {
+        // Smoothly pull player to front of boss — hold last attack frame throughout
+        const pullP = Math.min(1, boss.stateT / boss.stateDur);
+        const pullEased = 1 - Math.pow(1 - pullP, 2.5);
+        const destX = boss.x + 95;
+        const destY = boss.y;
+        player.x = boss.grabPullStartX + (destX - boss.grabPullStartX) * pullEased;
+        player.y = boss.grabPullStartY + (destY - boss.grabPullStartY) * pullEased;
+        player.vx = 0; player.vy = 0; player.onGround = false;
+        if (boss.stateT >= boss.stateDur) {
+            bossSetState(boss, 'grab_hold', 60 * 0.5);
+        }
+    } else if (boss.state === 'grab_hold') {
+        // Hold player in place — deal damage once after a short pause
+        player.x = boss.x + 95;
+        player.y = boss.y;
+        player.vx = 0; player.vy = 0; player.onGround = false;
+        if (!boss.grabDamageFired && boss.stateT >= 8) {
+            boss.grabDamageFired = true;
+            damagePlayer(local, player, boss);
+            // Override damagePlayer's knockback — player stays held
+            player.vx = 0; player.vy = 0;
+        }
+        if (boss.stateT >= boss.stateDur) {
+            // Release with knockback
+            boss.grabbedPlayer = false;
+            player.vx = 9; // flung right away from boss
+            player.vy = -10;
+            player.onGround = false;
+            bossSetState(boss, 'grab_release_kidnap', 60 * 0.35);
+        }
+    } else if (boss.state === 'grab_release_kidnap') {
+        if (boss.stateT >= boss.stateDur) {
+            bossSetState(boss, 'idle', 60 * 1.5);
+        }
+    } else if (boss.state === 'attack_anticipate') {
+        if (boss.stateT >= boss.stateDur) {
+            // Lock stomp target at player's ground position
+            boss.scoopStartX = boss.x;
+            boss.scoopStartY = boss.y;
+            boss.scoopTargetX = player.x;
+            boss.scoopTargetY = local.groundY + 10 - 20; // boss center near ground
+            boss.attackHitFired = false;
+            boss.scaleTarget = 1.0;
+            boss.motionTrail = [];
+            boss._trailTimer = 0;
+            bossSetState(boss, 'attack_stomp', 60 * 0.60);
+        }
+    } else if (boss.state === 'attack_stomp') {
+        const p = Math.min(1, boss.stateT / boss.stateDur);
+        // Ease-in cubic for fast approach
+        const ease = p < 0.5
+            ? 4 * p * p * p
+            : 1 - Math.pow(-2 * p + 2, 3) / 2;
+        // Arc: X smooth, Y curves up slightly then slams down
+        boss.x = boss.scoopStartX + (boss.scoopTargetX - boss.scoopStartX) * ease;
+        boss.y = (boss.scoopStartY + (boss.scoopTargetY - boss.scoopStartY) * ease)
+                 - Math.sin(p * Math.PI) * 60;
+
+        // Motion trail — add position every 3 frames
+        boss._trailTimer += dt;
+        if (boss._trailTimer >= 3) {
+            boss._trailTimer = 0;
+            boss.motionTrail.unshift({ x: boss.x, y: boss.y, alpha: 0.55 });
+            if (boss.motionTrail.length > 5) boss.motionTrail.pop();
+        }
+
+        // Damage player on contact during dive
+        if (!boss.attackHitFired) {
+            const ddx = player.x - boss.x;
+            const ddy = player.y - boss.y;
+            if (Math.hypot(ddx, ddy) < 70 && player.invulnT <= 0) {
+                boss.attackHitFired = true;
+                damagePlayer(local, player, boss);
+            }
+        }
+
+        if (boss.stateT >= boss.stateDur) {
+            // GROUND IMPACT
+            boss.x = boss.scoopTargetX;
+            boss.y = boss.scoopTargetY;
+            boss.motionTrail = [];
+            bossAddShake(local, 16);
+            boss.flashWhiteT = 22;
+            bossSpawnParticles(local, boss.x, local.groundY + 10, 24, {
+                color: 'rgba(255,255,180,0.95)', speed: 9, life: 38, size: 5
+            });
+            bossSpawnParticles(local, boss.x, local.groundY + 10, 10, {
+                color: 'rgba(255,200,100,0.80)', speed: 5, life: 28, size: 3
+            });
+            local.groundImpact = { x: boss.x, t: 0, maxT: 36 };
+            bossSetState(boss, 'attack_impact', 60 * 0.32);
+        }
+    } else if (boss.state === 'attack_impact') {
+        // Freeze boss at impact point while effects play
+        boss.x = boss.scoopTargetX;
+        boss.y = boss.scoopTargetY;
+        if (boss.stateT >= boss.stateDur) {
+            // Launch rebound — continues RIGHT (same direction as stomp) and upward off-screen
+            boss.reboundVX = 20;
+            boss.reboundVY = -15;
+            boss._trailTimer = 0;
+            bossSetState(boss, 'attack_rebound', 9999);
+        }
+    } else if (boss.state === 'attack_rebound') {
+        // Physics-driven bounce off screen
+        boss.reboundVY += 0.38 * dt;
+        boss.x += boss.reboundVX * dt;
+        boss.y += boss.reboundVY * dt;
+
+        // Trail during rebound
+        boss._trailTimer += dt;
+        if (boss._trailTimer >= 3) {
+            boss._trailTimer = 0;
+            boss.motionTrail.unshift({ x: boss.x, y: boss.y, alpha: 0.45 });
+            if (boss.motionTrail.length > 5) boss.motionTrail.pop();
+        }
+
+        // Once fully off-screen right, instant-snap to off-screen left, then return
+        if (boss.x > local.W + 200) {
+            boss.motionTrail = [];
+            // One-frame snap to off-screen LEFT — no transition
+            boss.x = -180;
+            boss.y = local.H * 0.42;
+            bossSetState(boss, 'attack_return', 60 * 0.75);
+        }
+    } else if (boss.state === 'attack_return') {
+        const p = Math.min(1, boss.stateT / boss.stateDur);
+        const eased = 1 - Math.pow(1 - p, 3);
+        boss.x = -180 + (local.W * 0.22 - (-180)) * eased;
+        boss.y = local.H * 0.42;
+        boss.baseY = local.H * 0.42;
+        if (boss.stateT >= boss.stateDur) {
+            boss.x = local.W * 0.22;
+            bossSetState(boss, 'idle', 60 * 1.5);
+        }
+    } else if (boss.state === 'weak') {
+        // Decay trail
+        boss.motionTrail = [];
+        // Check player collision with boss
+        if (player.invulnT <= 0) {
+            const ddx = player.x - boss.x;
+            const ddy = player.y - boss.y;
+            if (Math.hypot(ddx, ddy) < 60) {
+                // Player hits boss
+                boss.health -= 1;
+                boss.flashWhiteT = 12;
+                player.flashWhiteT = 12;
+                player.invulnT = 18;
+                // Knockback boss slightly
+                boss.x += 20 * (player.x < boss.x ? 1 : -1);
+                bossSpawnParticles(local, boss.x, boss.y, 12, { color: 'rgba(255,255,255,0.95)', speed: 6, life: 30, size: 4 });
+                bossAddShake(local, 6);
+                bossFloatText(local, boss.x, boss.y - 40, '-1 HP', '#ff4d6d');
+                // Bounce player up
+                player.vy = -10;
+                player.onGround = false;
+
+                if (boss.health <= 0) {
+                    bossSetState(boss, 'end', 9999);
+                    boss.endFallVy = 0;
+                } else {
+                    // Boss wakes up immediately after taking a hit
+                    bossSetState(boss, 'idle', 60 * 1.5);
+                }
+            }
+        }
+        // Time window expired
+        if (boss.state === 'weak' && boss.stateT >= boss.stateDur) {
+            bossSetState(boss, 'idle', 60 * 1.5);
+        }
+    } else if (boss.state === 'end') {
+        // Drop straight down
+        boss.endFallVy += 0.3 * dt;
+        boss.endFallVy = Math.min(8, boss.endFallVy);
+        boss.y += boss.endFallVy * dt;
+        if (boss.y > local.H + 200 && !boss.offScreen) {
+            boss.offScreen = true;
+            local.outcome = 'win';
+            local.outcomeT = 0;
+            bossSpawnParticles(local, boss.x, local.groundY, 18, { color: 'rgba(220,180,255,0.95)', speed: 7, life: 40, size: 5 });
+            bossAddShake(local, 10);
+        }
+        // Sparkle particles
+        if (Math.random() < 0.4) {
+            bossSpawnParticles(local, boss.x + (Math.random() - 0.5) * 60, boss.y, 1, { color: 'rgba(220,180,255,0.7)', speed: 1.4, life: 24, size: 3 });
+        }
+    }
+
+    // ── Shield alpha/scale (visible when not weak, animates on transition) ──
+    const isWeak = boss.state === 'weak' || boss.state === 'end';
+    const shieldAlphaTarget = isWeak ? 0 : 0.10;
+    const shieldScaleTarget = isWeak ? 1.35 : 1.0;
+    boss.shieldAlpha += (shieldAlphaTarget - boss.shieldAlpha) * 0.10 * dt;
+    boss.shieldScale += (shieldScaleTarget - boss.shieldScale) * 0.10 * dt;
+    if (boss.shieldAlpha < 0.002) boss.shieldAlpha = 0;
+
+    // ── Stair alpha (fade in during weak, fade out otherwise) ────────────────
+    const stair = local.stair;
+    stair.x = local.W * 0.40 - stair.w / 2;
+    stair.y = local.groundY - 165;
+    const stairTarget = (boss.state === 'weak') ? 1 : 0;
+    stair.alpha += (stairTarget - stair.alpha) * 0.08 * dt;
+    if (stair.alpha < 0.01) stair.alpha = 0;
+    // If player was standing on stair and stair fades out, drop them
+    if (stair.alpha < 0.1 && player.onGround) {
+        const feetY2 = player.y + player.h / 2;
+        if (Math.abs(feetY2 - stair.y) < 4) player.onGround = false;
+    }
+
+    // ── Ground impact timer (advances every frame, cleared when expired) ──────
+    if (local.groundImpact) {
+        local.groundImpact.t += dt;
+        if (local.groundImpact.t >= local.groundImpact.maxT) local.groundImpact = null;
+    }
+
+    // ── Particles tick ──────────────────────────────────────────────────────
+    local.particles = local.particles.filter(p => {
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.vy += 0.15 * dt;
+        p.life -= dt;
+        return p.life > 0;
+    });
+
+    // Float texts
+    local.floatTexts = local.floatTexts.filter(t => {
+        t.y += t.vy * dt;
+        t.life -= dt;
+        return t.life > 0;
+    });
+
+    // Wind particles
+    local.windParticles.forEach(wp => {
+        wp.x += wp.vx * dt;
+        if (wp.x < -20) { wp.x = local.W + 20; wp.y = Math.random() * local.H; }
+    });
+
+    // Aura update — handled in render via boss state
+    local.aura.forEach(a => a.phase += a.speed * 1000 * dt);
+
+    // Shake decay
+    if (local.shakeT > 0) {
+        local.shakeT -= dt;
+        const amp = local.shakeAmp * (local.shakeT / 10);
+        local.screenShakeX = (Math.random() - 0.5) * 2 * amp;
+        local.screenShakeY = (Math.random() - 0.5) * 2 * amp * 0.6;
+        if (local.shakeT <= 0) { local.screenShakeX = 0; local.screenShakeY = 0; local.shakeAmp = 0; }
+    } else {
+        local.screenShakeX = 0; local.screenShakeY = 0;
+    }
+
+    // Outcome handling
+    if (local.outcome && session && session.phase === 'active') {
+        local.outcomeT += dt;
+        if (local.outcomeT > 60 * 0.8) {
+            update(ref(database), { [laptopBossSessionPath('phase')]: 'finished' });
+        }
+    }
+}
+
+function damagePlayer(local, player, boss) {
+    if (player.invulnT > 0 || player.dead) return;
+    player.health -= 1;
+    player.flashRedT = 14;
+    player.invulnT = 60; // 1s invuln
+    // Knockback away from boss
+    const dir = player.x < boss.x ? -1 : 1;
+    player.vx = dir * 7;
+    player.vy = -8;
+    player.onGround = false;
+    bossSpawnParticles(local, player.x, player.y, 8, { color: 'rgba(255,80,80,0.85)', speed: 4, life: 28, size: 4 });
+    bossAddShake(local, 5);
+    bossFloatText(local, player.x, player.y - 30, '-1', '#ff4d6d');
+    if (player.health <= 0) {
+        player.dead = true;
+        player.vy = -10;
+    }
+}
+
+// ─── Boss render ──────────────────────────────────────────────────────────────
+
+function renderLaptopBoss() {
+    const ctx = gameState.ctx;
+    const canvas = gameState.canvas;
+    const local = gameState.laptopBoss.local;
+    const session = gameState.laptopBoss.session;
+    if (!ctx || !canvas) return;
+
+    // Defensive reset — clears any leaked canvas state from previous frames
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.filter = 'none';
+    ctx.setLineDash([]);
+
+    const dpr = gameState.dpr || 1;
+    const W = canvas.width / dpr;
+    const H = canvas.height / dpr;
+
+    // Update local W/H if window changed
+    if (local && (local.W !== W || local.H !== H)) {
+        // Recalc groundY proportionally
+        local.W = W; local.H = H;
+        local.groundY = H * 0.84;
+        // Snap player to new ground if was on ground
+        if (local.player && local.player.onGround) {
+            local.player.y = local.groundY - local.player.h / 2;
+        }
+        if (local.boss) {
+            local.boss.baseY = H * 0.42;
+        }
+        // Stair position is recomputed each frame in update, so no action needed
+    }
+
+    ctx.save();
+    ctx.scale(dpr, dpr);
+    ctx.imageSmoothingEnabled = false;
+
+    // Background — fallback gradient if image not loaded
+    const bgImg = gameState.assets.bossBg;
+    if (bgImg && bgImg.complete && bgImg.naturalWidth) {
+        ctx.drawImage(bgImg, 0, 0, W, H);
+    } else {
+        const g = ctx.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, '#1a0f2e');
+        g.addColorStop(1, '#0a0617');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+    }
+
+    if (!local) {
+        // No local state — just darken (teleport hold)
+        ctx.restore();
+        // Apply teleport overlay if active
+        ctx.save();
+        ctx.scale(dpr, dpr);
+        drawTeleportOverlay(W, H);
+        ctx.restore();
+        return;
+    }
+
+    const player = local.player;
+    const boss = local.boss;
+
+    // Screen shake transform
+    ctx.save();
+    ctx.translate(local.screenShakeX, local.screenShakeY);
+
+    // Wind particles (background polish)
+    ctx.save();
+    local.windParticles.forEach(wp => {
+        ctx.fillStyle = `rgba(220,220,255,${wp.alpha})`;
+        ctx.fillRect(wp.x, wp.y, wp.len, wp.size);
+    });
+    ctx.restore();
+
+    // Ground image
+    const groundImg = gameState.assets.bossGround;
+    if (groundImg && groundImg.complete && groundImg.naturalWidth) {
+        ctx.drawImage(groundImg, 0, 0, W, H);
+    } else {
+        ctx.fillStyle = '#3a2d1c';
+        ctx.fillRect(0, local.groundY, W, H - local.groundY);
+    }
+
+    // Stepping platform (weak state only, fades in/out) — pixel-art yellow
+    if (local.stair.alpha > 0.01) {
+        const st = local.stair;
+        ctx.save();
+        ctx.globalAlpha = st.alpha;
+        ctx.imageSmoothingEnabled = false;
+        // Dark shadow band underneath
+        ctx.fillStyle = '#5a3e00';
+        ctx.fillRect(st.x, st.y + st.h, st.w, 4);
+        // Main platform body — bright gold
+        ctx.fillStyle = '#f5c400';
+        ctx.fillRect(st.x, st.y, st.w, st.h);
+        // Dark shading bottom 3px
+        ctx.fillStyle = '#b88f00';
+        ctx.fillRect(st.x, st.y + st.h - 3, st.w, 3);
+        // Pixel-art checkerboard highlight on top row
+        const tileW = 8;
+        for (let tx = st.x; tx < st.x + st.w; tx += tileW * 2) {
+            ctx.fillStyle = '#ffe066';
+            ctx.fillRect(tx, st.y, tileW, 3);
+        }
+        ctx.restore();
+    }
+
+    // Aura around boss (skip during weak/end)
+    if (boss.state !== 'weak' && boss.state !== 'end') {
+        local.aura.forEach(a => {
+            const ax = boss.x + Math.cos(a.phase) * a.r;
+            const ay = boss.y + Math.sin(a.phase) * a.r * 0.7;
+            const alpha = 0.35 + Math.sin(a.phase * 1.5) * 0.18;
+            ctx.fillStyle = `rgba(190,140,255,${alpha})`;
+            ctx.beginPath();
+            ctx.arc(ax, ay, 3, 0, Math.PI * 2);
+            ctx.fill();
+        });
+    }
+
+    // Grab target circle (predict phase)
+    if (boss.state === 'grab_predict') {
+        // Lock to player live during predict
+        const p = boss.stateT / boss.stateDur;
+        const pulse = 0.6 + Math.abs(Math.sin(p * Math.PI * 4)) * 0.4;
+        ctx.save();
+        ctx.strokeStyle = `rgba(255,240,120,${pulse})`;
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.arc(player.x, player.y, 40, 0, Math.PI * 2);
+        ctx.stroke();
+        ctx.restore();
+    }
+
+    // Grab line — shoot phase (extends from boss to locked target)
+    if (boss.state === 'grab_shoot') {
+        const lerpT = Math.min(1, (boss.stateT / boss.stateDur) * 2.5);
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,240,140,0.85)';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(boss.x, boss.y);
+        ctx.lineTo(boss.x + (boss.grabTargetX - boss.x) * lerpT, boss.y + (boss.grabTargetY - boss.y) * lerpT);
+        ctx.stroke();
+        ctx.restore();
+    }
+    // Grab line — pull/hold phase (tether from boss to held player)
+    if (boss.state === 'grab_pull' || boss.state === 'grab_hold') {
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255,240,140,0.60)';
+        ctx.lineWidth = 2;
+        ctx.setLineDash([6, 4]);
+        ctx.beginPath();
+        ctx.moveTo(boss.x, boss.y);
+        ctx.lineTo(player.x, player.y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+    }
+
+    // Ground impact shockwave ring
+    if (local.groundImpact && local.groundImpact.t < local.groundImpact.maxT) {
+        const gi = local.groundImpact;
+        const ip = Math.max(0.01, gi.t / gi.maxT); // never 0 — avoids zero-radius ellipse crash
+        const ir = ip * 140;
+        const ia = (1 - ip) * 0.75;
+        ctx.save();
+        if (ir > 1) { // guard against sub-pixel radius
+            ctx.strokeStyle = `rgba(255,240,140,${ia})`;
+            ctx.lineWidth = 3 * (1 - ip) + 1;
+            ctx.beginPath();
+            ctx.ellipse(gi.x, local.groundY + 10, ir, Math.max(1, ir * 0.3), 0, Math.PI, 0);
+            ctx.stroke();
+        }
+        // Inner ring slightly delayed
+        if (ip > 0.15) {
+            const ir2 = (ip - 0.15) / 0.85 * 80;
+            const ia2 = (1 - ip) * 0.4;
+            if (ir2 > 1) {
+                ctx.strokeStyle = `rgba(255,200,80,${ia2})`;
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.ellipse(gi.x, local.groundY + 10, ir2, Math.max(1, ir2 * 0.28), 0, Math.PI, 0);
+                ctx.stroke();
+            }
+        }
+        ctx.restore();
+    }
+
+    // Motion trail echoes — stomp dive and rebound
+    if ((boss.state === 'attack_stomp' || boss.state === 'attack_rebound') && boss.motionTrail.length > 0) {
+        boss.motionTrail.forEach((tr, i) => {
+            if (tr.alpha > 0) drawBossSprite(ctx, boss, tr.x, tr.y, tr.alpha * 0.45);
+            tr.alpha = Math.max(0, tr.alpha - 0.018);
+        });
+    }
+
+    // Boss sprite
+    drawBossSprite(ctx, boss, boss.x, boss.y, 1);
+
+    // Shield overlay (over boss sprite, visible when NOT weak)
+    const shieldImg = gameState.assets.bossShield;
+    if (boss.shieldAlpha > 0.005 && shieldImg && shieldImg.complete && shieldImg.naturalWidth) {
+        const sw = BOSS_FRAME_W * BOSS_SPRITE_SCALE * boss.shieldScale * 1.5;
+        const sh = BOSS_FRAME_H * BOSS_SPRITE_SCALE * boss.shieldScale * 1.5;
+        ctx.save();
+        ctx.globalAlpha = boss.shieldAlpha;
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(shieldImg, boss.x - sw / 2, boss.y - sh / 2, sw, sh);
+        ctx.restore();
+    }
+
+    // Boss hearts above boss
+    drawBossHearts(ctx, boss.x, boss.y - 90, boss.health, BOSS_MAX_HEALTH, 1);
+
+    // Weak-state time bar (below hearts, depletes over 3 s)
+    if (boss.state === 'weak') {
+        const barW = 80;
+        const barH = 6;
+        const barX = boss.x - barW / 2;
+        const barY = boss.y - 90 + 38; // just below hearts row
+        const pct  = Math.max(0, 1 - boss.stateT / boss.stateDur);
+        // Background track
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(barX - 1, barY - 1, barW + 2, barH + 2, 3);
+        else ctx.rect(barX - 1, barY - 1, barW + 2, barH + 2);
+        ctx.fill();
+        // Fill — yellow → red as it drains
+        const r = Math.round(255);
+        const g = Math.round(220 * pct);
+        ctx.fillStyle = `rgb(${r},${g},0)`;
+        if (ctx.roundRect) {
+            ctx.beginPath();
+            ctx.roundRect(barX, barY, barW * pct, barH, 2);
+            ctx.fill();
+        } else {
+            ctx.fillRect(barX, barY, barW * pct, barH);
+        }
+        ctx.restore();
+    }
+
+    // Player avatar
+    if (!player.dead || player.y < local.H + 100) {
+        drawPlayerAvatar(ctx, player, local);
+    }
+
+    // Player hearts above avatar (world space, moves with player)
+    if (!player.dead || player.y < local.H + 100) {
+        drawBossHearts(ctx, player.x, player.y - player.h / 2 - 36, player.health, PLAYER_BOSS_MAX_HEALTH, 0.8, false);
+    }
+
+    // Particles
+    local.particles.forEach(p => {
+        const a = Math.max(0, p.life / p.maxLife);
+        ctx.fillStyle = p.color.replace(/[\d.]+\)$/, `${a.toFixed(2)})`);
+        ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    });
+
+    // Float texts
+    local.floatTexts.forEach(t => {
+        const a = t.life / t.maxLife;
+        ctx.save();
+        ctx.fillStyle = t.color;
+        ctx.globalAlpha = a;
+        ctx.font = 'bold 18px Rubik';
+        ctx.textAlign = 'center';
+        ctx.fillText(t.text, t.x, t.y);
+        ctx.restore();
+    });
+
+    ctx.restore(); // shake
+
+    // Countdown overlay (if not yet started)
+    if (session && session.startTime && serverNow() < session.startTime) {
+        const remaining = Math.max(0, session.startTime - serverNow());
+        const sec = Math.ceil(remaining / 1000);
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.4)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#fff';
+        ctx.font = 'bold 90px Rubik';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(sec.toString(), W / 2, H / 2);
+        ctx.font = 'bold 22px Rubik';
+        ctx.fillText('استعد', W / 2, H / 2 + 70);
+        ctx.restore();
+    }
+
+    // Outcome overlay (win/lose pre-results screen)
+    if (local.outcome) {
+        const a = Math.min(1, local.outcomeT / 30);
+        ctx.save();
+        ctx.fillStyle = `rgba(0,0,0,${0.55 * a})`;
+        ctx.fillRect(0, 0, W, H);
+        if (gameState.laptopBoss.showResultsInGame) {
+            drawBossResultsPanel(ctx, W, H, local.outcome);
+        }
+        ctx.restore();
+    } else if (gameState.laptopBoss.showResultsInGame && session?.phase === 'finished') {
+        // Direct render of results panel (re-entered finished phase)
+        ctx.save();
+        ctx.fillStyle = 'rgba(0,0,0,0.55)';
+        ctx.fillRect(0, 0, W, H);
+        drawBossResultsPanel(ctx, W, H, local.outcome || 'win');
+        ctx.restore();
+    }
+
+    // Teleport overlay (fade in/out)
+    drawTeleportOverlay(W, H);
+
+    ctx.restore(); // dpr
+}
+
+function drawBossSprite(ctx, boss, x, y, alpha) {
+    let sheet = null;
+    let frames = 0;
+    let frameIdx = 0;
+    if (boss.state === 'intro' || boss.state === 'idle') {
+        sheet = gameState.assets.bossIdle;
+        frames = BOSS_IDLE_FRAMES;
+        frameIdx = Math.floor((boss.floatT * 600) / 100) % frames;
+    } else if (boss.state === 'grab_predict' || boss.state === 'attack_anticipate') {
+        sheet = gameState.assets.bossAnticipation;
+        frames = BOSS_ANTICIPATION_FRAMES;
+        // Play through 0..7 across the state's duration
+        frameIdx = Math.min(frames - 1, Math.floor((boss.stateT / boss.stateDur) * frames));
+    } else if (boss.state === 'grab_shoot' || boss.state === 'attack_stomp') {
+        sheet = gameState.assets.bossAttack;
+        frames = BOSS_ATTACK_FRAMES;
+        frameIdx = Math.min(frames - 1, Math.floor((boss.stateT / boss.stateDur) * frames));
+    } else if (boss.state === 'grab_pull' || boss.state === 'grab_hold' ||
+               boss.state === 'attack_impact' || boss.state === 'attack_rebound') {
+        // Hold last frame of attack sheet
+        sheet = gameState.assets.bossAttack;
+        frames = BOSS_ATTACK_FRAMES;
+        frameIdx = frames - 1;
+    } else if (boss.state === 'grab_release_kidnap' || boss.state === 'attack_return') {
+        sheet = gameState.assets.bossIdle;
+        frames = BOSS_IDLE_FRAMES;
+        frameIdx = Math.floor((boss.floatT * 600) / 100) % frames;
+    } else if (boss.state === 'weak' || boss.state === 'end') {
+        sheet = gameState.assets.bossWeak;
+        frames = BOSS_WEAK_FRAMES;
+        if (boss.state === 'weak') {
+            // Animate once, then hold
+            frameIdx = Math.min(frames - 1, Math.floor(boss.stateT / 6));  // 100ms/frame at 60fps = 6 frames per sprite frame
+        } else {
+            frameIdx = frames - 1;
+        }
+    }
+
+    if (!sheet || !sheet.complete || !sheet.naturalWidth) {
+        // Fallback: solid purple box
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = '#7b4dff';
+        const w = BOSS_FRAME_W * BOSS_SPRITE_SCALE;
+        const h = BOSS_FRAME_H * BOSS_SPRITE_SCALE;
+        ctx.fillRect(x - w / 2, y - h / 2, w, h);
+        ctx.restore();
+        return;
+    }
+
+    const sw = BOSS_FRAME_W;
+    const sh = BOSS_FRAME_H;
+    const dw = sw * BOSS_SPRITE_SCALE * (boss.scale || 1);
+    const dh = sh * BOSS_SPRITE_SCALE * (boss.scale || 1);
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.imageSmoothingEnabled = false;
+    if (boss.flashWhiteT > 0) {
+        ctx.filter = 'brightness(2.5)';
+    }
+    ctx.drawImage(sheet, frameIdx * sw, 0, sw, sh, x - dw / 2, y - dh / 2, dw, dh);
+    ctx.filter = 'none';
+    ctx.restore();
+}
+
+function drawPlayerAvatar(ctx, player, local) {
+    const r = player.w / 2;
+    // Squash/stretch
+    const sx = 1 + (1 - player.squashT) * 0.25;
+    const sy = player.squashT;
+
+    // Blink during invuln
+    const blink = player.invulnT > 0 && Math.floor(player.invulnT / 4) % 2 === 0;
+    if (blink) {
+        // skip drawing for a flicker effect
+        return;
+    }
+
+    ctx.save();
+    ctx.translate(player.x, player.y);
+    ctx.scale(sx, sy);
+    // Avatar circle clip
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.clip();
+    const av = gameState.avatarCache[gameState.userId];
+    if (av && av !== 'failed' && av.complete) {
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(av, -r, -r, r * 2, r * 2);
+    } else {
+        ctx.fillStyle = COLORS.blue;
+        ctx.fillRect(-r, -r, r * 2, r * 2);
+    }
+    // Flash overlays
+    if (player.flashRedT > 0) {
+        ctx.fillStyle = `rgba(255,40,40,${Math.min(1, player.flashRedT / 14)})`;
+        ctx.fillRect(-r, -r, r * 2, r * 2);
+    }
+    if (player.flashWhiteT > 0) {
+        ctx.fillStyle = `rgba(255,255,255,${Math.min(1, player.flashWhiteT / 14)})`;
+        ctx.fillRect(-r, -r, r * 2, r * 2);
+    }
+    ctx.restore();
+
+    // Outline ring
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(player.x, player.y, r, 0, Math.PI * 2);
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+}
+
+function drawBossHearts(ctx, x, y, current, max, scale, leftAnchored) {
+    const heartSize = 30 * (scale || 1);
+    const gap = 6;
+    const totalW = max * heartSize + (max - 1) * gap;
+    const startX = leftAnchored ? x - heartSize / 2 : x - totalW / 2;
+    const fullImg = gameState.assets.bossHeart;
+    const deadImg = gameState.assets.bossHeartDead;
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    for (let i = 0; i < max; i++) {
+        const hx = startX + i * (heartSize + gap);
+        const hy = y;
+        const img = i < current ? fullImg : deadImg;
+        if (img && img.complete && img.naturalWidth) {
+            ctx.drawImage(img, hx, hy, heartSize, heartSize);
+        } else {
+            ctx.fillStyle = i < current ? '#ff4d6d' : '#444';
+            ctx.fillRect(hx, hy, heartSize, heartSize);
+        }
+    }
+    ctx.restore();
+}
+
+function drawBossResultsPanel(ctx, W, H, outcome) {
+    const panelW = 360;
+    const panelH = 220;
+    const px = (W - panelW) / 2;
+    const py = (H - panelH) / 2;
+    ctx.save();
+    ctx.fillStyle = 'rgba(20,12,32,0.94)';
+    if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(px, py, panelW, panelH, 18);
+        ctx.fill();
+    } else {
+        ctx.fillRect(px, py, panelW, panelH);
+    }
+    ctx.strokeStyle = 'rgba(180,140,255,0.20)';
+    ctx.lineWidth = 1;
+    if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(px, py, panelW, panelH, 18);
+        ctx.stroke();
+    }
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 36px Rubik';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(outcome === 'win' ? 'انتصرت!' : 'هزمت!', W / 2, py + 60);
+    ctx.font = 'bold 18px Rubik';
+    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillText(outcome === 'win' ? 'لقد قضيت على الحاسوب' : 'حاول مرة أخرى', W / 2, py + 110);
+
+    // Return button
+    const btnW = 160, btnH = 48;
+    const bx = px + (panelW - btnW) / 2;
+    const by = py + panelH - btnH - 22;
+    ctx.fillStyle = outcome === 'win' ? '#5b3aff' : '#553344';
+    if (ctx.roundRect) {
+        ctx.beginPath();
+        ctx.roundRect(bx, by, btnW, btnH, 24);
+        ctx.fill();
+    } else {
+        ctx.fillRect(bx, by, btnW, btnH);
+    }
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 18px Rubik';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('عودة', bx + btnW / 2, by + btnH / 2);
+    gameState.laptopBoss.resultsButtonRect = { x: bx, y: by, w: btnW, h: btnH };
+    ctx.restore();
 }
 
 // EOF

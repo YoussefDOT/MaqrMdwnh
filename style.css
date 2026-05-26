@@ -1959,6 +1959,57 @@ body.is-mobile .mobile-joystick.focus-hidden {
 }
 
 /* ══════════════════════════════════════════════════════
+   MOBILE LAPTOP BOSS CONTROLS — left / right / jump
+   ══════════════════════════════════════════════════════ */
+.mobile-boss-btns {
+    position: fixed;
+    bottom: 30px;
+    left: 0;
+    right: 0;
+    z-index: 9700;
+    pointer-events: none;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    direction: ltr;
+}
+.mobile-boss-btns.hidden { display: none; }
+.boss-btn {
+    position: fixed;
+    width: 78px;
+    height: 78px;
+    border-radius: 50%;
+    background: rgba(20, 20, 30, 0.72);
+    border: 1.5px solid rgba(180, 140, 255, 0.32);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    color: rgba(255, 255, 255, 0.92);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    pointer-events: auto;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.08s, transform 0.08s;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.45);
+}
+.boss-btn svg { width: 32px; height: 32px; pointer-events: none; }
+.boss-btn.pressed,
+.boss-btn:active {
+    background: rgba(120, 80, 255, 0.55);
+    border-color: rgba(220, 180, 255, 0.85);
+    transform: scale(0.92);
+}
+.boss-btn-left { left: 24px; bottom: 28px; }
+.boss-btn-right { left: 116px; bottom: 28px; }
+.boss-btn-jump { right: 24px; bottom: 28px; width: 92px; height: 92px; }
+/* On larger viewports, keep them inside thumb reach */
+@media (min-width: 1024px) {
+    .mobile-boss-btns { display: none !important; }
+}
+
+/* ══════════════════════════════════════════════════════
    MOBILE DRAWER HANDLE (inside focus-sounds-panel)
    ══════════════════════════════════════════════════════ */
 .mobile-drawer-handle {
