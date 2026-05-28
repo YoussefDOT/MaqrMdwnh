@@ -309,6 +309,22 @@ class FocusAudioEngine {
             breakAdded: null,
             inviteSent: null,
             inviteAccepted: null,
+            // Laptop boss fight
+            bossAnticipate: null,
+            bossAttackInitiate: null,
+            bossGrabInitiate: null,
+            bossGrabSuccess: null,
+            bossWeakIdle: null,
+            bossWeakInitiate: null,
+            bossWeakEnd: null,
+            bossHit: null,
+            bossAttackStomp: null,
+            playerHitBoss: null,
+            playerLooseBoss: null,
+            playerWinBoss: null,
+            bossApplause: null,
+            crowdCheer: null,
+            crowdShock: null,
         };
         this.focusBuffers = {
             rain: null,
@@ -372,12 +388,13 @@ class FocusAudioEngine {
     }
 
     async loadSoundEffects() {
+        const loadBuffer = async (url) => {
+            const response = await fetch(url);
+            const arrayBuffer = await response.arrayBuffer();
+            return await this.ctx.decodeAudioData(arrayBuffer);
+        };
+        // Core UI sounds (sequential — small, fast)
         try {
-            const loadBuffer = async (url) => {
-                const response = await fetch(url);
-                const arrayBuffer = await response.arrayBuffer();
-                return await this.ctx.decodeAudioData(arrayBuffer);
-            };
             this.buffers.timeBreak      = await loadBuffer('Sound/TimeBreak.mp3');
             this.buffers.timeReturn     = await loadBuffer('Sound/TimeReturn.mp3');
             this.buffers.kidnap         = await loadBuffer('Sound/LaptopGrab.mp3');
@@ -388,6 +405,28 @@ class FocusAudioEngine {
         } catch(e) {
             console.log("Failed to load Web Audio sound effects:", e);
         }
+        // Boss fight sounds — load in parallel, fail individually
+        const bossSounds = [
+            ['bossAnticipate',    'Sound/LaptopMinigame/Laptop_Anticipate.mp3'],
+            ['bossAttackInitiate','Sound/LaptopMinigame/Laptop_Attack_Initiate .mp3'],
+            ['bossGrabInitiate',  'Sound/LaptopMinigame/Laptop_Grab_initiate.mp3'],
+            ['bossGrabSuccess',   'Sound/LaptopMinigame/Laptop_Grab_Success.mp3'],
+            ['bossWeakIdle',      'Sound/LaptopMinigame/Laptop_Weak_Idle.mp3'],
+            ['bossWeakInitiate',  'Sound/LaptopMinigame/Laptop_Weak_Inititate.mp3'],
+            ['bossWeakEnd',       'Sound/LaptopMinigame/Laptop_Weak_End.mp3'],
+            ['bossHit',           'Sound/LaptopMinigame/Laptop_Hit.mp3'],
+            ['bossAttackStomp',   'Sound/LaptopMinigame/Laptop_Attack_Stomp.mp3'],
+            ['playerHitBoss',     'Sound/LaptopMinigame/Player_Hit.mp3'],
+            ['playerLooseBoss',   'Sound/LaptopMinigame/Player_Loose.mp3'],
+            ['playerWinBoss',     'Sound/LaptopMinigame/Player_Win.mp3'],
+            ['bossApplause',      'Sound/Minigame_Aplause.mp3'],
+            ['crowdCheer',        'Sound/LaptopMinigame/Crowd_Cheer.mp3'],
+            ['crowdShock',        'Sound/LaptopMinigame/Crowd_Shock.mp3'],
+        ];
+        await Promise.all(bossSounds.map(async ([key, url]) => {
+            try { this.buffers[key] = await loadBuffer(url); }
+            catch(e) { console.log(`Boss sound load failed [${key}]:`, e); }
+        }));
     }
 
     async loadFocusSoundBuffers() {
@@ -1103,6 +1142,22 @@ const gameState = {
         minigameCoffeeBad:       new Audio('Sound/Minigame_Coffee_Collect_Bad.mp3'),
         minigameCoffeeTimerClose: new Audio('Sound/Minigame_Coffee_TimerClose.mp3'),
         minigameApplause:        new Audio('Sound/Minigame_Aplause.mp3'),
+        // Laptop boss fight sounds
+        bossAnticipate:     new Audio('Sound/LaptopMinigame/Laptop_Anticipate.mp3'),
+        bossAttackInitiate: new Audio('Sound/LaptopMinigame/Laptop_Attack_Initiate .mp3'),
+        bossGrabInitiate:   new Audio('Sound/LaptopMinigame/Laptop_Grab_initiate.mp3'),
+        bossGrabSuccess:    new Audio('Sound/LaptopMinigame/Laptop_Grab_Success.mp3'),
+        bossWeakIdle:       new Audio('Sound/LaptopMinigame/Laptop_Weak_Idle.mp3'),
+        bossWeakInitiate:   new Audio('Sound/LaptopMinigame/Laptop_Weak_Inititate.mp3'),
+        bossWeakEnd:        new Audio('Sound/LaptopMinigame/Laptop_Weak_End.mp3'),
+        bossHit:            new Audio('Sound/LaptopMinigame/Laptop_Hit.mp3'),
+        bossAttackStomp:    new Audio('Sound/LaptopMinigame/Laptop_Attack_Stomp.mp3'),
+        playerHitBoss:      new Audio('Sound/LaptopMinigame/Player_Hit.mp3'),
+        playerLooseBoss:    new Audio('Sound/LaptopMinigame/Player_Loose.mp3'),
+        playerWinBoss:      new Audio('Sound/LaptopMinigame/Player_Win.mp3'),
+        bossApplause:       new Audio('Sound/Minigame_Aplause.mp3'),
+        crowdCheer:         new Audio('Sound/LaptopMinigame/Crowd_Cheer.mp3'),
+        crowdShock:         new Audio('Sound/LaptopMinigame/Crowd_Shock.mp3'),
         prayerCall:              new Audio('Sound/Prayer_CallToPrayer.mp3'),
         inviteSent:              new Audio('Sound/Invite_Sent.mp3'),
         inviteAccepted:          new Audio('Sound/Invite_Accepted.mp3'),
@@ -1191,6 +1246,15 @@ const gameState = {
         showResultsInGame: false,
         resultsButtonRect: null,
         _sirajCleanupTimer: null,
+        // Audio nodes for the boss fight (managed by boss audio helpers)
+        bossAudio: {
+            applauseSource: null,   // BufferSourceNode — looping crowd applause
+            applauseGain:   null,   // GainNode for fade/duck control
+            weakIdleSource: null,   // BufferSourceNode — looping weak idle hum
+            weakIdleGain:   null,   // GainNode
+            weakIdleTimer:  null,   // setTimeout id for 1-second startup delay
+            duckTimer:      null,   // setTimeout id for duck-recovery ramp
+        },
     },
 
     // Mobile joystick state
@@ -1317,6 +1381,21 @@ gameState.sounds.minigameCoffeeCollect.preload   = 'auto';
 gameState.sounds.minigameCoffeeBad.preload       = 'auto';
 gameState.sounds.minigameCoffeeTimerClose.preload = 'auto';
 gameState.sounds.minigameApplause.preload        = 'auto';
+gameState.sounds.bossAnticipate.preload     = 'auto';
+gameState.sounds.bossAttackInitiate.preload = 'auto';
+gameState.sounds.bossGrabInitiate.preload   = 'auto';
+gameState.sounds.bossGrabSuccess.preload    = 'auto';
+gameState.sounds.bossWeakIdle.preload       = 'auto';
+gameState.sounds.bossWeakInitiate.preload   = 'auto';
+gameState.sounds.bossWeakEnd.preload        = 'auto';
+gameState.sounds.bossHit.preload            = 'auto';
+gameState.sounds.bossAttackStomp.preload    = 'auto';
+gameState.sounds.playerHitBoss.preload      = 'auto';
+gameState.sounds.playerLooseBoss.preload    = 'auto';
+gameState.sounds.playerWinBoss.preload      = 'auto';
+gameState.sounds.bossApplause.preload       = 'auto';
+gameState.sounds.crowdCheer.preload         = 'auto';
+gameState.sounds.crowdShock.preload         = 'auto';
 gameState.sounds.prayerCall.preload              = 'auto';
 gameState.sounds.inviteSent.preload              = 'auto';
 gameState.sounds.inviteAccepted.preload          = 'auto';
@@ -11387,6 +11466,199 @@ function updateLaptopBossTeleportAnim() {
     }
 }
 
+// ─── Boss audio helpers ───────────────────────────────────────────────────────
+// All boss sounds go through the FocusAudioEngine's Web Audio context so they
+// work in background tabs. They bypass the focus mixer's masterGain and connect
+// directly to ctx.destination via their own gain nodes.
+
+function _bossCtx() {
+    const eng = gameState.focusAudioEngine;
+    if (!eng) return null;
+    if (!eng.ctx) eng.init();
+    return eng.ctx;
+}
+
+// Play a one-shot boss sound by buffer key
+// Volume levels for each one-shot boss sound.
+// Crowd/applause are loud by default; gameplay SFX need a boost.
+const BOSS_APPLAUSE_VOL = 0.45; // max volume for the looping applause track
+const BOSS_SOUND_VOLUMES = {
+    crowdCheer:         0.60,
+    crowdShock:         0.60,
+    bossAnticipate:     2.0,
+    bossAttackInitiate: 2.0,
+    bossGrabInitiate:   2.0,
+    bossGrabSuccess:    2.0,
+    bossWeakInitiate:   2.0,
+    bossWeakEnd:        2.0,
+    bossHit:            2.0,
+    bossAttackStomp:    2.0,
+    playerHitBoss:      2.0,
+    playerLooseBoss:    2.0,
+    playerWinBoss:      2.0,
+    bossWeakIdle:       1.0,  // managed separately (loop)
+};
+
+function bossPlaySound(key) {
+    const ctx = _bossCtx();
+    if (!ctx) return;
+    const buf = gameState.focusAudioEngine.buffers[key];
+    if (!buf) return;
+    const vol = BOSS_SOUND_VOLUMES[key] ?? 1.0;
+    ctx.resume().then(() => {
+        try {
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            const g = ctx.createGain();
+            g.gain.setValueAtTime(vol, ctx.currentTime);
+            src.connect(g);
+            g.connect(ctx.destination);
+            src.start(0);
+        } catch(e) {}
+    });
+}
+
+// Start the looping crowd applause for the boss fight.
+// Trims first 4 s and last 4 s by using loopStart/loopEnd.
+// Fades in over fadeMs milliseconds.
+function startBossApplause(fadeMs = 1500) {
+    const ctx = _bossCtx();
+    const ba = gameState.laptopBoss.bossAudio;
+    if (!ctx) return;
+    const buf = gameState.focusAudioEngine.buffers.bossApplause;
+    if (!buf) return;
+    ctx.resume().then(() => {
+        try {
+            const dur = buf.duration;
+            const loopStart = 4.0;
+            const loopEnd   = Math.max(loopStart + 1, dur - 4.0);
+
+            const gainNode = ctx.createGain();
+            gainNode.gain.setValueAtTime(0, ctx.currentTime);
+            gainNode.gain.linearRampToValueAtTime(BOSS_APPLAUSE_VOL, ctx.currentTime + fadeMs / 1000);
+            gainNode.connect(ctx.destination);
+
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            src.loop = true;
+            src.loopStart = loopStart;
+            src.loopEnd   = loopEnd;
+            src.connect(gainNode);
+            src.start(0, loopStart); // skip into audio past the file's own fade-in
+
+            ba.applauseSource = src;
+            ba.applauseGain   = gainNode;
+        } catch(e) {}
+    });
+}
+
+// Fade out and stop the applause. fadeMs = 0 means instant.
+function stopBossApplause(fadeMs = 1200) {
+    const ctx = _bossCtx();
+    const ba  = gameState.laptopBoss.bossAudio;
+    if (!ctx || !ba.applauseSource) return;
+    const src  = ba.applauseSource;
+    const gain = ba.applauseGain;
+    ba.applauseSource = null;
+    ba.applauseGain   = null;
+    if (ba.duckTimer) { clearTimeout(ba.duckTimer); ba.duckTimer = null; }
+    try {
+        gain.gain.cancelScheduledValues(ctx.currentTime);
+        gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+        if (fadeMs > 0) {
+            gain.gain.linearRampToValueAtTime(0, ctx.currentTime + fadeMs / 1000);
+            setTimeout(() => { try { src.stop(); } catch(e) {} }, fadeMs + 50);
+        } else {
+            src.stop();
+        }
+    } catch(e) {}
+}
+
+// Duck applause to 20%, play a crowd sound, then ramp back up.
+// duckKey = 'crowdCheer' | 'crowdShock'
+function bossDuckApplause(duckKey) {
+    const ctx = _bossCtx();
+    const ba  = gameState.laptopBoss.bossAudio;
+    bossPlaySound(duckKey);
+    if (!ctx || !ba.applauseGain) return;
+    const g = ba.applauseGain;
+    if (ba.duckTimer) { clearTimeout(ba.duckTimer); ba.duckTimer = null; }
+    try {
+        g.gain.cancelScheduledValues(ctx.currentTime);
+        g.gain.setValueAtTime(g.gain.value, ctx.currentTime);
+        g.gain.linearRampToValueAtTime(0.20, ctx.currentTime + 0.30); // duck in 300 ms
+    } catch(e) {}
+    // Recover after 2 s
+    ba.duckTimer = setTimeout(() => {
+        ba.duckTimer = null;
+        if (!ba.applauseGain) return;
+        try {
+            g.gain.cancelScheduledValues(ctx.currentTime);
+            g.gain.setValueAtTime(g.gain.value, ctx.currentTime);
+            g.gain.linearRampToValueAtTime(BOSS_APPLAUSE_VOL, ctx.currentTime + 0.80); // ramp up 800 ms
+        } catch(e) {}
+    }, 2000);
+}
+
+// Start looping weak-idle sound, with a 1-second startup delay and fade-in.
+function startBossWeakIdle() {
+    const ba = gameState.laptopBoss.bossAudio;
+    if (ba.weakIdleTimer) { clearTimeout(ba.weakIdleTimer); ba.weakIdleTimer = null; }
+    stopBossWeakIdle(0); // kill any existing one instantly
+    ba.weakIdleTimer = setTimeout(() => {
+        ba.weakIdleTimer = null;
+        const ctx = _bossCtx();
+        if (!ctx) return;
+        const buf = gameState.focusAudioEngine.buffers.bossWeakIdle;
+        if (!buf) return;
+        ctx.resume().then(() => {
+            try {
+                const gainNode = ctx.createGain();
+                gainNode.gain.setValueAtTime(0, ctx.currentTime);
+                gainNode.gain.linearRampToValueAtTime(1.0, ctx.currentTime + 0.5);
+                gainNode.connect(ctx.destination);
+
+                const src = ctx.createBufferSource();
+                src.buffer = buf;
+                src.loop = true;
+                src.connect(gainNode);
+                src.start(0);
+
+                ba.weakIdleSource = src;
+                ba.weakIdleGain   = gainNode;
+            } catch(e) {}
+        });
+    }, 1000);
+}
+
+// Fade out and stop the weak-idle loop.
+function stopBossWeakIdle(fadeMs = 500) {
+    const ctx = _bossCtx();
+    const ba  = gameState.laptopBoss.bossAudio;
+    if (ba.weakIdleTimer) { clearTimeout(ba.weakIdleTimer); ba.weakIdleTimer = null; }
+    if (!ba.weakIdleSource) return;
+    const src  = ba.weakIdleSource;
+    const gain = ba.weakIdleGain;
+    ba.weakIdleSource = null;
+    ba.weakIdleGain   = null;
+    try {
+        if (fadeMs > 0 && ctx) {
+            gain.gain.cancelScheduledValues(ctx.currentTime);
+            gain.gain.setValueAtTime(gain.gain.value, ctx.currentTime);
+            gain.gain.linearRampToValueAtTime(0, ctx.currentTime + fadeMs / 1000);
+            setTimeout(() => { try { src.stop(); } catch(e) {} }, fadeMs + 50);
+        } else {
+            src.stop();
+        }
+    } catch(e) {}
+}
+
+// Stop all boss audio (called on fight end / return to world)
+function stopAllBossAudio() {
+    stopBossApplause(1200);
+    stopBossWeakIdle(400);
+}
+
 function startLocalLaptopBoss(session) {
     if (gameState.laptopBoss.active && gameState.laptopBoss.local) return;
 
@@ -11501,6 +11773,9 @@ function startLocalLaptopBoss(session) {
     setupBossKeyHandlers();
     setupBossTouchHandlers();
 
+    // Start fight applause (fades in over 1.5 s)
+    startBossApplause(1500);
+
     // Siraj ghost cleanup
     if (gameState.isSirajGhost && gameState.laptopBoss.sessionKey) {
         const cleanupPath = lobbyPath(`minigames/laptop-boss/sessions/${gameState.laptopBoss.sessionKey}`);
@@ -11553,6 +11828,7 @@ function showMobileBossButtons(show) {
 }
 
 function returnFromLaptopBoss(clearState) {
+    stopAllBossAudio();
     if (gameState.laptopBoss._sirajCleanupTimer) {
         clearTimeout(gameState.laptopBoss._sirajCleanupTimer);
         gameState.laptopBoss._sirajCleanupTimer = null;
@@ -11791,22 +12067,32 @@ function updateLaptopBoss() {
         }
     } else if (boss.state === 'idle') {
         if (boss.stateT >= boss.stateDur) {
-            // Pick next attack: grab or scoop
-            boss.attacksThisCycle++;
-            if (boss.attacksThisCycle > 3) {
-                // Go to weak
-                bossSetState(boss, 'weak', 60 * 3); // 3 s weak window
-                boss.attacksThisCycle = 0;
-                bossSpawnParticles(local, boss.x, boss.y, 14, { color: 'rgba(120,80,255,0.85)', speed: 5, life: 36, size: 4 });
+            // If player is dead, just keep idling — finish current animation, don't attack
+            if (player.dead) {
+                bossSetState(boss, 'idle', 60 * 2);
             } else {
-                const grabRoll = Math.random() < 0.5;
-                if (grabRoll) {
-                    boss.grabHitFired = false;
-                    bossSetState(boss, 'grab_predict', 60 * 1.2);  // 1.2s
+                // Pick next attack: grab or scoop
+                boss.attacksThisCycle++;
+                if (boss.attacksThisCycle > 3) {
+                    // Go to weak
+                    bossSetState(boss, 'weak', 60 * 3); // 3 s weak window
+                    boss.attacksThisCycle = 0;
+                    bossSpawnParticles(local, boss.x, boss.y, 14, { color: 'rgba(120,80,255,0.85)', speed: 5, life: 36, size: 4 });
+                    // ♪ weak entry sounds
+                    bossPlaySound('bossWeakInitiate');
+                    startBossWeakIdle();
                 } else {
-                    boss.scaleTarget = 1.15;
-                    boss.attackHitFired = false;
-                    bossSetState(boss, 'attack_anticipate', 60 * 0.8); // 0.8s
+                    const grabRoll = Math.random() < 0.5;
+                    if (grabRoll) {
+                        boss.grabHitFired = false;
+                        bossSetState(boss, 'grab_predict', 60 * 1.2);  // 1.2s
+                        bossPlaySound('bossAnticipate');  // anticipation starts
+                    } else {
+                        boss.scaleTarget = 1.15;
+                        boss.attackHitFired = false;
+                        bossSetState(boss, 'attack_anticipate', 60 * 0.8); // 0.8s
+                        bossPlaySound('bossAnticipate');  // anticipation starts
+                    }
                 }
             }
         }
@@ -11816,6 +12102,7 @@ function updateLaptopBoss() {
             boss.grabTargetX = player.x;
             boss.grabTargetY = player.y;
             bossSetState(boss, 'grab_shoot', 60 * 0.35); // line extends over 0.35s
+            bossPlaySound('bossGrabInitiate'); // grab sequence begins
         }
     } else if (boss.state === 'grab_shoot') {
         if (boss.stateT >= boss.stateDur) {
@@ -11829,6 +12116,7 @@ function updateLaptopBoss() {
                 boss.grabPullStartY = player.y;
                 boss.grabDamageFired = false;
                 bossSetState(boss, 'grab_pull', 60 * 0.45);
+                bossPlaySound('bossGrabSuccess'); // grab connected
             } else {
                 // Miss
                 bossSetState(boss, 'idle', 60 * 1.5);
@@ -11853,7 +12141,7 @@ function updateLaptopBoss() {
         player.vx = 0; player.vy = 0; player.onGround = false;
         if (!boss.grabDamageFired && boss.stateT >= 8) {
             boss.grabDamageFired = true;
-            damagePlayer(local, player, boss);
+            damagePlayer(local, player, boss, true /*fromGrab*/);
             // Override damagePlayer's knockback — player stays held
             player.vx = 0; player.vy = 0;
         }
@@ -11871,7 +12159,7 @@ function updateLaptopBoss() {
         }
     } else if (boss.state === 'attack_anticipate') {
         if (boss.stateT >= boss.stateDur) {
-            // Lock stomp target at player's ground position
+            // Anticipation done — fire attack
             boss.scoopStartX = boss.x;
             boss.scoopStartY = boss.y;
             boss.scoopTargetX = player.x;
@@ -11881,6 +12169,7 @@ function updateLaptopBoss() {
             boss.motionTrail = [];
             boss._trailTimer = 0;
             bossSetState(boss, 'attack_stomp', 60 * 0.60);
+            bossPlaySound('bossAttackInitiate'); // attack (not grab) launches
         }
     } else if (boss.state === 'attack_stomp') {
         const p = Math.min(1, boss.stateT / boss.stateDur);
@@ -11907,7 +12196,7 @@ function updateLaptopBoss() {
             const ddy = player.y - boss.y;
             if (Math.hypot(ddx, ddy) < 70 && player.invulnT <= 0) {
                 boss.attackHitFired = true;
-                damagePlayer(local, player, boss);
+                damagePlayer(local, player, boss, false /*fromStomp*/);
             }
         }
 
@@ -11925,6 +12214,7 @@ function updateLaptopBoss() {
                 color: 'rgba(255,200,100,0.80)', speed: 5, life: 28, size: 3
             });
             local.groundImpact = { x: boss.x, t: 0, maxT: 36 };
+            bossPlaySound('bossAttackStomp'); // ground slam
             bossSetState(boss, 'attack_impact', 60 * 0.32);
         }
     } else if (boss.state === 'attack_impact') {
@@ -11993,16 +12283,26 @@ function updateLaptopBoss() {
                 player.onGround = false;
 
                 if (boss.health <= 0) {
+                    // ♪ player wins — kill boss; fade out applause (don't duck-and-recover)
+                    bossPlaySound('playerWinBoss');
+                    bossPlaySound('crowdCheer');
+                    stopBossApplause(2500);
+                    stopBossWeakIdle(300);
                     bossSetState(boss, 'end', 9999);
                     boss.endFallVy = 0;
                 } else {
-                    // Boss wakes up immediately after taking a hit
+                    // ♪ boss takes a hit but survives — wakes up
+                    bossPlaySound('bossHit');
+                    bossDuckApplause('crowdCheer');
+                    stopBossWeakIdle(200);
                     bossSetState(boss, 'idle', 60 * 1.5);
                 }
             }
         }
-        // Time window expired
+        // Time window expired — boss recovers on its own
         if (boss.state === 'weak' && boss.stateT >= boss.stateDur) {
+            bossPlaySound('bossWeakEnd');
+            stopBossWeakIdle(400);
             bossSetState(boss, 'idle', 60 * 1.5);
         }
     } else if (boss.state === 'end') {
@@ -12095,7 +12395,7 @@ function updateLaptopBoss() {
     }
 }
 
-function damagePlayer(local, player, boss) {
+function damagePlayer(local, player, boss, fromGrab = false) {
     if (player.invulnT > 0 || player.dead) return;
     player.health -= 1;
     player.flashRedT = 14;
@@ -12111,6 +12411,16 @@ function damagePlayer(local, player, boss) {
     if (player.health <= 0) {
         player.dead = true;
         player.vy = -10;
+        // ♪ player loses
+        bossPlaySound('playerLooseBoss');
+        bossDuckApplause('crowdShock');
+        stopBossApplause(1400);
+    } else {
+        // ♪ player takes damage (not from grab, not final hit)
+        if (!fromGrab) {
+            bossPlaySound('playerHitBoss');
+        }
+        bossDuckApplause('crowdShock');
     }
 }
 
@@ -12242,7 +12552,7 @@ function renderLaptopBoss() {
         const p = boss.stateT / boss.stateDur;
         const pulse = 0.6 + Math.abs(Math.sin(p * Math.PI * 4)) * 0.4;
         ctx.save();
-        ctx.strokeStyle = `rgba(255,240,120,${pulse})`;
+        ctx.strokeStyle = `rgba(0,0,0,${pulse})`;
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.arc(player.x, player.y, 40, 0, Math.PI * 2);
@@ -12254,7 +12564,7 @@ function renderLaptopBoss() {
     if (boss.state === 'grab_shoot') {
         const lerpT = Math.min(1, (boss.stateT / boss.stateDur) * 2.5);
         ctx.save();
-        ctx.strokeStyle = 'rgba(255,240,140,0.85)';
+        ctx.strokeStyle = 'rgba(0,0,0,0.85)';
         ctx.lineWidth = 3;
         ctx.beginPath();
         ctx.moveTo(boss.x, boss.y);
@@ -12265,7 +12575,7 @@ function renderLaptopBoss() {
     // Grab line — pull/hold phase (tether from boss to held player)
     if (boss.state === 'grab_pull' || boss.state === 'grab_hold') {
         ctx.save();
-        ctx.strokeStyle = 'rgba(255,240,140,0.60)';
+        ctx.strokeStyle = 'rgba(0,0,0,0.60)';
         ctx.lineWidth = 2;
         ctx.setLineDash([6, 4]);
         ctx.beginPath();
