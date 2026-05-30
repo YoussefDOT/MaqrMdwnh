@@ -1,4 +1,4 @@
-import { database, ref, onValue, update, get, onDisconnect, set, remove } from './firebase-config.js';
+import { database, ref, onValue, update, get, onDisconnect, set, remove, authReady } from './firebase-config.js';
 
 // ─── Mobile detection ────────────────────────────────────────────────────────
 const MOBILE_BREAKPOINT = 1024;
@@ -2341,7 +2341,7 @@ function setupUserSelection() {
     let firstRender = true;
     let prevUsersKey = null;
 
-    onValue(usersRef, (snapshot) => {
+    authReady.then(() => onValue(usersRef, (snapshot) => {
         const users = snapshot.val();
         if (gameState.userId) return;
 
@@ -2404,7 +2404,7 @@ function setupUserSelection() {
         } else {
             renderUsers();
         }
-    });
+    }));
 }
 
 function setupModal() {

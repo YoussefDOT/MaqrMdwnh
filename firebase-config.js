@@ -19,6 +19,6 @@ const app = initializeApp(firebaseConfig);
 const database = getDatabase(app);
 
 const auth = getAuth(app);
-signInAnonymously(auth).catch(() => {});
+export const authReady = signInAnonymously(auth).catch(() => {});
 
 export { database, ref, onValue, update, get, onDisconnect, set, remove };
