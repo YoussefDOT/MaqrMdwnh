@@ -2755,7 +2755,7 @@ body.is-mobile .sp-invite-toast { right: 12px; left: 12px; width: auto; bottom: 
 body.is-mobile .sp-coop-tasks { display: none !important; }
 body.is-mobile .sp-join-panel { left: 12px; width: calc(100vw - 24px); max-width: 220px; top: auto; bottom: 170px; transform: none; }
 /* On mobile the large timer is top:16px + ~99px tall — push leave wrap below it */
-body.is-mobile .leave-wrap { top: 126px; left: 12px; }
+/* leave-wrap mobile position: moved to pip section block (top: 148px) */
 
 /* ═══════════════════════════════════════════════════════
    PRAYER TIMES PANEL
@@ -4557,11 +4557,13 @@ body.is-mobile .azkar-focus-float-btn.hidden { display: none; }
     border-color: rgba(150, 120, 255, 0.5);
     color: #fff;
 }
-/* Mobile: the top-left clears during focus mode (logout/user-card slide away),
-   so sit above the leave pill (which is at top:126). */
+/* Mobile: stacked below the leave pill, both sitting under the big timer.
+   Timer ends at ~125px on mobile, so start the stack at 148px. */
+body.is-mobile .leave-wrap { top: 148px; left: 14px; }
+
 body.is-mobile .pip-toggle-btn {
-    top: 74px;
-    left: 12px;
+    top: 212px;   /* 148 (leave) + ~36px leave pill + 28px gap — clears break prompt */
+    left: 14px;
     padding: 8px 15px;
     font-size: 0.76rem;
 }
