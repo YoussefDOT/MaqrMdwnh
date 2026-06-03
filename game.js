@@ -3,6 +3,10 @@ import { database, ref, onValue, update, get, onDisconnect, set, remove, authRea
 // ─── Mobile detection ────────────────────────────────────────────────────────
 const MOBILE_BREAKPOINT = 1024;
 function isMobile() { return window.innerWidth < MOBILE_BREAKPOINT; }
+
+// ─── Device-local settings keys (used before init() is called) ───────────────
+const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'low' | 'high'
+const SETTINGS_NAMES_KEY    = 'mdwnh_hide_names';        // '0' = show, '1' = hide
 function setMobileClass() {
     document.body.classList.toggle('is-mobile', isMobile());
 }
@@ -8774,9 +8778,6 @@ function setupPiPUI() {
 function spPath(sub) { return lobbyPath(`sharedPomo/${sub}`); }
 
 // ── Settings (device-local, persisted in localStorage) ───────────────────────
-
-const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'low' | 'high'
-const SETTINGS_NAMES_KEY    = 'mdwnh_hide_names';        // '0' = show, '1' = hide
 
 function getGraphicsQuality() {
     return localStorage.getItem(SETTINGS_GRAPHICS_KEY) || 'auto';
