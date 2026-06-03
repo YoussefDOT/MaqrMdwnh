@@ -1775,6 +1775,146 @@ body {
     letter-spacing: 0.01em;
 }
 
+/* Settings icon button inside user-card-bottom */
+.settings-btn {
+    width: 26px; height: 26px;
+    flex: 0 0 auto;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    background: transparent;
+    border: none;
+    color: rgba(255,255,255,0.30);
+    cursor: pointer;
+    padding: 0;
+    transition: color 0.18s ease, background 0.18s ease, transform 0.2s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+.settings-btn svg { width: 14px; height: 14px; }
+.settings-btn:hover { color: rgba(255,255,255,0.70); background: rgba(255,255,255,0.08); }
+.settings-btn:active { transform: scale(0.90); }
+.settings-btn.active { color: rgba(255,255,255,0.85); }
+
+/* Settings panel */
+.settings-panel {
+    position: fixed;
+    top: 130px; left: 10px;
+    z-index: 6000;
+    width: 270px;
+    background: rgba(18,18,18,0.92);
+    -webkit-backdrop-filter: blur(24px) saturate(1.6);
+    backdrop-filter: blur(24px) saturate(1.6);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 18px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.50);
+    overflow: hidden;
+    animation: settingsPanelIn 0.28s cubic-bezier(0.34,1.56,0.64,1);
+}
+.settings-panel.hidden { display: none; }
+@keyframes settingsPanelIn {
+    from { opacity: 0; transform: scale(0.93) translateY(-8px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.settings-panel-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+.settings-panel-title {
+    font-size: 0.82rem; font-weight: 700;
+    color: rgba(255,255,255,0.70);
+    letter-spacing: 0.03em;
+    direction: rtl;
+}
+.settings-panel-close {
+    width: 26px; height: 26px;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.06);
+    border: none; cursor: pointer;
+    color: rgba(255,255,255,0.50);
+    transition: background 0.15s, color 0.15s;
+}
+.settings-panel-close svg { width: 13px; height: 13px; }
+.settings-panel-close:hover { background: rgba(255,255,255,0.12); color: #fff; }
+.settings-rows { padding: 10px 0; }
+.settings-row {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 10px 16px;
+    direction: rtl;
+}
+.settings-row:not(:last-child) { border-bottom: 1px solid rgba(255,255,255,0.05); }
+.settings-row-label { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
+.settings-row-name {
+    font-size: 0.82rem; font-weight: 600;
+    color: rgba(255,255,255,0.85);
+}
+.settings-row-sub {
+    font-size: 0.70rem; font-weight: 400;
+    color: rgba(255,255,255,0.38);
+    direction: rtl;
+}
+.settings-toggle-btn {
+    flex: 0 0 auto;
+    padding: 5px 12px;
+    border-radius: 50px;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: rgba(255,255,255,0.55);
+    font-size: 0.74rem; font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.18s, color 0.18s, border-color 0.18s;
+    -webkit-tap-highlight-color: transparent;
+}
+.settings-toggle-btn:hover { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); }
+.settings-toggle-btn:active { transform: scale(0.95); }
+.settings-toggle-btn.settings-toggle-on {
+    background: rgba(59,185,171,0.22);
+    border-color: rgba(59,185,171,0.40);
+    color: rgba(59,185,171,0.90);
+}
+.settings-toggle-btn.settings-toggle-low {
+    background: rgba(255,160,50,0.18);
+    border-color: rgba(255,160,50,0.35);
+    color: rgba(255,180,80,0.90);
+}
+
+/* Mobile: settings panel opens below the user card (top-right) */
+body.is-mobile .settings-panel {
+    top: auto;
+    bottom: auto;
+    left: auto;
+    right: 10px;
+    top: 110px;
+}
+
+/* Minigame leave button — same position as انهاء الجلسة but only during minigames */
+.minigame-leave-btn {
+    position: fixed;
+    top: 54px; left: 16px;
+    z-index: 5001;
+    background: rgba(18,18,18,0.80);
+    -webkit-backdrop-filter: blur(16px) saturate(1.4);
+    backdrop-filter: blur(16px) saturate(1.4);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 50px;
+    padding: 9px 20px;
+    color: rgba(255,160,80,0.80);
+    font-size: 0.80rem; font-weight: 600;
+    cursor: pointer; font-family: inherit;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.minigame-leave-btn:hover {
+    background: rgba(255,140,50,0.18);
+    border-color: rgba(255,140,50,0.32);
+    color: rgba(255,180,100,0.95);
+}
+.minigame-leave-btn:active { transform: scale(0.96); }
+
 /* ══════════════════════════════════════════════════════
    LOGOUT PILL — left side of screen, Apple-style
    ══════════════════════════════════════════════════════ */
@@ -2067,7 +2207,8 @@ body.is-mobile .logout-pill {
     will-change: transform;
 }
 
-body.is-mobile .user-card-bottom { display: none; }
+body.is-mobile .user-card-bottom { display: flex; }
+body.is-mobile .user-card-count { display: none; }
 
 /* Slide user card + logout up during focus work mode */
 body.is-mobile .user-card.focus-hidden {
@@ -3838,62 +3979,104 @@ body.is-mobile .mode-card-desc { font-size: 11px; }
 }
 
 /* — Confirm popup (inline under user card) — */
-.azkar-confirm {
-    margin-top: 6px;
-    padding: 10px 12px;
-    background: rgba(18,18,18,0.78);
-    backdrop-filter: blur(20px) saturate(1.6);
-    -webkit-backdrop-filter: blur(20px) saturate(1.6);
-    border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 14px;
-    box-shadow: 0 6px 20px rgba(0,0,0,0.30);
-    animation: azkarConfirmIn 0.32s cubic-bezier(0.34,1.56,0.64,1);
-}
-.azkar-confirm.hidden { display: none; }
-.azkar-confirm-q {
-    display: block;
-    font-size: 0.78rem;
-    color: rgba(255,255,255,0.90);
-    text-align: center;
-    margin-bottom: 9px;
-    font-weight: 600;
-}
-.azkar-confirm-row {
+/* ── Azkar confirmation modal ── */
+.azkar-confirm-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 10500;
     display: flex;
-    gap: 8px;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.55);
+    -webkit-backdrop-filter: blur(6px);
+    backdrop-filter: blur(6px);
+    animation: azkarConfirmFadeIn 0.25s ease;
 }
-.azkar-confirm-btn {
-    flex: 1;
-    padding: 8px 10px;
-    border-radius: 10px;
+.azkar-confirm-modal.hidden { display: none; }
+@keyframes azkarConfirmFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+.azkar-confirm-modal-box {
+    background: rgba(18,18,18,0.90);
+    -webkit-backdrop-filter: blur(24px) saturate(1.6);
+    backdrop-filter: blur(24px) saturate(1.6);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 24px;
+    box-shadow: 0 20px 60px rgba(0,0,0,0.55);
+    padding: 32px 28px 28px;
+    min-width: 280px;
+    max-width: 340px;
+    width: 90vw;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    animation: azkarConfirmBoxIn 0.32s cubic-bezier(0.34,1.56,0.64,1);
+}
+@keyframes azkarConfirmBoxIn {
+    from { opacity: 0; transform: scale(0.88) translateY(12px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.azkar-confirm-modal-icon {
+    width: 48px; height: 48px;
+    border-radius: 50%;
+    background: rgba(59,185,171,0.15);
+    border: 1px solid rgba(59,185,171,0.30);
+    display: grid; place-items: center;
+    color: rgba(59,185,171,0.90);
+    margin-bottom: 4px;
+}
+.azkar-confirm-modal-icon svg { width: 22px; height: 22px; }
+.azkar-confirm-modal-q {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: rgba(255,255,255,0.92);
+    text-align: center;
+    direction: rtl;
+}
+.azkar-confirm-modal-type {
+    font-size: 0.80rem;
+    font-weight: 500;
+    color: rgba(59,185,171,0.80);
+    text-align: center;
+    direction: rtl;
+    margin-bottom: 6px;
+}
+.azkar-confirm-modal-btns {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    width: 100%;
+    margin-top: 4px;
+}
+.azkar-confirm-modal-btn {
+    width: 100%;
+    padding: 13px 18px;
+    border-radius: 50px;
     font-family: inherit;
-    font-size: 0.78rem;
+    font-size: 0.90rem;
     font-weight: 700;
     cursor: pointer;
     border: 1px solid transparent;
     transition: transform 0.18s cubic-bezier(0.34,1.56,0.64,1),
-                background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+                background 0.2s ease, color 0.2s ease;
+    direction: rtl;
 }
-.azkar-confirm-btn:active { transform: scale(0.96); }
-.azkar-confirm-no {
-    /* highlighted as the "open azkar list" action */
+.azkar-confirm-modal-btn:active { transform: scale(0.97); }
+.azkar-confirm-modal-yes {
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.75);
+    border-color: rgba(255,255,255,0.12);
+}
+.azkar-confirm-modal-yes:hover { background: rgba(255,255,255,0.14); color: #fff; }
+.azkar-confirm-modal-no {
     background: rgba(59,185,171,0.55);
     color: #fff;
     border-color: rgba(59,185,171,0.70);
-    box-shadow: 0 4px 14px rgba(59,185,171,0.32);
+    box-shadow: 0 4px 18px rgba(59,185,171,0.28);
 }
-.azkar-confirm-no:hover { background: rgba(59,185,171,0.72); }
-.azkar-confirm-yes {
-    background: rgba(255,255,255,0.06);
-    color: rgba(255,255,255,0.70);
-    border-color: rgba(255,255,255,0.10);
-}
-.azkar-confirm-yes:hover { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.92); }
-
-@keyframes azkarConfirmIn {
-    0%   { opacity: 0; transform: translateY(-4px) scale(0.97); }
-    100% { opacity: 1; transform: translateY(0) scale(1); }
-}
+.azkar-confirm-modal-no:hover { background: rgba(59,185,171,0.72); }
 
 /* — Fullscreen azkar overlay — */
 .azkar-overlay {
@@ -4213,7 +4396,6 @@ body.is-mobile.azkar-active .focus-sounds-panel {
 
 /* When azkar overlay is open, hide the azkar button + confirm to avoid double UI */
 body.azkar-active .azkar-btn,
-body.azkar-active .azkar-confirm { display: none; }
 
 /* Mobile tweaks for azkar */
 body.is-mobile .azkar-btn {
@@ -4223,9 +4405,6 @@ body.is-mobile .azkar-btn {
     border-radius: 12px;
 }
 body.is-mobile .azkar-btn-icon { width: 12px; height: 12px; }
-body.is-mobile .azkar-confirm { padding: 9px 10px; }
-body.is-mobile .azkar-confirm-q { font-size: 0.72rem; margin-bottom: 7px; }
-body.is-mobile .azkar-confirm-btn { padding: 7px 8px; font-size: 0.74rem; }
 
 /* On mobile: no bottom extension and no compensating padding — just fill the viewport */
 body.is-mobile .azkar-overlay { bottom: 0; padding-bottom: 0; }

@@ -1400,6 +1400,7 @@ const gameState = {
         _opening: false,           // in-flight guard for async openPiPMode
         _closing: false,           // re-entrancy guard for closePiPMode
         _lastFrameAt: 0,           // perf timestamp of last PiP render (stall watchdog)
+        popupPollId: null,         // win.setInterval backstop for Safari rAF throttling
         btn: null, blackout: null, fallbackEl: null,
         timerEl: null, taskEl: null,
     },
@@ -2202,7 +2203,7 @@ function loadAssets() {
 }
 
 function initWindParticles() {
-    const count = isMobile() ? WIND_PARTICLE_COUNT_MOBILE : WIND_PARTICLE_COUNT;
+    const count = isLowGraphics() ? WIND_PARTICLE_COUNT_MOBILE : WIND_PARTICLE_COUNT;
     for (let i = 0; i < count; i++) {
         gameState.windParticles.push({
             x: Math.random() * window.innerWidth,
@@ -2219,9 +2220,9 @@ function initWindParticles() {
 }
 
 // Gentle world-space dust motes that drift through the office — magical "alive" feel.
-// Desktop only (skipped entirely on mobile for performance).
+// Skipped on low-graphics mode (mobile default, or user override).
 function initAmbientMotes() {
-    if (isMobile()) return;
+    if (isLowGraphics()) return;
     const count = 22;
     const minX = -BG_WIDTH / 2, maxX = BG_WIDTH / 2;
     const minY = -BG_HEIGHT / 2, maxY = BG_HEIGHT * 1.5;
@@ -2703,6 +2704,9 @@ function startGame(userData) {
     initPrayerSystem();
     setupAzkarUI();
     setupPiPUI();
+    setupSettingsUI();
+
+    document.getElementById('minigame-leave-btn')?.addEventListener('click', () => leaveMinigame());
 
     // Track server time offset so race start/countdown is synchronized across clients
     const offsetRef = ref(database, '.info/serverTimeOffset');
@@ -3227,8 +3231,42 @@ function setupRaceUI() {
 function setMinigameHideUI(hidden) {
     const leaveWrap = document.getElementById('leave-wrap');
     const logoutBtn = document.getElementById('logout-btn');
+    const miniLeave = document.getElementById('minigame-leave-btn');
     if (leaveWrap) leaveWrap.style.visibility = hidden ? 'hidden' : '';
     if (logoutBtn) logoutBtn.style.visibility = hidden ? 'hidden' : '';
+    if (miniLeave) miniLeave.style.display = hidden ? 'block' : 'none';
+}
+
+/** Exit a minigame early without affecting the other players' sessions */
+function leaveMinigame() {
+    if (gameState.race.active) {
+        // Remove ourselves from participants so other racers continue solo
+        if (gameState.race.sessionKey && gameState.userId) {
+            update(ref(database), { [raceSessionPath(`participants/${gameState.userId}`)]: null }).catch(() => {});
+        }
+        returnFromRace(true);
+    } else if (gameState.coffee.active) {
+        // Remove ourselves from participants only — do NOT delete the whole session
+        const sk = gameState.coffee.sessionKey;
+        if (sk && gameState.userId) {
+            update(ref(database), {
+                [lobbyPath(`minigames/coffee/sessions/${sk}/participants/${gameState.userId}`)]: null
+            }).catch(() => {});
+        }
+        // Clean up local state the same way returnFromCoffee does, but skip the session delete
+        if (gameState.coffee.readyFallbackTimer) { clearTimeout(gameState.coffee.readyFallbackTimer); gameState.coffee.readyFallbackTimer = null; }
+        if (gameState.coffee._sirajCleanupTimer) { clearTimeout(gameState.coffee._sirajCleanupTimer); gameState.coffee._sirajCleanupTimer = null; }
+        fadeOutAudio(gameState.sounds.minigameApplause, 900);
+        gameState.coffee.applausePlayed = false;
+        document.getElementById('user-card')?.style.removeProperty('display');
+        document.getElementById('mobile-joystick')?.style.removeProperty('display');
+        setMinigameHideUI(false);
+        gameState.coffee.sessionKey = null; // clear so returnFromCoffee won't try to delete
+        returnFromCoffee(true);
+    } else if (gameState.laptopBoss.active) {
+        // Laptop boss: just leave (single-player, safe to abort)
+        returnFromLaptopBoss?.();
+    }
 }
 
 /** Show/hide user card during focus work phase (mobile only) */
@@ -4283,11 +4321,12 @@ function startPomodoroPhase(phase) {
             createdAt: gameState.pomodoro.createdAt || Date.now()
         };
         updates[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}`)] = pomoData;
-        // Host pushes phaseEndTime to the live doc so guests stay in sync across
-        // break and subsequent work cycles (agreedEndTime only covers the first cycle).
+        // Host pushes phaseEndTime + currentPhase to the live doc so guests stay in sync
+        // across break and subsequent work cycles (agreedEndTime only covers the first cycle).
         const _sp = gameState.sharedPomo;
         if (_sp.isHost && _sp.phase === 'active' && _sp.sessionId) {
             updates[spPath(`live/${_sp.sessionId}/phaseEndTime`)] = gameState.pomodoro.endTime;
+            updates[spPath(`live/${_sp.sessionId}/currentPhase`)] = phase;
         }
         update(ref(database), updates);
     }
@@ -5004,7 +5043,7 @@ function gameLoop(timestamp) {
     try {
         // Edge bokeh: hide during all three minigames (they each return early before render()).
         // Must run first so the div state is always correct regardless of which path we take.
-        if (!isMobile()) {
+        if (!isLowGraphics()) {
             const _inMini =
                 (gameState.laptopBoss.active && gameState.laptopBoss.session &&
                     (gameState.laptopBoss.session.phase === 'active' || gameState.laptopBoss.session.phase === 'finished')) ||
@@ -5155,7 +5194,7 @@ function render() {
 
     drawWindParticles(W, H);
     drawFocusFog(W, H);
-    drawSunRays(W, H);
+    if (!isLowGraphics()) drawSunRays(W, H);
     drawVignette(W, H);
     drawTeleportOverlay(W, H);
 
@@ -7975,7 +8014,7 @@ function drawPlayers(onlyLocal = false) {
         ctx.globalAlpha = 1;
         ctx.restore(); // restores translate, rotate, scale
 
-        if (player.nameAlpha > 0.01 && !tpData) {
+        if (player.nameAlpha > 0.01 && !tpData && !getHideNames()) {
             ctx.fillStyle = `rgba(255, 255, 255, ${player.nameAlpha})`;
             ctx.font = '500 14px Rubik';
             ctx.textAlign = 'center';
@@ -8269,10 +8308,29 @@ function _pipSetupWindow(win) {
     win.addEventListener('wheel', (e) => {
         e.preventDefault();
         const d = e.deltaY > 0 ? -0.2 : 0.2;
-        pip.targetZoomLevel = Math.max(1.3, Math.min(4.0, pip.targetZoomLevel + d));
+        pip.targetZoomLevel = Math.max(0.8, Math.min(4.0, pip.targetZoomLevel + d));
     }, { passive: false });
 
     _pipResizeWindowCanvas();
+
+    // Safari-proof: the popup window's own setInterval runs even when the opener
+    // tab is unfocused/throttled (because the popup is a separate OS window the
+    // user can see). This ensures the canvas keeps updating at ~20fps minimum.
+    if (pip.popupPollId) { try { win.clearInterval(pip.popupPollId); } catch(e) {} pip.popupPollId = null; }
+    pip.popupPollId = win.setInterval(() => {
+        const p = gameState.pip;
+        if (!p.active || p.mode !== 'window' || !p.win || p.win.closed) {
+            try { win.clearInterval(p.popupPollId); } catch(e) {} p.popupPollId = null; return;
+        }
+        if (performance.now() - (p._lastFrameAt || 0) > 80) {
+            try {
+                updatePiPCamera();
+                renderPiPInto(p.ctx, p.canvas, p.dpr);
+                _pipUpdateChrome();
+                p._lastFrameAt = performance.now();
+            } catch (e) {}
+        }
+    }, 50);
 }
 
 async function openPiPMode() {
@@ -8515,12 +8573,14 @@ function closePiPMode() {
 
     pip.active = false;
 
-    // Document PiP window
+    // Document PiP / popup window
     if (pip.win) {
         try { if (pip.rafId) pip.win.cancelAnimationFrame(pip.rafId); } catch (e) {}
+        if (pip.popupPollId) { try { pip.win.clearInterval(pip.popupPollId); } catch(e) {} pip.popupPollId = null; }
         try { if (!pip.win.closed) pip.win.close(); } catch (e) {}
     }
     pip.rafId = 0;
+    pip.popupPollId = null;
     pip.win = null; pip.doc = null;
 
     // Video PiP
@@ -8556,6 +8616,8 @@ function togglePiPMode() {
 }
 
 function _pipShowBlackout(show) {
+    // Guard: never show the blackout unless PiP is genuinely active
+    if (show && !gameState.pip.active) return;
     if (gameState.pip.blackout) gameState.pip.blackout.classList.toggle('active', !!show);
     document.body.classList.toggle('pip-active', !!show);
 }
@@ -8644,7 +8706,7 @@ function _pipSetupFallback() {
         if (!gameState.pip.active) return;
         e.preventDefault();
         const d = e.deltaY > 0 ? -0.2 : 0.2;
-        gameState.pip.targetZoomLevel = Math.max(1.3, Math.min(4.0, gameState.pip.targetZoomLevel + d));
+        gameState.pip.targetZoomLevel = Math.max(0.8, Math.min(4.0, gameState.pip.targetZoomLevel + d));
     }, { passive: false });
 }
 
@@ -8710,6 +8772,99 @@ function setupPiPUI() {
 }
 
 function spPath(sub) { return lobbyPath(`sharedPomo/${sub}`); }
+
+// ── Settings (device-local, persisted in localStorage) ───────────────────────
+
+const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'low' | 'high'
+const SETTINGS_NAMES_KEY    = 'mdwnh_hide_names';        // '0' = show, '1' = hide
+
+function getGraphicsQuality() {
+    return localStorage.getItem(SETTINGS_GRAPHICS_KEY) || 'auto';
+}
+
+function isLowGraphics() {
+    const q = getGraphicsQuality();
+    if (q === 'low')  return true;
+    if (q === 'high') return false;
+    return isMobile(); // 'auto': mobile → low, desktop → high
+}
+
+function getHideNames() {
+    return localStorage.getItem(SETTINGS_NAMES_KEY) === '1';
+}
+
+function setupSettingsUI() {
+    const settingsBtn   = document.getElementById('settings-btn');
+    const panel         = document.getElementById('settings-panel');
+    const closeBtn      = document.getElementById('settings-panel-close');
+    const graphicsBtn   = document.getElementById('settings-graphics-btn');
+    const graphicsLabel = document.getElementById('settings-graphics-label');
+    const namesBtn      = document.getElementById('settings-names-btn');
+    const namesLabel    = document.getElementById('settings-names-label');
+    if (!settingsBtn || !panel) return;
+
+    function _reflectGraphics() {
+        const q = getGraphicsQuality();
+        graphicsBtn.dataset.value = q;
+        graphicsBtn.classList.toggle('settings-toggle-on',  q === 'high');
+        graphicsBtn.classList.toggle('settings-toggle-low', q === 'low');
+        graphicsBtn.classList.remove(...(q === 'auto' ? ['settings-toggle-on','settings-toggle-low'] : []));
+        if (q === 'auto')  graphicsLabel.textContent = 'تلقائي';
+        if (q === 'high')  graphicsLabel.textContent = 'عالية';
+        if (q === 'low')   graphicsLabel.textContent = 'منخفضة';
+        // Apply: wind particles count reacts immediately
+        _applyGraphicsSetting();
+    }
+
+    function _reflectNames() {
+        const hide = getHideNames();
+        namesBtn.dataset.value = hide ? 'hide' : 'show';
+        namesBtn.classList.toggle('settings-toggle-on', !hide);
+        namesLabel.textContent = hide ? 'مخفية' : 'ظاهرة';
+    }
+
+    function _applyGraphicsSetting() {
+        // Bokeh: hide immediately on low graphics
+        const bokeh = document.getElementById('edge-bokeh');
+        if (bokeh && isLowGraphics()) bokeh.style.display = 'none';
+    }
+
+    graphicsBtn.addEventListener('click', () => {
+        const cycle = { auto: 'high', high: 'low', low: 'auto' };
+        const next = cycle[getGraphicsQuality()] || 'auto';
+        localStorage.setItem(SETTINGS_GRAPHICS_KEY, next);
+        _reflectGraphics();
+    });
+
+    namesBtn.addEventListener('click', () => {
+        const next = getHideNames() ? '0' : '1';
+        localStorage.setItem(SETTINGS_NAMES_KEY, next);
+        _reflectNames();
+    });
+
+    settingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        panel.classList.toggle('hidden');
+        settingsBtn.classList.toggle('active', !panel.classList.contains('hidden'));
+    });
+
+    closeBtn.addEventListener('click', () => {
+        panel.classList.add('hidden');
+        settingsBtn.classList.remove('active');
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!panel.classList.contains('hidden') &&
+            !panel.contains(e.target) &&
+            e.target !== settingsBtn) {
+            panel.classList.add('hidden');
+            settingsBtn.classList.remove('active');
+        }
+    });
+
+    _reflectGraphics();
+    _reflectNames();
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 
@@ -9809,14 +9964,37 @@ function setupSpLiveListener(hostId) {
         }
 
         // ── Phase timer sync for guests (break + subsequent work cycles) ─────
-        // The host writes phaseEndTime to the live doc whenever startPomodoroPhase
-        // fires. Guests read it here and correct any drift from loading-time variance.
+        // The host writes phaseEndTime + currentPhase to the live doc whenever
+        // startPomodoroPhase fires. Guests read it here and correct drift, or
+        // force-transition if the host has already moved to a different phase.
         if (!sp.isHost && sp.phase === 'active' && gameState.pomodoro.active && data.phaseEndTime) {
+            const hostPhase = data.currentPhase; // 'work' | 'break' | undefined
+            const guestPhase = gameState.pomodoro.phase;
             const drift = Math.abs(gameState.pomodoro.endTime - data.phaseEndTime);
-            if (drift > 1500) { // only correct if off by more than 1.5 s
-                if (gameState.pomodoro.phase === 'break' || gameState.pomodoro.phase === 'work') {
+
+            // Host switched to break but guest is still in work — force the transition
+            // so the guest doesn't miss their break (root cause of the join-then-miss-break bug).
+            if (hostPhase === 'break' && guestPhase === 'work' && !gameState.pomodoro.transitioning) {
+                gameState.pomodoro.phase = 'break';
+                gameState.pomodoro.endTime = data.phaseEndTime;
+                gameState.pomodoro.transitioning = false;
+                // Mirror the UI side-effects from startPomodoroPhase('break')
+                gameState.isLockedIn = false;
+                if (gameState.anim.active) {
+                    gameState.anim.active = false; gameState.anim.phase = 'none'; gameState.anim.progress = 0;
+                }
+                const _breakPanel = document.getElementById('focus-sounds-panel');
+                if (_breakPanel) {
+                    gameState._drawerWasOpen = _breakPanel.classList.contains('drawer-open');
+                    _breakPanel.classList.remove('active');
+                }
+                setMobileFocusMode(false);
+                document.getElementById('prayer-panel')?.classList.add('break-compact');
+            } else if (drift > 1500) {
+                // Same phase — just correct the end time
+                if (guestPhase === 'break' || guestPhase === 'work') {
                     gameState.pomodoro.endTime = data.phaseEndTime;
-                } else if (gameState.pomodoro.phase === 'wait') {
+                } else if (guestPhase === 'wait') {
                     // Kidnap animation in progress — store for startPomodoroPhase to consume
                     sp.agreedEndTime = data.phaseEndTime;
                 }
@@ -11685,7 +11863,6 @@ function _todayDateStr() {
 
 function updateAzkarButton() {
     const btn = document.getElementById('azkar-btn');
-    const confirm = document.getElementById('azkar-confirm');
     if (!btn) return;
 
     // Throttle to ~1/s (called from main loop)
@@ -11703,7 +11880,7 @@ function updateAzkarButton() {
     const shouldShow = !!type && !inSharedPomo && !inPrayerOverlay && !azkarOpen && !doneToday;
     btn.classList.toggle('hidden', !shouldShow);
     if (!shouldShow) {
-        confirm?.classList.add('hidden');
+        hideAzkarConfirm();
     }
 
     const label = document.getElementById('azkar-btn-label');
@@ -11735,11 +11912,15 @@ function updateAzkarButton() {
 }
 
 function showAzkarConfirm() {
-    const confirm = document.getElementById('azkar-confirm');
-    confirm?.classList.remove('hidden');
+    const type = getCurrentAzkarType();
+    const modal = document.getElementById('azkar-confirm-modal');
+    if (!modal) return;
+    const typeEl = document.getElementById('azkar-confirm-modal-type');
+    if (typeEl) typeEl.textContent = type === 'morning' ? 'أذكار الصباح' : 'أذكار المساء';
+    modal.classList.remove('hidden');
 }
 function hideAzkarConfirm() {
-    document.getElementById('azkar-confirm')?.classList.add('hidden');
+    document.getElementById('azkar-confirm-modal')?.classList.add('hidden');
 }
 
 function markAzkarCompleted(type) {
@@ -12159,43 +12340,41 @@ function setupAzkarTimePicker() {
 }
 
 function setupAzkarUI() {
-    const btn = document.getElementById('azkar-btn');
-    btn?.addEventListener('click', (e) => {
+    // Both the regular button and the mobile float button open the confirm popup
+    const _openConfirm = () => showAzkarConfirm();
+
+    document.getElementById('azkar-btn')?.addEventListener('click', (e) => {
         e.stopPropagation();
-        const confirm = document.getElementById('azkar-confirm');
-        if (confirm && !confirm.classList.contains('hidden')) hideAzkarConfirm();
-        else showAzkarConfirm();
+        _openConfirm();
     });
 
-    document.getElementById('azkar-confirm-yes')?.addEventListener('click', () => {
+    // Mobile floating azkar button — also shows confirm modal (same flow on all devices)
+    document.getElementById('azkar-focus-float-btn')?.addEventListener('click', () => {
+        _openConfirm();
+    });
+
+    // Confirm modal buttons
+    document.getElementById('azkar-confirm-modal-yes')?.addEventListener('click', () => {
         const type = getCurrentAzkarType();
         if (type) markAzkarCompleted(type);
         hideAzkarConfirm();
     });
 
-    document.getElementById('azkar-confirm-no')?.addEventListener('click', () => {
+    document.getElementById('azkar-confirm-modal-no')?.addEventListener('click', () => {
         const type = getCurrentAzkarType();
         hideAzkarConfirm();
         if (type) openAzkarOverlay(type);
+    });
+
+    // Clicking outside the modal box closes it
+    document.getElementById('azkar-confirm-modal')?.addEventListener('click', (e) => {
+        if (e.target === document.getElementById('azkar-confirm-modal')) hideAzkarConfirm();
     });
 
     document.getElementById('azkar-finish-btn')?.addEventListener('click', () => {
         const fb = document.getElementById('azkar-finish-btn');
         if (!fb?.classList.contains('unlocked')) return; // still locked
         closeAzkarOverlay(true);
-    });
-
-    // Click anywhere outside the user card hides the confirm popup
-    document.addEventListener('click', (e) => {
-        const card = document.getElementById('user-card');
-        if (!card) return;
-        if (!card.contains(e.target)) hideAzkarConfirm();
-    });
-
-    // Mobile floating azkar button — tapping directly opens overlay (no confirm; card is hidden)
-    document.getElementById('azkar-focus-float-btn')?.addEventListener('click', () => {
-        const type = getCurrentAzkarType();
-        if (type) openAzkarOverlay(type);
     });
 
     loadAzkarCompletedFromFirebase();

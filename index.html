@@ -153,6 +153,12 @@
             </div>
             <div class="user-card-bottom">
                 <span id="player-count" class="user-card-count">0 مستخدمين</span>
+                <button id="settings-btn" class="settings-btn" type="button" aria-label="الإعدادات" title="الإعدادات">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <circle cx="12" cy="12" r="3"/>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                    </svg>
+                </button>
             </div>
             <!-- زر الأذكار: يظهر فجر→ظهر (الصباح) أو عصر→عشاء (المساء) -->
             <button id="azkar-btn" class="azkar-btn hidden" type="button">
@@ -163,14 +169,6 @@
                 </svg>
                 <span id="azkar-btn-label" class="azkar-btn-label">أذكار الصباح</span>
             </button>
-            <!-- شريط التأكيد: يظهر بعد ضغط زر الأذكار -->
-            <div id="azkar-confirm" class="azkar-confirm hidden">
-                <span class="azkar-confirm-q">هل قرأت الأذكار؟</span>
-                <div class="azkar-confirm-row">
-                    <button id="azkar-confirm-no" class="azkar-confirm-btn azkar-confirm-no" type="button">لا</button>
-                    <button id="azkar-confirm-yes" class="azkar-confirm-btn azkar-confirm-yes" type="button">نعم</button>
-                </div>
-            </div>
             <!-- زر تغيير الوقت (سراج فقط) -->
             <button id="azkar-time-spoof-btn" class="azkar-time-spoof-btn hidden" type="button" title="تغيير الوقت (سراج)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -478,6 +476,39 @@
         </div>
     </div>
 
+    <!-- زر مغادرة اللعبة — يظهر فقط أثناء الألعاب الصغيرة، في نفس موضع انهاء الجلسة -->
+    <button id="minigame-leave-btn" class="minigame-leave-btn" type="button" style="display:none">مغادرة اللعبة</button>
+
+    <!-- لوحة الإعدادات — تحفظ على الجهاز فقط (localStorage) -->
+    <div id="settings-panel" class="settings-panel hidden">
+        <div class="settings-panel-header">
+            <span class="settings-panel-title">الإعدادات</span>
+            <button id="settings-panel-close" class="settings-panel-close" type="button" aria-label="إغلاق">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
+        </div>
+        <div class="settings-rows">
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span class="settings-row-name">جودة الرسومات</span>
+                    <span class="settings-row-sub">منخفضة على الجوال، عالية على الحاسوب</span>
+                </div>
+                <button id="settings-graphics-btn" class="settings-toggle-btn" type="button" data-value="auto">
+                    <span id="settings-graphics-label">تلقائي</span>
+                </button>
+            </div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span class="settings-row-name">أسماء اللاعبين</span>
+                    <span class="settings-row-sub">إظهار الأسماء فوق الأفاتار</span>
+                </div>
+                <button id="settings-names-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="show">
+                    <span id="settings-names-label">ظاهرة</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
     <!-- تأكيد الخروج من الموقع -->
     <div id="logout-confirm-modal" class="modal-overlay">
         <div class="modal-content" style="max-width:320px;padding:36px 32px;text-align:center;">
@@ -511,6 +542,24 @@
             <div class="pip-blackout-title">الوضع المصغر مفعّل</div>
             <div class="pip-blackout-sub">تابع جلستك في النافذة العائمة</div>
             <button id="pip-blackout-end" class="pip-blackout-end" type="button">إنهاء الوضع المصغر</button>
+        </div>
+    </div>
+
+    <!-- نافذة تأكيد قراءة الأذكار — تظهر عند الضغط على زر الأذكار من أي مكان -->
+    <div id="azkar-confirm-modal" class="azkar-confirm-modal hidden" aria-modal="true" role="dialog">
+        <div class="azkar-confirm-modal-box">
+            <div class="azkar-confirm-modal-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 12a9 9 0 1 0 9-9"/>
+                    <path d="M12 7v5l3 2"/>
+                </svg>
+            </div>
+            <div class="azkar-confirm-modal-q">هل قرأتم الأذكار؟</div>
+            <div id="azkar-confirm-modal-type" class="azkar-confirm-modal-type">أذكار الصباح</div>
+            <div class="azkar-confirm-modal-btns">
+                <button id="azkar-confirm-modal-yes" class="azkar-confirm-modal-btn azkar-confirm-modal-yes" type="button">نعم، قرأتُها ✓</button>
+                <button id="azkar-confirm-modal-no" class="azkar-confirm-modal-btn azkar-confirm-modal-no" type="button">لا.. سأقرأها الآن</button>
+            </div>
         </div>
     </div>
 

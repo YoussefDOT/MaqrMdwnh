@@ -2,6 +2,8 @@
 
 > **This project is entirely vibe-coded.** Every line of JS/HTML/CSS was written by an AI model. Only the art assets and audio files are human-made. When Claude is working on this, it IS the developer — read this file carefully before touching anything.
 
+> **Spell-check all UI text.** Any Arabic or English text that will appear in the UI must be spell-checked before being written into the codebase. Never add user-visible text without verifying spelling and grammar first.
+
 ---
 
 ## Quick Start
