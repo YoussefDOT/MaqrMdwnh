@@ -3242,33 +3242,62 @@ function setMinigameHideUI(hidden) {
 }
 
 /** Exit a minigame early without affecting the other players' sessions */
+/** Fade out all minigame sound effects that may be looping or playing */
+function _fadeAllMinigameSounds() {
+    const s = gameState.sounds;
+    const toFade = [
+        s.minigameApplause, s.minigameCountdown, s.minigameCoffeeCountdown,
+        s.minigameCoffeeTimerClose, s.minigameCoffeeCollect, s.minigameCoffeeBad,
+        s.minigameReady, s.minigameButtonPressed
+    ];
+    for (const snd of toFade) {
+        if (!snd) continue;
+        snd.loop = false;
+        fadeOutAudio(snd, 400);
+    }
+}
+
 function leaveMinigame() {
+    // Always fade all minigame sounds on early exit
+    _fadeAllMinigameSounds();
+
     if (gameState.race.active) {
-        // Remove ourselves from participants so other racers continue solo
         if (gameState.race.sessionKey && gameState.userId) {
-            update(ref(database), { [raceSessionPath(`participants/${gameState.userId}`)]: null }).catch(() => {});
+            const session = gameState.race.session;
+            const participants = session?.participants || {};
+            const otherPlayers = Object.keys(participants).filter(uid => uid !== gameState.userId);
+            if (otherPlayers.length === 0) {
+                // Solo race — delete the whole session so it doesn't linger
+                update(ref(database), { [raceSessionPath()]: null }).catch(() => {});
+            } else {
+                // Others are racing — only remove ourselves from participants
+                update(ref(database), { [raceSessionPath(`participants/${gameState.userId}`)]: null }).catch(() => {});
+            }
         }
         returnFromRace(true);
+
     } else if (gameState.coffee.active) {
-        // Remove ourselves from participants only — do NOT delete the whole session
         const sk = gameState.coffee.sessionKey;
         if (sk && gameState.userId) {
-            update(ref(database), {
-                [lobbyPath(`minigames/coffee/sessions/${sk}/participants/${gameState.userId}`)]: null
-            }).catch(() => {});
+            const session = gameState.coffee.session;
+            const participants = session?.participants || {};
+            const otherPlayers = Object.keys(participants).filter(uid => uid !== gameState.userId);
+            if (otherPlayers.length === 0) {
+                // Solo session — let returnFromCoffee delete it normally (sessionKey is still set)
+                returnFromCoffee(true);
+            } else {
+                // Others still playing — only remove ourselves; do NOT delete the session
+                update(ref(database), {
+                    [lobbyPath(`minigames/coffee/sessions/${sk}/participants/${gameState.userId}`)]: null
+                }).catch(() => {});
+                gameState.coffee.sessionKey = null; // prevent returnFromCoffee from deleting session
+                returnFromCoffee(true);
+            }
+        } else {
+            returnFromCoffee(true);
         }
-        // Clean up local state the same way returnFromCoffee does, but skip the session delete
-        if (gameState.coffee.readyFallbackTimer) { clearTimeout(gameState.coffee.readyFallbackTimer); gameState.coffee.readyFallbackTimer = null; }
-        if (gameState.coffee._sirajCleanupTimer) { clearTimeout(gameState.coffee._sirajCleanupTimer); gameState.coffee._sirajCleanupTimer = null; }
-        fadeOutAudio(gameState.sounds.minigameApplause, 900);
-        gameState.coffee.applausePlayed = false;
-        document.getElementById('user-card')?.style.removeProperty('display');
-        document.getElementById('mobile-joystick')?.style.removeProperty('display');
-        setMinigameHideUI(false);
-        gameState.coffee.sessionKey = null; // clear so returnFromCoffee won't try to delete
-        returnFromCoffee(true);
+
     } else if (gameState.laptopBoss.active) {
-        // Laptop boss: just leave (single-player, safe to abort)
         returnFromLaptopBoss?.();
     }
 }
@@ -8317,24 +8346,25 @@ function _pipSetupWindow(win) {
 
     _pipResizeWindowCanvas();
 
-    // Safari-proof: the popup window's own setInterval runs even when the opener
-    // tab is unfocused/throttled (because the popup is a separate OS window the
-    // user can see). This ensures the canvas keeps updating at ~20fps minimum.
+    // Safari-proof: schedule a render loop inside the popup window's own execution
+    // context. When the popup is visible to the user, its setInterval is not subject
+    // to the opener tab's background-throttling — so this fires even when the opener
+    // is hidden/throttled, keeping the canvas alive at ~30 fps minimum.
     if (pip.popupPollId) { try { win.clearInterval(pip.popupPollId); } catch(e) {} pip.popupPollId = null; }
     pip.popupPollId = win.setInterval(() => {
         const p = gameState.pip;
         if (!p.active || p.mode !== 'window' || !p.win || p.win.closed) {
             try { win.clearInterval(p.popupPollId); } catch(e) {} p.popupPollId = null; return;
         }
-        if (performance.now() - (p._lastFrameAt || 0) > 80) {
-            try {
-                updatePiPCamera();
-                renderPiPInto(p.ctx, p.canvas, p.dpr);
-                _pipUpdateChrome();
-                p._lastFrameAt = performance.now();
-            } catch (e) {}
-        }
-    }, 50);
+        // Always render — no stale check. The main-loop watchdog also renders when
+        // the opener is foregrounded, so this only adds cost when it is throttled.
+        try {
+            updatePiPCamera();
+            renderPiPInto(p.ctx, p.canvas, p.dpr);
+            _pipUpdateChrome();
+            p._lastFrameAt = performance.now();
+        } catch (e) {}
+    }, 33);
 }
 
 async function openPiPMode() {
@@ -8443,19 +8473,7 @@ function _pipOpenPopup() {
     _pipUpdateChrome();
     pip._lastFrameAt = performance.now();
     try { pip.rafId = win.requestAnimationFrame(_pipFrame); } catch (e) {}
-
-    // Backstop: a popup window's rAF can throttle when it's occluded/unfocused
-    // (Safari is aggressive). This keeps the timer + view alive — the main-loop
-    // watchdog handles it while the opener is focused; this covers the rest.
-    if (pip._videoInterval) clearInterval(pip._videoInterval);
-    pip._videoInterval = setInterval(() => {
-        const p = gameState.pip;
-        if (!p.active || p.mode !== 'window' || !p.win) return;
-        if (p.win.closed) { closePiPMode(); return; }
-        if (performance.now() - (p._lastFrameAt || 0) > 180) {
-            try { updatePiPCamera(); renderPiPInto(p.ctx, p.canvas, p.dpr); _pipUpdateChrome(); p._lastFrameAt = performance.now(); } catch (e) {}
-        }
-    }, 250);
+    // popupPollId backstop is set up inside _pipSetupWindow (above)
     return true;
 }
 
@@ -8622,7 +8640,21 @@ function togglePiPMode() {
 function _pipShowBlackout(show) {
     // Guard: never show the blackout unless PiP is genuinely active
     if (show && !gameState.pip.active) return;
-    if (gameState.pip.blackout) gameState.pip.blackout.classList.toggle('active', !!show);
+    const el = gameState.pip.blackout;
+    if (el) {
+        if (show) {
+            // Make visible before adding active class so the CSS transition fires
+            el.style.display = 'flex';
+            // Defer one frame so display change is painted before opacity transition starts
+            requestAnimationFrame(() => el.classList.add('active'));
+        } else {
+            el.classList.remove('active');
+            // After transition completes, truly hide it from render tree
+            setTimeout(() => {
+                if (!el.classList.contains('active')) el.style.display = 'none';
+            }, 450);
+        }
+    }
     document.body.classList.toggle('pip-active', !!show);
 }
 
@@ -8745,14 +8777,15 @@ function updatePiPLifecycle() {
     } else if (pip.mode === 'window') {
         // A popup the user closed via the OS chrome → tear down cleanly.
         if (pip.win && pip.win.closed) { closePiPMode(); return; }
-        // Watchdog: if the PiP window's own rAF hasn't ticked recently (e.g. the
-        // opener is focused and the OS paused the PiP surface), render here too.
-        if (performance.now() - (pip._lastFrameAt || 0) > 120) {
-            updatePiPCamera();
-            renderPiPInto(pip.ctx, pip.canvas, pip.dpr);
-            _pipUpdateChrome();
-            pip._lastFrameAt = performance.now();
-        }
+        // Drive the popup from the main game loop every frame — consistent with
+        // fallback/video modes. _pipFrame (popup rAF) runs in parallel and provides
+        // smooth 60fps when the popup is the focused window; this watchdog ensures
+        // the canvas never goes stale when the opener tab is throttled or the popup
+        // rAF is paused by the browser (e.g. Safari background throttling).
+        updatePiPCamera();
+        renderPiPInto(pip.ctx, pip.canvas, pip.dpr);
+        _pipUpdateChrome();
+        pip._lastFrameAt = performance.now();
     }
 }
 
