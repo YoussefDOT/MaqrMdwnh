@@ -317,6 +317,46 @@ Sugar falls from top. `progress = (serverNow() - spawnTime) / fallDuration` — 
 
 ---
 
+## Picture-in-Picture (الوضع المصغر)
+
+Floating focus window showing a **player-centred, zoomed** view of the world. Available on **all platforms**, but the *kind* of window depends on browser capability (see tiers). Platform matrix:
+- **Chrome/Edge desktop** → Document PiP (always-on-top, escapes browser).
+- **Safari desktop** → popup window (escapes tab, draggable across displays; **not** always-on-top — no web API allows it there).
+- **Android Chrome** → Video PiP (always-on-top, floats over other apps).
+- **iOS Safari** → in-page panel (no captureStream / Document PiP on iOS).
+
+The popup window is **400×460**, forced small via `win.resizeTo()/moveTo()` (Safari ignores size on an `about:blank` popup otherwise). The popup tier is skipped on mobile (`window.open` is just a tab there).
+
+### Surfaces (four tiers, one renderer)
+`openPiPMode()` tries each in order; all share `renderPiPInto`:
+1. **Document Picture-in-Picture** (`documentPictureInPicture.requestWindow`, Chrome/Edge): real always-on-top OS window with its own DOM + rAF — smoothest, has DOM timer/close. DOM/CSS injected from JS (`PIP_WINDOW_HTML`/`PIP_WINDOW_CSS`) — **no `pip.html` file**.
+2. **Video Picture-in-Picture** (`srcCanvas.captureStream()` → hidden `<video>` → `requestPictureInPicture()`): always-on-top, timer drawn onto the canvas (`_pipDrawCanvasChrome`). **Skipped on Safari** — Safari does **not** implement `canvas.captureStream()`, so `_pipVideoSupported()` returns false there.
+3. **Popup window** (`window.open('', …, 'popup=yes,…')`, **Safari** & anywhere): a real separate OS window that escapes the tab and drags across displays — *not* always-on-top, but the best Safari can do for live content (no Document PiP, no captureStream). Reuses `_pipSetupWindow`/`_pipFrame` exactly like tier 1 (mode `'window'`); a `setInterval` backstop + main-loop watchdog keep it rendering when the popup's own rAF throttles. **This is what Safari/macOS users get.**
+4. **In-page panel** (`#pip-fallback`): draggable + `resize: both`, last resort when even `window.open` is blocked.
+
+**Why Safari can't have always-on-top:** an always-on-top floating window of *live* content needs either Document PiP (Chrome-only) or a `<video>` fed by `canvas.captureStream()` (Safari lacks it). So Safari gets a normal popup window instead.
+
+### Context-swap renderer (the core trick)
+`renderPiPInto(ctx, canvas, dpr)` temporarily points `gameState.ctx/canvas/zoom/camera/dpr` at the PiP surface, runs the normal world-draw sequence, then restores them in a `finally`. Every draw function reads `gameState.ctx` etc., so this reuses 100% of the rendering code — **no draw function takes a `ctx` param** (the Haiku breakdown was wrong about that). Skips `drawFocusMask` (it would thrash the shared `maskCanvas`); uses a local `_pipVignette` instead of cached `drawVignette`.
+
+### Smoothness
+Render is driven by the **PiP window's own `requestAnimationFrame`** (`_pipFrame`) so it stays 60fps even when the opener tab is hidden/throttled. `updatePiPLifecycle` in the main loop is a **watchdog**: if `pip._lastFrameAt` is stale (>120ms) it renders a frame itself, and it drives the in-page fallback every frame. Camera centres via `updatePiPCamera` (lerp toward `-playerRenderPos`). Scroll-to-zoom is wired on both surfaces.
+
+### Lifecycle — one guard, not scattered close-calls
+`isPiPAllowed()` is the single predicate: work phase (pomodoro **or** free mode) AND no azkar/prayer/minigame/dup-session. `updatePiPLifecycle()` (called early in `gameLoop`, before the minigame early-returns) toggles button visibility and **auto-closes PiP the instant `isPiPAllowed()` goes false** — so break/session-end/overlay/minigame/logout are all handled in one place. The main page shows `#pip-blackout` ("الوضع المصغر مفعّل") while active.
+
+| Function | Purpose |
+|---|---|
+| `togglePiPMode()` / `openPiPMode()` / `closePiPMode()` | entry / open (async, `_opening` guard) / teardown (`_closing` guard) |
+| `renderPiPInto()` | context-swap world render |
+| `updatePiPCamera()` | lerp camera to centre player + ease zoom |
+| `updatePiPLifecycle()` | per-frame button visibility + auto-close + fallback/watchdog render |
+| `setupPiPUI()` | wires button, blackout end-btn, fallback drag/resize, main-window `pagehide` |
+
+`openPiPMode` is **async** (awaits `requestWindow`) — `pip.active` is only set after the await, so `_opening`/`_closing` flags prevent a close from being undone by an in-flight open (this was a real race: close appeared to "not work").
+
+---
+
 ## Common Bugs & Fixes (lessons learned)
 
 | Bug | Root cause | Fix |
@@ -338,6 +378,10 @@ Sugar falls from top. `progress = (serverNow() - spawnTime) / fallDuration` — 
 | Time picker scroll wheel does nothing | `deltaMode: 1` (physical mouse = lines) sends `deltaY: 3`; old 50px threshold never reached | Normalize: `deltaMode===1 → deltaY*40`; threshold 40px → one click = one unit |
 | Siraj time spoof doesn't reset completion | After setting fake time, old Firebase completion still hides the button | Clear `gameState.azkar.completed = {}` and write `null` to Firebase on apply |
 | Prayer gradient glow stretched on mobile portrait | `ellipse` radial gradients look like ovals on narrow screens | `body.is-mobile .prayer-overlay-bg::after { display: none }` |
+| PiP close "doesn't work" (reopens itself) | `openPiPMode` is async; `pip.active` set only after `await requestWindow`, so a close mid-await is undone when the pending fallback resolves | `_opening`/`_closing` flags; `closePiPMode` clears `_opening` to cancel in-flight opens |
+| PiP button overlaps leave pill / looks like a stray icon | Icon-only circle placed at `top:68px` collides with `leave-wrap` (`top:54px`) | Labeled pill ("الوضع المصغر") at `top:96px`, stacked below logout + leave |
+| PiP draws but never centres / thrashes mask canvas | Calling full `render()` reuses `gameState.maskCanvas` sized to main canvas → per-frame realloc | Dedicated `renderPiPInto` context-swap; skip `drawFocusMask`, use local `_pipVignette` |
+| PiP works on Chrome but stays trapped in-tab on Safari | Safari has neither Document PiP nor `canvas.captureStream()`, so tiers 1+2 are skipped | Tier 3 `_pipOpenPopup()` (`window.open`) — a real popup window that escapes the tab (not always-on-top, but Safari's best for live content) |
 
 ---
 

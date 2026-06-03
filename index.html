@@ -184,6 +184,15 @@
         <!-- زر الخروج (يسار الشاشة، مستقل عن بطاقة المستخدم) -->
         <button id="logout-btn" class="logout-pill">الخروج من الموقع</button>
 
+        <!-- زر الوضع المصغر (Picture-in-Picture) — يظهر أثناء جلسة العمل على سطح المكتب فقط -->
+        <button id="pip-toggle-btn" class="pip-toggle-btn" type="button" aria-label="الوضع المصغر" title="الوضع المصغر">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="4.5" width="18" height="15" rx="2.6"/>
+                <rect x="11.5" y="11" width="7.5" height="6" rx="1.3" fill="currentColor" stroke="none"/>
+            </svg>
+            <span class="pip-toggle-label">الوضع المصغر</span>
+        </button>
+
         <!-- زر أذكار عائم للجوال — يظهر فقط في وضع التركيز عندما تكون بطاقة المستخدم مخفية -->
         <button id="azkar-focus-float-btn" class="azkar-focus-float-btn" type="button" style="display:none">أذكار</button>
 
@@ -487,6 +496,35 @@
             <h3 style="margin-bottom:12px;">تم فتح حسابك في مكان آخر</h3>
             <p style="margin-bottom:24px;color:rgba(255,255,255,0.6);">تم تسجيل الدخول من جهاز أو تبويب آخر. هذه الجلسة أصبحت غير نشطة.</p>
             <button class="btn-primary" onclick="window.location.reload()">إعادة تحميل</button>
+        </div>
+    </div>
+
+    <!-- الوضع المصغر: تغطية الصفحة الرئيسية أثناء تفعيل PiP (تمنع التفاعل حتى الإغلاق) -->
+    <div id="pip-blackout" class="pip-blackout" aria-hidden="true">
+        <div class="pip-blackout-inner">
+            <div class="pip-blackout-icon">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="4.5" width="18" height="15" rx="2.6"/>
+                    <rect x="11.5" y="11" width="7.5" height="6" rx="1.3" fill="currentColor" stroke="none"/>
+                </svg>
+            </div>
+            <div class="pip-blackout-title">الوضع المصغر مفعّل</div>
+            <div class="pip-blackout-sub">تابع جلستك في النافذة العائمة</div>
+            <button id="pip-blackout-end" class="pip-blackout-end" type="button">إنهاء الوضع المصغر</button>
+        </div>
+    </div>
+
+    <!-- الوضع المصغر: نافذة احتياطية داخل الصفحة للمتصفحات غير الداعمة (قابلة للسحب والتحجيم) -->
+    <div id="pip-fallback" class="pip-fallback">
+        <canvas id="pip-fb-canvas" class="pip-fb-canvas"></canvas>
+        <div id="pip-fb-bar" class="pip-fb-bar">
+            <div class="pip-fb-text">
+                <div id="pip-fb-timer" class="pip-fb-timer">00:00</div>
+                <div id="pip-fb-task" class="pip-fb-task"></div>
+            </div>
+            <button id="pip-fb-close" class="pip-fb-close" type="button" aria-label="إنهاء الوضع المصغر">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+            </button>
         </div>
     </div>
 

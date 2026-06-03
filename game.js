@@ -1373,6 +1373,36 @@ const gameState = {
         focusMobileWasActive: false,
         _lastButtonRefresh: 0,
     },
+    // Picture-in-Picture (الوضع المصغر) — always-on-top floating focus window.
+    // Renders a player-centred view of the world into a separate surface (a real
+    // Document-PiP window when supported, otherwise an in-page floating panel).
+    pip: {
+        active: false,
+        supported: false,          // documentPictureInPicture available?
+        mode: null,                // 'window' (Document PiP) | 'video' (Video PiP) | 'fallback'
+        win: null,                 // the Document-PiP Window (window mode)
+        doc: null,                 // its document
+        canvas: null,              // target canvas (in whichever surface)
+        ctx: null,                 // its 2D context
+        dpr: 1,                    // target device-pixel-ratio
+        // Video Picture-in-Picture (Safari/Chrome) — a real OS window via a
+        // captured canvas stream. Escapes the browser, draggable across displays.
+        video: null,               // hidden <video> consuming the canvas stream
+        stream: null,              // MediaStream from srcCanvas.captureStream()
+        srcCanvas: null,           // offscreen render target for the video stream
+        _videoPrimed: false,       // hidden video pre-built + playing (Safari-ready)
+        _videoInterval: 0,         // background-render backstop timer
+        rafId: 0,                  // requestAnimationFrame id inside the PiP window
+        zoomLevel: 2.4,            // current world zoom (lerped)
+        targetZoomLevel: 2.4,      // scroll-to-zoom target
+        camera: { x: 0, y: 0 },    // world offset that centres the player
+        _camInit: false,           // snap camera on first frame, lerp after
+        _opening: false,           // in-flight guard for async openPiPMode
+        _closing: false,           // re-entrancy guard for closePiPMode
+        _lastFrameAt: 0,           // perf timestamp of last PiP render (stall watchdog)
+        btn: null, blackout: null, fallbackEl: null,
+        timerEl: null, taskEl: null,
+    },
 };
 
 // Preload all sounds so they fire instantly with no lag
@@ -2672,6 +2702,7 @@ function startGame(userData) {
     setupFreeModeUI();
     initPrayerSystem();
     setupAzkarUI();
+    setupPiPUI();
 
     // Track server time offset so race start/countdown is synchronized across clients
     const offsetRef = ref(database, '.info/serverTimeOffset');
@@ -4997,6 +5028,7 @@ function gameLoop(timestamp) {
         }
 
         updatePomodoro();
+        updatePiPLifecycle();
         updateTeleportAnim();
         updateCoffeeTeleportAnim();
         updateLaptopBossTeleportAnim();
@@ -7971,6 +8003,711 @@ if (document.readyState === 'loading') { document.addEventListener('DOMContentLo
 const SP_PROXIMITY_SQ = 200 * 200; // squared distance threshold (world units)
 const SP_MAX_GUESTS   = 2;
 const SP_INVITE_TTL   = 10000;     // ms
+
+// ═══════════════════════════════════════════════════════════════════
+//  PICTURE-IN-PICTURE  (الوضع المصغر)
+//  Always-on-top floating window that re-renders a player-centred view of
+//  the world. Uses the Document Picture-in-Picture API when available (real
+//  OS-level, resizable, draggable across displays, stays on top), and falls
+//  back to an in-page draggable/resizable panel on unsupported browsers.
+//
+//  Rendering reuses 100% of the existing draw functions via a context swap:
+//  we temporarily point gameState.ctx/canvas/zoom/camera/dpr at the PiP
+//  surface, run the world-draw sequence, then restore. No code duplication.
+// ═══════════════════════════════════════════════════════════════════
+
+const PIP_WINDOW_CSS = `
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #07070a;
+  font-family: 'Rubik', -apple-system, system-ui, sans-serif; cursor: default; }
+#pip-root { position: fixed; inset: 0; }
+#pip-canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+#pip-top { position: absolute; top: 0; left: 0; right: 0; padding: 12px 16px 26px;
+  display: flex; flex-direction: column; gap: 1px; pointer-events: none;
+  background: linear-gradient(to bottom, rgba(0,0,0,0.55), rgba(0,0,0,0)); }
+#pip-timer { font-size: clamp(28px, 12vw, 60px); font-weight: 700; color: #fff;
+  line-height: 1; letter-spacing: 0.5px; text-shadow: 0 2px 16px rgba(0,0,0,0.7);
+  font-variant-numeric: tabular-nums; }
+#pip-task { font-size: clamp(11px, 3.6vw, 15px); font-weight: 500;
+  color: rgba(255,255,255,0.55); direction: rtl; max-width: 100%;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.6); }
+#pip-close { position: absolute; bottom: 14px; left: 14px; display: flex;
+  align-items: center; gap: 7px; padding: 9px 15px; border-radius: 50px;
+  cursor: pointer; background: rgba(18,18,18,0.68);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid rgba(255,255,255,0.09); color: rgba(255,255,255,0.85);
+  font-family: inherit; font-size: 13px; font-weight: 600;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.3); transition: transform .25s cubic-bezier(0.34,1.56,0.64,1), background .2s, color .2s; }
+#pip-close:hover { background: rgba(225,53,46,0.55); border-color: rgba(225,53,46,0.4); color: #fff; transform: scale(1.04); }
+#pip-close svg { width: 15px; height: 15px; }
+`;
+
+const PIP_WINDOW_HTML = `
+<div id="pip-root">
+  <canvas id="pip-canvas"></canvas>
+  <div id="pip-top">
+    <div id="pip-timer">00:00</div>
+    <div id="pip-task"></div>
+  </div>
+  <button id="pip-close" type="button" aria-label="إنهاء الوضع المصغر">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    <span>إنهاء</span>
+  </button>
+</div>`;
+
+function pipSupported() {
+    return typeof window !== 'undefined' && 'documentPictureInPicture' in window;
+}
+
+// PiP may only run during an active WORK phase with no blocking overlay/minigame.
+// This single predicate centralises every auto-close trigger.
+function isPiPAllowed() {
+    const inWork = (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
+        || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
+    if (!inWork) return false;
+    if (gameState.azkar.active) return false;
+    if (gameState.prayer.isOverlayActive) return false;
+    if (gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active) return false;
+    if (gameState._dupSessionDetected) return false;
+    return true;
+}
+
+// Compute the timer string + label for whichever mode is running.
+function _pipTimerData() {
+    const p = gameState.pomodoro, fm = gameState.freeMode;
+    if (p.active && p.phase === 'work') {
+        const rem = Math.max(0, p.endTime - Date.now());
+        const label = getCurrentTaskText() || `جلسة ${p.totalSessions - p.sessionsLeft + 1} من ${p.totalSessions}`;
+        return { text: formatTime(rem / 1000), label };
+    }
+    if (fm.active && fm.phase === 'work') {
+        const elapsed = fm.totalWorkMs + (fm.workStartTime > 0 ? (Date.now() - fm.workStartTime) : 0);
+        return { text: formatTime(elapsed / 1000), label: getCurrentTaskText() || 'وضع حر' };
+    }
+    return { text: '00:00', label: '' };
+}
+
+// Lerp the PiP camera so the local player sits dead-centre, plus zoom easing.
+function updatePiPCamera() {
+    const pip = gameState.pip;
+    const player = gameState.players[gameState.userId];
+    if (!player) return;
+    const { x: px, y: py } = getPlayerRenderPos(player);
+    const tx = -px, ty = -py;
+    if (!pip._camInit) {
+        pip.camera.x = tx; pip.camera.y = ty; pip._camInit = true;
+    } else {
+        pip.camera.x += (tx - pip.camera.x) * 0.16;
+        pip.camera.y += (ty - pip.camera.y) * 0.16;
+    }
+    pip.zoomLevel += (pip.targetZoomLevel - pip.zoomLevel) * 0.12;
+}
+
+// Draw the timer + task label directly onto the canvas (Video-PiP mode only,
+// where there is no DOM to overlay). Logical coords (ctx is already dpr-scaled).
+function _pipDrawCanvasChrome(ctx, W, H) {
+    const t = _pipTimerData();
+    ctx.save();
+    // Top scrim so white text reads over any scene.
+    const g = ctx.createLinearGradient(0, 0, 0, H * 0.30);
+    g.addColorStop(0, 'rgba(0,0,0,0.62)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H * 0.30);
+
+    const pad = Math.round(W * 0.05);
+    ctx.textBaseline = 'top';
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur = 12;
+
+    // Big timer, top-left.
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
+    const tSize = Math.round(H * 0.11);
+    ctx.font = `700 ${tSize}px Rubik, -apple-system, system-ui, sans-serif`;
+    ctx.fillText(t.text, pad, pad);
+    ctx.shadowBlur = 0;
+
+    // Task / session label under it (RTL).
+    if (t.label) {
+        ctx.textAlign = 'right';
+        ctx.direction = 'rtl';
+        ctx.fillStyle = 'rgba(255,255,255,0.62)';
+        ctx.font = `500 ${Math.round(H * 0.033)}px Rubik, -apple-system, system-ui, sans-serif`;
+        ctx.fillText(t.label, W - pad, pad + tSize + Math.round(H * 0.012));
+    }
+    ctx.restore();
+}
+
+function _pipVignette(ctx, W, H) {
+    const g = ctx.createRadialGradient(W / 2, H * 0.46, Math.min(W, H) * 0.30, W / 2, H / 2, Math.max(W, H) * 0.74);
+    g.addColorStop(0, 'rgba(0,0,0,0)');
+    g.addColorStop(1, 'rgba(0,0,0,0.45)');
+    ctx.save();
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+}
+
+// Render the world into an arbitrary canvas/context by temporarily swapping the
+// gameState render targets. Every draw function reads gameState.ctx/zoom/camera,
+// so this transparently retargets them, then restores the originals.
+function renderPiPInto(ctx, canvas, dpr) {
+    if (!ctx || !canvas) return;
+    const s = gameState;
+    const _ctx = s.ctx, _canvas = s.canvas, _zoom = s.zoom, _cx = s.camera.x, _cy = s.camera.y, _dpr = s.dpr;
+    s.ctx = ctx; s.canvas = canvas; s.zoom = s.pip.zoomLevel;
+    s.camera.x = s.pip.camera.x; s.camera.y = s.pip.camera.y; s.dpr = dpr;
+    try {
+        const W = canvas.width / dpr, H = canvas.height / dpr;
+        ctx.save();
+        ctx.scale(dpr, dpr);
+        ctx.fillStyle = COLORS.black;
+        ctx.fillRect(0, 0, W, H);
+        drawBackgroundAtmosphere(W, H);
+
+        ctx.save();
+        ctx.translate(W / 2, H / 2);
+        ctx.scale(s.zoom, s.zoom);
+        ctx.translate(s.camera.x, s.camera.y);
+
+        drawRooms();
+        if (s.assets.tables.complete) {
+            ctx.drawImage(s.assets.tables, TABLE_BOX.minX, TABLE_BOX.minY, TABLE_WIDTH, TABLE_HEIGHT);
+        }
+        drawBreakDoor();
+        drawAmbientMotes();
+        drawDustParticles();
+        drawPlayers(false);
+        drawCoopEmojiFloats();
+        drawCoopGroupLabels();
+        drawTimers();
+        drawRoomShadows();
+        ctx.restore();  // world transform
+
+        drawWindParticles(W, H);
+        drawFocusFog(W, H);
+        drawSunRays(W, H);
+        _pipVignette(ctx, W, H);
+        // Video PiP has no DOM overlay — paint the timer + label onto the frame.
+        if (s.pip.mode === 'video') _pipDrawCanvasChrome(ctx, W, H);
+        ctx.restore();  // dpr scale
+    } catch (e) {
+        console.error('[pip] render error (loop kept alive)', e);
+    } finally {
+        s.ctx = _ctx; s.canvas = _canvas; s.zoom = _zoom;
+        s.camera.x = _cx; s.camera.y = _cy; s.dpr = _dpr;
+    }
+}
+
+// Update the floating chrome (timer + task label) in whichever surface is live.
+function _pipUpdateChrome() {
+    const pip = gameState.pip;
+    const t = _pipTimerData();
+    if (pip.timerEl && pip.timerEl.textContent !== t.text) pip.timerEl.textContent = t.text;
+    if (pip.taskEl && pip.taskEl.textContent !== t.label) pip.taskEl.textContent = t.label;
+}
+
+// One render tick, driven by the PiP window's own rAF (runs at full speed even
+// when the opener tab is hidden/throttled — this is what keeps PiP smooth).
+function _pipFrame() {
+    const pip = gameState.pip;
+    if (!pip.active || pip.mode !== 'window' || !pip.win || pip.win.closed) return;
+    if (gameState._dupSessionDetected) { closePiPMode(); return; }
+    updatePiPCamera();
+    renderPiPInto(pip.ctx, pip.canvas, pip.dpr);
+    _pipUpdateChrome();
+    pip._lastFrameAt = performance.now();
+    try { pip.rafId = pip.win.requestAnimationFrame(_pipFrame); } catch (e) { closePiPMode(); }
+}
+
+function _pipResizeWindowCanvas() {
+    const pip = gameState.pip;
+    if (!pip.win || !pip.canvas) return;
+    const dpr = pip.win.devicePixelRatio || 1;
+    const w = pip.win.innerWidth, h = pip.win.innerHeight;
+    if (w <= 0 || h <= 0) return;
+    pip.dpr = dpr;
+    pip.canvas.width = Math.round(w * dpr);
+    pip.canvas.height = Math.round(h * dpr);
+    pip.canvas.style.width = w + 'px';
+    pip.canvas.style.height = h + 'px';
+}
+
+function _pipSetupWindow(win) {
+    const pip = gameState.pip;
+    const doc = win.document;
+    // window.open('') yields about:blank — make sure head/body exist.
+    if (!doc.head) { try { (doc.documentElement || doc).appendChild(doc.createElement('head')); } catch (e) {} }
+    if (!doc.body) { try { (doc.documentElement || doc).appendChild(doc.createElement('body')); } catch (e) {} }
+    doc.documentElement.lang = 'ar';
+    doc.documentElement.dir = 'rtl';
+
+    const fontLink = doc.createElement('link');
+    fontLink.rel = 'stylesheet';
+    fontLink.href = 'https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700&display=swap';
+    doc.head.appendChild(fontLink);
+
+    const style = doc.createElement('style');
+    style.textContent = PIP_WINDOW_CSS;
+    doc.head.appendChild(style);
+
+    doc.body.innerHTML = PIP_WINDOW_HTML;
+
+    pip.doc = doc;
+    pip.canvas = doc.getElementById('pip-canvas');
+    pip.ctx = pip.canvas.getContext('2d');
+    pip.timerEl = doc.getElementById('pip-timer');
+    pip.taskEl = doc.getElementById('pip-task');
+
+    doc.getElementById('pip-close').addEventListener('click', () => closePiPMode());
+    win.addEventListener('resize', _pipResizeWindowCanvas);
+    win.addEventListener('pagehide', () => closePiPMode());
+    win.addEventListener('unload', () => closePiPMode());
+    // Scroll to zoom — a nice bonus the OS PiP gives us for free.
+    win.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const d = e.deltaY > 0 ? -0.2 : 0.2;
+        pip.targetZoomLevel = Math.max(1.3, Math.min(4.0, pip.targetZoomLevel + d));
+    }, { passive: false });
+
+    _pipResizeWindowCanvas();
+}
+
+async function openPiPMode() {
+    const pip = gameState.pip;
+    // Re-entrancy guard: requestWindow() is async, so without _opening a second
+    // click (or a stale one) would spin up a duplicate window and race the close.
+    if (pip.active || pip._opening || pip._closing) return;
+    if (!isPiPAllowed()) return;
+    pip._opening = true;
+
+    // ── Tier 1: Document Picture-in-Picture (Chrome/Edge) ──
+    // Real OS window with its own DOM + rAF — smoothest, richest. Chrome only.
+    if (pipSupported()) {
+        try {
+            const win = await documentPictureInPicture.requestWindow({ width: 440, height: 480 });
+            // Closed/cancelled while we were awaiting → discard this window.
+            if (!pip._opening) { try { win.close(); } catch (e) {} return; }
+            pip.win = win;
+            pip.mode = 'window';
+            pip.active = true;
+            pip._opening = false;
+            pip._camInit = false;
+            pip.targetZoomLevel = pip.zoomLevel = 2.4;
+            _pipSetupWindow(win);
+            _pipShowBlackout(true);
+            _pipReflectButton();
+            // Paint one frame immediately so the window never flashes blank.
+            updatePiPCamera();
+            renderPiPInto(pip.ctx, pip.canvas, pip.dpr);
+            _pipUpdateChrome();
+            pip._lastFrameAt = performance.now();
+            pip.rafId = win.requestAnimationFrame(_pipFrame);
+            return;
+        } catch (e) {
+            console.warn('[pip] Document PiP unavailable, trying Video PiP:', e && e.name || e);
+        }
+    }
+    if (!pip._opening) return;   // cancelled during the await
+
+    // ── Tier 2: Video Picture-in-Picture (Safari/Chrome/Edge) ──
+    // A genuine floating OS window via a captured canvas stream — escapes the
+    // browser, stays on top of all apps, draggable anywhere across displays.
+    if (_pipVideoSupported()) {
+        try {
+            await _pipOpenVideo();
+            if (!pip._opening) return;   // cancelled mid-await → _pipOpenVideo bailed
+            pip._opening = false;
+            return;
+        } catch (e) {
+            console.warn('[pip] Video PiP unavailable, trying popup window:', e && e.name || e);
+            // Make sure a half-opened video session doesn't linger.
+            try { if (pip.stream) pip.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+            pip.stream = null; pip.mode = null; pip.active = false;
+        }
+    }
+    if (!pip._opening) return;
+
+    // ── Tier 3: real popup window (desktop Safari & anywhere window.open works) ──
+    // Safari has no Document PiP AND no canvas.captureStream, so a true
+    // always-on-top PiP of live content is impossible there. A popup window is
+    // the next best thing: a separate OS window that escapes the tab and drags
+    // freely across displays (just not always-on-top). Renders via the same path.
+    // Skipped on mobile — there window.open is just a new tab, not a window.
+    if (!isMobile()) {
+        try {
+            if (_pipOpenPopup()) { pip._opening = false; return; }
+        } catch (e) {
+            console.warn('[pip] popup window failed, using in-page panel:', e && e.name || e);
+        }
+    }
+    if (!pip._opening) return;
+
+    // ── Tier 4: in-page fallback panel ──
+    pip._opening = false;
+    _pipOpenFallback();
+}
+
+// Open the PiP view in a real popup window (window.open). Returns false if the
+// popup is blocked, so the caller can fall through to the in-page panel.
+function _pipOpenPopup() {
+    const pip = gameState.pip;
+    const W = 400, H = 460;
+    const left = Math.max(0, (window.screen && window.screen.availWidth || 1280) - W - 40);
+    const top = 90;
+    // No `popup=yes` (Safari ignores it and may open a full tab); explicit
+    // dimensions + disabled bars is the cross-browser way to force a small popup.
+    const features = `width=${W},height=${H},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,scrollbars=no,resizable=yes`;
+    let win = null;
+    try { win = window.open('', 'mdwnhPiP', features); } catch (e) { win = null; }
+    if (!win) return false;
+    // Safari often ignores size on an about:blank popup — force it small + placed.
+    try { win.resizeTo(W, H); } catch (e) {}
+    try { win.moveTo(left, top); } catch (e) {}
+
+    pip.win = win;
+    pip.mode = 'window';
+    pip.active = true;
+    pip._camInit = false;
+    pip.targetZoomLevel = pip.zoomLevel = 2.4;
+    _pipSetupWindow(win);
+    _pipShowBlackout(true);
+    _pipReflectButton();
+
+    updatePiPCamera();
+    renderPiPInto(pip.ctx, pip.canvas, pip.dpr);
+    _pipUpdateChrome();
+    pip._lastFrameAt = performance.now();
+    try { pip.rafId = win.requestAnimationFrame(_pipFrame); } catch (e) {}
+
+    // Backstop: a popup window's rAF can throttle when it's occluded/unfocused
+    // (Safari is aggressive). This keeps the timer + view alive — the main-loop
+    // watchdog handles it while the opener is focused; this covers the rest.
+    if (pip._videoInterval) clearInterval(pip._videoInterval);
+    pip._videoInterval = setInterval(() => {
+        const p = gameState.pip;
+        if (!p.active || p.mode !== 'window' || !p.win) return;
+        if (p.win.closed) { closePiPMode(); return; }
+        if (performance.now() - (p._lastFrameAt || 0) > 180) {
+            try { updatePiPCamera(); renderPiPInto(p.ctx, p.canvas, p.dpr); _pipUpdateChrome(); p._lastFrameAt = performance.now(); } catch (e) {}
+        }
+    }, 250);
+    return true;
+}
+
+function _pipVideoSupported() {
+    try {
+        const c = document.createElement('canvas');
+        if (typeof c.captureStream !== 'function') return false;
+        const v = document.createElement('video');
+        return !!document.pictureInPictureEnabled || typeof v.webkitSetPresentationMode === 'function';
+    } catch (e) { return false; }
+}
+
+const PIP_VIDEO_W = 920, PIP_VIDEO_H = 1040;   // 460×520 @2x — retina-crisp portrait
+
+// Build the offscreen canvas + hidden <video> + capture stream (idempotent).
+function _pipBuildVideoPipeline() {
+    const pip = gameState.pip;
+    if (!pip.srcCanvas) pip.srcCanvas = document.createElement('canvas');
+    if (pip.srcCanvas.width !== PIP_VIDEO_W)  pip.srcCanvas.width  = PIP_VIDEO_W;
+    if (pip.srcCanvas.height !== PIP_VIDEO_H) pip.srcCanvas.height = PIP_VIDEO_H;
+    pip.dpr = 2;
+
+    if (!pip.video) {
+        const v = document.createElement('video');
+        v.muted = true; v.defaultMuted = true; v.playsInline = true;
+        v.setAttribute('muted', ''); v.setAttribute('playsinline', '');
+        v.style.cssText = 'position:fixed;left:-10000px;top:0;width:2px;height:2px;opacity:0;pointer-events:none;';
+        document.body.appendChild(v);
+        pip.video = v;
+        const onLeave = () => { if (gameState.pip.mode === 'video' && gameState.pip.active) closePiPMode(); };
+        v.addEventListener('leavepictureinpicture', onLeave);
+        v.addEventListener('webkitpresentationmodechanged', () => {
+            if (v.webkitPresentationMode && v.webkitPresentationMode !== 'picture-in-picture') onLeave();
+        });
+    }
+    if (!pip.stream) {
+        pip.stream = pip.srcCanvas.captureStream(30);
+        pip.video.srcObject = pip.stream;
+    }
+}
+
+// Pre-warm the video while the button is shown so that, on click, PiP can be
+// requested with the video already playing + metadata loaded. Safari grants PiP
+// only for a ready video, and is happiest when requestPictureInPicture is called
+// without an intervening async wait — priming buys exactly that. No-op unless
+// Video PiP is the active path (i.e. Document PiP is unavailable).
+function _pipPrimeVideo() {
+    const pip = gameState.pip;
+    if (pip._videoPrimed || pip.active) return;
+    if (pipSupported() || !_pipVideoSupported()) return;
+    try {
+        _pipBuildVideoPipeline();
+        const ctx = pip.srcCanvas.getContext('2d');
+        ctx.fillStyle = '#07070a';
+        ctx.fillRect(0, 0, pip.srcCanvas.width, pip.srcCanvas.height);
+        pip.video.play().catch(() => {});
+        pip._videoPrimed = true;
+    } catch (e) { /* best-effort */ }
+}
+
+// Open a Video-PiP window: render the world+timer into the offscreen canvas,
+// then request PiP on the hidden <video> that mirrors it via captureStream.
+async function _pipOpenVideo() {
+    const pip = gameState.pip;
+    _pipBuildVideoPipeline();
+    pip.canvas = pip.srcCanvas;
+    pip.ctx = pip.srcCanvas.getContext('2d');
+    pip.timerEl = null; pip.taskEl = null;   // video has no DOM chrome — drawn on canvas
+    pip.mode = 'video';
+    pip._camInit = false;
+    pip.targetZoomLevel = pip.zoomLevel = 2.4;
+
+    // Live frame before capture so the window never shows the neutral prime fill.
+    updatePiPCamera();
+    renderPiPInto(pip.ctx, pip.srcCanvas, pip.dpr);
+
+    // Only await play() if not already playing (priming usually started it) —
+    // skipping the await keeps the click's transient activation maximally fresh.
+    if (pip.video.paused) { try { await pip.video.play(); } catch (e) {} }
+
+    if (typeof pip.video.requestPictureInPicture === 'function') {
+        await pip.video.requestPictureInPicture();
+    } else if (typeof pip.video.webkitSetPresentationMode === 'function') {
+        pip.video.webkitSetPresentationMode('picture-in-picture');
+    } else {
+        throw new Error('no-video-pip-api');
+    }
+
+    // Cancelled while awaiting PiP entry → undo immediately.
+    if (!pip._opening) {
+        try {
+            if (document.pictureInPictureElement === pip.video) document.exitPictureInPicture().catch(() => {});
+        } catch (e) {}
+        return;
+    }
+
+    pip.active = true;
+    _pipShowBlackout(true);
+    _pipReflectButton();
+    pip._lastFrameAt = performance.now();
+
+    // Background backstop: the main rAF throttles when the tab is hidden, so a
+    // timer keeps the stream (and the visible MM:SS) alive while you're away.
+    if (pip._videoInterval) clearInterval(pip._videoInterval);
+    pip._videoInterval = setInterval(() => {
+        const p = gameState.pip;
+        if (p.active && p.mode === 'video' && performance.now() - (p._lastFrameAt || 0) > 200) {
+            try { updatePiPCamera(); renderPiPInto(p.ctx, p.canvas, p.dpr); p._lastFrameAt = performance.now(); } catch (e) {}
+        }
+    }, 300);
+}
+
+function closePiPMode() {
+    const pip = gameState.pip;
+    if (pip._closing) return;
+    pip._opening = false;   // cancel any in-flight openPiPMode awaiting requestWindow/PiP
+    if (!pip.active && pip.mode === null) { _pipReflectButton(); return; }
+    pip._closing = true;
+
+    pip.active = false;
+
+    // Document PiP window
+    if (pip.win) {
+        try { if (pip.rafId) pip.win.cancelAnimationFrame(pip.rafId); } catch (e) {}
+        try { if (!pip.win.closed) pip.win.close(); } catch (e) {}
+    }
+    pip.rafId = 0;
+    pip.win = null; pip.doc = null;
+
+    // Video PiP
+    if (pip._videoInterval) { clearInterval(pip._videoInterval); pip._videoInterval = 0; }
+    if (pip.video) {
+        try {
+            if (document.pictureInPictureElement === pip.video && document.exitPictureInPicture) {
+                document.exitPictureInPicture().catch(() => {});
+            } else if (typeof pip.video.webkitSetPresentationMode === 'function'
+                       && pip.video.webkitPresentationMode === 'picture-in-picture') {
+                pip.video.webkitSetPresentationMode('inline');
+            }
+        } catch (e) {}
+        try { pip.video.pause(); } catch (e) {}
+        try { if (pip.stream) pip.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+        try { pip.video.srcObject = null; } catch (e) {}
+    }
+    pip.stream = null;
+    pip._videoPrimed = false;   // re-prime fresh next time the button shows
+
+    pip.ctx = null; pip.canvas = null;
+    pip.timerEl = null; pip.taskEl = null;
+    _pipCloseFallback();
+    pip.mode = null;
+    _pipShowBlackout(false);
+    _pipReflectButton();
+    pip._closing = false;
+}
+
+function togglePiPMode() {
+    if (gameState.pip.active) closePiPMode();
+    else openPiPMode();
+}
+
+function _pipShowBlackout(show) {
+    if (gameState.pip.blackout) gameState.pip.blackout.classList.toggle('active', !!show);
+    document.body.classList.toggle('pip-active', !!show);
+}
+
+function _pipReflectButton() {
+    if (gameState.pip.btn) gameState.pip.btn.classList.toggle('active', !!gameState.pip.active);
+}
+
+// ── In-page fallback (browsers without Document PiP) ─────────────────────────
+function _pipOpenFallback() {
+    const pip = gameState.pip;
+    const el = pip.fallbackEl;
+    if (!el) return;
+    pip.canvas = document.getElementById('pip-fb-canvas');
+    pip.ctx = pip.canvas.getContext('2d');
+    pip.timerEl = document.getElementById('pip-fb-timer');
+    pip.taskEl = document.getElementById('pip-fb-task');
+    pip.mode = 'fallback';
+    pip.active = true;
+    pip._camInit = false;
+    pip.targetZoomLevel = pip.zoomLevel = 2.4;
+    el.classList.add('active');
+    _pipShowBlackout(true);
+    _pipReflectButton();
+    _pipResizeFallbackCanvas();
+}
+
+function _pipCloseFallback() {
+    if (gameState.pip.fallbackEl) gameState.pip.fallbackEl.classList.remove('active');
+}
+
+function _pipResizeFallbackCanvas() {
+    const pip = gameState.pip, c = pip.canvas;
+    if (!c) return;
+    const dpr = window.devicePixelRatio || 1;
+    pip.dpr = dpr;
+    const w = c.clientWidth, h = c.clientHeight;
+    if (w <= 0 || h <= 0) return;
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+}
+
+function _pipSetupFallback() {
+    const el = document.getElementById('pip-fallback');
+    if (!el) return;
+    const bar = document.getElementById('pip-fb-bar') || el;
+    const closeBtn = document.getElementById('pip-fb-close');
+    if (closeBtn) closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closePiPMode(); });
+
+    // Drag by the top bar. A small movement threshold means a plain click on
+    // the bar (or a jittery click on the close button) never nudges the panel.
+    let armed = false, dragging = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    bar.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('#pip-fb-close')) return;
+        armed = true; dragging = false;
+        const r = el.getBoundingClientRect();
+        ox = r.left; oy = r.top; sx = e.clientX; sy = e.clientY;
+    });
+    bar.addEventListener('pointermove', (e) => {
+        if (!armed) return;
+        if (!dragging) {
+            if (Math.hypot(e.clientX - sx, e.clientY - sy) < 4) return;
+            dragging = true;
+            el.classList.add('dragging');
+            el.style.left = ox + 'px'; el.style.top = oy + 'px';
+            el.style.right = 'auto'; el.style.bottom = 'auto';
+            try { bar.setPointerCapture(e.pointerId); } catch (_) {}
+        }
+        const maxX = window.innerWidth - el.offsetWidth, maxY = window.innerHeight - el.offsetHeight;
+        el.style.left = Math.max(0, Math.min(maxX, ox + e.clientX - sx)) + 'px';
+        el.style.top = Math.max(0, Math.min(maxY, oy + e.clientY - sy)) + 'px';
+    });
+    const endDrag = (e) => { armed = false; dragging = false; el.classList.remove('dragging'); try { bar.releasePointerCapture(e.pointerId); } catch (_) {} };
+    bar.addEventListener('pointerup', endDrag);
+    bar.addEventListener('pointercancel', endDrag);
+
+    // Resize handle → keep backing store in sync.
+    const c = document.getElementById('pip-fb-canvas');
+    if (window.ResizeObserver && c) {
+        const ro = new ResizeObserver(() => {
+            if (gameState.pip.active && gameState.pip.mode === 'fallback') _pipResizeFallbackCanvas();
+        });
+        ro.observe(c);
+    }
+    el.addEventListener('wheel', (e) => {
+        if (!gameState.pip.active) return;
+        e.preventDefault();
+        const d = e.deltaY > 0 ? -0.2 : 0.2;
+        gameState.pip.targetZoomLevel = Math.max(1.3, Math.min(4.0, gameState.pip.targetZoomLevel + d));
+    }, { passive: false });
+}
+
+// Per-frame: drive button visibility, auto-close, and (for fallback / stalled
+// window) drive the render from the main loop. Called early in gameLoop so it
+// runs even while a minigame's early-return path is active.
+function updatePiPLifecycle() {
+    const pip = gameState.pip;
+    const allowed = isPiPAllowed();
+
+    if (pip.btn) {
+        // Shown on mobile too: Android Chrome gets real Video PiP; iOS Safari
+        // (no Document PiP / captureStream) gets the in-page panel.
+        pip.btn.classList.toggle('visible', allowed && !pip.active);
+    }
+
+    // Pre-warm the Video-PiP pipeline while the button is available so the click
+    // can enter PiP instantly (self-guards; only acts on the Video-PiP path —
+    // i.e. Android Chrome and any browser with captureStream + PiP).
+    if (allowed && !pip.active) _pipPrimeVideo();
+
+    if (pip.active && !allowed) { closePiPMode(); return; }
+    if (!pip.active) return;
+
+    if (pip.mode === 'fallback' || pip.mode === 'video') {
+        // In-page surface / video-stream source: the main loop drives it each
+        // frame (smooth while foregrounded; the video backstop covers hidden tabs).
+        updatePiPCamera();
+        renderPiPInto(pip.ctx, pip.canvas, pip.dpr);
+        _pipUpdateChrome();
+        pip._lastFrameAt = performance.now();
+    } else if (pip.mode === 'window') {
+        // A popup the user closed via the OS chrome → tear down cleanly.
+        if (pip.win && pip.win.closed) { closePiPMode(); return; }
+        // Watchdog: if the PiP window's own rAF hasn't ticked recently (e.g. the
+        // opener is focused and the OS paused the PiP surface), render here too.
+        if (performance.now() - (pip._lastFrameAt || 0) > 120) {
+            updatePiPCamera();
+            renderPiPInto(pip.ctx, pip.canvas, pip.dpr);
+            _pipUpdateChrome();
+            pip._lastFrameAt = performance.now();
+        }
+    }
+}
+
+function setupPiPUI() {
+    const pip = gameState.pip;
+    pip.supported = pipSupported();
+    pip.btn = document.getElementById('pip-toggle-btn');
+    pip.blackout = document.getElementById('pip-blackout');
+    pip.fallbackEl = document.getElementById('pip-fallback');
+
+    if (pip.btn) pip.btn.addEventListener('click', () => togglePiPMode());
+    const endBtn = document.getElementById('pip-blackout-end');
+    if (endBtn) endBtn.addEventListener('click', () => closePiPMode());
+
+    // Close the PiP window if the opener navigates away / logs out / refreshes.
+    window.addEventListener('pagehide', () => {
+        if (gameState.pip.win) { try { gameState.pip.win.close(); } catch (e) {} }
+    });
+
+    _pipSetupFallback();
+}
 
 function spPath(sub) { return lobbyPath(`sharedPomo/${sub}`); }
 
