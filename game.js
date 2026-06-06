@@ -11117,6 +11117,11 @@ function initPrayerSystem() {
     get(ref(database, `users/${gameState.userId}/prayerLocation`)).then(snap => {
         const loc = snap.val();
         if (loc && (loc.city || loc.country)) {
+            // Restore persisted lat/lon (from automatic location) for precise API calls
+            if (loc.lat != null && loc.lon != null) {
+                loc._lat = loc.lat;
+                loc._lon = loc.lon;
+            }
             gameState.prayer.location = loc;
             document.getElementById('prayer-blur-overlay')?.classList.add('hidden');
             fetchPrayerTimes();
@@ -11682,9 +11687,10 @@ function setupPrayerLocationModal() {
                 city = ipResult.city; country = ipResult.country;
             }
             const loc = { city, country };
-            // Store lat/lon only in memory for API call, not in Firebase
             loc._lat = coords.lat; loc._lon = coords.lon;
-            savePrayerLocation(loc);
+            // Persist lat/lon to Firebase for automatic location so precise
+            // coords survive reloads (auto-detected city is often generic)
+            savePrayerLocation(loc, true);
             modal.classList.add('hidden');
             if (statusEl) statusEl.textContent = '';
         } catch (e) {
@@ -11735,12 +11741,16 @@ function setupPrayerLocationModal() {
     });
 }
 
-function savePrayerLocation(loc) {
+function savePrayerLocation(loc, persistCoords) {
     gameState.prayer.location = loc;
     gameState.prayer.lastFetchDate = null; // force re-fetch
     gameState.prayer._sirajOverrideApplied = false;
-    // Only save city + country to Firebase (no lat/lon for privacy)
+    // Save city + country; also persist lat/lon for automatic location
     const fbData = { city: loc.city || '', country: loc.country || '' };
+    if (persistCoords && loc._lat != null && loc._lon != null) {
+        fbData.lat = loc._lat;
+        fbData.lon = loc._lon;
+    }
     update(ref(database), { [`users/${gameState.userId}/prayerLocation`]: fbData });
     document.getElementById('prayer-blur-overlay')?.classList.add('hidden');
     fetchPrayerTimes();
