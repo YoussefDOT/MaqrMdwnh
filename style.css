@@ -1988,7 +1988,7 @@ body.is-mobile .settings-panel {
     will-change: transform;
     transition: opacity 0.3s ease, transform 0.3s ease;
 }
-body.is-mobile .mobile-joystick.focus-hidden {
+.mobile-joystick.focus-hidden {
     opacity: 0;
     pointer-events: none;
     transform: translateY(24px);
@@ -2184,8 +2184,11 @@ body.is-mobile .mobile-joystick.focus-hidden {
 /* ══════════════════════════════════════════════════════
    MOBILE-SPECIFIC OVERRIDES  (body.is-mobile)
    ══════════════════════════════════════════════════════ */
-body.is-mobile .mobile-joystick { display: flex; }
 body.is-mobile .mobile-drawer-handle { display: flex; }
+
+/* Control circle (joystick) — shown on any touch device or when forced on via
+   settings, independent of the width-based is-mobile layout. */
+body.joystick-enabled .mobile-joystick { display: flex; }
 
 /* User card on mobile: compact, top-right */
 body.is-mobile .user-card {

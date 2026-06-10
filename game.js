@@ -7,8 +7,38 @@ function isMobile() { return window.innerWidth < MOBILE_BREAKPOINT; }
 // ─── Device-local settings keys (used before init() is called) ───────────────
 const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'low' | 'high'
 const SETTINGS_NAMES_KEY    = 'mdwnh_hide_names';        // '0' = show, '1' = hide
+const SETTINGS_JOYSTICK_KEY = 'mdwnh_joystick_mode';    // 'auto' | 'always'
+
+// ─── Touch / joystick detection ──────────────────────────────────────────────
+// `is-mobile` is width-based and drives the whole mobile layout. But the control
+// circle (joystick) must also appear on touch devices that report a wide viewport
+// — e.g. an iPad in landscape (width >= 1024) which would otherwise be treated as
+// a desktop. Joystick visibility is therefore decoupled from `is-mobile`.
+function isTouchDevice() {
+    return (navigator.maxTouchPoints || 0) > 0
+        || ('ontouchstart' in window)
+        || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+}
+function getJoystickMode() {
+    return localStorage.getItem(SETTINGS_JOYSTICK_KEY) === 'always' ? 'always' : 'auto';
+}
+function setJoystickMode(mode) {
+    localStorage.setItem(SETTINGS_JOYSTICK_KEY, mode === 'always' ? 'always' : 'auto');
+    updateJoystickVisibility();
+}
+// Should the control circle be shown right now?
+// auto   → any touch-capable device (incl. iPad landscape) or narrow viewport
+// always → forced on, even on a desktop (manual fallback)
+function joystickShouldShow() {
+    return getJoystickMode() === 'always' || isMobile() || isTouchDevice();
+}
+function updateJoystickVisibility() {
+    document.body.classList.toggle('joystick-enabled', joystickShouldShow());
+}
+
 function setMobileClass() {
     document.body.classList.toggle('is-mobile', isMobile());
+    updateJoystickVisibility();
 }
 // ─── Lobby configuration ─────────────────────────────────────────────────────
 // To add a new lobby: add one entry.  The key is the internal lobby ID and must
@@ -346,7 +376,21 @@ class FocusAudioEngine {
             wind: null,
             ocean: null,
         };
+        // Source files for the file-based ambient sounds. Used both for buffer
+        // decoding (background-safe steady-state) and for instant streaming start
+        // via a media element before the buffer has finished downloading.
+        this.focusFiles = {
+            rain:         'Sound/Focus Sounds/Rain.mp3',
+            rain_muffled: 'Sound/Focus Sounds/Muffled rain.mp3',
+            fire:         'Sound/Focus Sounds/Boiling.mp3',
+            forest:       'Sound/Focus Sounds/Forest.mp3',
+            brown:        'Sound/Focus Sounds/Brown Noise.mp3',
+            wind:         'Sound/Focus Sounds/Wind.mp3',
+            ocean:        'Sound/Focus Sounds/Ocean.mp3',
+        };
     }
+    // file-based ambient sound keys (everything except synthesized 'plane')
+    get fileSoundKeys() { return ['rain', 'rain_muffled', 'fire', 'forest', 'brown', 'wind', 'ocean']; }
 
     init() {
         if (this.ctx) return;
@@ -382,15 +426,7 @@ class FocusAudioEngine {
                 this.ctx.resume().then(() => {
                     for (const [name, sound] of Object.entries(this.sounds)) {
                         if (!sound.active) continue;
-                        if (sound.nodes) {
-                            try { sound.nodes.source?.stop(); } catch(e) {}
-                            try { sound.nodes.gainNode?.disconnect(); } catch(e) {}
-                            sound.nodes.secondaryNodes?.forEach(n => {
-                                try { n.stop(); } catch(e) {}
-                                try { n.disconnect(); } catch(e) {}
-                            });
-                            sound.nodes = null;
-                        }
+                        this._teardownNodes(sound);
                         this.startSound(name);
                     }
                 }).catch(e => {});
@@ -441,18 +477,9 @@ class FocusAudioEngine {
     }
 
     async loadFocusSoundBuffers() {
-        const files = {
-            rain:         'Sound/Focus Sounds/Rain.mp3',
-            rain_muffled: 'Sound/Focus Sounds/Muffled rain.mp3',
-            fire:         'Sound/Focus Sounds/Boiling.mp3',
-            forest:       'Sound/Focus Sounds/Forest.mp3',
-            brown:        'Sound/Focus Sounds/Brown Noise.mp3',
-            wind:         'Sound/Focus Sounds/Wind.mp3',
-            ocean:        'Sound/Focus Sounds/Ocean.mp3',
-        };
-        // Load all sounds in parallel — each starts playing as soon as its own buffer is ready
-        // (previously sequential: one slow file blocked all others on mobile)
-        await Promise.all(Object.entries(files).map(async ([key, url]) => {
+        // Load all sounds in parallel — each becomes available as soon as its own
+        // buffer is ready (previously sequential: one slow file blocked all others).
+        await Promise.all(Object.entries(this.focusFiles).map(async ([key, url]) => {
             try {
                 const response = await fetch(url);
                 const arrayBuffer = await response.arrayBuffer();
@@ -460,15 +487,122 @@ class FocusAudioEngine {
                 // Remove loading indicator now that this sound is buffered
                 const el = document.querySelector(`.sound-item[data-sound="${key}"]`);
                 if (el) el.classList.remove('sound-loading');
-                // If the user toggled this sound on while it was still loading, start it now
+                // If the user toggled this sound on while it was still loading, switch
+                // over to the seamless crossfade loop now that the buffer has arrived.
                 const sound = this.sounds[key];
-                if (sound?.active && !sound.nodes && this.ctx.state === 'running') {
-                    this.startSound(key);
+                if (sound?.active && this.ctx?.state === 'running') {
+                    if (sound.nodes?.mediaEl) {
+                        this._handoffToBuffer(key);   // crossfade: streaming → seamless loop
+                    } else if (!sound.nodes) {
+                        this.startSound(key);
+                    }
                 }
             } catch(e) {
                 console.log(`Failed to load focus sound [${key}]:`, e);
             }
         }));
+    }
+
+    // Schedule a gap-free, cross-dissolving loop of `buf` into `gainNode`.
+    // Instead of a hard loopStart/loopEnd jump (which can click), successive
+    // copies of the buffer overlap by a short crossfade so the seam is inaudible.
+    // Returns a loop-state handle; set `.stopped = true` and clear `.timer` to end it.
+    _scheduleCrossfadeLoop(name, buf, gainNode) {
+        const ctx = this.ctx;
+        const XF = Math.max(0.15, Math.min(0.8, buf.duration * 0.18)); // crossfade seconds
+        const period = Math.max(0.2, buf.duration - XF);               // spacing between starts
+        const loop = { stopped: false, timer: null, sources: [], nextTime: ctx.currentTime + 0.03 };
+
+        const startSegment = (when) => {
+            const src = ctx.createBufferSource();
+            src.buffer = buf;
+            const seg = ctx.createGain();
+            src.connect(seg);
+            seg.connect(gainNode);
+            // cross-dissolve envelope: fade in → hold → fade out (overlaps neighbours)
+            seg.gain.setValueAtTime(0.0001, when);
+            seg.gain.linearRampToValueAtTime(1, when + XF);
+            seg.gain.setValueAtTime(1, when + period);
+            seg.gain.linearRampToValueAtTime(0.0001, when + buf.duration);
+            try { src.start(when); } catch(e) { try { seg.disconnect(); } catch(_){} return; }
+            try { src.stop(when + buf.duration + 0.05); } catch(e) {}
+            const entry = { src, seg };
+            loop.sources.push(entry);
+            src.onended = () => {
+                try { src.disconnect(); } catch(e) {}
+                try { seg.disconnect(); } catch(e) {}
+                const i = loop.sources.indexOf(entry);
+                if (i >= 0) loop.sources.splice(i, 1);
+            };
+        };
+
+        // A look-ahead scheduler keeps ~1.5s of segments queued. The tab stays
+        // "audible" while a sound plays, so its timers aren't throttled in the
+        // background — the look-ahead is just a safety margin.
+        const scheduler = () => {
+            if (loop.stopped) return;
+            const horizon = ctx.currentTime + 1.5;
+            while (loop.nextTime < horizon) {
+                startSegment(loop.nextTime);
+                loop.nextTime += period;
+            }
+            loop.timer = setTimeout(scheduler, 300);
+        };
+        scheduler();
+        return loop;
+    }
+
+    // Crossfade from the streaming media element to the seamless buffer loop once
+    // the buffer has finished decoding. The loop's first segment fades in while the
+    // media element fades out, so the listener hears no transition.
+    _handoffToBuffer(name) {
+        const sound = this.sounds[name];
+        const buf = this.focusBuffers[name];
+        if (!sound?.nodes?.mediaEl || !buf) return;
+        const gainNode = sound.nodes.gainNode;
+        const { mediaEl, mediaGain, mediaSource } = sound.nodes;
+
+        sound.nodes.loopState = this._scheduleCrossfadeLoop(name, buf, gainNode);
+        sound.nodes.mediaEl = null;
+        sound.nodes.mediaGain = null;
+        sound.nodes.mediaSource = null;
+
+        const t = this.ctx.currentTime;
+        try {
+            mediaGain.gain.cancelScheduledValues(t);
+            mediaGain.gain.setValueAtTime(mediaGain.gain.value, t);
+            mediaGain.gain.linearRampToValueAtTime(0.0001, t + 0.8);
+        } catch (e) {}
+        setTimeout(() => {
+            try { mediaEl.pause(); } catch(e) {}
+            try { mediaSource.disconnect(); } catch(e) {}
+            try { mediaGain.disconnect(); } catch(e) {}
+            try { mediaEl.src = ''; } catch(e) {}
+        }, 950);
+    }
+
+    // Immediately tear down all audio nodes for a sound (no fade). Used when
+    // rebuilding after the context was suspended in a background tab.
+    _teardownNodes(sound) {
+        if (!sound.nodes) return;
+        const n = sound.nodes;
+        sound.nodes = null;
+        if (n.loopState) {
+            n.loopState.stopped = true;
+            if (n.loopState.timer) clearTimeout(n.loopState.timer);
+            n.loopState.sources.forEach(({ src, seg }) => {
+                try { src.stop(); } catch(e) {}
+                try { src.disconnect(); } catch(e) {}
+                try { seg.disconnect(); } catch(e) {}
+            });
+        }
+        try { n.source?.stop(); } catch(e) {}
+        try { n.source?.disconnect(); } catch(e) {}
+        n.secondaryNodes?.forEach(x => { try { x.stop(); } catch(e) {} try { x.disconnect(); } catch(e) {} });
+        if (n.mediaEl) { try { n.mediaEl.pause(); } catch(e) {} try { n.mediaEl.src = ''; } catch(e) {} }
+        try { n.mediaSource?.disconnect(); } catch(e) {}
+        try { n.mediaGain?.disconnect(); } catch(e) {}
+        try { n.gainNode?.disconnect(); } catch(e) {}
     }
 
     playEffect(name) {
@@ -557,18 +691,32 @@ class FocusAudioEngine {
         let source = null;
         let secondaryNodes = [];
 
-        if (['rain', 'rain_muffled', 'fire', 'forest', 'brown', 'wind', 'ocean'].includes(name)) {
+        if (this.fileSoundKeys.includes(name)) {
             const buf = this.focusBuffers?.[name];
-            if (!buf) { gainNode.disconnect(); return; }
-            source = this.ctx.createBufferSource();
-            source.buffer = buf;
-            source.loop = true;
-            // Skip fade-in at start and fade-out at end for seamless looping
-            const fadePad = Math.min(2.0, buf.duration * 0.08);
-            source.loopStart = fadePad;
-            source.loopEnd = buf.duration - fadePad;
-            source.connect(gainNode);
-            source.start(0, fadePad);
+            if (buf) {
+                // Buffer ready → start the seamless cross-dissolving loop immediately.
+                const loopState = this._scheduleCrossfadeLoop(name, buf, gainNode);
+                sound.nodes = { gainNode, loopState, secondaryNodes: [] };
+            } else {
+                // Buffer still downloading → stream instantly via a media element so
+                // the sound starts now, then hand off to the buffer loop when ready.
+                let mediaEl, mediaSource, mediaGain;
+                try {
+                    mediaEl = new Audio(this.focusFiles[name]);
+                    mediaEl.loop = true;          // temporary fallback loop until handoff
+                    mediaEl.preload = 'auto';
+                    mediaSource = this.ctx.createMediaElementSource(mediaEl);
+                    mediaGain = this.ctx.createGain();
+                    mediaGain.gain.setValueAtTime(1, this.ctx.currentTime);
+                    mediaSource.connect(mediaGain);
+                    mediaGain.connect(gainNode);
+                    mediaEl.play().catch(() => {});
+                } catch (e) {
+                    gainNode.disconnect();
+                    return;
+                }
+                sound.nodes = { gainNode, loopState: null, mediaEl, mediaSource, mediaGain, secondaryNodes: [] };
+            }
         } else if (name === 'plane') {
             source = this.createBrownNoiseNode();
             const filter = this.ctx.createBiquadFilter();
@@ -596,9 +744,12 @@ class FocusAudioEngine {
             osc2.start();
 
             secondaryNodes.push(filter, osc1, osc1Gain, osc2, osc2Gain);
+            sound.nodes = { source, gainNode, secondaryNodes };
         }
 
-        sound.nodes = { source, gainNode, secondaryNodes };
+        // Unknown sound key (no branch ran) — bail without leaving a dangling node.
+        if (!sound.nodes) { gainNode.disconnect(); return; }
+
         const scaledVol = sound.volume * this.baseVolumeScale[name];
         try {
             gainNode.gain.cancelScheduledValues(this.ctx.currentTime);
@@ -613,10 +764,16 @@ class FocusAudioEngine {
         const sound = this.sounds[name];
         if (!sound.nodes) return;
 
-        const gainNode = sound.nodes.gainNode;
-        const nodesToStop = [sound.nodes.source, ...sound.nodes.secondaryNodes];
+        const n = sound.nodes;
         sound.nodes = null; // immediately clear so startSound can restart without blocking
 
+        // Stop scheduling new loop segments right away; existing ones ring out under the fade.
+        if (n.loopState) {
+            n.loopState.stopped = true;
+            if (n.loopState.timer) clearTimeout(n.loopState.timer);
+        }
+
+        const gainNode = n.gainNode;
         try {
             gainNode.gain.cancelScheduledValues(this.ctx.currentTime);
             gainNode.gain.setValueAtTime(gainNode.gain.value, this.ctx.currentTime);
@@ -626,10 +783,17 @@ class FocusAudioEngine {
         }
 
         setTimeout(() => {
-            nodesToStop.forEach(n => {
-                try { n.stop(); } catch(e) {}
-                try { n.disconnect(); } catch(e) {}
+            n.loopState?.sources.forEach(({ src, seg }) => {
+                try { src.stop(); } catch(e) {}
+                try { src.disconnect(); } catch(e) {}
+                try { seg.disconnect(); } catch(e) {}
             });
+            try { n.source?.stop(); } catch(e) {}
+            try { n.source?.disconnect(); } catch(e) {}
+            n.secondaryNodes?.forEach(x => { try { x.stop(); } catch(e) {} try { x.disconnect(); } catch(e) {} });
+            if (n.mediaEl) { try { n.mediaEl.pause(); } catch(e) {} try { n.mediaEl.src = ''; } catch(e) {} }
+            try { n.mediaSource?.disconnect(); } catch(e) {}
+            try { n.mediaGain?.disconnect(); } catch(e) {}
             try { gainNode.disconnect(); } catch(e) {}
         }, 600);
     }
@@ -3307,20 +3471,17 @@ function setMobileFocusMode(active) {
     const card     = document.getElementById('user-card');
     const logout   = document.getElementById('logout-btn');
     const joystick = document.getElementById('mobile-joystick');
-    if (active && isMobile()) {
-        if (card)     card.classList.add('focus-hidden');
-        if (logout)   logout.classList.add('focus-hidden');
-        if (joystick) joystick.classList.add('focus-hidden');
-    } else {
-        if (card)     card.classList.remove('focus-hidden');
-        if (logout)   logout.classList.remove('focus-hidden');
-        if (joystick) joystick.classList.remove('focus-hidden');
-    }
+    const hideCard = active && isMobile();
+    if (card)     card.classList.toggle('focus-hidden', hideCard);
+    if (logout)   logout.classList.toggle('focus-hidden', hideCard);
+    // The joystick hides during focus on any device where it's actually shown
+    // (e.g. iPad landscape, where isMobile() is false but the circle is visible).
+    if (joystick) joystick.classList.toggle('focus-hidden', active && joystickShouldShow());
 }
 
 /** Show or hide the race d-pad, and toggle joystick visibility */
 function showMobileRaceButtons(show) {
-    if (!isMobile()) return;
+    if (!joystickShouldShow()) return;
     const dpad = document.getElementById('mobile-race-btns');
     const joystick = document.getElementById('mobile-joystick');
     if (dpad) dpad.classList.toggle('hidden', !show);
@@ -8835,7 +8996,17 @@ function setupSettingsUI() {
     const graphicsLabel = document.getElementById('settings-graphics-label');
     const namesBtn      = document.getElementById('settings-names-btn');
     const namesLabel    = document.getElementById('settings-names-label');
+    const joystickBtn   = document.getElementById('settings-joystick-btn');
+    const joystickLabel = document.getElementById('settings-joystick-label');
     if (!settingsBtn || !panel) return;
+
+    function _reflectJoystick() {
+        if (!joystickBtn) return;
+        const mode = getJoystickMode();
+        joystickBtn.dataset.value = mode;
+        joystickBtn.classList.toggle('settings-toggle-on', mode === 'always');
+        if (joystickLabel) joystickLabel.textContent = mode === 'always' ? 'دائماً' : 'تلقائي';
+    }
 
     function _reflectGraphics() {
         const q = getGraphicsQuality();
@@ -8876,6 +9047,13 @@ function setupSettingsUI() {
         _reflectNames();
     });
 
+    if (joystickBtn) {
+        joystickBtn.addEventListener('click', () => {
+            setJoystickMode(getJoystickMode() === 'always' ? 'auto' : 'always');
+            _reflectJoystick();
+        });
+    }
+
     settingsBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         panel.classList.toggle('hidden');
@@ -8898,6 +9076,7 @@ function setupSettingsUI() {
 
     _reflectGraphics();
     _reflectNames();
+    _reflectJoystick();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
