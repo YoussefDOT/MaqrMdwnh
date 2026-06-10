@@ -2143,6 +2143,15 @@ function formatTime(sec) {
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
+// Countdown like "1:23:45" (h:mm:ss) when >= 1h, else "23:45" (mm:ss).
+function formatPrayerCountdown(ms) {
+    let sec = Math.max(0, Math.floor((ms || 0) / 1000));
+    const h = Math.floor(sec / 3600); sec -= h * 3600;
+    const m = Math.floor(sec / 60);   const s = sec % 60;
+    const pad = (n) => n.toString().padStart(2, '0');
+    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
 function formatDurationArabic(totalMins) {
     totalMins = Math.max(0, Math.floor(totalMins));
     if (totalMins < 60) return `${totalMins} دقيقة`;
@@ -8265,7 +8274,14 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #07070a;
   color: rgba(255,255,255,0.55); direction: rtl; max-width: 100%;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   text-shadow: 0 1px 6px rgba(0,0,0,0.6); }
-#pip-close { position: absolute; bottom: 14px; left: 14px; display: flex;
+/* Next prayer + live countdown — sits under the task, subtle so it never competes with the timer */
+#pip-prayer { display: none; align-items: center; gap: 6px; margin-top: 5px;
+  font-size: clamp(10px, 3.2vw, 13px); font-weight: 600; direction: rtl;
+  color: rgba(59,185,171,0.92); text-shadow: 0 1px 6px rgba(0,0,0,0.6); }
+#pip-prayer.show { display: flex; }
+#pip-prayer .pip-pr-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(59,185,171,0.7); flex: 0 0 auto; }
+#pip-prayer .pip-pr-cd { color: rgba(255,255,255,0.6); font-variant-numeric: tabular-nums; }
+#pip-close { position: absolute; bottom: 14px; left: 14px; z-index: 5; display: flex;
   align-items: center; gap: 7px; padding: 9px 15px; border-radius: 50px;
   cursor: pointer; background: rgba(18,18,18,0.68);
   -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
@@ -8274,7 +8290,109 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #07070a;
   box-shadow: 0 4px 24px rgba(0,0,0,0.3); transition: transform .25s cubic-bezier(0.34,1.56,0.64,1), background .2s, color .2s; }
 #pip-close:hover { background: rgba(225,53,46,0.55); border-color: rgba(225,53,46,0.4); color: #fff; transform: scale(1.04); }
 #pip-close svg { width: 15px; height: 15px; }
+
+/* ── Compact control bar (focus sounds + YouTube) ── */
+#pip-controls { position: absolute; bottom: 12px; right: 12px; z-index: 5;
+  display: flex; align-items: center; gap: 8px; direction: ltr;
+  max-width: calc(100% - 130px); }
+#pip-sounds { display: flex; align-items: center; gap: 4px; padding: 5px 6px;
+  border-radius: 50px; background: rgba(18,18,18,0.62);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+  overflow-x: auto; scrollbar-width: none; max-width: 100%; }
+#pip-sounds::-webkit-scrollbar { display: none; }
+.pip-chip { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.05);
+  color: rgba(255,255,255,0.55); font-size: 13px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; padding: 0;
+  transition: background .18s, color .18s, transform .15s; }
+.pip-chip:hover { background: rgba(255,255,255,0.12); }
+.pip-chip:active { transform: scale(0.9); }
+.pip-chip.active { background: rgba(59,185,171,0.24); border-color: rgba(59,185,171,0.4); color: rgba(120,230,215,0.95); }
+.pip-chip.pip-chip-more { font-size: 15px; color: rgba(255,255,255,0.6); }
+#pip-yt { display: flex; align-items: center; gap: 4px; padding: 5px 6px;
+  border-radius: 50px; background: rgba(18,18,18,0.62);
+  -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
+  border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 4px 20px rgba(0,0,0,0.3); flex: 0 0 auto; }
+.pip-yt-btn { width: 28px; height: 28px; border-radius: 50%; border: none; padding: 0; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.8); transition: background .18s, transform .15s; }
+.pip-yt-btn:hover { background: rgba(255,255,255,0.14); }
+.pip-yt-btn:active { transform: scale(0.9); }
+.pip-yt-btn svg { width: 14px; height: 14px; }
+
+/* ── Popovers (open above their buttons) ── */
+.pip-pop { position: absolute; bottom: 50px; z-index: 6; display: none;
+  flex-direction: column; gap: 9px; padding: 12px; border-radius: 16px; direction: rtl;
+  width: 210px; max-height: 230px; overflow-y: auto;
+  background: rgba(16,16,20,0.95); -webkit-backdrop-filter: blur(24px) saturate(1.6); backdrop-filter: blur(24px) saturate(1.6);
+  border: 1px solid rgba(255,255,255,0.1); box-shadow: 0 12px 40px rgba(0,0,0,0.6); }
+.pip-pop.show { display: flex; }
+#pip-snd-pop { right: 12px; }
+#pip-yt-pop { right: 12px; }
+.pip-pop-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.7); margin-bottom: 2px; }
+.pip-slider-row { display: flex; flex-direction: column; gap: 4px; }
+.pip-slider-row .lbl { display: flex; justify-content: space-between; align-items: center;
+  font-size: 11px; font-weight: 600; }
+.pip-slider-row .lbl .nm { color: rgba(255,255,255,0.6); }
+.pip-slider-row .lbl .nm.on { color: rgba(120,230,215,0.95); }
+.pip-pop input[type=range] { width: 100%; height: 4px; cursor: pointer; accent-color: rgba(59,185,171,0.9); }
+.pip-pop input[type=text] { width: 100%; padding: 8px 10px; border-radius: 9px; direction: ltr;
+  background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); color: #fff;
+  font-family: inherit; font-size: 12px; }
+.pip-pop input[type=text]::placeholder { color: rgba(255,255,255,0.3); }
+.pip-pop .pip-pop-btn { padding: 8px 10px; border-radius: 9px; border: none; cursor: pointer;
+  background: rgba(59,185,171,0.22); color: rgba(120,230,215,0.95); font-family: inherit; font-size: 12px; font-weight: 700; }
+.pip-pop .pip-pop-btn:hover { background: rgba(59,185,171,0.32); }
+
+/* Prayer screen drawn on canvas; hide DOM chrome while it's showing (window mode) */
+#pip-root.praying #pip-top,
+#pip-root.praying #pip-controls { opacity: 0; pointer-events: none; }
 `;
+
+// Focus-sound chips for the PiP control bar. Emoji glyphs keep it tiny + language-neutral.
+const PIP_SOUND_CHIPS = [
+  ['rain', '🌧', 'مطر'], ['rain_muffled', '🌫', 'مطر خافت'], ['fire', '🔥', 'موقد'],
+  ['forest', '🌲', 'غابة'], ['brown', '🟤', 'ضوضاء بنية'], ['wind', '💨', 'رياح'],
+  ['plane', '✈️', 'طائرة'], ['ocean', '🌊', 'بحر'],
+];
+
+function _pipBuildControlsHTML() {
+    const chips = PIP_SOUND_CHIPS.map(([key, emoji, label]) =>
+        `<button class="pip-chip" data-sound="${key}" title="${label}" aria-label="${label}">${emoji}</button>`
+    ).join('');
+    const sliders = PIP_SOUND_CHIPS.map(([key, , label]) =>
+        `<div class="pip-slider-row"><div class="lbl"><span class="nm" data-snd-nm="${key}">${label}</span></div>` +
+        `<input type="range" min="0" max="1" step="0.05" data-snd-vol="${key}"></div>`
+    ).join('');
+    return `
+  <div id="pip-controls">
+    <div id="pip-yt">
+      <button id="pip-yt-toggle" class="pip-yt-btn" type="button" aria-label="تشغيل/إيقاف يوتيوب">
+        <svg id="pip-yt-play" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+        <svg id="pip-yt-pause" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+      </button>
+      <button id="pip-yt-opts" class="pip-yt-btn" type="button" aria-label="خيارات يوتيوب">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+      </button>
+    </div>
+    <div id="pip-sounds">
+      ${chips}
+      <button class="pip-chip pip-chip-more" id="pip-snd-more" type="button" aria-label="مستويات الصوت" title="مستويات الصوت">≡</button>
+    </div>
+  </div>
+  <div id="pip-snd-pop" class="pip-pop">
+    <div class="pip-pop-title">مستويات أصوات التركيز</div>
+    ${sliders}
+  </div>
+  <div id="pip-yt-pop" class="pip-pop">
+    <div class="pip-pop-title">مشغّل يوتيوب</div>
+    <input id="pip-yt-url" type="text" placeholder="ألصق رابط يوتيوب…" />
+    <button id="pip-yt-load" class="pip-pop-btn" type="button">تشغيل الرابط</button>
+    <div class="pip-slider-row"><div class="lbl"><span class="nm">الصوت</span></div>
+      <input id="pip-yt-vol" type="range" min="0" max="100" step="1"></div>
+  </div>`;
+}
 
 const PIP_WINDOW_HTML = `
 <div id="pip-root">
@@ -8282,11 +8400,13 @@ const PIP_WINDOW_HTML = `
   <div id="pip-top">
     <div id="pip-timer">00:00</div>
     <div id="pip-task"></div>
+    <div id="pip-prayer"><span class="pip-pr-dot"></span><span class="pip-pr-name"></span><span class="pip-pr-cd"></span></div>
   </div>
-  <button id="pip-close" type="button" aria-label="إنهاء الوضع المصغر">
+  <button id="pip-close" type="button" aria-label="إغلاق الوضع المصغر">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-    <span>إنهاء</span>
+    <span>إغلاق</span>
   </button>
+  __PIP_CONTROLS__
 </div>`;
 
 function pipSupported() {
@@ -8300,7 +8420,7 @@ function isPiPAllowed() {
         || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
     if (!inWork) return false;
     if (gameState.azkar.active) return false;
-    if (gameState.prayer.isOverlayActive) return false;
+    // Prayer no longer closes PiP — it shows the prayer screen on the PiP canvas instead.
     if (gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active) return false;
     if (gameState._dupSessionDetected) return false;
     return true;
@@ -8373,6 +8493,44 @@ function _pipDrawCanvasChrome(ctx, W, H) {
     ctx.restore();
 }
 
+// Resolve the Arabic name for the prayer currently being shown.
+function _pipPrayerArabic() {
+    const key = (gameState.prayer.overlayPrayer || '').toLowerCase();
+    const hit = (typeof PRAYER_DATA !== 'undefined') && PRAYER_DATA.find(p => p.key.toLowerCase() === key);
+    return hit ? hit.arabic : '';
+}
+
+// Draw the prayer card onto the PiP canvas — mirrors the main-site overlay so the
+// user sees "it's prayer time" instead of just a frozen timer. Works in every mode.
+function _pipDrawPrayer(ctx, W, H) {
+    ctx.save();
+    // Darken the scene behind the card.
+    ctx.fillStyle = 'rgba(6,7,12,0.82)';
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowColor = 'rgba(0,0,0,0.6)';
+    ctx.shadowBlur = 16;
+
+    // Mosque glyph.
+    ctx.font = `${Math.round(H * 0.16)}px -apple-system, system-ui, sans-serif`;
+    ctx.fillText('🕌', W / 2, H * 0.38);
+
+    // "وقت صلاة X"
+    const name = _pipPrayerArabic();
+    ctx.direction = 'rtl';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = `700 ${Math.round(H * 0.066)}px Rubik, -apple-system, system-ui, sans-serif`;
+    ctx.fillText(name ? `وقت صلاة ${name}` : 'حان وقت الصلاة', W / 2, H * 0.56);
+
+    // Subtitle
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.font = `500 ${Math.round(H * 0.036)}px Rubik, -apple-system, system-ui, sans-serif`;
+    ctx.fillText('حان وقت الصلاة — الله أكبر', W / 2, H * 0.645);
+    ctx.restore();
+}
+
 function _pipVignette(ctx, W, H) {
     const g = ctx.createRadialGradient(W / 2, H * 0.46, Math.min(W, H) * 0.30, W / 2, H / 2, Math.max(W, H) * 0.74);
     g.addColorStop(0, 'rgba(0,0,0,0)');
@@ -8425,6 +8583,8 @@ function renderPiPInto(ctx, canvas, dpr) {
         _pipVignette(ctx, W, H);
         // Video PiP has no DOM overlay — paint the timer + label onto the frame.
         if (s.pip.mode === 'video') _pipDrawCanvasChrome(ctx, W, H);
+        // Prayer time → draw the prayer card over everything (all PiP modes).
+        if (s.prayer.isOverlayActive) _pipDrawPrayer(ctx, W, H);
         ctx.restore();  // dpr scale
     } catch (e) {
         console.error('[pip] render error (loop kept alive)', e);
@@ -8440,6 +8600,130 @@ function _pipUpdateChrome() {
     const t = _pipTimerData();
     if (pip.timerEl && pip.timerEl.textContent !== t.text) pip.timerEl.textContent = t.text;
     if (pip.taskEl && pip.taskEl.textContent !== t.label) pip.taskEl.textContent = t.label;
+
+    // Next prayer + live countdown line (DOM modes only).
+    if (pip.prayerEl) {
+        const pr = gameState.prayer;
+        if (pr.nextPrayer && pr.location && pr.times) {
+            const rem = Math.max(0, pr.nextPrayer.timeMs - Date.now());
+            pip.prayerEl.classList.add('show');
+            const nm = pip.prayerEl.querySelector('.pip-pr-name');
+            const cd = pip.prayerEl.querySelector('.pip-pr-cd');
+            if (nm) nm.textContent = pr.nextPrayer.arabic;
+            if (cd) cd.textContent = formatPrayerCountdown(rem);
+        } else {
+            pip.prayerEl.classList.remove('show');
+        }
+    }
+
+    // Prayer screen mode: hide the interactive chrome so the canvas prayer card shows.
+    if (pip.rootEl) pip.rootEl.classList.toggle('praying', !!gameState.prayer.isOverlayActive);
+
+    _pipSyncControls();
+}
+
+// Reflect focus-sound + YouTube state onto the PiP control bar (cheap; only writes on change).
+function _pipSyncControls() {
+    const pip = gameState.pip;
+    const doc = pip.doc;
+    if (!doc) return;
+    const eng = gameState.focusAudioEngine;
+    if (eng) {
+        doc.querySelectorAll('.pip-chip[data-sound]').forEach(chip => {
+            const on = !!eng.sounds[chip.dataset.sound]?.active;
+            if (chip.classList.contains('active') !== on) chip.classList.toggle('active', on);
+        });
+    }
+    const yt = gameState.focusYTPlayer;
+    const playIcon = doc.getElementById('pip-yt-play');
+    const pauseIcon = doc.getElementById('pip-yt-pause');
+    if (playIcon && pauseIcon) {
+        let playing = false;
+        try { playing = yt && yt.player && yt.player.getPlayerState && yt.player.getPlayerState() === 1; } catch (e) {}
+        playIcon.style.display = playing ? 'none' : 'block';
+        pauseIcon.style.display = playing ? 'block' : 'none';
+    }
+}
+
+// Wire the PiP control bar: sound chips, sliders popover, YouTube transport + options popover.
+// Handlers call the existing engine/player directly (same JS context as the opener).
+function _pipWireControls(doc) {
+    const eng = () => gameState.focusAudioEngine;
+    const yt  = () => gameState.focusYTPlayer;
+
+    // Sound toggle chips
+    doc.querySelectorAll('.pip-chip[data-sound]').forEach(chip => {
+        chip.addEventListener('click', () => {
+            const e = eng(); if (!e) return;
+            e.toggle(chip.dataset.sound);
+            _pipSyncControls();
+        });
+    });
+
+    const sndPop = doc.getElementById('pip-snd-pop');
+    const ytPop  = doc.getElementById('pip-yt-pop');
+    const closePops = (except) => {
+        if (sndPop && except !== sndPop) sndPop.classList.remove('show');
+        if (ytPop  && except !== ytPop)  ytPop.classList.remove('show');
+    };
+
+    // Sliders popover (volumes)
+    doc.getElementById('pip-snd-more')?.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const e = eng();
+        if (e) doc.querySelectorAll('input[data-snd-vol]').forEach(sl => {
+            const key = sl.dataset.sndVol;
+            sl.value = e.sounds[key]?.volume ?? 0.5;
+            const nm = doc.querySelector(`.nm[data-snd-nm="${key}"]`);
+            if (nm) nm.classList.toggle('on', !!e.sounds[key]?.active);
+        });
+        const open = !sndPop.classList.contains('show');
+        closePops(sndPop); sndPop.classList.toggle('show', open);
+    });
+    doc.querySelectorAll('input[data-snd-vol]').forEach(sl => {
+        sl.addEventListener('input', () => {
+            const e = eng(); if (!e) return;
+            const key = sl.dataset.sndVol;
+            // Turn the sound on if the user nudges its volume while it's off.
+            if (!e.sounds[key]?.active && parseFloat(sl.value) > 0) e.toggle(key);
+            e.updateVolume(key, sl.value);
+            const nm = doc.querySelector(`.nm[data-snd-nm="${key}"]`);
+            if (nm) nm.classList.toggle('on', !!e.sounds[key]?.active);
+            _pipSyncControls();
+        });
+    });
+
+    // YouTube transport
+    doc.getElementById('pip-yt-toggle')?.addEventListener('click', () => {
+        const y = yt(); if (!y || !y.player) return;
+        let playing = false;
+        try { playing = y.player.getPlayerState && y.player.getPlayerState() === 1; } catch (e) {}
+        if (playing) y.pause(); else y.resume();
+        setTimeout(_pipSyncControls, 60);
+    });
+    doc.getElementById('pip-yt-opts')?.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        const y = yt();
+        const vol = doc.getElementById('pip-yt-vol');
+        const url = doc.getElementById('pip-yt-url');
+        if (y && vol) vol.value = y.volume ?? 80;
+        if (y && url && y.url) url.value = y.url;
+        const open = !ytPop.classList.contains('show');
+        closePops(ytPop); ytPop.classList.toggle('show', open);
+    });
+    doc.getElementById('pip-yt-load')?.addEventListener('click', () => {
+        const y = yt(); const url = doc.getElementById('pip-yt-url');
+        if (y && url && url.value.trim()) { y.loadUrl(url.value.trim(), 0, true, false); ytPop.classList.remove('show'); }
+    });
+    doc.getElementById('pip-yt-vol')?.addEventListener('input', () => {
+        const y = yt(); const vol = doc.getElementById('pip-yt-vol');
+        if (y && vol) y.setVolumePercent(parseInt(vol.value, 10));
+    });
+
+    // Tapping the canvas / empty space closes any open popover.
+    doc.addEventListener('click', (ev) => {
+        if (!ev.target.closest('#pip-snd-pop, #pip-snd-more, #pip-yt-pop, #pip-yt-opts')) closePops(null);
+    });
 }
 
 // One render tick, driven by the PiP window's own rAF (runs at full speed even
@@ -8486,15 +8770,18 @@ function _pipSetupWindow(win) {
     style.textContent = PIP_WINDOW_CSS;
     doc.head.appendChild(style);
 
-    doc.body.innerHTML = PIP_WINDOW_HTML;
+    doc.body.innerHTML = PIP_WINDOW_HTML.replace('__PIP_CONTROLS__', _pipBuildControlsHTML());
 
     pip.doc = doc;
     pip.canvas = doc.getElementById('pip-canvas');
     pip.ctx = pip.canvas.getContext('2d');
     pip.timerEl = doc.getElementById('pip-timer');
     pip.taskEl = doc.getElementById('pip-task');
+    pip.rootEl = doc.getElementById('pip-root');
+    pip.prayerEl = doc.getElementById('pip-prayer');
 
     doc.getElementById('pip-close').addEventListener('click', () => closePiPMode());
+    _pipWireControls(doc);
     win.addEventListener('resize', _pipResizeWindowCanvas);
     win.addEventListener('pagehide', () => closePiPMode());
     win.addEventListener('unload', () => closePiPMode());
@@ -8786,6 +9073,7 @@ function closePiPMode() {
 
     pip.ctx = null; pip.canvas = null;
     pip.timerEl = null; pip.taskEl = null;
+    pip.rootEl = null; pip.prayerEl = null;
     _pipCloseFallback();
     pip.mode = null;
     _pipShowBlackout(false);
@@ -11468,14 +11756,18 @@ function updatePrayerPanelDOM() {
         }
 
         // Progress bar
+        const remaining = Math.max(0, pr.nextPrayer.timeMs - now);
         const fill = document.getElementById('prayer-progress-fill');
         if (fill) {
             const total = pr.nextPrayer.timeMs - pr.nextPrayer.prevTimeMs;
-            const remaining = Math.max(0, pr.nextPrayer.timeMs - now);
             // Fill from 0% (prayer just passed) → 100% (prayer right now)
             const pct = total > 0 ? Math.max(0, Math.min(100, ((total - remaining) / total) * 100)) : 0;
             fill.style.width = `${pct}%`;
         }
+
+        // Live countdown to the next prayer
+        const cd = document.getElementById('prayer-next-countdown');
+        if (cd) cd.textContent = formatPrayerCountdown(remaining);
     }
 }
 
