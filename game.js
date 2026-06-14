@@ -11812,54 +11812,148 @@ function initPrayerSystem() {
 
 // ── API fetch ────────────────────────────────────────────────────────────────
 
+// ── Local (offline) prayer-time computation ───────────────────────────────────
+// Self-contained astronomical calculation so prayer times work even when the
+// Aladhan API is unreachable (some ISPs / VPN exit nodes block api.aladhan.com —
+// that was the cause of the "--:--" report). Matches method=5 (Egyptian General
+// Authority of Survey): Fajr 19.5°, Isha 17.5°, Asr factor 1 (standard/Shafii).
+// Verified to within ~1 min of the Aladhan API for multiple cities.
+function computePrayerTimesLocal(lat, lng, date, tzOffsetHours) {
+    const dtr = d => d * Math.PI / 180, rtd = r => r * 180 / Math.PI;
+    const sin = d => Math.sin(dtr(d)), cos = d => Math.cos(dtr(d)), tan = d => Math.tan(dtr(d));
+    const arcsin = x => rtd(Math.asin(x)), arccos = x => rtd(Math.acos(x));
+    const arctan2 = (y, x) => rtd(Math.atan2(y, x)), arccot = x => rtd(Math.atan(1 / x));
+    const fixAngle = a => { a %= 360; return a < 0 ? a + 360 : a; };
+    const fixHour  = a => { a %= 24;  return a < 0 ? a + 24  : a; };
+
+    let y = date.getFullYear(), mo = date.getMonth() + 1, d = date.getDate();
+    if (mo <= 2) { y -= 1; mo += 12; }
+    const A = Math.floor(y / 100), B = 2 - A + Math.floor(A / 4);
+    const jDate = Math.floor(365.25 * (y + 4716)) + Math.floor(30.6001 * (mo + 1)) + d + B - 1524.5
+                  - lng / (15 * 24);
+
+    const sunPos = jd => {
+        const D = jd - 2451545.0;
+        const g = fixAngle(357.529 + 0.98560028 * D);
+        const q = fixAngle(280.459 + 0.98564736 * D);
+        const L = fixAngle(q + 1.915 * sin(g) + 0.020 * sin(2 * g));
+        const e = 23.439 - 0.00000036 * D;
+        const RA = arctan2(cos(e) * sin(L), cos(L)) / 15;
+        return { declination: arcsin(sin(e) * sin(L)), equation: q / 15 - fixHour(RA) };
+    };
+    const midDay = t => fixHour(12 - sunPos(jDate + t).equation);
+    const sunAngle = (angle, t, dir) => {
+        const decl = sunPos(jDate + t).declination;
+        const v = (-sin(angle) - sin(decl) * sin(lat)) / (cos(decl) * cos(lat));
+        return midDay(t) + (dir === 'ccw' ? -1 : 1) * (1 / 15) * arccos(v);
+    };
+    const asr = t => {
+        const decl = sunPos(jDate + t).declination;
+        return sunAngle(-arccot(1 + tan(Math.abs(lat - decl))), t, 'cw'); // shadow factor 1
+    };
+
+    let times = { Fajr: 5, Sunrise: 6, Dhuhr: 12, Asr: 13, Maghrib: 18, Isha: 18 };
+    for (let i = 0; i < 2; i++) { // iterate to converge
+        const t = {};
+        for (const k in times) t[k] = times[k] / 24;
+        times = {
+            Fajr:    sunAngle(19.5, t.Fajr, 'ccw'),
+            Sunrise: sunAngle(0.833, t.Sunrise, 'ccw'),
+            Dhuhr:   midDay(t.Dhuhr),
+            Asr:     asr(t.Asr),
+            Maghrib: sunAngle(0.833, t.Maghrib, 'cw'),
+            Isha:    sunAngle(17.5, t.Isha, 'cw'),
+        };
+    }
+    const out = {};
+    for (const k in times) {
+        const v = fixHour(times[k] + tzOffsetHours - lng / 15 + 0.5 / 60); // +30s → round to min
+        const h = Math.floor(v), m = Math.floor((v - h) * 60);
+        out[k] = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+    }
+    return out;
+}
+
+// Resolve a saved (Arabic) city/country to curated city-centre coordinates, or null.
+function curatedCityCoords(cityName, countryName) {
+    for (const c of PRAYER_LOCATIONS) {
+        if (c.country === countryName) {
+            const m = c.cities.find(ci => ci.name === cityName);
+            if (m) return { lat: m.lat, lon: m.lon };
+        }
+    }
+    return null;
+}
+
+let _prayerRetryTimer = null;
+function schedulePrayerRetry(delayMs) {
+    if (_prayerRetryTimer) return; // keep at most one pending retry
+    _prayerRetryTimer = setTimeout(() => {
+        _prayerRetryTimer = null;
+        gameState.prayer.lastFetchDate = null;
+        fetchPrayerTimes();
+    }, delayMs || 30000);
+}
+
+function _applyPrayerTimings(timings, dateStr) {
+    const pr = gameState.prayer;
+    pr.times = {};
+    for (const p of PRAYER_DATA) pr.times[p.key] = timings[p.key]; // e.g. "12:30"
+    pr.lastFetchDate = dateStr;
+    computeNextPrayer();
+    _lastPrayerPanelUpdate = 0; // force tickPrayerPanel to recompute next frame
+    updatePrayerPanelDOM();
+    document.getElementById('prayer-blur-overlay')?.classList.add('hidden');
+}
+
 async function fetchPrayerTimes() {
-    const loc = gameState.prayer.location;
+    const pr = gameState.prayer;
+    const loc = pr.location;
     if (!loc) return;
 
     const today = new Date();
     const dateStr = `${String(today.getDate()).padStart(2, '0')}-${String(today.getMonth() + 1).padStart(2, '0')}-${today.getFullYear()}`;
-    if (gameState.prayer.lastFetchDate === dateStr && gameState.prayer.times) return;
+    if (pr.lastFetchDate === dateStr && pr.times) return;
 
+    // Resolve coordinates: in-memory exact (this session) or curated city-centre.
+    let lat = loc._lat, lon = loc._lon;
+    if (lat == null || lon == null) {
+        const cc = curatedCityCoords(loc.city || '', loc.country || '');
+        if (cc) { lat = cc.lat; lon = cc.lon; }
+    }
+
+    // 1) Try the Aladhan API first (authoritative). Fail fast (8s abort) so a
+    //    blocked/slow endpoint can't hang the user on "--:--".
+    let applied = false;
     try {
-        let url;
-        if (loc._lat != null && loc._lon != null) {
-            // In-memory lat/lon from auto-detect this session
-            url = `https://api.aladhan.com/v1/timings/${dateStr}?latitude=${loc._lat}&longitude=${loc._lon}&method=5`;
-        } else {
-            // Loaded from Firebase (city+country only) — use city-based lookup
-            const cityName = loc.city || '';
-            const countryName = loc.country || '';
-            // Try to match city in PRAYER_LOCATIONS for lat/lon
-            let matched = null;
-            for (const c of PRAYER_LOCATIONS) {
-                if (c.country === countryName) {
-                    matched = c.cities.find(ci => ci.name === cityName);
-                    if (matched) break;
-                }
-            }
-            if (matched) {
-                url = `https://api.aladhan.com/v1/timings/${dateStr}?latitude=${matched.lat}&longitude=${matched.lon}&method=5`;
-            } else {
-                // Use Aladhan city-based API
-                url = `https://api.aladhan.com/v1/timingsByCity/${dateStr}?city=${encodeURIComponent(cityName)}&country=${encodeURIComponent(countryName)}&method=5`;
-            }
-        }
-        const res = await fetch(url);
+        const url = (lat != null && lon != null)
+            ? `https://api.aladhan.com/v1/timings/${dateStr}?latitude=${lat}&longitude=${lon}&method=5`
+            : `https://api.aladhan.com/v1/timingsByCity/${dateStr}?city=${encodeURIComponent(loc.city || '')}&country=${encodeURIComponent(loc.country || '')}&method=5`;
+        const ctrl = new AbortController();
+        const to = setTimeout(() => ctrl.abort(), 8000);
+        const res = await fetch(url, { signal: ctrl.signal });
+        clearTimeout(to);
         const json = await res.json();
         if (json.code === 200 && json.data && json.data.timings) {
-            const t = json.data.timings;
-            gameState.prayer.times = {};
-            for (const p of PRAYER_DATA) {
-                gameState.prayer.times[p.key] = t[p.key]; // e.g. "12:30"
-            }
-            gameState.prayer.lastFetchDate = dateStr;
-            computeNextPrayer();
-            _lastPrayerPanelUpdate = 0; // force tickPrayerPanel to recompute on very next frame
-            updatePrayerPanelDOM();
+            _applyPrayerTimings(json.data.timings, dateStr);
+            applied = true;
         }
     } catch (e) {
-        console.error('[prayer] fetch failed:', e);
+        console.warn('[prayer] API unavailable, falling back to local computation:', e?.message || e);
     }
+
+    // 2) Offline fallback: compute locally when the API failed but we have coords.
+    //    Uses the device's UTC offset (which the OS keeps DST-correct) — the user
+    //    is physically at the location they set, so this matches their local clock.
+    if (!applied && lat != null && lon != null) {
+        const tzOffset = -today.getTimezoneOffset() / 60;
+        _applyPrayerTimings(computePrayerTimesLocal(lat, lon, today, tzOffset), dateStr);
+        applied = true;
+        console.info('[prayer] using offline prayer-time computation');
+    }
+
+    // 3) No coords AND API down → retry shortly (e.g. uncurated city + offline).
+    if (!applied) schedulePrayerRetry(20000);
 }
 
 // ── Compute next prayer ──────────────────────────────────────────────────────
