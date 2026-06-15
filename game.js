@@ -486,7 +486,26 @@ class FocusAudioEngine {
         } catch(e) {
             console.log("Failed to load Web Audio sound effects:", e);
         }
-        // Boss fight sounds — load in parallel, fail individually
+        // Boss-fight sounds (15 files) are only used inside the boss minigame, which
+        // most players never open. Decoding them all on audio-init competes for
+        // CPU/network during the critical startup window — a big cause of first-load
+        // jank on budget phones (cold cache). Defer to browser idle time instead;
+        // ensureBossSounds() also force-loads them the moment a boss fight begins.
+        if (window.requestIdleCallback) {
+            requestIdleCallback(() => this.ensureBossSounds(), { timeout: 6000 });
+        } else {
+            setTimeout(() => this.ensureBossSounds(), 2500);
+        }
+    }
+
+    ensureBossSounds() {
+        if (this._bossSoundsRequested || !this.ctx) return;
+        this._bossSoundsRequested = true;
+        const loadBuffer = async (url) => {
+            const response = await fetch(url);
+            const arrayBuffer = await response.arrayBuffer();
+            return await this.ctx.decodeAudioData(arrayBuffer);
+        };
         const bossSounds = [
             ['bossAnticipate',    'Sound/LaptopMinigame/Laptop_Anticipate.mp3'],
             ['bossAttackInitiate','Sound/LaptopMinigame/Laptop_Attack_Initiate .mp3'],
@@ -504,7 +523,7 @@ class FocusAudioEngine {
             ['crowdCheer',        'Sound/LaptopMinigame/Crowd_Cheer.mp3'],
             ['crowdShock',        'Sound/LaptopMinigame/Crowd_Shock.mp3'],
         ];
-        await Promise.all(bossSounds.map(async ([key, url]) => {
+        Promise.all(bossSounds.map(async ([key, url]) => {
             try { this.buffers[key] = await loadBuffer(url); }
             catch(e) { console.log(`Boss sound load failed [${key}]:`, e); }
         }));
@@ -2901,6 +2920,8 @@ function startGame(userData) {
     document.getElementById('channel-name').textContent = userData.channelName || 'قناة غير معروفة';
     gameState.canvas = document.getElementById('game-canvas');
     gameState.ctx = gameState.canvas.getContext('2d');
+    gameState._lowGfx = isLowGraphics();
+    installLowGfxShadowGuard(gameState.ctx);
     resizeCanvas();
     setupControls();
     setupArabicNumeralSupport();
@@ -3111,10 +3132,37 @@ function startGame(userData) {
     gameLoop();
 }
 
+// Canvas `shadowBlur` is a per-draw Gaussian blur and one of the most expensive
+// 2D ops on budget GPUs — and it's used ~20× per frame (timers, nametags, player,
+// connection labels…). Rather than gate every call site, intercept the property:
+// when the live graphics tier is "low", every `ctx.shadowBlur = N` is clamped to 0.
+// Calls the native accessor so high-graphics shadows are unchanged, and reads the
+// per-frame flag so a runtime quality switch takes effect immediately.
+function installLowGfxShadowGuard(ctx) {
+    try {
+        let proto = Object.getPrototypeOf(ctx), desc = null;
+        while (proto && !desc) {
+            desc = Object.getOwnPropertyDescriptor(proto, 'shadowBlur');
+            proto = Object.getPrototypeOf(proto);
+        }
+        if (!desc || !desc.get || !desc.set) return;
+        Object.defineProperty(ctx, 'shadowBlur', {
+            configurable: true,
+            get() { return desc.get.call(this); },
+            set(v) { desc.set.call(this, gameState._lowGfx ? 0 : v); },
+        });
+    } catch (_) { /* non-fatal: shadows just stay on */ }
+}
+
 let _lastCanvasW = 0, _lastCanvasH = 0, _lastCanvasDpr = 0;
 function resizeCanvas() {
     if (!gameState.canvas) return;
-    const dpr = window.devicePixelRatio || 1;
+    let dpr = window.devicePixelRatio || 1;
+    // Cap render resolution on low-graphics / mobile. A full-screen 60fps canvas is
+    // fill-rate bound, and a budget phone at dpr 2.5–3 renders 6–9× the pixels of
+    // dpr 1. Capping to 1.5 cuts that dramatically for only a slight sharpness loss
+    // — the single biggest mobile performance win here.
+    if (isLowGraphics()) dpr = Math.min(dpr, 1.5);
     const w = window.innerWidth;
     const h = window.innerHeight;
     // Skip redundant reallocations. Android Chrome fires resize/visualViewport
@@ -5321,6 +5369,11 @@ function gameLoop(timestamp) {
 
     if (deltaTime > 100) deltaTime = 100; // Cap to avoid large jumps if tab is inactive
     gameState.dtFactor = deltaTime / 16.666; // Standardize to 60fps (1000ms / 60 = 16.666ms)
+
+    // Cache the graphics tier once per frame. Hot draw code reads this instead of
+    // calling isLowGraphics() (which hits localStorage) many times per frame, and
+    // the shadowBlur guard installed in startGame consults it to drop shadows.
+    gameState._lowGfx = isLowGraphics();
     // On mobile, cap dtFactor more aggressively to reduce stutters from dropped frames
     if (isMobile() && gameState.dtFactor > 2) gameState.dtFactor = 2;
 
@@ -9412,6 +9465,10 @@ function setupSettingsUI() {
         // Bokeh: hide immediately on low graphics
         const bokeh = document.getElementById('edge-bokeh');
         if (bokeh && isLowGraphics()) bokeh.style.display = 'none';
+        // Re-apply the DPR cap (low caps to 1.5, high restores full) and refresh the
+        // cached tier so the shadow guard reacts on the next frame.
+        gameState._lowGfx = isLowGraphics();
+        resizeCanvas();
     }
 
     graphicsBtn.addEventListener('click', () => {
@@ -13406,6 +13463,10 @@ async function triggerLaptopBossTeleport() {
     if (gameState.laptopBoss.active) return;
     const player = gameState.players[gameState.userId];
     if (!player) return;
+
+    // Make sure the boss SFX (deferred at startup) are loading — the teleport
+    // animation gives them time to arrive before gameplay starts.
+    gameState.focusAudioEngine?.ensureBossSounds?.();
 
     playSoundRobust(gameState.sounds.minigameButtonPressed);
 
