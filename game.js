@@ -1815,6 +1815,20 @@ function isBreakActive() {
         || (gameState.freeMode.active && gameState.freeMode.phase === 'break');
 }
 
+// True while any break minigame (race / coffee / laptop-boss) is running, including
+// its lobby/teleport phases.
+function isMinigameActive() {
+    return !!(gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active);
+}
+
+// Force-exit whatever minigame is running (used when prayer time arrives — the athan
+// takes priority, so we pull the player straight back out to the break room).
+function exitAnyMinigame() {
+    if (gameState.laptopBoss.active) returnFromLaptopBoss(true);
+    if (gameState.coffee.active)     returnFromCoffee(true);
+    if (gameState.race.active)       returnFromRace(true);
+}
+
 function serverNow() {
     return Date.now() + (gameState.serverTimeOffset || 0);
 }
@@ -2212,6 +2226,42 @@ function formatTime(sec) {
     const m = Math.floor(sec / 60);
     const s = sec % 60;
     return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+// Tab-title countdown: while in a session, show the remaining work/break time in
+// the browser tab so a backgrounded tab still surfaces the timer. Restores the
+// original title when no session is running.
+// Driven by a setInterval (see startTabTitleTicker) rather than the rAF game loop,
+// because the browser pauses requestAnimationFrame in hidden tabs — setInterval
+// keeps ticking, so the countdown stays live when the tab is in the background.
+const _BASE_DOC_TITLE = (typeof document !== 'undefined' && document.title) || 'مدونة ستوديو';
+let _lastTabTitle = '';
+let _tabTitleTicker = null;
+function startTabTitleTicker() {
+    if (_tabTitleTicker) return;
+    updateTabTitle();
+    _tabTitleTicker = setInterval(updateTabTitle, 1000);
+}
+function updateTabTitle() {
+    const now = Date.now();
+    let title = _BASE_DOC_TITLE;
+    const pomo = gameState.pomodoro;
+    const fm   = gameState.freeMode;
+    if (pomo.active && (pomo.phase === 'work' || pomo.phase === 'break') && pomo.endTime) {
+        const remaining = Math.max(0, pomo.endTime - now);
+        title = `${formatTime(remaining / 1000)} · ${pomo.phase === 'work' ? 'عمل' : 'راحة'}`;
+    } else if (fm.active && fm.phase === 'work') {
+        const elapsedMs = fm.totalWorkMs + (fm.workStartTime > 0 ? (now - fm.workStartTime) : 0);
+        title = `${formatTime(elapsedMs / 1000)} · عمل`;
+    } else if (fm.active && fm.phase === 'break' && fm.breakEndTime) {
+        const remaining = Math.max(0, fm.breakEndTime - now);
+        title = `${formatTime(remaining / 1000)} · راحة`;
+    }
+
+    if (title !== _lastTabTitle) {
+        _lastTabTitle = title;
+        document.title = title;
+    }
 }
 
 // Countdown like "1:23:45" (h:mm:ss) when >= 1h, else "23:45" (mm:ss).
@@ -2962,6 +3012,7 @@ function startGame(userData) {
     setupAzkarUI();
     setupPiPUI();
     setupSettingsUI();
+    startTabTitleTicker();
 
     document.getElementById('minigame-leave-btn')?.addEventListener('click', () => leaveMinigame());
 
@@ -3609,6 +3660,16 @@ function setMinigameHideUI(hidden) {
     if (leaveWrap) leaveWrap.style.visibility = hidden ? 'hidden' : '';
     if (logoutBtn) logoutBtn.style.visibility = hidden ? 'hidden' : '';
     if (miniLeave) miniLeave.style.display = hidden ? 'block' : 'none';
+    // Hide the azkar button while in a minigame. updateAzkarSystem doesn't run during
+    // a minigame (the loop early-returns), so the button would otherwise keep its
+    // pre-minigame visible state and open the azkar overlay over the live game.
+    // When the minigame ends, updateAzkarButton re-shows it on the next frame.
+    const azkarBtn = document.getElementById('azkar-btn');
+    if (azkarBtn) azkarBtn.style.visibility = hidden ? 'hidden' : '';
+    if (hidden) {
+        const azkarFloat = document.getElementById('azkar-focus-float-btn');
+        if (azkarFloat) azkarFloat.style.display = 'none';
+    }
 }
 
 /** Exit a minigame early without affecting the other players' sessions */
@@ -12055,6 +12116,19 @@ const PRAYER_LOCATIONS = [
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 
+// Ask for notification permission once, at a calm moment after game entry. Siraj
+// ghosts skip it (ephemeral). No-op if already granted/denied or unsupported.
+function maybeRequestNotificationPermission() {
+    if (gameState.isSirajGhost) return;
+    try {
+        if (typeof Notification === 'undefined') return;
+        if (Notification.permission !== 'default') return;
+        setTimeout(() => {
+            try { Notification.requestPermission().catch(() => {}); } catch (e) {}
+        }, 3500);
+    } catch (e) {}
+}
+
 function initPrayerSystem() {
     if (gameState.isSirajGhost) gameState.prayer.prayerLockMs = 5000; // 5 s for Siraj
 
@@ -12070,6 +12144,11 @@ function initPrayerSystem() {
     };
     // Delay slightly to let AudioContext initialize first
     setTimeout(_preloadAthan, 2000);
+
+    // Request notification permission once, shortly after entering the game (still
+    // close to the entry click gesture). Doing it here — rather than at the athan
+    // moment — keeps the prayer overlay from being interrupted by a browser prompt.
+    maybeRequestNotificationPermission();
 
     // On mobile, move prayer panel + YT inside the focus drawer for proper scrolling.
     // Prayer panel comes first so it's visible as soon as the drawer opens,
@@ -12397,6 +12476,9 @@ function checkPrayerTrigger() {
 // ── Trigger overlay ──────────────────────────────────────────────────────────
 
 function triggerPrayerOverlay(prayerKey, arabicName) {
+    // Prayer takes priority over a running break minigame — pull the player straight
+    // back out to the break room before showing the overlay.
+    if (isMinigameActive()) exitAnyMinigame();
     // Prayer takes priority over azkar — close azkar without marking complete
     if (gameState.azkar && gameState.azkar.active) {
         closeAzkarOverlay(false);
@@ -12416,14 +12498,13 @@ function triggerPrayerOverlay(prayerKey, arabicName) {
     pr.isOverlayActive = true;
     pr.overlayStartTime = Date.now();
 
-    // System notification
+    // System notification — only fire if already granted. Never call
+    // requestPermission() here: a browser permission prompt at the exact moment the
+    // athan plays interrupts the overlay. Permission is requested once at game start
+    // (see initPrayerSystem → maybeRequestNotificationPermission).
     try {
         if (Notification.permission === 'granted') {
             new Notification(`🕌 وقت صلاة ${arabicName}`, { body: 'حان وقت الصلاة — الله أكبر' });
-        } else if (Notification.permission !== 'denied') {
-            Notification.requestPermission().then(p => {
-                if (p === 'granted') new Notification(`🕌 وقت صلاة ${arabicName}`, { body: 'حان وقت الصلاة — الله أكبر' });
-            });
         }
     } catch(e) {}
 
