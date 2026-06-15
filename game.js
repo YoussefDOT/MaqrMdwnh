@@ -119,6 +119,11 @@ function raceSessionPath(subpath) {
 const DISCORD_CLIENT_ID = '1505168261157752972';
 const DISCORD_SCOPE = 'identify';
 const DISCORD_SESSION_KEY = 'mdwnh_discord_session';
+// Set to the user id while actively in-game; cleared on explicit logout. Lets us
+// auto-resume straight back into the game after an unintended reload (e.g. Android
+// Chrome discarding the tab when the user switches apps) instead of dumping them
+// back on the lobby/welcome screen.
+const ACTIVE_SESSION_KEY = 'mdwnh_active_session';
 
 // Returns the exact redirect URI registered for the current host.
 // Discord matches strictly so we hardcode known-good values.
@@ -262,6 +267,7 @@ function showDiscordWelcomeScreen(user, lobby) {
     };
     document.getElementById('discord-welcome-logout').onclick = () => {
         clearDiscordSession();
+        try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
         screen.classList.remove('active');
         if (lobbyScreen) lobbyScreen.classList.add('active');
     };
@@ -327,7 +333,16 @@ async function initDiscordOAuth() {
     const resolvedLobby = await resolveUserLobby(user.id);
     loading?.classList.remove('active');
     if (resolvedLobby) {
-        showDiscordWelcomeScreen(user, resolvedLobby);
+        // Auto-resume: if this same user was actively in-game before an unintended
+        // reload (Android tab discard, accidental refresh), go straight back in and
+        // let startGame restore their pomodoro/free-mode session from Firebase —
+        // don't strand them on the welcome screen. Fresh logins (flag not set yet)
+        // still see the welcome screen.
+        if (localStorage.getItem(ACTIVE_SESSION_KEY) === user.id) {
+            enterGameAsDiscordUser(user, resolvedLobby);
+        } else {
+            showDiscordWelcomeScreen(user, resolvedLobby);
+        }
     } else {
         showDiscordFirstLobbyChooser(user);
     }
@@ -2834,6 +2849,12 @@ function startGame(userData) {
     gameState.currentUser = userData.username;
     gameState.userId = userData.userId;
 
+    // Remember we're actively in-game so an unintended reload auto-resumes.
+    // Siraj ghosts are ephemeral (deleted on disconnect) — never auto-resume them.
+    if (!gameState.isSirajGhost) {
+        try { localStorage.setItem(ACTIVE_SESSION_KEY, userData.userId); } catch (_) {}
+    }
+
     // Set HUD avatar image
     const hudAvatar = document.getElementById('hud-avatar');
     if (hudAvatar && userData.avatar) hudAvatar.src = userData.avatar;
@@ -3090,12 +3111,19 @@ function startGame(userData) {
     gameLoop();
 }
 
+let _lastCanvasW = 0, _lastCanvasH = 0, _lastCanvasDpr = 0;
 function resizeCanvas() {
     if (!gameState.canvas) return;
     const dpr = window.devicePixelRatio || 1;
-    gameState.dpr = dpr;
     const w = window.innerWidth;
     const h = window.innerHeight;
+    // Skip redundant reallocations. Android Chrome fires resize/visualViewport
+    // repeatedly as the URL bar collapses/expands; reallocating a multi-megapixel
+    // canvas every time causes visible jank/hangs. Only resize when something
+    // actually changed.
+    if (w === _lastCanvasW && h === _lastCanvasH && dpr === _lastCanvasDpr) return;
+    _lastCanvasW = w; _lastCanvasH = h; _lastCanvasDpr = dpr;
+    gameState.dpr = dpr;
     gameState.canvas.width  = w * dpr;
     gameState.canvas.height = h * dpr;
     gameState.canvas.style.width  = w + 'px';
@@ -3123,7 +3151,10 @@ window.addEventListener('resize', () => {
 // dimensions stick. Cover all the events different browsers actually emit.
 function handleOrientationChange() {
     applyViewportLayout();                 // immediate (may be stale)
-    [120, 300, 600].forEach(d => setTimeout(applyViewportLayout, d)); // after settle
+    // After settle. Cheap: resizeCanvas no-ops unless dimensions actually changed,
+    // so the extra ticks only do work once the new orientation is reported (slow
+    // Android devices can take up to ~1s to settle).
+    [120, 300, 600, 1000].forEach(d => setTimeout(applyViewportLayout, d));
 }
 window.addEventListener('orientationchange', handleOrientationChange);
 if (window.matchMedia) {
@@ -4665,6 +4696,8 @@ function listenToPomodoro() {
 function doLogout() {
     _azkarFakeHour = null;
     _azkarFakeMin  = null;
+    // Explicit logout — don't auto-resume on the next load.
+    try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
     if (gameState.userId) {
         if (gameState.isSirajGhost) {
             const cleanups = { [`users/${gameState.userId}`]: null };
