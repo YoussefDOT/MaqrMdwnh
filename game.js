@@ -1698,11 +1698,12 @@ const TABLE_WIDTH = BASE_TABLE_WIDTH * TABLE_SCALE;
 const TABLE_HEIGHT = BASE_TABLE_HEIGHT * TABLE_SCALE;
 const ROOM_COUNT = 2;
 
-// Laptop focus-mask proximity radii. Full dark mask anywhere within FULL_R of a
-// laptop, easing out to nothing by FADE_R. FULL_R is wider than the laptop
-// spacing so the mask reads as one continuous darkening across the grid.
-const LAPTOP_MASK_FULL_R = 150;
-const LAPTOP_MASK_FADE_R = 235;
+// Laptop focus-mask tuning (does NOT affect laptop selection, which stays 120px).
+// FADE_R = how far the mask senses a laptop; HOLD_FRAMES = how long the mask
+// holds its darkening after leaving range before fading, so short gaps between
+// adjacent laptops don't flicker the mask out (~0.65s at 60fps).
+const LAPTOP_MASK_FADE_R = 150;
+const LAPTOP_MASK_HOLD_FRAMES = 40;
 const WORLD_HEIGHT = BG_HEIGHT * ROOM_COUNT;
 const ROOM_SEAM_Y = BG_HEIGHT / 2;
 const BREAK_ROOM_CENTER_Y = BG_HEIGHT;
@@ -5150,13 +5151,13 @@ function updateInteractions() {
 
     gameState.activeLaptop = null;
     gameState.activeRaceButton = false;
-    // Detection radius is generous so the dark focus mask stays continuous while
-    // walking through / past the whole laptop grid (laptops sit ~45-90px apart).
-    let closestDist = LAPTOP_MASK_FADE_R;
+    let closestDist = 120;          // selection range (click to start) — unchanged
     let minDist = Infinity;
+    let nearestDist = Infinity;     // distance to closest laptop regardless of range (mask only)
 
     gameState.laptops.forEach(laptop => {
         const dist = Math.sqrt(Math.pow(player.x - laptop.x, 2) + Math.pow(player.y - laptop.y, 2));
+        if (dist < nearestDist) nearestDist = dist;
         if (dist < closestDist) {
             gameState.activeLaptop = laptop;
             gameState.lastActiveLaptop = laptop;
@@ -5248,13 +5249,20 @@ function updateInteractions() {
     if (gameState.isLockedIn) {
         // Always full darkening when locked in — don't rely on proximity
         targetAlpha = baseAlpha;
-    } else if (gameState.activeLaptop) {
-        // Proximity fade: full (plateaued) when within LAPTOP_MASK_FULL_R of ANY
-        // laptop, easing to 0 only by LAPTOP_MASK_FADE_R. The wide full-alpha
-        // plateau keeps the mask continuous across the whole laptop grid so it no
-        // longer flickers out in the gaps between adjacent laptops.
-        const fadeT = (LAPTOP_MASK_FADE_R - minDist) / (LAPTOP_MASK_FADE_R - LAPTOP_MASK_FULL_R);
-        targetAlpha = baseAlpha * Math.max(0, Math.min(1, fadeT));
+    } else {
+        // Proximity fade toward the nearest laptop. Selection range is untouched
+        // (120px), but the mask senses a bit wider (LAPTOP_MASK_FADE_R) and — to
+        // stop the flicker in the gaps between laptops — HOLDS the last darkening
+        // for a short window before letting it fade. So walking a row keeps the
+        // mask continuous; it only fades once you've genuinely left the cluster.
+        const prox = Math.min(baseAlpha, Math.max(0, (1 - nearestDist / LAPTOP_MASK_FADE_R) * 1.6));
+        if (prox > 0.001) {
+            gameState.maskHoldT = 0;
+            gameState.maskLast = prox;
+        } else {
+            gameState.maskHoldT = (gameState.maskHoldT || 0) + gameState.dtFactor;
+        }
+        targetAlpha = (gameState.maskHoldT < LAPTOP_MASK_HOLD_FRAMES) ? (gameState.maskLast || 0) : 0;
     }
 
     // Disable the dark laptop focus mask if we are currently on a break!
