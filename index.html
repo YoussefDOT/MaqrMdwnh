@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>مدونة ستوديو | مساحة العمل الرقمية</title>
     <link rel="stylesheet" href="style.css">
 </head>
@@ -491,11 +491,14 @@
             <div class="settings-row">
                 <div class="settings-row-label">
                     <span class="settings-row-name">جودة الرسومات</span>
-                    <span class="settings-row-sub">تلقائي حسب الجهاز. بطاطس: للأجهزة الضعيفة جداً</span>
+                    <span class="settings-row-sub">اختر الجودة، أو «تلقائي» للاختيار حسب جهازك. بطاطس للأجهزة الضعيفة جدًا</span>
                 </div>
-                <button id="settings-graphics-btn" class="settings-toggle-btn" type="button" data-value="auto">
-                    <span id="settings-graphics-label">تلقائي</span>
-                </button>
+                <div class="settings-toggle-group">
+                    <button id="settings-graphics-auto-btn" class="settings-mini-btn" type="button">تلقائي</button>
+                    <button id="settings-graphics-btn" class="settings-toggle-btn" type="button" data-value="low">
+                        <span id="settings-graphics-label">منخفضة</span>
+                    </button>
+                </div>
             </div>
             <div class="settings-row">
                 <div class="settings-row-label">

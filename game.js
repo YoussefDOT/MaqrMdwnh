@@ -3191,21 +3191,42 @@ function applyViewportLayout() {
     setMobileClass();
 }
 
+// Is the viewport aspect consistent with the device's reported orientation?
+// screen.orientation updates IMMEDIATELY on rotation, while window.innerWidth/
+// innerHeight lag (Android can report the old landscape size for up to ~1s into a
+// portrait rotation). Comparing the two tells us whether the reported size is the
+// real post-rotation size or a stale one.
+function _viewportMatchesOrientation() {
+    // Only meaningful on devices that physically rotate. On desktop a portrait-shaped
+    // window on a landscape monitor is a permanent mismatch, so never block there.
+    if (!isTouchDevice()) return true;
+    const so = window.screen && window.screen.orientation;
+    if (!so || !so.type) return true; // can't tell → assume fine
+    const wantPortrait = so.type.indexOf('portrait') === 0;
+    return (window.innerHeight >= window.innerWidth) === wantPortrait;
+}
+
+let _lastAspectPortrait = window.innerHeight >= window.innerWidth;
 let _resizeTimer = null;
 window.addEventListener('resize', () => {
     if (_resizeTimer) clearTimeout(_resizeTimer);
     _resizeTimer = setTimeout(() => {
-        applyViewportLayout();
         _resizeTimer = null;
+        // If the aspect flipped (landscape↔portrait) without an orientationchange
+        // event, treat it as a rotation and run the full settle.
+        const portraitNow = window.innerHeight >= window.innerWidth;
+        if (portraitNow !== _lastAspectPortrait) { settleViewportLayout(); return; }
+        applyViewportLayout();
     }, 150);
 });
 
-// Orientation flips (portrait↔landscape) are special: mobile browsers — Android
-// Chrome especially on portrait→landscape — report stale or intermediate
-// innerWidth/innerHeight for up to ~1s after the rotation. A single resize can lock
-// in a broken/oversized canvas (UI looks wrong + perf tanks until reload). Instead
-// of guessing a settle delay, POLL until the reported size stops changing, then
-// force a final relayout — i.e. "rebuild on drastic size change".
+// Orientation flips (portrait↔landscape) are the hard case: the browser reports the
+// OLD (stale) innerWidth/innerHeight for a beat after rotating, and if we apply that
+// and stop, the portrait UI is laid out with landscape dimensions and stays broken
+// until reload. So: keep re-applying until the reported size actually matches the
+// device orientation (via screen.orientation) AND has gone stable — i.e. "rebuild
+// on drastic size change", but anchored to a reliable orientation signal rather than
+// a guessed delay.
 let _viewportSettleId = 0;
 function settleViewportLayout() {
     const myId = ++_viewportSettleId;
@@ -3214,32 +3235,40 @@ function settleViewportLayout() {
     let lastW = -1, lastH = -1, stable = 0;
     const tick = () => {
         if (myId !== _viewportSettleId) return;   // superseded by a newer rotation
-        applyViewportLayout();
         const w = window.innerWidth, h = window.innerHeight;
-        if (w === lastW && h === lastH) stable++;
-        else { stable = 0; lastW = w; lastH = h; }
-        if (stable >= 3 || Date.now() - start > 2000) {
+        const oriented = _viewportMatchesOrientation();
+        // Only commit a layout once the reported size reflects the real orientation;
+        // before that the dimensions are stale and would lock in a broken UI.
+        if (oriented) {
+            applyViewportLayout();
+            if (w === lastW && h === lastH) stable++;
+            else { stable = 0; lastW = w; lastH = h; }
+        }
+        if ((oriented && stable >= 2) || Date.now() - start > 2500) {
+            _lastAspectPortrait = h >= w;
             _lastCanvasBW = _lastCanvasBH = -1;
             applyViewportLayout();                // final forced relayout
             return;
         }
-        setTimeout(tick, 100);
+        setTimeout(tick, 80);
     };
     tick();
 }
 window.addEventListener('orientationchange', settleViewportLayout);
+if (window.screen && window.screen.orientation && window.screen.orientation.addEventListener) {
+    window.screen.orientation.addEventListener('change', settleViewportLayout);
+}
 if (window.matchMedia) {
     const _mqlPortrait = window.matchMedia('(orientation: portrait)');
     const _onOrient = () => settleViewportLayout();
     if (_mqlPortrait.addEventListener) _mqlPortrait.addEventListener('change', _onOrient);
     else if (_mqlPortrait.addListener) _mqlPortrait.addListener(_onOrient);
 }
-// visualViewport tracks the *real* rendered viewport (accounts for browser chrome
-// collapsing on rotation) — its resize fires with correct dimensions.
+// visualViewport resize fires as the browser chrome settles after rotation.
 if (window.visualViewport) {
     window.visualViewport.addEventListener('resize', () => {
         if (_resizeTimer) clearTimeout(_resizeTimer);
-        _resizeTimer = setTimeout(() => { applyViewportLayout(); _resizeTimer = null; }, 150);
+        _resizeTimer = setTimeout(() => { _resizeTimer = null; applyViewportLayout(); }, 150);
     });
 }
 
@@ -9430,16 +9459,16 @@ function spPath(sub) { return lobbyPath(`sharedPomo/${sub}`); }
 
 // ── Settings (device-local, persisted in localStorage) ───────────────────────
 
+// Returns the explicit stored tier, or null when on device-auto (no explicit choice).
 function getGraphicsQuality() {
     const v = localStorage.getItem(SETTINGS_GRAPHICS_KEY);
-    return (v === 'high' || v === 'low' || v === 'potato') ? v : 'auto';
+    return (v === 'high' || v === 'low' || v === 'potato') ? v : null;
 }
 
-// Resolve 'auto' to a concrete tier. Mobile defaults to 'low' (atmosphere gradients
-// ON, but cheap compositing); desktop defaults to 'high' (everything).
+// Resolve to a concrete tier: an explicit choice, else the device default — mobile
+// → 'low' (atmosphere gradients ON, cheap compositing), desktop → 'high'.
 function graphicsTier() {
-    const q = getGraphicsQuality();
-    return q === 'auto' ? (isMobile() ? 'low' : 'high') : q;
+    return getGraphicsQuality() || (isMobile() ? 'low' : 'high');
 }
 
 // Reduced compositing: DPR cap, no live backdrop-filter, no canvas shadows, fewer
@@ -9468,6 +9497,7 @@ function setupSettingsUI() {
     const closeBtn      = document.getElementById('settings-panel-close');
     const graphicsBtn   = document.getElementById('settings-graphics-btn');
     const graphicsLabel = document.getElementById('settings-graphics-label');
+    const graphicsAutoBtn = document.getElementById('settings-graphics-auto-btn');
     const namesBtn      = document.getElementById('settings-names-btn');
     const namesLabel    = document.getElementById('settings-names-label');
     const joystickBtn   = document.getElementById('settings-joystick-btn');
@@ -9484,12 +9514,15 @@ function setupSettingsUI() {
     }
 
     function _reflectGraphics() {
-        const q = getGraphicsQuality();
-        graphicsBtn.dataset.value = q;
-        graphicsBtn.classList.toggle('settings-toggle-on',  q === 'high');
-        graphicsBtn.classList.toggle('settings-toggle-low', q === 'potato');
-        const labels = { auto: 'تلقائي', high: 'عالية', low: 'منخفضة', potato: 'بطاطس' };
-        graphicsLabel.textContent = labels[q] || 'تلقائي';
+        const stored = getGraphicsQuality();   // null when on device-auto
+        const tier = graphicsTier();           // always concrete
+        graphicsBtn.dataset.value = tier;
+        graphicsBtn.classList.toggle('settings-toggle-on',  tier === 'high');
+        graphicsBtn.classList.toggle('settings-toggle-low', tier === 'potato');
+        const labels = { high: 'عالية', low: 'منخفضة', potato: 'بطاطس' };
+        graphicsLabel.textContent = labels[tier];
+        // The auto button is "active" while no explicit tier is chosen (device-auto).
+        if (graphicsAutoBtn) graphicsAutoBtn.classList.toggle('active', stored === null);
         _applyGraphicsSetting();
     }
 
@@ -9512,12 +9545,23 @@ function setupSettingsUI() {
         resizeCanvas();
     }
 
+    // Main button cycles only the explicit tiers (no confusing no-op 'auto' state):
+    // عالية → منخفضة → بطاطس. Operates on the resolved tier so something always changes.
     graphicsBtn.addEventListener('click', () => {
-        const cycle = { auto: 'high', high: 'low', low: 'potato', potato: 'auto' };
-        const next = cycle[getGraphicsQuality()] || 'auto';
+        const cycle = { high: 'low', low: 'potato', potato: 'high' };
+        const next = cycle[graphicsTier()] || 'low';
         localStorage.setItem(SETTINGS_GRAPHICS_KEY, next);
         _reflectGraphics();
     });
+
+    // Separate auto button: clears the explicit choice so the tier follows the device
+    // (mobile → low, desktop → high). The main button then shows the resolved tier.
+    if (graphicsAutoBtn) {
+        graphicsAutoBtn.addEventListener('click', () => {
+            localStorage.removeItem(SETTINGS_GRAPHICS_KEY);
+            _reflectGraphics();
+        });
+    }
 
     namesBtn.addEventListener('click', () => {
         const next = getHideNames() ? '0' : '1';
