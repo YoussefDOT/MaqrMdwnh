@@ -18,7 +18,7 @@ function isMobile() {
 }
 
 // ─── Device-local settings keys (used before init() is called) ───────────────
-const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'low' | 'high'
+const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'high' | 'low' | 'potato'
 const SETTINGS_NAMES_KEY    = 'mdwnh_hide_names';        // '0' = show, '1' = hide
 const SETTINGS_JOYSTICK_KEY = 'mdwnh_joystick_mode';    // 'auto' | 'always' | 'off'
 
@@ -2433,7 +2433,7 @@ function loadAssets() {
 }
 
 function initWindParticles() {
-    const count = isLowGraphics() ? WIND_PARTICLE_COUNT_MOBILE : WIND_PARTICLE_COUNT;
+    const count = isPotato() ? WIND_PARTICLE_COUNT_MOBILE : WIND_PARTICLE_COUNT;
     for (let i = 0; i < count; i++) {
         gameState.windParticles.push({
             x: Math.random() * window.innerWidth,
@@ -2450,9 +2450,9 @@ function initWindParticles() {
 }
 
 // Gentle world-space dust motes that drift through the office — magical "alive" feel.
-// Skipped on low-graphics mode (mobile default, or user override).
+// Skipped only on the potato tier (kept on low so mobile looks close to desktop).
 function initAmbientMotes() {
-    if (isLowGraphics()) return;
+    if (isPotato()) return;
     const count = 22;
     const minX = -BG_WIDTH / 2, maxX = BG_WIDTH / 2;
     const minY = -BG_HEIGHT / 2, maxY = BG_HEIGHT * 1.5;
@@ -2920,7 +2920,8 @@ function startGame(userData) {
     document.getElementById('channel-name').textContent = userData.channelName || 'قناة غير معروفة';
     gameState.canvas = document.getElementById('game-canvas');
     gameState.ctx = gameState.canvas.getContext('2d');
-    gameState._lowGfx = isLowGraphics();
+    gameState._lowGfx = isReducedGraphics();
+    gameState._potato = isPotato();
     installLowGfxShadowGuard(gameState.ctx);
     resizeCanvas();
     setupControls();
@@ -3154,26 +3155,33 @@ function installLowGfxShadowGuard(ctx) {
     } catch (_) { /* non-fatal: shadows just stay on */ }
 }
 
-let _lastCanvasW = 0, _lastCanvasH = 0, _lastCanvasDpr = 0;
+let _lastCanvasBW = -1, _lastCanvasBH = -1;
 function resizeCanvas() {
     if (!gameState.canvas) return;
+    const w = Math.max(1, window.innerWidth);
+    const h = Math.max(1, window.innerHeight);
     let dpr = window.devicePixelRatio || 1;
-    // Cap render resolution on low-graphics / mobile. A full-screen 60fps canvas is
+    // Cap render resolution on reduced tiers. A full-screen 60fps canvas is
     // fill-rate bound, and a budget phone at dpr 2.5–3 renders 6–9× the pixels of
-    // dpr 1. Capping to 1.5 cuts that dramatically for only a slight sharpness loss
-    // — the single biggest mobile performance win here.
-    if (isLowGraphics()) dpr = Math.min(dpr, 1.5);
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    // Skip redundant reallocations. Android Chrome fires resize/visualViewport
-    // repeatedly as the URL bar collapses/expands; reallocating a multi-megapixel
-    // canvas every time causes visible jank/hangs. Only resize when something
-    // actually changed.
-    if (w === _lastCanvasW && h === _lastCanvasH && dpr === _lastCanvasDpr) return;
-    _lastCanvasW = w; _lastCanvasH = h; _lastCanvasDpr = dpr;
+    // dpr 1. Capping to 1.5 (1.25 on potato) cuts that dramatically — the single
+    // biggest mobile win — for only a slight sharpness loss.
+    const reduced = isReducedGraphics();
+    if (reduced) dpr = Math.min(dpr, isPotato() ? 1.25 : 1.5);
+    // Hard cap on the backing-store size. A bad transient viewport mid-rotation
+    // (Android briefly reports stale/oversized dimensions) could otherwise allocate
+    // a huge canvas and tank performance until reload. Scale dpr down to fit budget.
+    const maxPixels = reduced ? 3.2e6 : 24e6; // high cap only catches absurd transients
+    const want = w * h * dpr * dpr;
+    if (want > maxPixels) dpr *= Math.sqrt(maxPixels / want);
+    const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+    // Skip redundant reallocations. Android fires resize/visualViewport repeatedly
+    // as the URL bar collapses; reallocating a multi-megapixel canvas each time
+    // causes jank. Only resize when the backing-store size actually changed.
+    if (bw === _lastCanvasBW && bh === _lastCanvasBH) return;
+    _lastCanvasBW = bw; _lastCanvasBH = bh;
     gameState.dpr = dpr;
-    gameState.canvas.width  = w * dpr;
-    gameState.canvas.height = h * dpr;
+    gameState.canvas.width  = bw;
+    gameState.canvas.height = bh;
     gameState.canvas.style.width  = w + 'px';
     gameState.canvas.style.height = h + 'px';
 }
@@ -3192,22 +3200,37 @@ window.addEventListener('resize', () => {
     }, 150);
 });
 
-// Orientation flips (portrait↔landscape) are special: many mobile browsers report
-// stale innerWidth/innerHeight for a beat after the rotation, so a single resize can
-// fire with the wrong dimensions and leave the canvas/UI broken until refresh.
-// Re-apply the layout several times across the settle window to guarantee the final
-// dimensions stick. Cover all the events different browsers actually emit.
-function handleOrientationChange() {
-    applyViewportLayout();                 // immediate (may be stale)
-    // After settle. Cheap: resizeCanvas no-ops unless dimensions actually changed,
-    // so the extra ticks only do work once the new orientation is reported (slow
-    // Android devices can take up to ~1s to settle).
-    [120, 300, 600, 1000].forEach(d => setTimeout(applyViewportLayout, d));
+// Orientation flips (portrait↔landscape) are special: mobile browsers — Android
+// Chrome especially on portrait→landscape — report stale or intermediate
+// innerWidth/innerHeight for up to ~1s after the rotation. A single resize can lock
+// in a broken/oversized canvas (UI looks wrong + perf tanks until reload). Instead
+// of guessing a settle delay, POLL until the reported size stops changing, then
+// force a final relayout — i.e. "rebuild on drastic size change".
+let _viewportSettleId = 0;
+function settleViewportLayout() {
+    const myId = ++_viewportSettleId;
+    _lastCanvasBW = _lastCanvasBH = -1;   // force the next resize through the guard
+    const start = Date.now();
+    let lastW = -1, lastH = -1, stable = 0;
+    const tick = () => {
+        if (myId !== _viewportSettleId) return;   // superseded by a newer rotation
+        applyViewportLayout();
+        const w = window.innerWidth, h = window.innerHeight;
+        if (w === lastW && h === lastH) stable++;
+        else { stable = 0; lastW = w; lastH = h; }
+        if (stable >= 3 || Date.now() - start > 2000) {
+            _lastCanvasBW = _lastCanvasBH = -1;
+            applyViewportLayout();                // final forced relayout
+            return;
+        }
+        setTimeout(tick, 100);
+    };
+    tick();
 }
-window.addEventListener('orientationchange', handleOrientationChange);
+window.addEventListener('orientationchange', settleViewportLayout);
 if (window.matchMedia) {
     const _mqlPortrait = window.matchMedia('(orientation: portrait)');
-    const _onOrient = () => handleOrientationChange();
+    const _onOrient = () => settleViewportLayout();
     if (_mqlPortrait.addEventListener) _mqlPortrait.addEventListener('change', _onOrient);
     else if (_mqlPortrait.addListener) _mqlPortrait.addListener(_onOrient);
 }
@@ -5370,10 +5393,12 @@ function gameLoop(timestamp) {
     if (deltaTime > 100) deltaTime = 100; // Cap to avoid large jumps if tab is inactive
     gameState.dtFactor = deltaTime / 16.666; // Standardize to 60fps (1000ms / 60 = 16.666ms)
 
-    // Cache the graphics tier once per frame. Hot draw code reads this instead of
-    // calling isLowGraphics() (which hits localStorage) many times per frame, and
-    // the shadowBlur guard installed in startGame consults it to drop shadows.
-    gameState._lowGfx = isLowGraphics();
+    // Cache the graphics tier once per frame. Hot draw code reads these flags
+    // instead of calling the helpers (which hit localStorage) many times per frame.
+    // _lowGfx = reduced compositing (drops shadows etc.); _potato = also drop the
+    // atmosphere gradients.
+    gameState._lowGfx = isReducedGraphics();
+    gameState._potato = isPotato();
     // On mobile, cap dtFactor more aggressively to reduce stutters from dropped frames
     if (isMobile() && gameState.dtFactor > 2) gameState.dtFactor = 2;
 
@@ -5531,7 +5556,7 @@ function render() {
 
     drawWindParticles(W, H);
     drawFocusFog(W, H);
-    if (!isLowGraphics()) drawSunRays(W, H);
+    if (!gameState._potato) drawSunRays(W, H);
     drawVignette(W, H);
     drawTeleportOverlay(W, H);
 
@@ -7370,8 +7395,8 @@ function drawFocusMask(W, H) {
         const pScreenY = centerY + (playerY + gameState.camera.y) * zoom * dpr;
 
         const pRadius = (gameState.isLockedIn ? 85 : 75) * zoom * dpr;
-        if (isMobile()) {
-            // Skip gradient allocation on mobile — solid circle is imperceptible difference
+        if (gameState._potato) {
+            // Potato: solid circle (sharp edge) instead of a soft radial fade
             mCtx.fillStyle = 'rgba(255, 255, 255, 1)';
         } else {
             const pGrad = mCtx.createRadialGradient(pScreenX, pScreenY, pRadius * 0.4, pScreenX, pScreenY, pRadius);
@@ -7387,7 +7412,7 @@ function drawFocusMask(W, H) {
             const lScreenX = centerX + (laptop.x + gameState.camera.x) * zoom * dpr;
             const lScreenY = centerY + (laptop.y + gameState.camera.y) * zoom * dpr;
             const lRadius = 100 * zoom * dpr;
-            if (isMobile()) {
+            if (gameState._potato) {
                 mCtx.fillStyle = 'rgba(255, 255, 255, 1)';
             } else {
                 const lGrad = mCtx.createRadialGradient(lScreenX, lScreenY, lRadius * 0.4, lScreenX, lScreenY, lRadius);
@@ -7988,7 +8013,7 @@ function drawBackgroundAtmosphere(W, H) {
 
     ctx.save();
 
-    if (!isMobile()) {
+    if (!gameState._potato) {
         // Deep indigo pool — top-left void
         const g1 = ctx.createRadialGradient(
             W * 0.05 + ox,        H * 0.10 + oy,        0,
@@ -8009,7 +8034,7 @@ function drawBackgroundAtmosphere(W, H) {
         ctx.fillStyle = g2;
         ctx.fillRect(0, 0, W, H);
     } else {
-        // Mobile: single cheaper blob
+        // Potato: single cheaper blob
         const gm = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.max(W, H) * 0.7);
         gm.addColorStop(0, 'rgba(30, 14, 58, 0.45)');
         gm.addColorStop(1, 'rgba(6, 3, 14, 0)');
@@ -8024,7 +8049,7 @@ function drawBackgroundAtmosphere(W, H) {
 // A single large radial gradient anchored off the top-right, giving the scene
 // a warm golden wash. Mild camera parallax makes it "float" behind the world.
 function drawSunRays(W, H) {
-    if (isMobile()) return;   // skip on mobile — one fewer gradient per frame
+    if (gameState._potato) return;   // skip only on potato tier
     const ctx  = gameState.ctx;
     const cam  = gameState.camera;
     const zoom = gameState.zoom;
@@ -8079,8 +8104,8 @@ function drawFocusFog(W, H) {
     ctx.save();
     ctx.globalAlpha = gameState.focusFogAlpha * 0.85;
 
-    if (isMobile()) {
-        // Simple static overlay on mobile — no gradient allocation every frame
+    if (gameState._potato) {
+        // Simple static overlay on potato — no gradient allocation every frame
         ctx.fillStyle = 'rgba(10, 15, 30, 0.35)';
         ctx.fillRect(0, 0, w, h);
     } else {
@@ -9406,15 +9431,32 @@ function spPath(sub) { return lobbyPath(`sharedPomo/${sub}`); }
 // ── Settings (device-local, persisted in localStorage) ───────────────────────
 
 function getGraphicsQuality() {
-    return localStorage.getItem(SETTINGS_GRAPHICS_KEY) || 'auto';
+    const v = localStorage.getItem(SETTINGS_GRAPHICS_KEY);
+    return (v === 'high' || v === 'low' || v === 'potato') ? v : 'auto';
 }
 
-function isLowGraphics() {
+// Resolve 'auto' to a concrete tier. Mobile defaults to 'low' (atmosphere gradients
+// ON, but cheap compositing); desktop defaults to 'high' (everything).
+function graphicsTier() {
     const q = getGraphicsQuality();
-    if (q === 'low')  return true;
-    if (q === 'high') return false;
-    return isMobile(); // 'auto': mobile → low, desktop → high
+    return q === 'auto' ? (isMobile() ? 'low' : 'high') : q;
 }
+
+// Reduced compositing: DPR cap, no live backdrop-filter, no canvas shadows, fewer
+// particles. True on BOTH 'low' and 'potato' — i.e. mobile by default. These are
+// the cheap-but-huge wins that don't change the art, so they apply on low too.
+function isReducedGraphics() {
+    const t = graphicsTier();
+    return t === 'low' || t === 'potato';
+}
+
+// Potato (بطاطس): the most aggressive tier — additionally drops the atmosphere
+// gradients (sun wash, parallax background, focus-fade, fog, ambient motes). This
+// is exactly the old mobile-low behaviour, kept for very weak phones.
+function isPotato() { return graphicsTier() === 'potato'; }
+
+// Back-compat alias: historically "low graphics" meant the reduced-compositing set.
+function isLowGraphics() { return isReducedGraphics(); }
 
 function getHideNames() {
     return localStorage.getItem(SETTINGS_NAMES_KEY) === '1';
@@ -9445,12 +9487,9 @@ function setupSettingsUI() {
         const q = getGraphicsQuality();
         graphicsBtn.dataset.value = q;
         graphicsBtn.classList.toggle('settings-toggle-on',  q === 'high');
-        graphicsBtn.classList.toggle('settings-toggle-low', q === 'low');
-        graphicsBtn.classList.remove(...(q === 'auto' ? ['settings-toggle-on','settings-toggle-low'] : []));
-        if (q === 'auto')  graphicsLabel.textContent = 'تلقائي';
-        if (q === 'high')  graphicsLabel.textContent = 'عالية';
-        if (q === 'low')   graphicsLabel.textContent = 'منخفضة';
-        // Apply: wind particles count reacts immediately
+        graphicsBtn.classList.toggle('settings-toggle-low', q === 'potato');
+        const labels = { auto: 'تلقائي', high: 'عالية', low: 'منخفضة', potato: 'بطاطس' };
+        graphicsLabel.textContent = labels[q] || 'تلقائي';
         _applyGraphicsSetting();
     }
 
@@ -9462,17 +9501,19 @@ function setupSettingsUI() {
     }
 
     function _applyGraphicsSetting() {
-        // Bokeh: hide immediately on low graphics
+        // Bokeh (live backdrop-filter blur): hide on reduced tiers (low + potato).
         const bokeh = document.getElementById('edge-bokeh');
-        if (bokeh && isLowGraphics()) bokeh.style.display = 'none';
-        // Re-apply the DPR cap (low caps to 1.5, high restores full) and refresh the
-        // cached tier so the shadow guard reacts on the next frame.
-        gameState._lowGfx = isLowGraphics();
+        if (bokeh && isReducedGraphics()) bokeh.style.display = 'none';
+        else if (bokeh) bokeh.style.display = '';
+        // Re-apply the DPR cap and refresh the cached tier flags so the shadow guard
+        // and atmosphere gates react immediately.
+        gameState._lowGfx = isReducedGraphics();
+        gameState._potato = isPotato();
         resizeCanvas();
     }
 
     graphicsBtn.addEventListener('click', () => {
-        const cycle = { auto: 'high', high: 'low', low: 'auto' };
+        const cycle = { auto: 'high', high: 'low', low: 'potato', potato: 'auto' };
         const next = cycle[getGraphicsQuality()] || 'auto';
         localStorage.setItem(SETTINGS_GRAPHICS_KEY, next);
         _reflectGraphics();
