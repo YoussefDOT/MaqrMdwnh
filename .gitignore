@@ -1,2 +1,5 @@
 .DS_Store
+._*
 .claude/worktrees/
+presence-server/node_modules/
+presence-server/.wrangler/

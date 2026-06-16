@@ -1867,6 +1867,74 @@ function syncEntityRenderToTarget(entity) {
     entity.renderY = entity.y;
 }
 
+// ---------------------------------------------------------------------------
+// Remote-player snapshot interpolation
+// ---------------------------------------------------------------------------
+// Positions arrive ~11×/sec (WebSocket) plus the occasional Firebase write.
+// Easing toward each one and stopping makes movement "step" (worst at sprint
+// speed). Instead we buffer the last ~1s of samples and render each remote
+// player NET_RENDER_DELAY ms in the past, gliding at constant velocity between
+// the two samples that bracket that render time. Result: smooth motion even at
+// a low, cheap send rate. When the buffer starves we briefly extrapolate along
+// the last velocity (only while the player is still moving), then clamp.
+const NET_RENDER_DELAY = 140; // ms behind real time (≈1.5 send intervals)
+const NET_MAX_EXTRAP   = 120; // ms cap on extrapolation when starved
+const NET_BUF_MAX_AGE  = 1200; // ms of history to retain
+
+const NET_IDLE_GAP = 250; // ms of silence after which a stream counts as "resumed"
+
+function pushNetSample(player, x, y) {
+    const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+    if (player.renderX === undefined) { player.renderX = x; player.renderY = y; }
+    if (!player._netBuf) player._netBuf = [];
+    const buf = player._netBuf;
+    const last = buf[buf.length - 1];
+    if (!last || now - last.t > NET_IDLE_GAP) {
+        // Resume-after-idle: the held sample's timestamp is stale, so interpolating
+        // across that long gap would make the avatar snap to the new position. Re-
+        // anchor at the CURRENT render position, timestamped one render-delay in the
+        // past, so the glide resumes instantly and smoothly from where the avatar
+        // actually is — no dead time before it moves, no snap.
+        buf.length = 0;
+        buf.push({ t: now - NET_RENDER_DELAY, x: player.renderX, y: player.renderY });
+    } else if (last.x === x && last.y === y) {
+        return; // not idle and no movement → no new sample
+    }
+    buf.push({ t: now, x, y });
+    while (buf.length > 2 && now - buf[0].t > NET_BUF_MAX_AGE) buf.shift();
+}
+
+// Sets entity.renderX/renderY from the buffer. Returns false if no buffer yet
+// (caller falls back to the plain lerp).
+function interpolateRemoteFromBuffer(entity) {
+    const buf = entity._netBuf;
+    if (!buf || !buf.length) return false;
+    const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+    const renderT = now - NET_RENDER_DELAY;
+    if (buf.length === 1 || renderT <= buf[0].t) {
+        entity.renderX = buf[0].x; entity.renderY = buf[0].y; return true;
+    }
+    for (let i = 0; i < buf.length - 1; i++) {
+        const a = buf[i], b = buf[i + 1];
+        if (renderT >= a.t && renderT <= b.t) {
+            const span = b.t - a.t || 1;
+            const f = (renderT - a.t) / span;
+            entity.renderX = a.x + (b.x - a.x) * f;
+            entity.renderY = a.y + (b.y - a.y) * f;
+            return true;
+        }
+    }
+    // renderT is past the newest sample (buffer starved this frame).
+    const b = buf[buf.length - 1];
+    if (!entity.isMoving) { entity.renderX = b.x; entity.renderY = b.y; return true; }
+    const a = buf[buf.length - 2];
+    const span = b.t - a.t || 1;
+    const ahead = Math.min(renderT - b.t, NET_MAX_EXTRAP);
+    entity.renderX = b.x + ((b.x - a.x) / span) * ahead;
+    entity.renderY = b.y + ((b.y - a.y) / span) * ahead;
+    return true;
+}
+
 function setEntityTarget(entity, x, y) {
     entity.x = x;
     entity.y = y;
@@ -1896,7 +1964,12 @@ function updatePlayerRenderPositions() {
             }
             continue;
         }
-        lerpEntityRenderTowardTarget(player);
+        // Remote players: smooth snapshot interpolation from the position buffer
+        // (fed by both the WebSocket relay and Firebase). Fall back to the plain
+        // catch-up lerp until the first sample arrives.
+        if (!interpolateRemoteFromBuffer(player)) {
+            lerpEntityRenderTowardTarget(player);
+        }
     }
 }
 
@@ -3161,6 +3234,7 @@ function startGame(userData) {
             });
             const _p = gameState.players[gameState.userId];
             if (_p) updatePlayerPosition(_p.x, _p.y);
+            ensurePresenceSocket();   // re-open the relay if the wake dropped it
         };
         document.addEventListener('visibilitychange', () => { if (!document.hidden) _resyncPresence(); });
         window.addEventListener('focus', _resyncPresence);
@@ -3187,6 +3261,7 @@ function startGame(userData) {
     setupLogout();
     initMobileControls();
     listenToPlayers();
+    ensurePresenceSocket();   // open the live-position WebSocket relay
     listenToPomodoro();
     listenToRace();
     listenToCoffee();
@@ -5123,6 +5198,7 @@ function listenToPomodoro() {
 function doLogout() {
     _azkarFakeHour = null;
     _azkarFakeMin  = null;
+    disconnectPresenceSocket();   // close the live-position relay; don't reconnect
     // Explicit logout — don't auto-resume on the next load.
     try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
     if (gameState.userId) {
@@ -5317,6 +5393,7 @@ function listenToPlayers() {
                             if (userData.x !== undefined && userData.x !== null
                              && userData.y !== undefined && userData.y !== null) {
                                 setEntityTarget(player, userData.x, userData.y);
+                                pushNetSample(player, userData.x, userData.y);
                             }
                             player.isMoving          = userData.isMoving || false;
                             player.isSprinting       = userData.isSprinting || false;
@@ -5346,6 +5423,116 @@ function listenToPlayers() {
             if (countElem) countElem.textContent = `${playerCount} مستخدم${playerCount > 10 ? '' : (playerCount > 2 ? 'ين' : '')}`;
         }
     });
+}
+
+// ============================================================================
+// Live position relay (Cloudflare WebSocket)
+// ----------------------------------------------------------------------------
+// High-frequency player movement (x/y) goes over a WebSocket relay instead of
+// Firebase — Firebase stays the source of truth for everything that must
+// PERSIST (presence, task, working state, pomodoro, reclaim) but is no longer
+// spammed with a write on every animation frame. The server is a dumb relay:
+// it forwards each position payload to the other players in the same lobby and
+// stores nothing. If the socket is down we silently fall back to the periodic
+// Firebase position writes (stop / heartbeat), so nobody ever freezes.
+// ============================================================================
+const PRESENCE_WS_BASE = 'wss://mdwnh-presence.yosefbore3y.workers.dev';
+const POS_WS_MIN_INTERVAL = 90; // ms between sends → ~11/sec max while walking
+const presenceNet = {
+    ws: null,
+    lobby: null,        // which lobby room the current socket is joined to
+    lastSendAt: 0,
+    reconnectTimer: null,
+    closing: false,     // true = we asked it to close (logout); don't reconnect
+};
+
+// The single entry point. Opens a socket if we don't have a healthy one for the
+// current lobby. Safe to call repeatedly (startGame, the 10s heartbeat, resync).
+function ensurePresenceSocket() {
+    if (!gameState.userId || !gameState.selectedLobby) return;
+    presenceNet.closing = false;
+    const ws = presenceNet.ws;
+    const lobbyOk = presenceNet.lobby === gameState.selectedLobby;
+    if (ws && lobbyOk && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
+    if (ws && !lobbyOk) { try { ws.close(); } catch (_) {} presenceNet.ws = null; }
+    _openPresenceSocket();
+}
+
+function _openPresenceSocket() {
+    const lobby = gameState.selectedLobby;
+    const url = `${PRESENCE_WS_BASE}/lobby/${encodeURIComponent(lobby)}?uid=${encodeURIComponent(gameState.userId)}`;
+    let ws;
+    try { ws = new WebSocket(url); } catch (_) { _schedulePresenceReconnect(); return; }
+    presenceNet.ws = ws;
+    presenceNet.lobby = lobby;
+    ws.onopen = () => {
+        // Announce our current position immediately so others place us correctly.
+        const p = gameState.players[gameState.userId];
+        if (p) sendPositionWS(p.x, p.y, true);
+    };
+    ws.onmessage = (ev) => onPresenceMessage(ev.data);
+    ws.onclose = () => { if (!presenceNet.closing) _schedulePresenceReconnect(); };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+}
+
+function _schedulePresenceReconnect() {
+    if (presenceNet.reconnectTimer || presenceNet.closing) return;
+    presenceNet.reconnectTimer = setTimeout(() => {
+        presenceNet.reconnectTimer = null;
+        ensurePresenceSocket();
+    }, 2000);
+}
+
+function disconnectPresenceSocket() {
+    presenceNet.closing = true;
+    if (presenceNet.reconnectTimer) { clearTimeout(presenceNet.reconnectTimer); presenceNet.reconnectTimer = null; }
+    if (presenceNet.ws) { try { presenceNet.ws.close(); } catch (_) {} presenceNet.ws = null; }
+    presenceNet.lobby = null;
+}
+
+// Send our position over the socket (throttled). `force` bypasses the throttle —
+// used on stop and on (re)connect so the final/initial state lands instantly.
+// Returns false if it couldn't send (socket down) so callers can fall back.
+function sendPositionWS(x, y, force) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+    if (!force && now - presenceNet.lastSendAt < POS_WS_MIN_INTERVAL) return false;
+    presenceNet.lastSendAt = now;
+    const p = gameState.players[gameState.userId];
+    const payload = JSON.stringify({
+        uid: gameState.userId,
+        x: Math.round(x),
+        y: Math.round(y),
+        m: (p && p.isMoving) ? 1 : 0,
+        s: (p && p.isSprinting) ? 1 : 0,
+    });
+    try { ws.send(payload); return true; } catch (_) { return false; }
+}
+
+function onPresenceMessage(data) {
+    let msg;
+    try { msg = JSON.parse(data); } catch (_) { return; }
+    if (!msg || !msg.uid || msg.uid === gameState.userId) return;
+    if (msg.t === 'bye') {
+        // Firebase presence owns add/remove; just stop their walk animation so
+        // they don't keep "moonwalking" until the next Firebase update.
+        const pl = gameState.players[msg.uid];
+        if (pl) { pl.isMoving = false; pl.isSprinting = false; }
+        return;
+    }
+    // Ignore positions for players Firebase hasn't introduced yet — the users
+    // listener adds them (with avatar, lobby filtering, presence) first.
+    const player = gameState.players[msg.uid];
+    if (!player) return;
+    // isMoving must update before pushing the sample — interpolateRemoteFromBuffer
+    // reads it to decide whether to extrapolate when the buffer starves.
+    player.isMoving = msg.m === 1;
+    player.isSprinting = msg.s === 1;
+    if (typeof msg.x === 'number' && typeof msg.y === 'number') {
+        setEntityTarget(player, msg.x, msg.y);  // keep .x/.y authoritative
+        pushNetSample(player, msg.x, msg.y);    // feed the interpolation buffer
+    }
 }
 
 function updatePlayerPosition(x, y) {
@@ -5435,7 +5622,9 @@ function handleMovement() {
         if (!checkCollision(player.x, nextY)) player.y = nextY;
         player.smoothMove = false;
         syncEntityRenderToTarget(player);
-        updatePlayerPosition(player.x, player.y);
+        // Live movement goes over the WebSocket relay (throttled), NOT Firebase —
+        // this is the per-frame write that used to spam the database.
+        sendPositionWS(player.x, player.y);
 
         if (Math.random() < (isSprinting ? 0.8 : 0.4) * gameState.dtFactor) {
             spawnDust(player.renderX, player.renderY, isSprinting ? 2 : 1, false);
@@ -5444,6 +5633,10 @@ function handleMovement() {
         if (player.isMoving) {
             player.isMoving = false;
             player.isSprinting = false;
+            // On stop: persist the final position to Firebase (so late joiners /
+            // reclaim / spawn read a correct last-known spot) AND push one forced
+            // socket update so others halt our walk animation immediately.
+            sendPositionWS(player.x, player.y, true);
             updatePlayerPosition(player.x, player.y);
         }
     }
@@ -5818,6 +6011,7 @@ function gameLoop(timestamp) {
         if (!gameState._lastPresenceHeartbeat || _now - gameState._lastPresenceHeartbeat > 10000) {
             gameState._lastPresenceHeartbeat = _now;
             update(ref(database), { [`users/${gameState.userId}/activeInGame`]: true });
+            ensurePresenceSocket();   // self-heal the relay if it silently died
         }
     }
 

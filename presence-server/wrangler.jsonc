@@ -1,0 +1,19 @@
+{
+  // Name of your Worker. Your URL becomes: https://mdwnh-presence.<your-subdomain>.workers.dev
+  "name": "mdwnh-presence",
+  "main": "src/index.js",
+  "compatibility_date": "2026-01-01",
+
+  // Bind the Durable Object class so the Worker can reach it.
+  "durable_objects": {
+    "bindings": [
+      { "name": "LOBBY", "class_name": "LobbyRoom" }
+    ]
+  },
+
+  // Required on the free tier: Durable Objects must use the SQLite backend.
+  // (We don't store anything, but the class must be declared this way.)
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["LobbyRoom"] }
+  ]
+}
