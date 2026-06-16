@@ -4414,6 +4414,69 @@ body.azkar-active .sound-item .sound-vol { display: none; }
 body.azkar-active .sound-name { font-size: 0.72rem; }
 body.azkar-active .yt-focus-block { display: none !important; }
 
+/* ── Hide / show the focus-sounds panel during azkar ── */
+/* Collapse button lives in the panel header; only visible during azkar (desktop). */
+.azkar-sounds-hide {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.06);
+    color: rgba(255,255,255,0.65);
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease;
+}
+.azkar-sounds-hide svg { width: 13px; height: 13px; }
+.azkar-sounds-hide:hover { background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.9); }
+body.azkar-active .azkar-sounds-hide { display: flex; }
+body.is-mobile .azkar-sounds-hide { display: none !important; }
+
+/* Reshow pill — appears at the panel's spot only while collapsed during azkar. */
+.azkar-sounds-show {
+    position: fixed;
+    bottom: 25px;
+    right: 24px;
+    z-index: 10001;
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 9px 16px;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 50px;
+    background: rgba(10,10,14,0.55);
+    backdrop-filter: blur(20px) saturate(160%);
+    -webkit-backdrop-filter: blur(20px) saturate(160%);
+    color: rgba(255,255,255,0.85);
+    font-family: 'Rubik', sans-serif;
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    opacity: 0;
+    transform: translateY(20px) scale(0.9);
+    pointer-events: none;
+    transition: transform 0.45s cubic-bezier(0.34,1.56,0.64,1), opacity 0.35s ease;
+}
+.azkar-sounds-show svg { width: 14px; height: 14px; }
+body.azkar-active.azkar-sounds-collapsed .azkar-sounds-show {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: all;
+}
+body.is-mobile .azkar-sounds-show { display: none !important; }
+
+/* Collapsed state: slide the panel down out of view (higher specificity than the
+   azkar override above, so it wins without !important on transform). */
+body.azkar-active.azkar-sounds-collapsed .focus-sounds-panel {
+    transform: translateY(140%) scale(0.85);
+    opacity: 0;
+    pointer-events: none;
+}
+
 /* Sounds panel is hidden on mobile entirely — including during azkar */
 body.is-mobile.azkar-active .focus-sounds-panel {
     display: none !important;

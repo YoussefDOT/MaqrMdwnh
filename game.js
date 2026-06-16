@@ -861,16 +861,34 @@ class FocusAudioEngine {
             const scaledVol = sound.volume * this.baseVolumeScale[name];
             sound.nodes.gainNode.gain.setValueAtTime(scaledVol, this.ctx.currentTime);
         }
+        // During azkar there's no work phase keeping master up — make the slider audible.
+        if (gameState.azkar && gameState.azkar.active) this._applyMasterForAzkar();
     }
 
     updateOverallVolume(val) {
         this.overallVolume = parseFloat(val);
         const inWorkPhase = (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
-            || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
+            || (gameState.freeMode.active && gameState.freeMode.phase === 'work')
+            || (gameState.azkar && gameState.azkar.active);
         if (this.masterGain && inWorkPhase) {
             this.masterGain.gain.setValueAtTime(this.overallVolume, this.ctx.currentTime);
         }
         this.saveToFirebase();
+    }
+
+    // The focus panel is shown during azkar as a live mixer, but no work phase is
+    // running then, so the master gain sits at 0 and toggling sounds is silent.
+    // This lifts master to the user's overall volume (resuming the context first).
+    _applyMasterForAzkar() {
+        if (!this.ctx || !this.masterGain) return;
+        const apply = () => {
+            try {
+                this.masterGain.gain.cancelScheduledValues(this.ctx.currentTime);
+                this.masterGain.gain.setValueAtTime(this.overallVolume, this.ctx.currentTime);
+            } catch (e) {}
+        };
+        if (this.ctx.state === 'suspended') this.ctx.resume().then(apply).catch(() => {});
+        else apply();
     }
 
     toggle(name) {
@@ -885,6 +903,8 @@ class FocusAudioEngine {
         }
         if (sound.active) {
             this.startSound(name);
+            // During azkar the panel acts as a live mixer; lift master so it's audible.
+            if (gameState.azkar && gameState.azkar.active) this._applyMasterForAzkar();
         } else {
             this.stopSound(name);
             if (el) el.classList.remove('sound-loading');
@@ -1604,6 +1624,7 @@ const gameState = {
         ytVolumeBefore: 80,
         focusMobileWasActive: false,
         _lastButtonRefresh: 0,
+        _lockInterval: null,       // setInterval id ticking the انتهيت lock (rAF-independent)
     },
     // Picture-in-Picture (الوضع المصغر) — always-on-top floating focus window.
     // Renders a player-centred view of the world into a separate surface (a real
@@ -8165,7 +8186,8 @@ function drawPrompt(laptop) {
 }
 
 function enforceAudioFailsafe() {
-    if (gameState.isLockedIn) return;
+    // Azkar shows the focus panel as a live mixer — don't fade master down then.
+    if (gameState.isLockedIn || gameState.azkar.active) return;
     const yt = gameState.focusYTPlayer;
     if (yt && yt.player && yt.ready && yt.videoId && !yt._fading) {
         try {
@@ -13647,6 +13669,7 @@ function openAzkarOverlay(type) {
     az.minLockMs = gameState.isSirajGhost ? 3000 : 180000;
 
     document.body.classList.add('azkar-active');
+    document.body.classList.remove('azkar-sounds-collapsed'); // always start expanded
     const overlay = document.getElementById('azkar-overlay');
     if (overlay) {
         overlay.dataset.mode = type;
@@ -13722,6 +13745,12 @@ function openAzkarOverlay(type) {
     const _listEl = document.getElementById('azkar-list');
     if (_listEl) _listEl.scrollTop = 0;
     updateAzkarFinishTimer();
+
+    // The lock countdown must not depend on the rAF game loop — that loop is throttled
+    // (or paused) in a backgrounded tab, which froze the انتهيت timer mid-count. A plain
+    // interval keeps ticking (and unlocks) even when the tab isn't focused.
+    if (az._lockInterval) clearInterval(az._lockInterval);
+    az._lockInterval = setInterval(updateAzkarFinishTimer, 250);
 }
 
 function _ar(n) {
@@ -13914,6 +13943,18 @@ function closeAzkarOverlay(markDone) {
 
     if (markDone && az.type) markAzkarCompleted(az.type);
 
+    // Stop the independent lock countdown
+    if (az._lockInterval) { clearInterval(az._lockInterval); az._lockInterval = null; }
+
+    // If the panel was used as a live mixer outside a work phase, fade master back
+    // down so ambient sounds don't keep playing after azkar closes.
+    const inWork = (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
+        || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
+    if (gameState.focusAudioEngine && !inWork) gameState.focusAudioEngine.fadeToMaster(0, 0.6);
+
+    // Reset the collapsed state so the panel is expanded next time
+    document.body.classList.remove('azkar-sounds-collapsed');
+
     az.type = null;
     az.pausedPomoRemaining = 0;
     az.pausedFreeWorkSnap = 0;
@@ -14065,6 +14106,14 @@ function setupAzkarUI() {
         const fb = document.getElementById('azkar-finish-btn');
         if (!fb?.classList.contains('unlocked')) return; // still locked
         closeAzkarOverlay(true);
+    });
+
+    // Hide / show the focus-sounds panel during azkar (smooth slide, CSS-driven)
+    document.getElementById('azkar-sounds-hide')?.addEventListener('click', () => {
+        document.body.classList.add('azkar-sounds-collapsed');
+    });
+    document.getElementById('azkar-sounds-show')?.addEventListener('click', () => {
+        document.body.classList.remove('azkar-sounds-collapsed');
     });
 
     loadAzkarCompletedFromFirebase();

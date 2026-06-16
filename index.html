@@ -62,7 +62,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 143 · Updated 5:22 PM</div>
+    <div id="build-number" class="build-number">Build 144 · Updated 6:49 PM</div>
 
     <!-- شاشة الترحيب: للمستخدمين المسجلين عبر ديسكورد -->
     <div id="discord-welcome-screen" class="screen">
@@ -667,6 +667,10 @@
                     <svg class="overall-vol-icon" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
                     <input type="range" id="overall-vol" class="overall-vol-slider" min="0" max="1" step="0.05" value="0.5">
                 </div>
+                <!-- إخفاء لوحة الأصوات أثناء الأذكار (يظهر فقط أثناء الأذكار) -->
+                <button id="azkar-sounds-hide" class="azkar-sounds-hide" title="إخفاء الأصوات" aria-label="إخفاء الأصوات">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                </button>
             </div>
             <div class="sound-controls">
                 <!-- Rain -->
@@ -735,6 +739,12 @@
                 </div>
             </div>
         </div>
+
+        <!-- زر إعادة إظهار لوحة الأصوات بعد إخفائها أثناء الأذكار -->
+        <button id="azkar-sounds-show" class="azkar-sounds-show" type="button" title="إظهار الأصوات" aria-label="إظهار الأصوات">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/></svg>
+            <span>الأصوات</span>
+        </button>
 
         <!-- YouTube Focus Player (outside focus-sounds-panel to avoid transform containing block) -->
         <div id="yt-focus-block" class="yt-focus-block">
