@@ -854,7 +854,7 @@ body {
 /* لوحة أصوات التركيز */
 .focus-sounds-panel {
     position: fixed;
-    bottom: 25px;
+    bottom: 18px;
     right: 24px;
     width: 260px;
     transform: translateY(150%) scale(0.95);
@@ -883,7 +883,7 @@ body {
 
 .current-task-panel {
     position: fixed;
-    bottom: 180px;
+    bottom: 18px;
     left: 50%;
     transform: translate(-50%, 100px) scale(0.95);
     background: rgba(10, 10, 14, 0.88);
@@ -2914,8 +2914,9 @@ body.is-mobile .sp-join-panel { left: 12px; width: calc(100vw - 24px); max-width
 body.game-ready #yt-focus-block { display: flex !important; }
 body.game-ready #prayer-panel { display: flex !important; flex-direction: column !important; }
 
-/* Move YT player up to make room for prayer panel below */
-.yt-focus-block { bottom: 188px !important; }
+/* Move YT player up to make room for prayer panel below (small natural gap).
+   Prayer panel is ~144px tall at bottom:18px → its top sits at ~162px. */
+.yt-focus-block { bottom: 172px !important; }
 
 .prayer-panel {
     position: fixed;
@@ -4840,6 +4841,11 @@ body.is-mobile .leave-wrap { top: 148px; left: 14px; }
    All at the same top, same pill height, below the big timer (~125px bottom).
    ─────────────────────────────────────────────────────────────────────────── */
 /* انهاء الجلسة (leave-wrap already at top:148, left:14 from above) */
+/* Keep all three top-row buttons BELOW the focus-sounds drawer (z-index 1001) so a
+   fully pulled-up drawer covers them instead of overlapping on short screens. */
+body.is-mobile .leave-wrap,
+body.is-mobile .pip-toggle-btn,
+body.is-mobile .azkar-focus-float-btn { z-index: 1000; }
 
 /* الوضع المصغر — right side */
 body.is-mobile .pip-toggle-btn {

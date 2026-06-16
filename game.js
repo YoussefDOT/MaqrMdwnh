@@ -4068,6 +4068,11 @@ function setMobileFocusMode(active) {
     // The joystick hides during focus on any device where it's actually shown
     // (e.g. iPad landscape, where isMobile() is false but the circle is visible).
     if (joystick) joystick.classList.toggle('focus-hidden', active && joystickShouldShow());
+    // Refresh the azkar float button immediately (it depends on the card being
+    // focus-hidden) so it appears together with the rest of the focus UI instead of
+    // lagging up to a second behind the 1/s throttle.
+    gameState.azkar._lastButtonRefresh = 0;
+    updateAzkarButton();
 }
 
 /** Show or hide the race d-pad, and toggle joystick visibility */
@@ -6205,7 +6210,10 @@ function render() {
     }
     const prayerPanel = document.getElementById('prayer-panel');
     if (prayerPanel) {
-        const showPrayer = gameState.pomodoro.active || gameState.freeMode.active;
+        // Only reveal once the kidnap animation has finished (anim inactive), so prayer
+        // appears together with focus sounds / task box / YouTube — not the moment the
+        // session is selected.
+        const showPrayer = (gameState.pomodoro.active || gameState.freeMode.active) && !gameState.anim.active;
         prayerPanel.classList.toggle('visible', !!showPrayer);
         const isBreak = (gameState.pomodoro.active && gameState.pomodoro.phase === 'break')
             || (gameState.freeMode.active && gameState.freeMode.phase === 'break');
@@ -12080,7 +12088,9 @@ function updatePomoLeaveBtn() {
     let newText, shouldShow;
     if (gameState.freeMode.active) {
         newText    = 'انهاء الجلسة';
-        shouldShow = true;
+        // Wait for the kidnap animation to finish (locked-in) before showing — keeps
+        // it in sync with focus sounds / task box instead of popping up on select.
+        shouldShow = !!(gameState.isLockedIn || gameState.freeMode.phase === 'break');
     } else {
         newText    = 'مغادرة الجلسة';
         shouldShow = !!(gameState.pomodoro.active &&
