@@ -2463,6 +2463,16 @@ function cleanupAbandonedPomoSessions(pomoData) {
             if (state.mode === 'free') {
                 const savedAt = state.savedAt || state.createdAt || 0;
                 if (savedAt && now - savedAt > FREE_MODE_EXPIRY_MS) {
+                    // Stash a reclaimable snapshot (parity with pomo below) instead of
+                    // silently deleting — so a free-mode user whose onDisconnect never
+                    // landed can still reclaim their accumulated work within 4 hours.
+                    updates[`users/${state.claimedBy}/lastPomoSession`] = {
+                        mode: 'free', laptopId: parseInt(laptopId),
+                        claimedBy: state.claimedBy,
+                        totalWorkMs: state.totalWorkMs || 0,
+                        createdAt: state.createdAt || savedAt,
+                        abandonedAt: now,
+                    };
                     updates[lobbyPath(`pomodoro/${laptopId}`)] = null;
                 }
                 continue;
@@ -11610,8 +11620,15 @@ function updateFreeMode() {
     // Check prayer trigger (only if pomodoro isn't already handling it)
     if (!gameState.pomodoro.active && !gameState.prayer.isOverlayActive) checkPrayerTrigger();
 
-    // Periodically persist totalWorkMs so it's available if the tab closes
-    if (fm.phase === 'work' && fm.workStartTime > 0 && Date.now() - fm._lastSavedAt > 15000) {
+    // Periodically persist totalWorkMs + RE-ARM the disconnect/reclaim handlers so
+    // a sudden tab close is always caught. This runs during BREAK too (not just
+    // work): the break used to arm the onDisconnect only once at break-start, so a
+    // mid-break network blip that consumed that handler left the session
+    // unreclaimable — and free mode has no cross-user stash fallback like pomo.
+    // Re-saving every 15s also keeps `savedAt` fresh so a long break doesn't trip
+    // the 1-hour free-mode expiry measured from break-start.
+    const _fmTimerRunning = (fm.phase === 'work' && fm.workStartTime > 0) || fm.phase === 'break';
+    if (_fmTimerRunning && Date.now() - fm._lastSavedAt > 15000) {
         saveFreeModStateToFirebase();
     }
 
