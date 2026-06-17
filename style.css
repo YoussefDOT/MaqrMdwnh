@@ -883,7 +883,7 @@ body {
 
 .current-task-panel {
     position: fixed;
-    bottom: 18px;
+    bottom: 95px;
     left: 50%;
     transform: translate(-50%, 100px) scale(0.95);
     background: rgba(10, 10, 14, 0.88);
