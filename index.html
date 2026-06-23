@@ -5,6 +5,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>مدونة ستوديو | مساحة العمل الرقمية</title>
+    <link rel="icon" type="image/png" sizes="128x128" href="favicon-128.png">
+    <link rel="icon" type="image/png" sizes="any" href="favicon-128.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
     <link rel="stylesheet" href="style.css">
 </head>
 
@@ -62,7 +65,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 149 · Updated 5:58 AM</div>
+    <div id="build-number" class="build-number">Build 150 · Updated 9:14 PM</div>
 
     <!-- شاشة الترحيب: للمستخدمين المسجلين عبر ديسكورد -->
     <div id="discord-welcome-screen" class="screen">
@@ -460,6 +463,7 @@
     <!-- Leave wrapper: always fixed at one position, children swap states -->
     <div id="leave-wrap" class="leave-wrap leave-wrap-hidden">
         <button id="pomo-leave-btn" class="pomo-leave-btn">انهاء جلسة العمل</button>
+        <button id="end-break-btn" class="end-break-btn" type="button" style="display:none">إنهاء الاستراحة</button>
         <div id="pomo-leave-confirm1" class="pomo-leave-confirm pomo-leave-confirm-hidden">
             <span class="plc-title">هل انت متأكد؟</span>
             <div class="plc-btns">
@@ -514,6 +518,24 @@
                 </div>
                 <button id="settings-joystick-btn" class="settings-toggle-btn" type="button" data-value="on">
                     <span id="settings-joystick-label">ظاهرة</span>
+                </button>
+            </div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span class="settings-row-name">حركة الجلوس أثناء العمل</span>
+                    <span class="settings-row-sub">إيقاف حركة شخصيتك أثناء العمل إذا كانت تشتت انتباهك</span>
+                </div>
+                <button id="settings-idle-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="on">
+                    <span id="settings-idle-label">مفعّلة</span>
+                </button>
+            </div>
+            <div class="settings-row">
+                <div class="settings-row-label">
+                    <span class="settings-row-name">ترتيب الأذكار عشوائي</span>
+                    <span class="settings-row-sub">ترتيب أذكار الصباح والمساء عشوائيًا لتقرأها بتمعّن</span>
+                </div>
+                <button id="settings-azkar-random-btn" class="settings-toggle-btn" type="button" data-value="off">
+                    <span id="settings-azkar-random-label">مغلق</span>
                 </button>
             </div>
         </div>
@@ -920,11 +942,19 @@
             </div>
             <div class="prayer-overlay-content">
                 <div id="prayer-overlay-icon" class="prayer-overlay-icon"></div>
-                <div id="prayer-overlay-name" class="prayer-overlay-name"></div>
-                <button id="prayer-overlay-btn" class="prayer-overlay-btn" disabled>
-                    <span id="prayer-overlay-btn-text">صليت.. الحمدلله ♥️</span>
-                    <span id="prayer-overlay-timer" class="prayer-overlay-timer">3:00</span>
-                </button>
+                <div class="prayer-overlay-texts">
+                    <div id="prayer-overlay-name" class="prayer-overlay-name"></div>
+                    <div class="prayer-overlay-sub">حيَّ على الصلاة، حيَّ على الفلاح</div>
+                </div>
+                <div class="prayer-overlay-actions">
+                    <button id="prayer-overlay-btn" class="prayer-overlay-btn" disabled>
+                        <span id="prayer-overlay-btn-text">صلّيتُ.. الحمد لله ♥️</span>
+                        <span id="prayer-overlay-timer" class="prayer-overlay-timer">3:00</span>
+                    </button>
+                    <button id="prayer-azkar-btn" class="prayer-azkar-btn" type="button">
+                        قراءة أذكار الصلاة؟
+                    </button>
+                </div>
             </div>
         </div>
 

@@ -21,6 +21,11 @@ function isMobile() {
 const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'high' | 'low' | 'potato'
 const SETTINGS_NAMES_KEY    = 'mdwnh_hide_names';        // '0' = show, '1' = hide
 const SETTINGS_JOYSTICK_KEY = 'mdwnh_joystick_mode';    // 'auto' | 'always' | 'off'
+const SETTINGS_NOIDLE_KEY   = 'mdwnh_disable_idle_anim'; // '1' = disable idle animation while working
+const SETTINGS_AZKAR_RANDOM_KEY = 'mdwnh_randomize_azkar'; // '1' = shuffle azkar order
+
+function getDisableIdleAnim() { return localStorage.getItem(SETTINGS_NOIDLE_KEY) === '1'; }
+function getRandomizeAzkar()  { return localStorage.getItem(SETTINGS_AZKAR_RANDOM_KEY) === '1'; }
 
 // ─── Touch / joystick detection ──────────────────────────────────────────────
 // `is-mobile` is width-based and drives the whole mobile layout. But the control
@@ -1633,7 +1638,9 @@ const gameState = {
     },
     azkar: {
         active: false,             // overlay open
-        type: null,                // 'morning' | 'evening'
+        type: null,                // 'morning' | 'evening' | 'afterPrayer'
+        items: [],                 // the active zikr list (possibly shuffled / custom)
+        afterPrayer: false,        // opened from the prayer overlay (post-salah azkar)
         startTime: 0,              // overlay opened at
         minLockMs: 180000,         // 3 min lock before انتهيت enables (5 s for Siraj)
         counts: [],                // remaining count per zikr index
@@ -1860,6 +1867,14 @@ function isBreakActive() {
         || (gameState.freeMode.active && gameState.freeMode.phase === 'break');
 }
 
+// True while the LOCAL user is in an active work phase (solo/shared pomo or free
+// mode). Used to suppress other players' distracting working-bounce animation
+// while I'm trying to focus — I only see their bounce when I'm idle / on break.
+function localInWorkPhase() {
+    return (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
+        || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
+}
+
 // True while any break minigame (race / coffee / laptop-boss) is running, including
 // its lobby/teleport phases.
 function isMinigameActive() {
@@ -1923,7 +1938,7 @@ function syncEntityRenderToTarget(entity) {
 // a low, cheap send rate. When the buffer starves we briefly extrapolate along
 // the last velocity (only while the player is still moving), then clamp.
 const NET_RENDER_DELAY = 140; // ms behind real time (≈1.5 send intervals)
-const NET_MAX_EXTRAP   = 120; // ms cap on extrapolation when starved
+const NET_MAX_EXTRAP   = 180; // ms cap on extrapolation when starved (TCP bursts/delays)
 const NET_BUF_MAX_AGE  = 1200; // ms of history to retain
 
 const NET_IDLE_GAP = 250; // ms of silence after which a stream counts as "resumed"
@@ -1934,14 +1949,17 @@ function pushNetSample(player, x, y) {
     if (!player._netBuf) player._netBuf = [];
     const buf = player._netBuf;
     const last = buf[buf.length - 1];
-    if (!last || now - last.t > NET_IDLE_GAP) {
-        // Resume-after-idle: the held sample's timestamp is stale, so interpolating
-        // across that long gap would make the avatar snap to the new position. Re-
-        // anchor at the CURRENT render position, timestamped one render-delay in the
-        // past, so the glide resumes instantly and smoothly from where the avatar
-        // actually is — no dead time before it moves, no snap.
+    // Re-anchor when the stream resumed after a gap (idle) OR after the buffer
+    // STARVED (the relay is a WebSocket over TCP, so a lost packet really means a
+    // delayed burst — meanwhile the avatar ran past the last sample and clamped).
+    // Re-anchoring at the CURRENT render position, timestamped one render-delay in
+    // the past, makes the glide resume smoothly from wherever the avatar actually
+    // is — no dead time, and crucially no forward JUMP when the burst lands (the
+    // "snapping" users saw with a laggy friend, in or out of a session).
+    if (!last || now - last.t > NET_IDLE_GAP || player._netStarved) {
         buf.length = 0;
         buf.push({ t: now - NET_RENDER_DELAY, x: player.renderX, y: player.renderY });
+        player._netStarved = false;
     } else if (last.x === x && last.y === y) {
         return; // not idle and no movement → no new sample
     }
@@ -1972,6 +1990,10 @@ function interpolateRemoteFromBuffer(entity) {
     // renderT is past the newest sample (buffer starved this frame).
     const b = buf[buf.length - 1];
     if (!entity.isMoving) { entity.renderX = b.x; entity.renderY = b.y; return true; }
+    // Still moving but out of buffer → extrapolate along the last velocity, and flag
+    // the starve so the NEXT incoming sample re-anchors smoothly instead of letting
+    // interpolation jump the avatar forward to catch up.
+    entity._netStarved = true;
     const a = buf[buf.length - 2];
     const span = b.t - a.t || 1;
     const ahead = Math.min(renderT - b.t, NET_MAX_EXTRAP);
@@ -5470,7 +5492,16 @@ function listenToPlayers() {
                             if (userData.x !== undefined && userData.x !== null
                              && userData.y !== undefined && userData.y !== null) {
                                 setEntityTarget(player, userData.x, userData.y);
-                                pushNetSample(player, userData.x, userData.y);
+                                // Only feed the interpolation buffer from Firebase when the
+                                // WebSocket isn't the live source. A Firebase write carries a
+                                // STALE position (round-trip latency) but a fresh timestamp, so
+                                // interleaving it during active WS streaming yanks the avatar
+                                // backward → the "snapping" users reported. The WS path keeps
+                                // movement smooth; Firebase is only the fallback when WS is quiet.
+                                const _now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+                                if (_now - (player._lastWsSampleAt || 0) > 1000) {
+                                    pushNetSample(player, userData.x, userData.y);
+                                }
                             }
                             player.isMoving          = userData.isMoving || false;
                             player.isSprinting       = userData.isSprinting || false;
@@ -5607,6 +5638,10 @@ function onPresenceMessage(data) {
     player.isMoving = msg.m === 1;
     player.isSprinting = msg.s === 1;
     if (typeof msg.x === 'number' && typeof msg.y === 'number') {
+        // Mark that the WebSocket is the live source for this player so the
+        // Firebase listener won't interleave its laggy (stale-position) writes
+        // into the interpolation buffer and snap the avatar backward.
+        player._lastWsSampleAt = (typeof performance !== 'undefined') ? performance.now() : Date.now();
         setEntityTarget(player, msg.x, msg.y);  // keep .x/.y authoritative
         pushNetSample(player, msg.x, msg.y);    // feed the interpolation buffer
     }
@@ -6063,6 +6098,9 @@ function gameLoop(timestamp) {
     // atmosphere gradients.
     gameState._lowGfx = isReducedGraphics();
     gameState._potato = isPotato();
+    // Cache the "disable my working idle animation" setting once per frame too —
+    // drawPlayers reads it per-avatar and the getter hits localStorage.
+    gameState._disableIdleAnim = getDisableIdleAnim();
     // On mobile, cap dtFactor more aggressively to reduce stutters from dropped frames
     if (isMobile() && gameState.dtFactor > 2) gameState.dtFactor = 2;
 
@@ -8994,13 +9032,25 @@ function drawPlayers(onlyLocal = false) {
         let workScaleY = 1.0;
         let coopDX = 0, coopDY = 0;
 
-        if (isWorking && !tpData) {
+        // Suppress avatar animation in two cases:
+        //  • MY OWN avatar, if I turned off "حركة الجلوس أثناء العمل" — freeze it
+        //    completely (bounce AND idle breathing) whenever I'm in any work phase,
+        //    pomodoro OR free mode. (isWorking above only tracks pomodoro, which is
+        //    why free mode kept breathing before — use localInWorkPhase() instead.)
+        //  • OTHER players' working bounce, while *I'm* in a work phase (I only see
+        //    their bounce when idle / on break / not in a session).
+        const suppressWorkAnim = !tpData && (
+            (isCurrentUser && gameState._disableIdleAnim && localInWorkPhase()) ||
+            (!isCurrentUser && player.isWorking && localInWorkPhase())
+        );
+
+        if (isWorking && !tpData && !suppressWorkAnim) {
             const workT = Date.now() * 0.005;
             workBob = Math.sin(workT) * 3;
             workAngle = Math.sin(workT * 0.5) * 0.08;
             workScaleY = 1.0 + Math.sin(workT) * 0.04;
             workScaleX = 1.0 - Math.sin(workT) * 0.04;
-        } else if (!tpData && !player.isMoving) {
+        } else if (!tpData && !player.isMoving && !suppressWorkAnim) {
             // Idle breathing — keeps standing avatars subtly alive.
             // Per-player phase offset so the crowd doesn't breathe in unison.
             const breatheT = Date.now() * 0.0022 + (player.bobTime || 0) * 0 + (player._breathePhase ?? (player._breathePhase = Math.random() * Math.PI * 2));
@@ -10256,6 +10306,10 @@ function setupSettingsUI() {
     const namesLabel    = document.getElementById('settings-names-label');
     const joystickBtn   = document.getElementById('settings-joystick-btn');
     const joystickLabel = document.getElementById('settings-joystick-label');
+    const idleBtn       = document.getElementById('settings-idle-btn');
+    const idleLabel     = document.getElementById('settings-idle-label');
+    const azkarRandBtn  = document.getElementById('settings-azkar-random-btn');
+    const azkarRandLabel= document.getElementById('settings-azkar-random-label');
     if (!settingsBtn || !panel) return;
 
     function _reflectJoystick() {
@@ -10282,6 +10336,23 @@ function setupSettingsUI() {
         namesBtn.dataset.value = hide ? 'hide' : 'show';
         namesBtn.classList.toggle('settings-toggle-on', !hide);
         namesLabel.textContent = hide ? 'مخفية' : 'ظاهرة';
+    }
+
+    function _reflectIdle() {
+        if (!idleBtn) return;
+        // "حركة الجلوس مفعّلة" = idle animation ON (default). Disabled = OFF.
+        const disabled = getDisableIdleAnim();
+        idleBtn.dataset.value = disabled ? 'off' : 'on';
+        idleBtn.classList.toggle('settings-toggle-on', !disabled);
+        idleLabel.textContent = disabled ? 'مغلقة' : 'مفعّلة';
+    }
+
+    function _reflectAzkarRandom() {
+        if (!azkarRandBtn) return;
+        const on = getRandomizeAzkar();
+        azkarRandBtn.dataset.value = on ? 'on' : 'off';
+        azkarRandBtn.classList.toggle('settings-toggle-on', on);
+        azkarRandLabel.textContent = on ? 'مفعّل' : 'مغلق';
     }
 
     function _applyGraphicsSetting() {
@@ -10320,6 +10391,22 @@ function setupSettingsUI() {
         });
     }
 
+    if (idleBtn) {
+        idleBtn.addEventListener('click', () => {
+            const next = getDisableIdleAnim() ? '0' : '1';
+            localStorage.setItem(SETTINGS_NOIDLE_KEY, next);
+            _reflectIdle();
+        });
+    }
+
+    if (azkarRandBtn) {
+        azkarRandBtn.addEventListener('click', () => {
+            const next = getRandomizeAzkar() ? '0' : '1';
+            localStorage.setItem(SETTINGS_AZKAR_RANDOM_KEY, next);
+            _reflectAzkarRandom();
+        });
+    }
+
     settingsBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         panel.classList.toggle('hidden');
@@ -10343,6 +10430,8 @@ function setupSettingsUI() {
     _reflectGraphics();
     _reflectNames();
     _reflectJoystick();
+    _reflectIdle();
+    _reflectAzkarRandom();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -12134,6 +12223,12 @@ function setupPomoLeaveBtn() {
         e.stopPropagation();
         resetToBtn();
     });
+
+    // إنهاء الاستراحة — end the break early, no confirmation needed.
+    document.getElementById('end-break-btn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        endBreakEarly();
+    });
 }
 
 let _leaveBtnLastText = '';
@@ -12169,6 +12264,30 @@ function updatePomoLeaveBtn() {
             document.getElementById('pomo-leave-confirm2')?.classList.add('pomo-leave-confirm-hidden');
         }
         _leaveBtnLastVisible = shouldShow;
+    }
+
+    // "إنهاء الاستراحة" — only while on break (solo pomo or free mode) and NOT in a
+    // minigame. Excludes shared-pomo break, whose timing is host-synchronized.
+    const endBreakBtn = document.getElementById('end-break-btn');
+    if (endBreakBtn) {
+        const showEndBreak = shouldShow && isBreakActive() && !isMinigameActive()
+            && gameState.sharedPomo.phase !== 'active';
+        const disp = showEndBreak ? 'block' : 'none';
+        if (endBreakBtn.style.display !== disp) endBreakBtn.style.display = disp;
+    }
+}
+
+// End the current break early and kick off the normal comeback-to-work sequence
+// (TimeReturn sound → 2 s pause → kidnap animation → work phase).
+function endBreakEarly() {
+    if (isMinigameActive()) return;
+    const fm = gameState.freeMode;
+    if (fm.active && fm.phase === 'break') { endFreeModeBreak(); return; }
+    // Solo pomo break: force the timer to zero so updatePomodoro runs its natural
+    // break-end transition next frame (writes the 'wait' doc + starts the kidnap).
+    if (gameState.pomodoro.active && gameState.pomodoro.phase === 'break'
+        && gameState.sharedPomo.phase !== 'active') {
+        gameState.pomodoro.endTime = Date.now();
     }
 }
 
@@ -13345,6 +13464,14 @@ function setupPrayerUI() {
         }
     });
 
+    // "قراءة أذكار الصلاة؟" — open the post-salah azkar overlay ON TOP of the prayer
+    // overlay. It doesn't resume the timer; only pressing انتهيت (which closes both
+    // overlays) does that, returning to a normal work session.
+    document.getElementById('prayer-azkar-btn')?.addEventListener('click', () => {
+        if (gameState.azkar && gameState.azkar.active) return;
+        openAzkarOverlay('morning', { afterPrayer: true });
+    });
+
     // Location modal
     setupPrayerLocationModal();
 
@@ -13609,6 +13736,18 @@ const AZKAR_EVENING = [
     { highlight: '', text: 'سبحان الله، والحمد لله، والله أكبر، لا إله إلا الله وحده، لا شريك له، له الملك، وله الحمد، وهو على كل شيء قدير.', count: 100 },
 ];
 
+// أذكار بعد الصلاة — opened from the prayer overlay after dismissing the athan.
+const AZKAR_AFTER_PRAYER = [
+    { highlight: '', text: 'أَسْتَغْفِرُ اللَّهَ (ثَلاَثَاً)، اللَّهُمَّ أَنْتَ السَّلاَمُ، وَمِنْكَ السَّلاَمُ، تَبَارَكْتَ يَا ذَا الْجَلاَلِ وَالْإِكْرَامِ.', count: 3 },
+    { highlight: '', text: 'لاَ إِلَهَ إِلاَّ اللَّهُ وَحْدَهُ لاَ شَرِيكَ لَهُ، لَهُ الْمُلْكُ وَلَهُ الْحَمْدُ وَهُوَ عَلَى كُلِّ شَيْءٍ قَدِيرٌ، اللَّهُمَّ لاَ مَانِعَ لِمَا أَعْطَيْتَ، وَلاَ مُعْطِيَ لِمَا مَنَعْتَ، وَلاَ يَنْفَعُ ذَا الْجَدِّ مِنْكَ الجَدُّ.', count: 3 },
+    { highlight: '', text: 'لَا إِلَهَ إِلاَّ اللَّهُ وَحْدَهُ لاَ شَرِيكَ لَهُ، لَهُ الْمُلْكُ، وَلَهُ الْحَمدُ، وَهُوَ عَلَى كُلِّ شَيْءٍ قَدِيرٌ. لاَ حَوْلَ وَلاَ قُوَّةَ إِلاَّ بِاللَّهِ، لاَ إِلَهَ إِلاَّ اللَّهُ، وَلاَ نَعْبُدُ إِلاَّ إِيَّاهُ، لَهُ النِّعْمَةُ وَلَهُ الْفَضْلُ وَلَهُ الثَّنَاءُ الْحَسَنُ، لَا إِلَهَ إِلاَّ اللَّهُ مُخْلِصِينَ لَهُ الدِّينَ وَلَوْ كَرِهَ الكَافِرُونَ.', count: 1 },
+    { highlight: '', text: 'سُبْحَانَ اللَّهِ، وَالْحَمْدُ لِلَّهِ، وَاللَّهُ أَكْبَرُ (ثلاثاً وثلاثين)، ثُمَّ: لاَ إِلَهَ إِلاَّ اللَّهُ وَحْدَهُ لاَ شَرِيكَ لَهُ، لَهُ الْمُلْكُ وَلَهُ الْحَمْدُ وَهُوَ عَلَى كُلِّ شَيْءٍ قَدِيرٌ.', count: 33 },
+    { highlight: 'بعد كل صلاة:', text: 'بِسْمِ اللهِ الرَّحْمَنِ الرَّحِيمِ ﴿قُلْ هُوَ اللَّهُ أَحَدٌ * اللَّهُ الصَّمَدُ * لَمْ يَلِدْ وَلَمْ يُولَدْ * وَلَمْ يَكُن لَّهُ كُفُواً أَحَدٌ﴾، ﴿قُلْ أَعُوذُ بِرَبِّ الْفَلَقِ * مِن شَرِّ مَا خَلَقَ * وَمِن شَرِّ غَاسِقٍ إِذَا وَقَبَ * وَمِن شَرِّ النَّفَّاثَاتِ فِي الْعُقَدِ * وَمِن شَرِّ حَاسِدٍ إِذَا حَسَدَ﴾، ﴿قُلْ أَعُوذُ بِرَبِّ النَّاسِ * مَلِكِ النَّاسِ * إِلَهِ النَّاسِ * مِن شَرِّ الْوَسْوَاسِ الْخَنَّاسِ * الَّذِي يُوَسْوِسُ فِي صُدُورِ النَّاسِ * مِنَ الْجِنَّةِ وَالنَّاسِ﴾.', count: 1 },
+    { highlight: 'آية الكرسي عقب كل صلاة:', text: '﴿اللَّهُ لاَ إِلَهَ إِلاَّ هُوَ الْحَيُّ الْقَيُّومُ لاَ تَأْخُذُهُ سِنَةٌ وَلاَ نَوْمٌ، لَّهُ مَا فِي السَّمَوَاتِ وَمَا فِي الأَرْضِ، مَن ذَا الَّذِي يَشْفَعُ عِنْدَهُ إِلاَّ بِإِذْنِهِ، يَعْلَمُ مَا بَيْنَ أَيْدِيهِمْ وَمَا خَلْفَهُمْ، وَلاَ يُحِيطُونَ بِشَيْءٍ مِّنْ عِلْمِهِ إِلاَّ بِمَا شَاءَ، وَسِعَ كُرْسِيُّهُ السَّمَوَاتِ وَالأَرْضَ، وَلاَ يَؤُودُهُ حِفْظُهُمَا، وَهُوَ الْعَلِيُّ الْعَظِيمُ﴾.', count: 1 },
+    { highlight: 'عشر مرات بعد المغرب والصبح:', text: 'لاَ إِلَهَ إِلاَّ اللَّهُ وَحْدَهُ لاَ شَرِيكَ لَهُ، لَهُ الْمُلْكُ وَلَهُ الْحَمْدُ يُحْيِي وَيُمِيتُ وَهُوَ عَلَى كُلِّ شَيْءٍ قَدِيرٌ.', count: 10 },
+    { highlight: 'بعد السلام من صلاة الفجر:', text: 'اللَّهُمَّ إِنِّي أَسْأَلُكَ عِلْماً نافِعاً، وَرِزْقاً طَيِّباً، وَعَمَلاً مُتَقَبَّلاً.', count: 1 },
+];
+
 // Fallback prayer windows for Cairo when no location yet (approximate year-round)
 const AZKAR_FALLBACK_TIMES = { Fajr: '04:30', Dhuhr: '12:00', Asr: '15:30', Maghrib: '18:00', Isha: '19:30' };
 
@@ -13723,52 +13862,80 @@ function loadAzkarCompletedFromFirebase() {
     }).catch(() => {});
 }
 
-function openAzkarOverlay(type) {
+// Fisher–Yates shuffle (returns a new array, leaves the source untouched).
+function _shuffledCopy(arr) {
+    const a = arr.slice();
+    for (let i = a.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [a[i], a[j]] = [a[j], a[i]];
+    }
+    return a;
+}
+
+// opts.afterPrayer = post-salah azkar opened ON TOP of the prayer overlay; the
+// prayer overlay already froze the timer + faded audio, so we DON'T touch them
+// here (closeAzkarOverlay delegates the resume to dismissPrayerOverlay).
+function openAzkarOverlay(type, opts) {
     const az = gameState.azkar;
     if (az.active) return;
+    opts = opts || {};
+    const afterPrayer = !!opts.afterPrayer;
 
     az.active = true;
     az.type = type;
+    az.afterPrayer = afterPrayer;
     az.startTime = Date.now();
     az.currentIndex = 0;
-    const list = type === 'morning' ? AZKAR_MORNING : AZKAR_EVENING;
-    az.counts = list.map(z => z.count);
+    // Build the active list: custom (after-prayer) or the standard morning/evening
+    // set, optionally shuffled if the user enabled "ترتيب الأذكار عشوائي".
+    let baseList = afterPrayer ? AZKAR_AFTER_PRAYER
+                 : (type === 'morning' ? AZKAR_MORNING : AZKAR_EVENING);
+    az.items = (getRandomizeAzkar() && !afterPrayer) ? _shuffledCopy(baseList) : baseList.slice();
+    az.counts = az.items.map(z => z.count);
 
-    // Siraj: shorter lock for testing
-    az.minLockMs = gameState.isSirajGhost ? 3000 : 180000;
+    // Siraj: shorter lock for testing. After-prayer azkar: no forced wait — these
+    // are short post-salah adhkar, so انتهيت is usable as soon as they're done.
+    az.minLockMs = afterPrayer ? 0 : (gameState.isSirajGhost ? 3000 : 180000);
 
     document.body.classList.add('azkar-active');
+    if (afterPrayer) document.body.classList.add('azkar-after-prayer');
+    else document.body.classList.remove('azkar-after-prayer');
     document.body.classList.remove('azkar-sounds-collapsed'); // always start expanded
     const overlay = document.getElementById('azkar-overlay');
     if (overlay) {
-        overlay.dataset.mode = type;
+        // After-prayer azkar uses the morning (sky-blue) look regardless of time.
+        overlay.dataset.mode = afterPrayer ? 'morning' : type;
         overlay.classList.remove('hidden');
         requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add('active')));
     }
 
     // ── Pause pomodoro / freeMode timers ──
-    // Solo pomo: snapshot remaining ms (we'll keep extending endTime in update loop)
-    if (gameState.pomodoro.active && gameState.sharedPomo.phase !== 'active') {
-        az.pausedPomoRemaining = Math.max(0, gameState.pomodoro.endTime - Date.now());
-        az.pausedPomoPhase = gameState.pomodoro.phase;
-        // Push the frozen endTime to Firebase so other lobby members watching
-        // this laptop don't see it expire while the user is in azkar.
-        if (gameState.pomodoro.laptopId !== null) {
-            update(ref(database), {
-                [lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}/endTime`)]:
-                    Date.now() + az.pausedPomoRemaining
-            }).catch(() => {});
+    // After-prayer azkar skips this entirely — the prayer overlay already froze
+    // everything and owns the resume when it's dismissed.
+    if (!afterPrayer) {
+        // Solo pomo: snapshot remaining ms (we'll keep extending endTime in update loop)
+        if (gameState.pomodoro.active && gameState.sharedPomo.phase !== 'active') {
+            az.pausedPomoRemaining = Math.max(0, gameState.pomodoro.endTime - Date.now());
+            az.pausedPomoPhase = gameState.pomodoro.phase;
+            // Push the frozen endTime to Firebase so other lobby members watching
+            // this laptop don't see it expire while the user is in azkar.
+            if (gameState.pomodoro.laptopId !== null) {
+                update(ref(database), {
+                    [lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}/endTime`)]:
+                        Date.now() + az.pausedPomoRemaining
+                }).catch(() => {});
+            }
         }
-    }
-    // Free mode: snapshot accumulated work, freeze workStartTime
-    if (gameState.freeMode.active) {
-        const fm = gameState.freeMode;
-        if (fm.phase === 'work' && fm.workStartTime > 0) {
-            fm.totalWorkMs  += Date.now() - fm.workStartTime;
-            fm.workStartTime = 0;
-        }
-        if (fm.phase === 'break') {
-            az.pausedFreeWorkSnap = Math.max(0, fm.breakEndTime - Date.now());
+        // Free mode: snapshot accumulated work, freeze workStartTime
+        if (gameState.freeMode.active) {
+            const fm = gameState.freeMode;
+            if (fm.phase === 'work' && fm.workStartTime > 0) {
+                fm.totalWorkMs  += Date.now() - fm.workStartTime;
+                fm.workStartTime = 0;
+            }
+            if (fm.phase === 'break') {
+                az.pausedFreeWorkSnap = Math.max(0, fm.breakEndTime - Date.now());
+            }
         }
     }
 
@@ -13780,7 +13947,9 @@ function openAzkarOverlay(type) {
         .forEach(k => { if (gameState.keys) gameState.keys[k] = false; });
 
     // ── Stop YouTube (remember if was playing so we can restore) ──
-    if (gameState.focusYTPlayer) {
+    // After-prayer azkar: the prayer overlay already faded YT out and owns the
+    // restore, so don't touch it here.
+    if (!afterPrayer && gameState.focusYTPlayer) {
         try {
             const state = gameState.focusYTPlayer.player?.getPlayerState?.() ?? -1;
             az.ytWasPlaying = (state === 1 /* PLAYING */);
@@ -13789,7 +13958,7 @@ function openAzkarOverlay(type) {
         gameState.focusYTPlayer.fadeOutAndPause(1200);
     }
     // Show "انتهي من أذكارك" overlay above YT
-    document.getElementById('yt-azkar-overlay')?.classList.add('active');
+    if (!afterPrayer) document.getElementById('yt-azkar-overlay')?.classList.add('active');
 
     // On mobile: un-hide user card / logout if they were hidden by focus mode (we need an exit)
     az.focusMobileWasActive = document.body.classList.contains('mobile-focus-mode') ||
@@ -13834,8 +14003,9 @@ function renderAzkarList() {
     const progEl = document.getElementById('azkar-progress');
     if (!listEl) return;
 
-    const items = az.type === 'morning' ? AZKAR_MORNING : AZKAR_EVENING;
-    if (titleEl) titleEl.textContent = az.type === 'morning' ? 'أذكار الصباح' : 'أذكار المساء';
+    const items = az.items;
+    if (titleEl) titleEl.textContent = az.afterPrayer ? 'أذكار بعد الصلاة'
+        : (az.type === 'morning' ? 'أذكار الصباح' : 'أذكار المساء');
     const completedCount = az.counts.filter(c => c === 0).length;
     if (progEl) progEl.textContent = `${_ar(completedCount)} / ${_ar(items.length)}`;
 
@@ -13901,7 +14071,7 @@ function onAzkarCountClick(idx) {
     if (!az.active) return;
     if (az.counts[idx] <= 0) return;
     az.counts[idx] -= 1;
-    const items = az.type === 'morning' ? AZKAR_MORNING : AZKAR_EVENING;
+    const items = az.items;
     const listEl = document.getElementById('azkar-list');
     const itemEls = listEl?.querySelectorAll('.azkar-item');
     if (!itemEls) return;
@@ -13925,11 +14095,18 @@ function onAzkarCountClick(idx) {
         if (next < items.length) {
             az.currentIndex = next;
             itemEls.forEach((el, j) => el.classList.toggle('current', j === next));
-            // Smooth scroll to next
+            // Smooth scroll to next — scroll ONLY the list, never let it bubble to the
+            // overlay/page (scrollIntoView used to scroll the whole overlay down, which
+            // looked like the overlay jumping when the list couldn't scroll on its own).
             const nextEl = itemEls[next];
-            if (nextEl) {
+            if (nextEl && listEl) {
                 setTimeout(() => {
-                    nextEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    const lr = listEl.getBoundingClientRect();
+                    const nr = nextEl.getBoundingClientRect();
+                    const delta = (nr.top - lr.top) - (listEl.clientHeight / 2 - nr.height / 2);
+                    const maxTop = listEl.scrollHeight - listEl.clientHeight;
+                    const top = Math.max(0, Math.min(maxTop, listEl.scrollTop + delta));
+                    listEl.scrollTo({ top, behavior: 'smooth' });
                 }, 220);
             }
         }
@@ -13960,7 +14137,31 @@ function updateAzkarFinishTimer() {
 function closeAzkarOverlay(markDone) {
     const az = gameState.azkar;
     if (!az.active) return;
+    const wasAfterPrayer = az.afterPrayer;
     az.active = false;
+    az.afterPrayer = false;
+
+    // After-prayer azkar: the prayer overlay owns the timer/audio resume. Just fade
+    // the azkar overlay out and then dismiss the prayer overlay (which un-freezes the
+    // timer + fades focus sounds / YouTube back in → normal work session). Skip all
+    // the solo/free resume logic below so we don't double-resume.
+    if (wasAfterPrayer) {
+        const overlay = document.getElementById('azkar-overlay');
+        if (overlay) {
+            overlay.classList.remove('active');
+            setTimeout(() => { overlay.classList.add('hidden'); }, 700);
+        }
+        document.body.classList.remove('azkar-active');
+        document.body.classList.remove('azkar-after-prayer');
+        document.body.classList.remove('azkar-sounds-collapsed');
+        if (az._lockInterval) { clearInterval(az._lockInterval); az._lockInterval = null; }
+        az.type = null;
+        az.items = [];
+        // Dismiss the prayer overlay underneath — this resumes the work session.
+        if (gameState.prayer && gameState.prayer.isOverlayActive) dismissPrayerOverlay();
+        updateAzkarButton();
+        return;
+    }
 
     // Resume pomodoro endTime (solo)
     if (gameState.pomodoro.active && gameState.sharedPomo.phase !== 'active') {

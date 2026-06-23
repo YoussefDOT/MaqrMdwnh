@@ -6,6 +6,8 @@
 
 > **The owner is a beginner developer.** Explain things in plain language — what broke, why, and what the fix does — as if to someone who doesn't know much about code. Skip jargon, and when you must use a technical term, define it briefly. Don't over-explain either: keep it short and clear, not a tutorial. Claude is the one writing the code; the owner is steering, so help them understand decisions without drowning them in detail.
 
+> **The owner is on macOS and tests mainly in Safari.** Every new feature must work cross-browser — don't assume Chrome behaviour. Common Safari gotchas: aggressive favicon caching + rejection of oversized favicons (use a small ~128px PNG, not a 1MB+ one — see `favicon-128.png`/`apple-touch-icon.png`); no `documentPictureInPicture` and no `canvas.captureStream()` (PiP falls back to a popup window — see Picture-in-Picture tiers); `button[disabled]` leaks touch events on iOS (use a CSS `.unlocked` class, never the `disabled` attribute, for visual-only locks); always pair `backdrop-filter` with `-webkit-backdrop-filter`; stricter autoplay / AudioContext-resume rules. When something "works for me but not for the owner," suspect a Safari difference first.
+
 ---
 
 ## Quick Start
@@ -35,7 +37,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Focus sounds panel** | Ambient audio mixer — 8 sounds, each with an on/off toggle and volume slider (desktop only) |
 | **YouTube focus player** | Paste a YouTube link, it plays embedded with loop support |
 | **Prayer times** | Live Adhan scheduling with overlay + rain effect |
-| **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock |
+| **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock; optional shuffled order; **after-prayer azkar** reachable from the prayer overlay |
 | **Minigames** | Racing (canvas-based) and Coffee-catching game; triggered by walking into zones |
 | **Mobile mode** | Full touch support — virtual joystick, pull-up sounds drawer, focus-mode UI |
 
@@ -182,7 +184,8 @@ Morning and evening are **independent keys** — marking morning done does NOT a
 ### gameState.azkar fields
 ```js
 azkar: {
-    active, type, startTime, minLockMs,   // overlay state
+    active, type, items[], afterPrayer,   // overlay state (items = the ACTIVE list)
+    startTime, minLockMs,
     counts[], currentIndex, completed,     // list progress
     pausedPomoRemaining, pausedPomoPhase,  // timer freeze
     pausedFreeWorkStart, pausedFreeWorkSnap,
@@ -191,15 +194,23 @@ azkar: {
 }
 ```
 
+**`az.items` is the single source for rendering** — `openAzkarOverlay` builds it once (`renderAzkarList`/`onAzkarCountClick` read `az.items`, never `AZKAR_MORNING/EVENING` directly), so shuffling and the custom after-prayer list "just work" and stay index-aligned with `az.counts`.
+
+### Randomize order
+`getRandomizeAzkar()` (off by default, `SETTINGS_AZKAR_RANDOM_KEY`) → `openAzkarOverlay` builds `az.items` via `_shuffledCopy(baseList)` (Fisher–Yates). Completion tracking is per-type (morning/evening), so shuffling never affects the done state.
+
+### After-prayer azkar (أذكار بعد الصلاة)
+Opened from the **prayer overlay** via `#prayer-azkar-btn` → `openAzkarOverlay('morning', { afterPrayer: true })`. Uses the custom `AZKAR_AFTER_PRAYER` list, the morning (sky-blue) look (`overlay.dataset.mode = 'morning'`), and sits **on top** of the prayer overlay (`body.azkar-after-prayer .azkar-overlay { z-index: 10002 }` vs prayer's 10000). Crucially it does **not** freeze/resume the timer or fade YT/sounds itself (`afterPrayer` skips all of that in `openAzkarOverlay`) — the prayer overlay already owns that. On انتهيت, `closeAzkarOverlay` detects `afterPrayer`, fades the azkar overlay out, then calls `dismissPrayerOverlay()` which un-freezes the timer and fades focus sounds + YouTube back in → normal work session. `minLockMs = 0` for after-prayer (no forced wait).
+
 ### Key functions
 | Function | Purpose |
 |---|---|
 | `getCurrentAzkarType()` | Returns current window type using `_azkarFakeHour` if set |
 | `updateAzkarButton()` | Throttled 1/s; shows/hides button + mobile float btn |
-| `openAzkarOverlay(type)` | Freezes timers, pauses YT, renders list, starts lock timer |
-| `closeAzkarOverlay(markDone)` | Restores timers, fades YT back in, removes body class |
-| `renderAzkarList()` | Builds DOM; resets `scrollTop = 0` every time |
-| `onAzkarCountClick(idx)` | Decrements count, marks done, scrolls to next |
+| `openAzkarOverlay(type, opts)` | Builds `az.items` (shuffle / custom), freezes timers, pauses YT, renders list, starts lock timer. `opts.afterPrayer` = post-salah mode (skips freeze/YT) |
+| `closeAzkarOverlay(markDone)` | Restores timers, fades YT back in, removes body class. In `afterPrayer` mode delegates the resume to `dismissPrayerOverlay()` |
+| `renderAzkarList()` | Builds DOM from `az.items`; resets `scrollTop = 0` every time |
+| `onAzkarCountClick(idx)` | Decrements count, marks done, scrolls to next — **scrolls `listEl` only** (manual `scrollTo`, never `scrollIntoView` which bubbled up and scrolled the whole overlay down) |
 | `markAzkarCompleted(type)` | Saves to Firebase |
 | `setupAzkarUI()` | Wires all button events; called from `startGame()` |
 | `updateAzkarSystem()` | Called every frame from game loop |
@@ -337,6 +348,8 @@ Prayer location stored in localStorage (`mdwnh_prayer_location`).
 
 **Offline fallback (API can be blocked by VPN/ISP).** `fetchPrayerTimes()`: resolve coords (in-memory, else match `PRAYER_LOCATIONS` by city+country) → try `api.aladhan.com` with an **8s `AbortController`** → on any failure **compute locally** via `computePrayerTimesLocal()` (self-contained, method=5: Fajr 19.5°, Isha 17.5°, Asr factor 1; uses the device UTC offset so DST is correct; verified within ~1 min of the API). Retry in 20s only if there were no coords at all.
 
+**Overlay layout** (`.prayer-overlay-content`): a centred glass card — icon, name, subtitle (`حيَّ على الصلاة، حيَّ على الفلاح`), then a `.prayer-overlay-actions` column with the primary dismiss button (`#prayer-overlay-btn`, locked for `prayerLockMs`) and a secondary `#prayer-azkar-btn` ("قراءة أذكار الصلاة؟") that opens the after-prayer azkar on top (see Azkar System). Keep the gorgeous per-prayer backgrounds (`.prayer-overlay-bg` gradients) untouched — only the content card was redesigned.
+
 ---
 
 ## Minigame Architecture
@@ -396,6 +409,28 @@ Never animate `filter: blur()` or `transform: scale()`/`background-position` on 
 
 ---
 
+## Settings Panel (`setupSettingsUI`, `#settings-panel`)
+
+Opens **under the gear button, top-right** on desktop (`top:130px; right:18px`) and mobile (`right:10px; top:110px`). Each row is a binary toggle button reflected via a `_reflect*()` helper and persisted in localStorage. Keys & defaults:
+
+| Key | Default | Effect |
+|---|---|---|
+| `SETTINGS_GRAPHICS_KEY` | device-auto | عالية → منخفضة → بطاطس (see Graphics Tiers) |
+| `SETTINGS_NAMES_KEY` | show | hide player names above avatars |
+| `SETTINGS_JOYSTICK_KEY` | auto | show/hide the on-screen joystick |
+| `SETTINGS_NOIDLE_KEY` | off (`getDisableIdleAnim()`) | when **on**, freeze the local avatar's animation while working |
+| `SETTINGS_AZKAR_RANDOM_KEY` | off (`getRandomizeAzkar()`) | when **on**, shuffle morning/evening azkar order each open |
+
+### Avatar working animation (`drawPlayers`, the `suppressWorkAnim` block)
+Two independent suppressions, both gated on `localInWorkPhase()` (pomodoro **or** free-mode work):
+- **My own avatar** — if `SETTINGS_NOIDLE_KEY` is on, freeze **both** the working bounce **and** the idle breathing while I'm in any work phase. NB the per-avatar `isWorking` flag only tracks pomodoro, so the suppression uses `localInWorkPhase()` (which also covers free mode) — otherwise free-mode users kept breathing. The flag is cached per-frame as `gameState._disableIdleAnim` (the getter hits localStorage; never read it per-draw).
+- **Other players' working bounce** — always hidden while *I'm* in a work phase. I only see their bounce when I'm idle / on break / not in a session.
+
+### End-break button (`#end-break-btn`, `endBreakEarly()`)
+"إنهاء الاستراحة" — a child of `#leave-wrap`, shown by `updatePomoLeaveBtn` only when `isBreakActive() && !isMinigameActive() && sharedPomo.phase !== 'active'` (solo pomo or free-mode break; shared pomo is host-synchronized so it's excluded). Ends the break early into the normal comeback-to-work sequence: free mode calls `endFreeModeBreak()`; solo pomo just sets `pomodoro.endTime = Date.now()` so `updatePomodoro`'s natural break-end transition (writes the `wait` doc → 2 s → kidnap) fires next frame.
+
+---
+
 ## Player Position Sync
 
 ### Live movement runs over a WebSocket relay (not Firebase)
@@ -403,7 +438,10 @@ High-frequency walking used to write `x/y` to Firebase **every animation frame**
 
 - **Server**: [`presence-server/`](presence-server/) — a stateless relay. One Durable Object = one lobby room (keyed by `gameState.selectedLobby`, so male/female never mix). It forwards each position payload to the other sockets in the room and stores nothing; on disconnect it sends `{t:'bye',uid}`. Deploy with `npx wrangler deploy`. URL: `wss://mdwnh-presence.yosefbore3y.workers.dev/lobby/<lobby>?uid=<uid>`. Free tier bills incoming WS messages 20:1 → ~2M msgs/day free.
 - **Client** (`game.js`, the "Live position relay" block above `updatePlayerPosition`): `ensurePresenceSocket()` opens/heals the socket (called from `startGame`, the 10s presence heartbeat, and `_resyncPresence`). `sendPositionWS(x,y,force)` sends `{uid,x,y,m,s}` throttled to ~11/sec. `onPresenceMessage()` feeds others' positions into a per-player **interpolation buffer** (`pushNetSample`). `disconnectPresenceSocket()` on logout. Auto-reconnects on close (2s backoff).
-- **Smooth movement = snapshot interpolation** (`pushNetSample` / `interpolateRemoteFromBuffer`, in the entity-helpers block). At ~11 packets/sec the old "ease toward each point and stop" lerp visibly stepped (worst at sprint). Instead each remote player is rendered `NET_RENDER_DELAY` (140ms) **in the past**, gliding at constant velocity between the two buffered samples bracketing that time; if the buffer starves it extrapolates along the last velocity for ≤120ms (only while `isMoving`) then clamps. `updatePlayerRenderPositions` uses this for remotes and falls back to the plain lerp only before the first sample. **The buffer is fed by BOTH the WebSocket and the Firebase users listener**, so seating/teleport/kidnap/fallback all stay smooth and never freeze.
+- **Smooth movement = snapshot interpolation** (`pushNetSample` / `interpolateRemoteFromBuffer`, in the entity-helpers block). At ~11 packets/sec the old "ease toward each point and stop" lerp visibly stepped (worst at sprint). Instead each remote player is rendered `NET_RENDER_DELAY` (140ms) **in the past**, gliding at constant velocity between the two buffered samples bracketing that time; if the buffer starves it extrapolates along the last velocity for ≤`NET_MAX_EXTRAP` (180ms) (only while `isMoving`) then clamps. `updatePlayerRenderPositions` uses this for remotes and falls back to the plain lerp only before the first sample. **The buffer is fed by BOTH the WebSocket and the Firebase users listener**, so seating/teleport/kidnap/fallback all stay smooth and never freeze.
+- **Anti-snap (the "friend snapping places" bug), two distinct causes — both fixed:**
+  1. **Stale Firebase write polluting the buffer.** Firebase position writes (the 4s session heartbeat, stop writes) carry a slightly-OLD position but a fresh timestamp; appended as the newest buffer sample they yank the avatar backward, then the next WebSocket packet snaps it forward. Worst during a **break** (a walking friend still has `pomodoro.active`, so their heartbeat fires while WS also streams). **Fix:** `onPresenceMessage` stamps `player._lastWsSampleAt`; the Firebase users listener only `pushNetSample`s when WS has been quiet >1s (still sets the authoritative `.x/.y` always). WS owns smoothness; Firebase is the fallback only.
+  2. **WebSocket starve → forward jump.** The relay is WS-over-TCP, so a "lost" packet is really a **delayed burst**. While starved the avatar extrapolates then clamps at the last sample; when the burst lands, interpolation places the render-time *between* the old clamp and the new sample and the avatar jumps forward to catch up. Happens **regardless of session/break**. **Fix:** the starve branch sets `entity._netStarved`; the next `pushNetSample` re-anchors at the CURRENT render position (same mechanism as resume-after-idle) so the glide continues smoothly with no jump.
 - **`handleMovement`**: per-frame walk → `sendPositionWS()` (WebSocket). On **stop** → a forced `sendPositionWS()` (instant anim stop for others) **plus** `updatePlayerPosition()` (one Firebase write to persist last-known position for late joiners / spawn / reclaim).
 - **Fallback**: if the socket is down, the periodic Firebase writes (stop + heartbeats) still drive observers via the users listener's `setEntityTarget` — nobody freezes, just less smooth until it reconnects.
 - **Known limit (experiment)**: position `uid` is client-claimed (spoofable). Fine for the trusted friend group; revisit if going fully public.
@@ -499,6 +537,9 @@ Render is driven by the **PiP window's own `requestAnimationFrame`** (`_pipFrame
 | Reclaimed session lost after a reconnect | `reassertActiveSessionAfterReconnect` cleared `lastPomoSession` to `null` then armed only the `abandonedAt` child → a later disconnect stamped a timestamp onto an empty object | Re-**persist** a full live snapshot via `trackSessionForReclaim` (never `set(null)` while still in-session) |
 | Mobile: re-tapping the same laptop fires free/pomo "without asking"; happens only on the same laptop | The opening tap is followed ~300ms later by a synthesized `click` at the same point; if a mode-select button sits under it (depends on the laptop's screen position) it fires immediately | Ghost-click guard: `showLaptopModeSelect()` stamps `_modeSelectOpenedAt`; `mode-select-pomo`/`mode-select-free` ignore presses within 500ms (`modeSelectGhostClick()`) |
 | Reconnected user shows no `أعمل على` / no timer for others; or appears low-opacity (VC-ghost look) after PC sleep/wake | `activeInGame` was set once at login and only re-asserted by `.info/connected`; `updatePlayerPosition` never wrote it, and the position heartbeat only runs during a session — so an idle/walking user stayed `false` after a drop, gating their opacity + timer + task label | Write `activeInGame:true` on every `updatePlayerPosition`; add a session-independent **10s presence heartbeat**; re-assert on `visibilitychange`/`focus`/`online`. See **Presence self-heal** |
+| Friend's avatar "snaps places" occasionally while walking | Two causes: (1) a laggy Firebase position write (4s heartbeat during a break, stop write) fed the interpolation buffer with a stale-but-fresh-timestamped sample → backward yank; (2) WS-over-TCP delayed bursts starved the buffer, then interpolation jumped the avatar forward to catch up when the burst landed | (1) Only `pushNetSample` from Firebase when WS quiet >1s (`player._lastWsSampleAt`); (2) flag the starve (`entity._netStarved`) so the next sample re-anchors at the current render pos. See **Player Position Sync → Anti-snap** |
+| "Disable idle animation while working" setting did nothing in free mode | The per-avatar `isWorking` flag only tracks pomodoro, so in free mode the local avatar fell into the idle-breathing branch and the suppression (gated on `isWorking`) never fired | Gate the local-avatar suppression on `localInWorkPhase()` (covers pomodoro **and** free mode) and freeze both the bounce and the breathing |
+| After-prayer azkar: tapping a count button scrolled the whole overlay down | `nextEl.scrollIntoView()` bubbles to the nearest scrollable ancestor; when the list itself couldn't scroll it scrolled the overlay/page | Scroll `listEl` only via a manual `listEl.scrollTo({top})` computed from bounding rects — never `scrollIntoView` |
 
 ---
 
