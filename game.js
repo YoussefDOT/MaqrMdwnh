@@ -60,7 +60,19 @@ function updateJoystickVisibility() {
 
 function setMobileClass() {
     document.body.classList.toggle('is-mobile', isMobile());
+    applyGraphicsBodyClass();
     updateJoystickVisibility();
+}
+
+// Mirror the graphics tier onto the <body> so the CSS perf wins (drop live
+// backdrop-filter, pause overlay animations) apply on DESKTOP too when the user
+// picks low/potato — not just on mobile. `reduced-gfx` = low or potato (the
+// cheap compositing wins); `potato-gfx` = the most aggressive tier. On desktop
+// the default tier is 'high', so these only switch on once the user lowers it.
+function applyGraphicsBodyClass() {
+    const reduced = isReducedGraphics();
+    document.body.classList.toggle('reduced-gfx', reduced);
+    document.body.classList.toggle('potato-gfx', isPotato());
 }
 // ─── Lobby configuration ─────────────────────────────────────────────────────
 // To add a new lobby: add one entry.  The key is the internal lobby ID and must
@@ -10281,6 +10293,7 @@ function setupSettingsUI() {
         // and atmosphere gates react immediately.
         gameState._lowGfx = isReducedGraphics();
         gameState._potato = isPotato();
+        applyGraphicsBodyClass();   // toggle reduced-gfx/potato-gfx body classes for the CSS wins
         resizeCanvas();
     }
 
