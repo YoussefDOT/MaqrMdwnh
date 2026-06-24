@@ -1,0 +1,182 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   JUICE EXPERIMENT — arcade-feel UI animations (pop-in + pop-out cascades,
+   gentle click compression). Fully additive & reversible: delete the <link>
+   to juice.css in index.html to revert all of this. No existing rules edited.
+
+   Tone: smooth, not jagged. Subtle overshoot only — the heavy springiness was
+   dialled way down per feedback. Sequencing (staggered cascades) is preserved.
+
+   Scope notes:
+   • Never touches .focus-sounds-panel (its transform is JS drag-owned).
+   • Only animates display-toggled elements (so cascades re-trigger on open) or
+     elements without transform-based positioning.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+:root {
+    /* Smooth ease-out with only a whisper of overshoot */
+    --juice-spring: cubic-bezier(0.25, 1.0, 0.32, 1);
+    --juice-snap:   cubic-bezier(0.22, 1.0, 0.30, 1);
+}
+
+/* ── Pop-IN keyframes (gentle) ─────────────────────────────────────────────── */
+@keyframes juicePop {
+    0%   { transform: scale(0.928) translateY(8.4px); opacity: 0; }
+    70%  { transform: scale(1.0145) translateY(-1.2px); opacity: 1; }
+    100% { transform: scale(1)      translateY(0);    opacity: 1; }
+}
+@keyframes juiceRowIn {
+    0%   { transform: translateX(14.4px); opacity: 0; }
+    100% { transform: translateX(0);      opacity: 1; }
+}
+@keyframes juiceContainerPop {
+    0%   { transform: scale(0.88)  translateY(16.8px); opacity: 0; }
+    70%  { transform: scale(1.018) translateY(-2.4px); opacity: 1; }
+    100% { transform: scale(1)     translateY(0);      opacity: 1; }
+}
+
+/* ── Pop-OUT keyframes (quick) ─────────────────────────────────────────────── */
+@keyframes juicePopOut {
+    from { transform: scale(1)    translateY(0);   opacity: 1; }
+    to   { transform: scale(0.92) translateY(6px); opacity: 0; }
+}
+@keyframes juiceRowOut {
+    from { transform: translateX(0);    opacity: 1; }
+    to   { transform: translateX(12px); opacity: 0; }
+}
+
+/* ── Gentle click/tap compression ─────────────────────────────────────────────
+   A soft squish on press (excludes the JS-driven sounds drawer). */
+button:not(.focus-sounds-panel):active,
+.mode-card:active,
+.opt-btn:active,
+.btn-primary:active,
+.btn-secondary:active,
+.settings-toggle-btn:active,
+.mode-select-back-btn:active,
+.pomodoro-back-btn:active,
+.fbp-confirm:active,
+.sp-btn-yes:active,
+.sp-btn-no:active,
+.free-prompt-yes:active {
+    transform: scale(0.952) !important;
+    transition: transform 0.09s cubic-bezier(0.33, 0, 0.2, 1) !important;
+}
+
+/* ════════════════════════ MODE CHOOSER (pomo / free) ═════════════════════ */
+.modal-overlay.active .mode-select-content {
+    animation: juiceContainerPop 0.4s var(--juice-snap) forwards;
+}
+.modal-overlay.active .mode-select-cards .mode-card {
+    animation: juicePop 0.46s var(--juice-spring) both;
+}
+.modal-overlay.active .mode-select-cards .mode-card:nth-child(1) { animation-delay: 0.12s; }
+.modal-overlay.active .mode-select-cards .mode-card:nth-child(2) { animation-delay: 0.20s; }
+.modal-overlay.active .mode-select-back-btn {
+    animation: juicePop 0.46s var(--juice-spring) both;
+    animation-delay: 0.28s;
+}
+
+/* ════════════════════════ POMODORO SETUP SCREEN ═════════════════════════ */
+.modal-overlay.active .pomodoro-content {
+    animation: juiceContainerPop 0.4s var(--juice-snap) forwards;
+}
+.modal-overlay.active .pomodoro-content > .logo-container,
+.modal-overlay.active .pomodoro-content > .title,
+.modal-overlay.active .pomodoro-content .pomodoro-settings .setting-group,
+.modal-overlay.active .pomodoro-content > .pomo-launch-row,
+.modal-overlay.active .pomodoro-content > .pomodoro-back-btn {
+    animation: juicePop 0.46s var(--juice-spring) both;
+}
+.modal-overlay.active .pomodoro-content > .logo-container { animation-delay: 0.11s; }
+.modal-overlay.active .pomodoro-content > .title          { animation-delay: 0.17s; }
+.modal-overlay.active .pomodoro-content .pomodoro-settings .setting-group:nth-child(1) { animation-delay: 0.24s; }
+.modal-overlay.active .pomodoro-content .pomodoro-settings .setting-group:nth-child(2) { animation-delay: 0.31s; }
+.modal-overlay.active .pomodoro-content .pomodoro-settings .setting-group:nth-child(3) { animation-delay: 0.38s; }
+.modal-overlay.active .pomodoro-content > .pomo-launch-row  { animation-delay: 0.46s; }
+.modal-overlay.active .pomodoro-content > .pomodoro-back-btn { animation-delay: 0.52s; }
+
+/* ════════════════════════ GENERIC MODALS (logout, etc.) ─────────────────── */
+.modal-overlay.active .modal-content:not(.mode-select-content):not(.pomodoro-content) {
+    animation: juiceContainerPop 0.42s var(--juice-snap) forwards;
+}
+
+/* ════════════════════════ POP-OUT (quick sequenced disappear) ─────────────
+   JS adds .juice-closing (keeping .active) just before hiding, so the box and
+   its pieces flee in a fast reverse cascade, then the next panel pops in. */
+/* NOTE: .active stays on the overlay during close, so these out-rules must match
+   the in-rules' selector specificity exactly (and sit later in the file) to win. */
+.modal-overlay.juice-closing .modal-content {
+    animation: juicePopOut 0.2s cubic-bezier(0.4, 0, 1, 1) forwards;
+}
+/* mode-select children — explicit selectors (match the in-rule specificity) */
+.modal-overlay.juice-closing .mode-select-cards .mode-card,
+.modal-overlay.juice-closing .mode-select-back-btn {
+    animation: juicePopOut 0.16s cubic-bezier(0.4, 0, 1, 1) both;
+}
+.modal-overlay.juice-closing .mode-select-back-btn                      { animation-delay: 0s; }
+.modal-overlay.juice-closing .mode-select-cards .mode-card:nth-child(2) { animation-delay: 0.03s; }
+.modal-overlay.juice-closing .mode-select-cards .mode-card:nth-child(1) { animation-delay: 0.06s; }
+/* pomodoro children — explicit selectors, reverse cascade (last leaves first) */
+.modal-overlay.juice-closing .pomodoro-content > .logo-container,
+.modal-overlay.juice-closing .pomodoro-content > .title,
+.modal-overlay.juice-closing .pomodoro-content .pomodoro-settings .setting-group,
+.modal-overlay.juice-closing .pomodoro-content > .pomo-launch-row,
+.modal-overlay.juice-closing .pomodoro-content > .pomodoro-back-btn {
+    animation: juicePopOut 0.16s cubic-bezier(0.4, 0, 1, 1) both;
+}
+.modal-overlay.juice-closing .pomodoro-content > .pomodoro-back-btn { animation-delay: 0s; }
+.modal-overlay.juice-closing .pomodoro-content > .pomo-launch-row   { animation-delay: 0.03s; }
+.modal-overlay.juice-closing .pomodoro-content .pomodoro-settings .setting-group:nth-child(3) { animation-delay: 0.05s; }
+.modal-overlay.juice-closing .pomodoro-content .pomodoro-settings .setting-group:nth-child(2) { animation-delay: 0.07s; }
+.modal-overlay.juice-closing .pomodoro-content .pomodoro-settings .setting-group:nth-child(1) { animation-delay: 0.09s; }
+.modal-overlay.juice-closing .pomodoro-content > .title          { animation-delay: 0.10s; }
+.modal-overlay.juice-closing .pomodoro-content > .logo-container { animation-delay: 0.11s; }
+
+/* ════════════════════════ SETTINGS PANEL ════════════════════════════════ */
+.settings-panel:not(.hidden) .settings-panel-header {
+    animation: juiceRowIn 0.36s var(--juice-spring) both;
+    animation-delay: 0.04s;
+}
+.settings-panel:not(.hidden) .settings-row {
+    animation: juiceRowIn 0.38s var(--juice-spring) both;
+}
+.settings-panel:not(.hidden) .settings-row:nth-child(1) { animation-delay: 0.08s; }
+.settings-panel:not(.hidden) .settings-row:nth-child(2) { animation-delay: 0.14s; }
+.settings-panel:not(.hidden) .settings-row:nth-child(3) { animation-delay: 0.20s; }
+.settings-panel:not(.hidden) .settings-row:nth-child(4) { animation-delay: 0.26s; }
+.settings-panel:not(.hidden) .settings-row:nth-child(5) { animation-delay: 0.32s; }
+.settings-panel:not(.hidden) .settings-row:nth-child(6) { animation-delay: 0.38s; }
+
+/* ════════════════════════ FREE-MODE PANEL (children only) ───────────────
+   Root keeps its translateX(-50%) centering — animate its contents instead. */
+.free-mode-panel:not(.hidden) > .free-timer-text,
+.free-mode-panel:not(.hidden) > .free-mode-label {
+    animation: juicePop 0.46s var(--juice-spring) both;
+}
+.free-mode-panel:not(.hidden) > .free-timer-text { animation-delay: 0.05s; }
+.free-mode-panel:not(.hidden) > .free-mode-label { animation-delay: 0.13s; }
+
+/* (Shared-pomo "المجاورون" nearby panel intentionally NOT animated — reverted
+   to its original behaviour per feedback.) */
+
+/* Respect reduced-motion users — fall back to a plain fade */
+@media (prefers-reduced-motion: reduce) {
+    .modal-overlay.active .mode-select-content,
+    .modal-overlay.active .mode-select-cards .mode-card,
+    .modal-overlay.active .mode-select-back-btn,
+    .modal-overlay.active .pomodoro-content,
+    .modal-overlay.active .pomodoro-content > *,
+    .modal-overlay.active .pomodoro-content .setting-group,
+    .modal-overlay.active .modal-content,
+    .modal-overlay.juice-closing .modal-content,
+    .modal-overlay.juice-closing .pomodoro-content > *,
+    .modal-overlay.juice-closing .mode-select-cards .mode-card,
+    .settings-panel:not(.hidden) .settings-panel-header,
+    .settings-panel:not(.hidden) .settings-row,
+    .free-mode-panel:not(.hidden) > * {
+        animation: none !important;
+    }
+    button:active, .mode-card:active, .opt-btn:active {
+        transition: none !important;
+    }
+}

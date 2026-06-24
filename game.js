@@ -359,6 +359,7 @@ async function initDiscordOAuth() {
         // don't strand them on the welcome screen. Fresh logins (flag not set yet)
         // still see the welcome screen.
         if (localStorage.getItem(ACTIVE_SESSION_KEY) === user.id) {
+            gameState._resumeEntry = true;   // mid-session reload → plain black fade, no entrance anim/sound
             enterGameAsDiscordUser(user, resolvedLobby);
         } else {
             showDiscordWelcomeScreen(user, resolvedLobby);
@@ -1646,6 +1647,9 @@ const gameState = {
         counts: [],                // remaining count per zikr index
         currentIndex: 0,
         completed: {},             // { morning: 'YYYY-MM-DD', evening: 'YYYY-MM-DD' }
+        _completionLoaded: false,  // don't show/hide the button until Firebase completion is known (no flash)
+        _btnShown: false,          // current button visibility (drives fade in/out transitions)
+        _btnHideTimer: null,
         // saved-state to restore on close
         pausedPomoRemaining: 0,
         pausedPomoPhase: null,
@@ -1860,6 +1864,15 @@ const easeOutBack = (x) => {
     const c1 = 1.70158;
     const c3 = c1 + 1;
     return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2);
+};
+// JUICE EXPERIMENT helpers (used by the login entrance sequence below).
+const easeOutCubic = (x) => 1 - Math.pow(1 - x, 3);
+const easeOutBounce = (x) => {
+    const n1 = 7.5625, d1 = 2.75;
+    if (x < 1 / d1)        return n1 * x * x;
+    else if (x < 2 / d1)   return n1 * (x -= 1.5 / d1) * x + 0.75;
+    else if (x < 2.5 / d1) return n1 * (x -= 2.25 / d1) * x + 0.9375;
+    else                   return n1 * (x -= 2.625 / d1) * x + 0.984375;
 };
 
 function isBreakActive() {
@@ -2777,6 +2790,7 @@ function init() {
     initAmbientMotes();
     initLaptops();
     initDiscordOAuth();      // Discord button on lobby; auto-resume if session exists
+    setupJuiceUi();          // JUICE: wire the UI blip early so the login/lobby menu blips too
 }
 
 function loadAssets() {
@@ -3364,6 +3378,7 @@ function startGame(userData) {
     setupAzkarUI();
     setupPiPUI();
     setupSettingsUI();
+    setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
     startTabTitleTicker();
 
     document.getElementById('minigame-leave-btn')?.addEventListener('click', () => leaveMinigame());
@@ -3593,7 +3608,308 @@ function startGame(userData) {
     };
     timerWorker.postMessage('start');
 
+    // JUICE EXPERIMENT: cinematic login entrance (black fade + zoom-in + character
+    // drop + screenshake + pitched entrance sound). No-op when JUICE_ENTRANCE is off
+    // or for ephemeral Siraj ghosts. See the JUICE block below startGame().
+    playEntranceSequence();
+
     gameLoop();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  JUICE EXPERIMENT — login entrance sequence + remote scale-in + screenshake
+//  Self-contained & reversible: flip JUICE_ENTRANCE to false to disable the JS
+//  side entirely (every hook below is guarded on it). The matching CSS lives in
+//  juice.css (remove its <link> in index.html to revert the UI animations).
+// ═══════════════════════════════════════════════════════════════════════════
+const JUICE_ENTRANCE = true;
+
+const ENTRY = {
+    fadeMs:      1300,   // black overlay fade-out duration
+    zoomStart:   0.62,   // camera starts zoomed OUT, eases IN to 1.0
+    zoomMs:      1700,   // zoom-in duration (fast start, slow end)
+    dropStartMs: 1480,   // when the character appears (waits ~0.5s longer)
+    dropMs:      200,    // snaps down to normal size FAST (0.2s)
+    startScale:  16,     // appears huge (≈screen-filling), then shrinks to normal
+    blurPerScale: 3.4,   // blur ∝ (scale−1); device-pixel space, so it must scale up
+    blurMaxPx:   52,     // clamp so a giant blur can't tank a frame
+};
+
+const _entrance = {
+    active: false, start: 0, el: null, targetZoom: 1,
+    camSnapped: false, dropBaseSet: false, dropBaseT: 0,
+    charVisible: false, dropComplete: false,
+    dropY: 0, dropScale: 1, dropBlur: 0, squashX: 1, squashY: 1,
+    shakeFired: false, impactT: 0, shakeAmp: 0, shakeX: 0, shakeY: 0,
+};
+
+// Entrance sound — decoded once, replayed with a fresh random pitch each login.
+let _entSndCtx = null, _entSndBuf = null, _entSndLoading = false;
+function _preloadEntranceSound() {
+    if (_entSndBuf || _entSndLoading) return;
+    _entSndLoading = true;
+    try {
+        _entSndCtx = new (window.AudioContext || window.webkitAudioContext)();
+        fetch('Sound/Enterance_Sound.mp3')
+            .then(r => r.arrayBuffer())
+            .then(b => _entSndCtx.decodeAudioData(b))
+            .then(buf => { _entSndBuf = buf; })
+            .catch(() => {});
+    } catch (_) { /* Web Audio unavailable — HTMLAudio fallback handles it */ }
+}
+function _playEntranceSound() {
+    // Preferred: Web Audio with random detune (pitch-only shift, ±5 semitones).
+    if (_entSndCtx && _entSndBuf) {
+        try {
+            const doPlay = () => {
+                const src = _entSndCtx.createBufferSource();
+                src.buffer = _entSndBuf;
+                try { src.detune.value = (Math.random() * 2 - 1) * 500; }
+                catch (_) { src.playbackRate.value = 0.85 + Math.random() * 0.45; }
+                const g = _entSndCtx.createGain();
+                g.gain.value = 0.9;
+                src.connect(g).connect(_entSndCtx.destination);
+                src.start(0);
+            };
+            if (_entSndCtx.state === 'suspended') _entSndCtx.resume().then(doPlay).catch(doPlay);
+            else doPlay();
+            return;
+        } catch (_) { /* fall through */ }
+    }
+    // Fallback: HTMLAudio with random playbackRate (also varies pitch each time).
+    try {
+        const a = new Audio('Sound/Enterance_Sound.mp3');
+        a.playbackRate = 0.82 + Math.random() * 0.5;
+        a.volume = 0.9;
+        a.play().catch(() => {});
+    } catch (_) {}
+}
+
+function playEntranceSequence() {
+    if (!JUICE_ENTRANCE || gameState.isSirajGhost) return;
+
+    // Full-screen black overlay above everything.
+    const el = document.createElement('div');
+    el.id = 'entrance-blackout';
+    el.style.cssText = 'position:fixed;inset:0;background:#000;z-index:99999;'
+        + 'pointer-events:none;opacity:1;';
+    document.body.appendChild(el);
+
+    // Mid-session reload (auto-resume): NO entrance — just a plain black fade-in.
+    // No zoom, no character drop, no sound, no extra AudioContext. Re-entering an
+    // active session must feel seamless (and not disturb YouTube / focus sounds).
+    if (gameState._resumeEntry) {
+        gameState._resumeEntry = false;
+        el.style.transition = 'opacity 0.7s ease';
+        requestAnimationFrame(() => { el.style.opacity = '0'; });
+        setTimeout(() => { try { el.remove(); } catch (_) {} }, 820);
+        return;
+    }
+
+    _preloadEntranceSound();
+
+    // Reset state for this login.
+    Object.assign(_entrance, {
+        active: true, start: performance.now(), targetZoom: 1,
+        camSnapped: false, dropBaseSet: false, dropBaseT: 0,
+        charVisible: false, dropComplete: false,
+        dropY: 0, dropScale: 1, dropBlur: 0, squashX: 1, squashY: 1,
+        shakeFired: false, impactT: 0, shakeAmp: 0, shakeX: 0, shakeY: 0,
+    });
+    _entrance.el = el;   // updateEntrance fades this overlay out
+
+    gameState.zoom = ENTRY.zoomStart;
+    _playEntranceSound();
+}
+
+function updateEntrance(now) {
+    if (!JUICE_ENTRANCE || !_entrance.active) return;
+    const e = _entrance;
+    const t = now - e.start;
+    const player = gameState.players[gameState.userId];
+
+    // Snap the camera onto the player the instant it exists (created async after
+    // the Firebase read) so the zoom-out is centred — hidden under the black fade.
+    if (player && !e.camSnapped) {
+        const { x: px, y: py } = getPlayerRenderPos(player);
+        gameState.camera.x = -px;
+        gameState.camera.y = -py;
+        e.camSnapped = true;
+    }
+
+    // Black overlay fade-out.
+    if (e.el) {
+        const f = Math.min(1, t / ENTRY.fadeMs);
+        e.el.style.opacity = String(1 - easeOutCubic(f));
+        if (f >= 1) { try { e.el.remove(); } catch (_) {} e.el = null; }
+    }
+
+    // Camera zoom-out (fast start, slow end).
+    const z = Math.min(1, t / ENTRY.zoomMs);
+    gameState.zoom = ENTRY.zoomStart + (e.targetZoom - ENTRY.zoomStart) * easeOutCubic(z);
+
+    // Character drop — only once the player entity actually exists.
+    if (player) {
+        if (!e.dropBaseSet) {
+            e.dropBaseT = Math.max(now, e.start + ENTRY.dropStartMs);
+            e.dropBaseSet = true;
+        }
+        const dp = (now - e.dropBaseT) / ENTRY.dropMs;
+        if (dp >= 0) {
+            e.charVisible = true;
+            const p = Math.min(1, dp);
+            const sp = easeOutCubic(p);
+            // Z-axis drop: starts huge (near the camera) → snaps down to normal fast.
+            let scale = 1 + (ENTRY.startScale - 1) * (1 - sp);
+            // Light landing settle — a subtle dip, not a heavy bounce.
+            if (p > 0.74) { const q = (p - 0.74) / 0.26; scale *= 1 - Math.sin(q * Math.PI) * 0.045; }
+            e.dropScale = scale;
+            e.dropY = 0;
+            // Out-of-focus blur, coupled to scale so it's actually visible on the
+            // giant sprite (canvas filter blur is in device px, not scaled by the
+            // transform). Sharpens to 0 as the avatar reaches normal size.
+            e.dropBlur = Math.min(ENTRY.blurMaxPx, Math.max(0, scale - 1) * ENTRY.blurPerScale);
+            // One soft screenshake on landing.
+            if (!e.shakeFired && p >= 0.74) {
+                e.shakeFired = true;
+                e.impactT = now;
+                e.shakeAmp = 12;
+            }
+            if (p >= 1 && !e.dropComplete) {
+                e.dropComplete = true;
+                e.dropY = 0;
+                e.dropScale = 1;
+                e.dropBlur = 0;
+            }
+        }
+        // Impact squash: a light vertical compress that springs back.
+        if (e.shakeFired) {
+            const q = (now - e.impactT) / 180;
+            if (q < 1) {
+                const k = Math.sin(q * Math.PI) * 0.10;
+                e.squashX = 1 + k;
+                e.squashY = 1 - k;
+            } else { e.squashX = 1; e.squashY = 1; }
+        }
+    }
+
+    // Screenshake decay.
+    if (e.shakeAmp > 0.3) {
+        e.shakeAmp *= 0.86;
+        e.shakeX = (Math.random() - 0.5) * 2 * e.shakeAmp;
+        e.shakeY = (Math.random() - 0.5) * 2 * e.shakeAmp * 0.7;
+    } else {
+        e.shakeAmp = 0; e.shakeX = 0; e.shakeY = 0;
+    }
+
+    // End the sequence once the drop has landed, the shake settled, and the
+    // overlay is gone — then movement unblocks.
+    if (e.dropComplete && e.shakeAmp === 0 && !e.el) {
+        e.active = false;
+        e.charVisible = true;
+        e.dropY = 0; e.dropScale = 1; e.dropBlur = 0; e.squashX = 1; e.squashY = 1;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  JUICE EXPERIMENT — UI sound per element + sequenced pop-out on modal swaps
+//  Reversible: set JUICE_UI = false to disable both. The pop-out cascades and
+//  per-element blip are driven from the CSS animations in juice.css.
+// ═══════════════════════════════════════════════════════════════════════════
+const JUICE_UI = true;
+// Only POP-IN animations of the in-game juiced panels trigger the cascade blip.
+// (Login/lobby elements do NOT blip on appear — they blip on button press, see
+// the pointerdown handler in setupJuiceUi.)
+const _JUICE_IN_ANIMS = new Set(['juicePop', 'juiceContainerPop', 'juiceRowIn']);
+// Elements whose pop-in should stay silent (visual animation still plays).
+const _JUICE_SILENT_SEL = '.free-mode-panel, .success-content';
+
+// Menu blip — decoded once, replayed with a rising pitch across each cascade.
+let _uiSndCtx = null, _uiSndBuf = null, _uiSndLoading = false;
+function _preloadUiSound() {
+    if (_uiSndBuf || _uiSndLoading) return;
+    _uiSndLoading = true;
+    try {
+        _uiSndCtx = _entSndCtx || new (window.AudioContext || window.webkitAudioContext)();
+        fetch('Sound/Menu_Ui.mp3')
+            .then(r => r.arrayBuffer())
+            .then(b => _uiSndCtx.decodeAudioData(b))
+            .then(buf => { _uiSndBuf = buf; })
+            .catch(() => {});
+    } catch (_) {}
+}
+function _playUiBlip(rate) {
+    if (!_uiSndCtx || !_uiSndBuf) return;
+    try {
+        const doPlay = () => {
+            const src = _uiSndCtx.createBufferSource();
+            src.buffer = _uiSndBuf;
+            src.playbackRate.value = rate;
+            const g = _uiSndCtx.createGain();
+            g.gain.value = 0.075;   // deliberately quiet — must not be annoying
+            src.connect(g).connect(_uiSndCtx.destination);
+            src.start(0);
+        };
+        if (_uiSndCtx.state === 'suspended') _uiSndCtx.resume().then(doPlay).catch(doPlay);
+        else doPlay();
+    } catch (_) {}
+}
+
+// Pitch sweep state: first element of a cascade is the "heaviest" (deepest)
+// pitch, each following element a step higher; the base is randomised per
+// cascade. A gap (or an explicit reset) starts a fresh sweep.
+const _uiSeq = { lastT: 0, idx: 0, base: 1 };
+function _uiSeqRate() {
+    const now = performance.now();
+    if (now - _uiSeq.lastT > 240) {                 // new cascade
+        _uiSeq.idx = 0;
+        _uiSeq.base = 0.78 + Math.random() * 0.16;  // random deep start each time
+    } else {
+        _uiSeq.idx++;
+    }
+    _uiSeq.lastT = now;
+    return _uiSeq.base + Math.min(_uiSeq.idx, 12) * 0.055;   // rises toward the end
+}
+function _uiSeqReset() { _uiSeq.lastT = 0; }   // force the next blip to begin a fresh sweep
+
+function setupJuiceUi() {
+    if (!JUICE_UI || gameState._juiceUiWired) return;
+    gameState._juiceUiWired = true;
+    _preloadUiSound();
+    // One blip per element as it POPS IN (pop-outs are silent). Capture phase so
+    // it catches descendants regardless of where they sit.
+    document.addEventListener('animationstart', (ev) => {
+        if (!_JUICE_IN_ANIMS.has(ev.animationName)) return;
+        const t = ev.target;
+        if (t && t.closest && t.closest(_JUICE_SILENT_SEL)) return;   // mute in-session timer text + completed card
+        _playUiBlip(_uiSeqRate());
+    }, true);
+
+    // On the login / lobby flow (before we're in-game) the blip fires on BUTTON
+    // PRESS, not on element appearance.
+    document.addEventListener('pointerdown', (ev) => {
+        if (gameState.userId) return;   // login flow only
+        const t = ev.target;
+        if (t && t.closest && t.closest('button, .user-item')) _playUiBlip(0.95 + Math.random() * 0.1);
+    }, true);
+}
+
+// Quick sequenced close of a modal, then run openNext() — gives the "old panel
+// flees, new panel pops in" feel. Falls back to an instant swap if JUICE_UI off.
+function juiceCloseThenOpen(fromModal, openNext) {
+    if (!fromModal) { if (openNext) openNext(); return; }
+    if (!JUICE_UI) {
+        fromModal.classList.remove('active');
+        if (openNext) openNext();
+        return;
+    }
+    fromModal.classList.add('juice-closing');
+    setTimeout(() => {
+        fromModal.classList.remove('active');
+        fromModal.classList.remove('juice-closing');
+        _uiSeqReset();          // the incoming panel starts its own pitch sweep
+        if (openNext) openNext();
+    }, 230);
 }
 
 // Canvas `shadowBlur` is a per-draw Gaussian blur and one of the most expensive
@@ -4930,19 +5246,17 @@ function setupModeSelectUI() {
     if (!modal) return;
 
     document.getElementById('mode-select-back')?.addEventListener('click', () => {
-        modal.classList.remove('active');
+        juiceCloseThenOpen(modal, null);   // JUICE: sequenced pop-out
     });
 
     document.getElementById('mode-select-pomo')?.addEventListener('click', () => {
         if (modeSelectGhostClick()) return;
-        modal.classList.remove('active');
-        document.getElementById('pomodoro-modal').classList.add('active');
+        juiceCloseThenOpen(modal, () => document.getElementById('pomodoro-modal').classList.add('active'));
     });
 
     document.getElementById('mode-select-free')?.addEventListener('click', () => {
         if (modeSelectGhostClick()) return;
-        modal.classList.remove('active');
-        startFreeMode(null, false);
+        juiceCloseThenOpen(modal, () => startFreeMode(null, false));
     });
 }
 
@@ -4981,8 +5295,7 @@ function setupPomodoroUI() {
     });
 
     cancelBtn.addEventListener('click', () => {
-        modal.classList.remove('active');
-        document.getElementById('mode-select-modal').classList.add('active');
+        juiceCloseThenOpen(modal, () => document.getElementById('mode-select-modal').classList.add('active'));   // JUICE
     });
 
     confirmBtn.addEventListener('click', () => {
@@ -5469,6 +5782,8 @@ function listenToPlayers() {
                             freeWorkStartTime:  userData.freeWorkStartTime || 0,
                             freeTotalWorkMs:    userData.freeTotalWorkMs   || 0,
                             coopHostId:         userData.coopHostId || null,
+                            // JUICE: others pop in with a 0→100% overshoot scale.
+                            _entryT: (JUICE_ENTRANCE && !isCurrentUser) ? performance.now() : null,
                         };
                     } else {
                         const player = gameState.players[userId];
@@ -5705,6 +6020,7 @@ function updateCamera() {
 }
 
 function handleMovement() {
+    if (JUICE_ENTRANCE && _entrance.active) return;   // JUICE: lock controls during the login entrance
     if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive) return;
     if (document.querySelector('.modal-overlay.active')) return;
     const player = gameState.players[gameState.userId];
@@ -6196,6 +6512,7 @@ function gameLoop(timestamp) {
         updateAnimation();
         updatePlayerRenderPositions();
         updateCamera();
+        updateEntrance(timestamp);   // JUICE: login entrance (no-op once finished)
         updatePlayerBobbing();
         updateNametags();
         updateAvatarColorFade();
@@ -6240,6 +6557,7 @@ function render() {
 
     ctx.save();
     ctx.translate(W / 2, H / 2);
+    if (_entrance.shakeX || _entrance.shakeY) ctx.translate(_entrance.shakeX, _entrance.shakeY); // JUICE: entrance impact shake
     ctx.scale(gameState.zoom, gameState.zoom);
     ctx.translate(gameState.camera.x, gameState.camera.y);
 
@@ -9080,6 +9398,23 @@ function drawPlayers(onlyLocal = false) {
             }
         }
 
+        // JUICE: entrance drop (local player) + scale-in pop (remote players).
+        let _juiceScale = 1, _juiceDropY = 0, _juiceSquashX = 1, _juiceSquashY = 1, _juiceBlur = 0;
+        if (JUICE_ENTRANCE) {
+            if (isCurrentUser && _entrance.active) {
+                if (!_entrance.charVisible) continue;   // pre-drop: hidden until it appears
+                _juiceScale  = _entrance.dropScale;
+                _juiceDropY  = _entrance.dropY;
+                _juiceSquashX = _entrance.squashX;
+                _juiceSquashY = _entrance.squashY;
+                _juiceBlur    = _entrance.dropBlur;
+            } else if (!isCurrentUser && player._entryT != null) {
+                const et = (performance.now() - player._entryT) / 460;
+                if (et >= 1) { player._entryT = null; }
+                else { _juiceScale = Math.max(0, easeOutBack(Math.max(0.0001, et))); }
+            }
+        }
+
         const colorAlpha = isCurrentUser ? 1 : (player.avatarColorAlpha ?? 0);
         const grayMix = 1 - colorAlpha;
         const ringColor = isCurrentUser ? COLORS.blue : '#ffffff';
@@ -9088,7 +9423,9 @@ function drawPlayers(onlyLocal = false) {
         // Soft contact shadow on the ground — shrinks/fades as the avatar bobs upward,
         // so walking avatars feel like they lift off the floor. Cheap (one ellipse).
         if (!tpData || tpFadeOut < 0.9) {
-            const lift = (player.bobOffset || 0) + Math.abs(workBob) + tpFly * 110;
+            // JUICE: the z-drop / scale-in shrinks the contact shadow (it stays on the floor).
+            const lift = (player.bobOffset || 0) + Math.abs(workBob) + tpFly * 110
+                + Math.abs(_juiceScale - 1) * 40;
             const liftN = Math.min(1, lift / 24);
             const shW = (PLAYER_SIZE * 0.46) * (1 - liftN * 0.32);
             const shH = shW * 0.32;
@@ -9104,9 +9441,10 @@ function drawPlayers(onlyLocal = false) {
 
         ctx.save();
         if (tpFadeOut > 0.01) ctx.globalAlpha = 1 - tpFadeOut;
-        ctx.translate(screenX + coopDX, screenY + workBob + coopDY + tpFlyOffsetY);
+        ctx.translate(screenX + coopDX, screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY);
         ctx.rotate(workAngle);
-        ctx.scale(workScaleX, workScaleY);
+        ctx.scale(workScaleX * _juiceScale * _juiceSquashX, workScaleY * _juiceScale * _juiceSquashY);
+        if (_juiceBlur > 0.1) ctx.filter = `blur(${_juiceBlur}px)`;   // JUICE: entrance out-of-focus → sharp
 
         if (grayMix > 0.01) {
             ctx.filter = `saturate(${colorAlpha}) brightness(${0.72 + 0.28 * colorAlpha})`;
@@ -13797,8 +14135,36 @@ function updateAzkarButton() {
     const today = _todayDateStr();
     const doneToday = type && gameState.azkar.completed && gameState.azkar.completed[type] === today;
 
-    const shouldShow = !!type && !inSharedPomo && !inPrayerOverlay && !azkarOpen && !doneToday;
-    btn.classList.toggle('hidden', !shouldShow);
+    // Gate on _completionLoaded so the button never flashes on start before we've
+    // checked Firebase (it used to show, then snap away once "already read" loaded).
+    const az = gameState.azkar;
+    const shouldShow = az._completionLoaded
+        && !!type && !inSharedPomo && !inPrayerOverlay && !azkarOpen && !doneToday;
+
+    const wasShown = az._btnShown === true;
+    if (shouldShow && !wasShown) {
+        // Appear — fade/scale in.
+        if (az._btnHideTimer) { clearTimeout(az._btnHideTimer); az._btnHideTimer = null; }
+        btn.classList.remove('hidden', 'azkar-leaving');
+        btn.classList.add('azkar-entering');
+        setTimeout(() => btn.classList.remove('azkar-entering'), 380);
+        az._btnShown = true;
+    } else if (!shouldShow && wasShown) {
+        // Disappear — fade/scale out, THEN collapse (display:none) so it never snaps.
+        btn.classList.remove('azkar-entering');
+        btn.classList.add('azkar-leaving');
+        if (az._btnHideTimer) clearTimeout(az._btnHideTimer);
+        az._btnHideTimer = setTimeout(() => {
+            btn.classList.add('hidden');
+            btn.classList.remove('azkar-leaving');
+            az._btnHideTimer = null;
+        }, 340);
+        az._btnShown = false;
+    } else if (!shouldShow && !wasShown && !az._btnHideTimer) {
+        // Steady hidden (incl. initial state) — no animation.
+        btn.classList.add('hidden');
+    }
+
     if (!shouldShow) {
         hideAzkarConfirm();
     }
@@ -13850,16 +14216,21 @@ function markAzkarCompleted(type) {
     if (gameState.userId) {
         update(ref(database), { [`users/${gameState.userId}/azkarCompleted`]: gameState.azkar.completed }).catch(() => {});
     }
+    gameState.azkar._lastButtonRefresh = 0;   // bypass the 1/s throttle so the fade-out fires now
     updateAzkarButton();
 }
 
 function loadAzkarCompletedFromFirebase() {
     if (!gameState.userId) return;
     get(ref(database, `users/${gameState.userId}/azkarCompleted`)).then(snap => {
-        const v = snap.val() || {};
-        gameState.azkar.completed = v;
+        gameState.azkar.completed = snap.val() || {};
+        gameState.azkar._completionLoaded = true;
         updateAzkarButton();
-    }).catch(() => {});
+    }).catch(() => {
+        // Offline / read failed — assume not-done so the button can still appear.
+        gameState.azkar._completionLoaded = true;
+        updateAzkarButton();
+    });
 }
 
 // Fisher–Yates shuffle (returns a new array, leaves the source untouched).

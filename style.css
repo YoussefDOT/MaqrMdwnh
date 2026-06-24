@@ -3983,7 +3983,8 @@ body.is-mobile .mode-card-desc { font-size: 11px; }
     cursor: pointer;
     overflow: hidden;
     isolation: isolate;
-    transition: transform 0.22s cubic-bezier(0.34,1.56,0.64,1),
+    transition: transform 0.28s cubic-bezier(0.34,1.56,0.64,1),
+                opacity 0.28s ease,
                 background 0.3s ease,
                 border-color 0.3s ease,
                 box-shadow 0.3s ease;
@@ -3991,6 +3992,19 @@ body.is-mobile .mode-card-desc { font-size: 11px; }
     -webkit-tap-highlight-color: transparent;
 }
 .azkar-btn.hidden { display: none; }
+/* Smooth appear / disappear — JS adds .azkar-leaving, waits for the fade, then
+   adds .hidden (collapse). Prevents the button snapping away when it clears. */
+.azkar-btn.azkar-leaving {
+    opacity: 0;
+    transform: scale(0.82) translateY(-4px);
+    animation: none;
+    pointer-events: none;
+}
+@keyframes azkarBtnEnter {
+    from { opacity: 0; transform: scale(0.82) translateY(-4px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
+}
+.azkar-btn.azkar-entering { animation: azkarBtnEnter 0.36s cubic-bezier(0.34,1.56,0.64,1); }
 .azkar-btn:hover { transform: translateY(-1px) scale(1.02); }
 .azkar-btn:active { transform: scale(0.97); }
 
