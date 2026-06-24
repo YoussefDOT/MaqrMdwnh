@@ -362,16 +362,11 @@ async function initDiscordOAuth() {
     const resolvedLobby = await resolveUserLobby(user.id);
     loading?.classList.remove('active');
     if (resolvedLobby) {
-        // Auto-resume: if this same user was actively in-game before an unintended
-        // reload (Android tab discard, accidental refresh), go straight back in and
-        // let startGame restore their pomodoro/free-mode session from Firebase —
-        // don't strand them on the welcome screen. Fresh logins (flag not set yet)
-        // still see the welcome screen.
-        if (localStorage.getItem(ACTIVE_SESSION_KEY) === user.id) {
-            enterGameAsDiscordUser(user, resolvedLobby);
-        } else {
-            showDiscordWelcomeScreen(user, resolvedLobby);
-        }
+        // Auto-login (auto-resume straight into the game on refresh) is DISABLED on
+        // purpose: a gesture-less reload can't start audio (browser autoplay block),
+        // so the entrance sound never played. We always show the welcome screen now,
+        // so pressing الدخول provides the gesture that unlocks the entrance sound.
+        showDiscordWelcomeScreen(user, resolvedLobby);
     } else {
         showDiscordFirstLobbyChooser(user);
     }
@@ -514,7 +509,13 @@ class FocusAudioEngine {
         // can fire immediately). Loading them 8th (behind the timer/invite sounds)
         // was the "audio delayed by a bit" on re-entry.
         try {
-            this.buffers.entranceSound  = await loadBuffer('Sound/Enterance_Sound.mp3');   // JUICE — load first
+            // Entrance whoosh: decode from the page-load prefetch if it's ready (no
+            // second network round-trip), else fetch normally. Loaded FIRST so it's
+            // ready the instant الدخول is pressed.
+            let entAb = _entranceArrayBufferPromise ? await _entranceArrayBufferPromise : null;
+            this.buffers.entranceSound  = entAb
+                ? await this.ctx.decodeAudioData(entAb.slice(0))
+                : await loadBuffer('Sound/Enterance_Sound.mp3');
             this.buffers.uiBlip         = await loadBuffer('Sound/Menu_Ui.mp3');           // JUICE
             this.buffers.timeBreak      = await loadBuffer('Sound/TimeBreak.mp3');
             this.buffers.timeReturn     = await loadBuffer('Sound/TimeReturn.mp3');
@@ -2825,8 +2826,22 @@ function screenToWorld(clientX, clientY) {
     };
 }
 
+// The entrance whoosh, prefetched over the network the moment the page loads (the
+// slow part is the download). We can't DECODE it yet — there's no AudioContext
+// until the user gesture (الدخول press) — but holding the raw bytes means
+// loadSoundEffects() decodes from memory on login instead of fetching, so the
+// sound is ready to fire the instant الدخول is pressed.
+let _entranceArrayBufferPromise = null;
+function _prefetchEntranceSound() {
+    if (_entranceArrayBufferPromise) return;
+    _entranceArrayBufferPromise = fetch('Sound/Enterance_Sound.mp3')
+        .then(r => r.arrayBuffer())
+        .catch(() => null);
+}
+
 // Initialize game
 function init() {
+    _prefetchEntranceSound();   // FIRST: warm the entrance sound so it's ready at login
     setMobileClass(); // set body.is-mobile before anything renders
     loadAssets();
     loadRaceTrackAsset();
@@ -3760,7 +3775,7 @@ function _playEntranceSound() {
         if (!_entPending) return;
         const c = fe.ctx;
         if (c && c.state === 'suspended') c.resume().catch(() => {});
-        if (_entWantsPlay && fe.playPitched('entranceSound', 0.92 + Math.random() * 0.26, 0.42)) {
+        if (_entWantsPlay && fe.playPitched('entranceSound', 1.0, 0.42)) {
             _entPending = false; _entWantsPlay = false;  // played for real
             return;
         }
