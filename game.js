@@ -2789,6 +2789,7 @@ function init() {
     initAmbientMotes();
     initLaptops();
     initDiscordOAuth();      // Discord button on lobby; auto-resume if session exists
+    _juiceWireResume();      // JUICE: resume audio on the first gesture (refresh autoplay)
     if (JUICE_ENTRANCE) _preloadEntranceSound();   // JUICE: decode the entrance sound NOW so it's ready (no delay)
     setupJuiceUi();          // JUICE: wire the UI blip early so the login/lobby menu blips too
 }
@@ -3647,46 +3648,84 @@ const _entrance = {
     shakeFired: false, impactT: 0, shakeAmp: 0, shakeX: 0, shakeY: 0,
 };
 
-// Entrance sound — decoded once, replayed with a fresh random pitch each login.
-let _entSndCtx = null, _entSndBuf = null, _entSndLoading = false;
-function _preloadEntranceSound() {
-    if (_entSndBuf || _entSndLoading) return;
-    _entSndLoading = true;
+// ── Shared juice audio ──────────────────────────────────────────────────────
+// ONE AudioContext for the entrance sound AND the UI blips (was two — fewer
+// contexts = less memory, important on Safari/iOS). Buffers decoded once.
+let _juiceCtx = null, _entSndBuf = null, _uiSndBuf = null;
+let _entLoading = false, _uiLoading = false;
+let _entPending = false, _entPendingAt = 0;   // entrance sound queued for the first gesture (refresh autoplay block)
+
+function _juiceCtxGet() {
+    if (_juiceCtx) return _juiceCtx;
+    try { _juiceCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) { _juiceCtx = null; }
+    return _juiceCtx;
+}
+
+// On a refresh that auto-resumes, there is NO user gesture at load, so the
+// AudioContext starts suspended and the browser blocks audio until the user
+// interacts. Resume on the very first interaction of ANY kind (move/click/tap)
+// and flush a queued entrance sound so it isn't lost.
+function _juiceWireResume() {
+    if (gameState._juiceResumeWired) return;
+    gameState._juiceResumeWired = true;
+    const onGesture = () => {
+        const c = _juiceCtx;
+        if (c && c.state === 'suspended') c.resume().catch(() => {});
+        if (_entPending && performance.now() - _entPendingAt < 30000) { _entPending = false; _playEntranceSound(); }
+    };
+    ['pointerdown', 'mousedown', 'keydown', 'touchstart', 'click'].forEach(ev =>
+        document.addEventListener(ev, onGesture, { capture: true, passive: true }));
+}
+
+// One-shot buffer playback with a short attack/release envelope. The envelope is
+// what kills the start/stop click that sounded like "cracking" on Android,
+// especially once the pitch is shifted. playbackRate (not detune) for the random
+// pitch — it's the more reliable path on mobile Chrome.
+function _juicePlayBuffer(buf, rate, peak) {
+    const ctx = _juiceCtxGet();
+    if (!ctx || !buf) return false;
+    if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); return false; }
     try {
-        _entSndCtx = new (window.AudioContext || window.webkitAudioContext)();
-        fetch('Sound/Enterance_Sound.mp3')
-            .then(r => r.arrayBuffer())
-            .then(b => _entSndCtx.decodeAudioData(b))
-            .then(buf => { _entSndBuf = buf; })
-            .catch(() => {});
-    } catch (_) { /* Web Audio unavailable — HTMLAudio fallback handles it */ }
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.playbackRate.value = rate;
+        const g = ctx.createGain();
+        const t = ctx.currentTime;
+        const dur = buf.duration / rate;
+        const atk = Math.min(0.012, dur * 0.25);
+        const rel = Math.min(0.04, dur * 0.3);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(peak, t + atk);
+        g.gain.setValueAtTime(peak, t + Math.max(atk, dur - rel));
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        src.connect(g).connect(ctx.destination);
+        src.onended = () => { try { src.disconnect(); g.disconnect(); } catch (_) {} };   // free nodes promptly
+        src.start(0);
+        return true;
+    } catch (_) { return false; }
+}
+
+function _preloadEntranceSound() {
+    if (_entSndBuf || _entLoading) return;
+    _entLoading = true;
+    const ctx = _juiceCtxGet();
+    if (!ctx) { _entLoading = false; return; }
+    fetch('Sound/Enterance_Sound.mp3')
+        .then(r => r.arrayBuffer()).then(b => ctx.decodeAudioData(b))
+        .then(buf => { _entSndBuf = buf; }).catch(() => { _entLoading = false; });
 }
 function _playEntranceSound() {
-    // Preferred: Web Audio with random detune (pitch-only shift, ±5 semitones).
-    if (_entSndCtx && _entSndBuf) {
-        try {
-            const doPlay = () => {
-                const src = _entSndCtx.createBufferSource();
-                src.buffer = _entSndBuf;
-                try { src.detune.value = (Math.random() * 2 - 1) * 500; }
-                catch (_) { src.playbackRate.value = 0.85 + Math.random() * 0.45; }
-                const g = _entSndCtx.createGain();
-                g.gain.value = 0.9;
-                src.connect(g).connect(_entSndCtx.destination);
-                src.start(0);
-            };
-            if (_entSndCtx.state === 'suspended') _entSndCtx.resume().then(doPlay).catch(doPlay);
-            else doPlay();
-            return;
-        } catch (_) { /* fall through */ }
+    const ctx = _juiceCtxGet();
+    // Not ready (buffer still decoding) or blocked (suspended on a gesture-less
+    // refresh): queue it for the first interaction instead of dropping it.
+    if (!ctx || !_entSndBuf || ctx.state === 'suspended') {
+        _entPending = true; _entPendingAt = performance.now();
+        if (ctx && ctx.state === 'suspended') ctx.resume().then(() => {
+            if (_entPending) { _entPending = false; _playEntranceSound(); }
+        }).catch(() => {});
+        return;
     }
-    // Fallback: HTMLAudio with random playbackRate (also varies pitch each time).
-    try {
-        const a = new Audio('Sound/Enterance_Sound.mp3');
-        a.playbackRate = 0.82 + Math.random() * 0.5;
-        a.volume = 0.9;
-        a.play().catch(() => {});
-    } catch (_) {}
+    _juicePlayBuffer(_entSndBuf, 0.9 + Math.random() * 0.32, 0.8);
 }
 
 // Put up the black overlay immediately, but DON'T decide the entrance yet — we
@@ -3731,15 +3770,21 @@ function beginEntrance(inSession) {
     }
 
     // Full cinematic entrance — timing starts now (preserves the overlay ref).
+    // Mobile gets a lighter zoom-out + smaller start scale: the zoomed-out frame
+    // draws far more of the world and a screen-filling sprite is costly to raster,
+    // which is what made the intro lag (and spike memory) on phones.
+    const mobile = isMobile();
     Object.assign(_entrance, {
         active: true, start: performance.now(), targetZoom: 1,
+        zoomStart: mobile ? 0.82 : ENTRY.zoomStart,
+        startScale: mobile ? 8 : ENTRY.startScale,
         camSnapped: false, dropBaseSet: false, dropBaseT: 0,
         charVisible: false, dropComplete: false,
         dropY: 0, dropScale: 1, dropBlur: 0, squashX: 1, squashY: 1,
         shakeFired: false, impactT: 0, shakeAmp: 0, shakeX: 0, shakeY: 0,
         el,
     });
-    gameState.zoom = ENTRY.zoomStart;
+    gameState.zoom = _entrance.zoomStart;
     _playEntranceSound();
 }
 
@@ -3765,9 +3810,10 @@ function updateEntrance(now) {
         if (f >= 1) { try { e.el.remove(); } catch (_) {} e.el = null; }
     }
 
-    // Camera zoom-out (fast start, slow end).
+    // Camera zoom-in (fast start, slow end).
+    const _zs = e.zoomStart != null ? e.zoomStart : ENTRY.zoomStart;
     const z = Math.min(1, t / ENTRY.zoomMs);
-    gameState.zoom = ENTRY.zoomStart + (e.targetZoom - ENTRY.zoomStart) * easeOutCubic(z);
+    gameState.zoom = _zs + (e.targetZoom - _zs) * easeOutCubic(z);
 
     // Character drop — only once the player entity actually exists.
     if (player) {
@@ -3781,16 +3827,19 @@ function updateEntrance(now) {
             const p = Math.min(1, dp);
             const sp = easeOutCubic(p);
             // Z-axis drop: starts huge (near the camera) → snaps down to normal fast.
-            let scale = 1 + (ENTRY.startScale - 1) * (1 - sp);
+            const _ss = e.startScale != null ? e.startScale : ENTRY.startScale;
+            let scale = 1 + (_ss - 1) * (1 - sp);
             // Light landing settle — a subtle dip, not a heavy bounce.
             if (p > 0.74) { const q = (p - 0.74) / 0.26; scale *= 1 - Math.sin(q * Math.PI) * 0.045; }
             e.dropScale = scale;
             e.dropY = 0;
-            // One soft screenshake on landing.
+            // One soft screenshake + a puff of impact particles on landing.
             if (!e.shakeFired && p >= 0.74) {
                 e.shakeFired = true;
                 e.impactT = now;
                 e.shakeAmp = 12;
+                const rp = getPlayerRenderPos(player);
+                spawnImpactBurst(rp.x, rp.y + PLAYER_SIZE / 2, gameState._lowGfx ? 9 : 18);
             }
             if (p >= 1 && !e.dropComplete) {
                 e.dropComplete = true;
@@ -3854,34 +3903,18 @@ const _JUICE_IN_ANIMS = new Set(['juicePop', 'juiceContainerPop', 'juiceRowIn'])
 const _JUICE_SILENT_SEL = '.free-mode-panel, .success-content';
 
 // Menu blip — decoded once, replayed with a rising pitch across each cascade.
-let _uiSndCtx = null, _uiSndBuf = null, _uiSndLoading = false;
 function _preloadUiSound() {
-    if (_uiSndBuf || _uiSndLoading) return;
-    _uiSndLoading = true;
-    try {
-        _uiSndCtx = _entSndCtx || new (window.AudioContext || window.webkitAudioContext)();
-        fetch('Sound/Menu_Ui.mp3')
-            .then(r => r.arrayBuffer())
-            .then(b => _uiSndCtx.decodeAudioData(b))
-            .then(buf => { _uiSndBuf = buf; })
-            .catch(() => {});
-    } catch (_) {}
+    if (_uiSndBuf || _uiLoading) return;
+    _uiLoading = true;
+    const ctx = _juiceCtxGet();   // shared with the entrance sound — one context total
+    if (!ctx) { _uiLoading = false; return; }
+    fetch('Sound/Menu_Ui.mp3')
+        .then(r => r.arrayBuffer()).then(b => ctx.decodeAudioData(b))
+        .then(buf => { _uiSndBuf = buf; }).catch(() => { _uiLoading = false; });
 }
 function _playUiBlip(rate) {
-    if (!_uiSndCtx || !_uiSndBuf) return;
-    try {
-        const doPlay = () => {
-            const src = _uiSndCtx.createBufferSource();
-            src.buffer = _uiSndBuf;
-            src.playbackRate.value = rate;
-            const g = _uiSndCtx.createGain();
-            g.gain.value = 0.075;   // deliberately quiet — must not be annoying
-            src.connect(g).connect(_uiSndCtx.destination);
-            src.start(0);
-        };
-        if (_uiSndCtx.state === 'suspended') _uiSndCtx.resume().then(doPlay).catch(doPlay);
-        else doPlay();
-    } catch (_) {}
+    // Quiet, with an attack/release envelope (no click/crackle on mobile).
+    _juicePlayBuffer(_uiSndBuf, rate, 0.07);
 }
 
 // Pitch sweep state: first element of a cascade is the "heaviest" (deepest)
@@ -6341,9 +6374,30 @@ function spawnDust(x, y, amount, isDragging = false) {
     }
 }
 
+// JUICE: a puff of dust kicked outward + up when the character lands in the
+// entrance. Reuses the dust pool (drawn by drawDustParticles). The optional
+// gravity field arcs them back down; plain dust has no gravity field (no-op).
+function spawnImpactBurst(cx, groundY, count) {
+    for (let i = 0; i < count; i++) {
+        const dir = i % 2 === 0 ? 1 : -1;
+        const speed = 2.5 + Math.random() * 4.5;
+        gameState.dustParticles.push({
+            x: cx + (Math.random() - 0.5) * 24,
+            y: groundY + (Math.random() - 0.5) * 6,
+            vx: dir * speed * (0.5 + Math.random() * 0.9),
+            vy: -(1.2 + Math.random() * 3.0),
+            gravity: 0.18 + Math.random() * 0.12,
+            life: 1.0,
+            decay: 0.022 + Math.random() * 0.03,
+            size: 3 + Math.random() * 5,
+        });
+    }
+}
+
 function updateDustParticles() {
     for (let i = gameState.dustParticles.length - 1; i >= 0; i--) {
         const p = gameState.dustParticles[i];
+        if (p.gravity) p.vy += p.gravity * gameState.dtFactor;
         p.x += p.vx * gameState.dtFactor;
         p.y += p.vy * gameState.dtFactor;
         p.life -= p.decay * gameState.dtFactor;
