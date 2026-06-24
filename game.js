@@ -244,6 +244,15 @@ async function resolveUserLobby(discordId) {
 }
 
 async function enterGameAsDiscordUser(user, lobby) {
+    // Wake the shared audio context NOW — we're still inside the "Enter" button
+    // click that called us, and that gesture is the browser's permission to start
+    // audio. The awaits below (Firebase reads/writes) end the gesture window, so an
+    // AudioContext created afterwards (in startGame) is born suspended on Safari and
+    // the entrance sound waits for the next tap to wake it. Priming here lets it
+    // play the instant the entrance fires. (No-op on the gesture-less auto-resume
+    // path; _juiceWireResume covers that.)
+    _primeFocusAudio();
+
     gameState.selectedLobby = lobby;
     localStorage.setItem(`mdwnh_discord_lobby_${user.id}`, lobby);
 
@@ -3314,7 +3323,10 @@ function startGame(userData) {
     // inits lazily as before so the focus-sound streaming→buffer handoff timing is
     // undisturbed. Juice sounds [entrance/blips] are registered as buffers in this
     // same engine, so they share its single context — no competing AudioContext.)
-    gameState.focusAudioEngine = new FocusAudioEngine();
+    // Reuse the engine if the login gesture already primed it (_primeFocusAudio in
+    // enterGameAsDiscordUser) — that's what keeps its context RUNNING so the
+    // entrance sound plays immediately instead of waiting for the first tap.
+    gameState.focusAudioEngine = gameState.focusAudioEngine || new FocusAudioEngine();
     gameState.focusYTPlayer = new FocusYouTubePlayer();
     setupFocusPanelUI();
 
@@ -3704,6 +3716,20 @@ function _juiceWireResume() {
     };
     ['pointerdown', 'mousedown', 'keydown', 'touchstart', 'click'].forEach(ev =>
         document.addEventListener(ev, onGesture, { capture: true, passive: true }));
+}
+
+// Ensure the focus audio engine exists, its single AudioContext is created, and —
+// crucially — it's resumed. Call this synchronously from inside a user gesture
+// (the login "Enter" click) so the context starts RUNNING rather than suspended.
+// Idempotent and safe to call repeatedly. Returns the engine.
+function _primeFocusAudio() {
+    if (!gameState.focusAudioEngine) gameState.focusAudioEngine = new FocusAudioEngine();
+    const fe = gameState.focusAudioEngine;
+    try {
+        if (!fe.ctx) fe.init();
+        if (fe.ctx && fe.ctx.state === 'suspended') fe.ctx.resume().catch(() => {});
+    } catch (_) {}
+    return fe;
 }
 
 // Play the entrance whoosh through the focus engine. If the context is suspended
