@@ -404,6 +404,10 @@ class FocusAudioEngine {
             breakAdded: null,
             inviteSent: null,
             inviteAccepted: null,
+            // JUICE: entrance whoosh + UI cascade blip — played through THIS engine's
+            // single context so they never spin up a competing AudioContext.
+            entranceSound: null,
+            uiBlip: null,
             // Laptop boss fight
             bossAnticipate: null,
             bossAttackInitiate: null,
@@ -503,6 +507,8 @@ class FocusAudioEngine {
             this.buffers.breakAdded     = await loadBuffer('Sound/BreakAdded.mp3');
             this.buffers.inviteSent     = await loadBuffer('Sound/Invite_Sent.mp3');
             this.buffers.inviteAccepted = await loadBuffer('Sound/Invite_Accepted.mp3');
+            this.buffers.entranceSound  = await loadBuffer('Sound/Enterance_Sound.mp3');   // JUICE
+            this.buffers.uiBlip         = await loadBuffer('Sound/Menu_Ui.mp3');           // JUICE
         } catch(e) {
             console.log("Failed to load Web Audio sound effects:", e);
         }
@@ -712,6 +718,33 @@ class FocusAudioEngine {
         } else {
             _doPlay();
         }
+    }
+
+    // JUICE one-shot: play a buffer at a random pitch with a short attack/release
+    // envelope (no start/stop click → no "crackle"), through THIS engine's single
+    // context. Returns true only if it actually started (ctx running + buffer ready).
+    playPitched(name, rate, peak) {
+        if (!this.ctx) this.init();
+        const buf = this.buffers[name];
+        if (!buf || !this.ctx || this.ctx.state !== 'running') return false;
+        try {
+            const src = this.ctx.createBufferSource();
+            src.buffer = buf;
+            src.playbackRate.value = rate;
+            const g = this.ctx.createGain();
+            const t = this.ctx.currentTime;
+            const dur = buf.duration / rate;
+            const atk = Math.min(0.014, dur * 0.25);
+            const rel = Math.min(0.05, dur * 0.3);
+            g.gain.setValueAtTime(0.0001, t);
+            g.gain.exponentialRampToValueAtTime(peak, t + atk);
+            g.gain.setValueAtTime(peak, t + Math.max(atk, dur - rel));
+            g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+            src.connect(g); g.connect(this.ctx.destination);
+            src.onended = () => { try { src.disconnect(); g.disconnect(); } catch (_) {} };
+            src.start(0);
+            return true;
+        } catch (_) { return false; }
     }
 
     createWhiteNoiseNode() {
@@ -3277,21 +3310,13 @@ function startGame(userData) {
     // Apply mobile class immediately
     setMobileClass();
 
-    // JUICE: close the login-only fallback AudioContext BEFORE the focus engine
-    // creates its own, so there is only ever ONE context. All juice audio then
-    // shares the focus-engine context (Safari/iOS gives audio output to one
-    // context only — a second one silenced the focus sounds when it resumed).
-    _juiceCloseLoginCtx();
-
-    // Initialize Focus Audio Engine & Setup Focus UI
+    // Initialize Focus Audio Engine & Setup Focus UI. (No forced init() here — it
+    // inits lazily as before so the focus-sound streaming→buffer handoff timing is
+    // undisturbed. Juice sounds [entrance/blips] are registered as buffers in this
+    // same engine, so they share its single context — no competing AudioContext.)
     gameState.focusAudioEngine = new FocusAudioEngine();
-    gameState.focusAudioEngine.init();   // create its context now — ALL juice audio shares it
     gameState.focusYTPlayer = new FocusYouTubePlayer();
     setupFocusPanelUI();
-
-    // Re-decode the juice sounds on the shared (focus-engine) context.
-    _preloadUiSound();
-    if (JUICE_ENTRANCE) { _entSndBuf = null; _entLoading = false; _preloadEntranceSound(); }
 
     // Set active presence in game and set up disconnect presence cleanup
     const activeRef = ref(database, `users/${gameState.userId}/activeInGame`);
@@ -3658,120 +3683,66 @@ const _entrance = {
     shakeFired: false, impactT: 0, shakeAmp: 0, shakeX: 0, shakeY: 0,
 };
 
-// ── Shared juice audio ──────────────────────────────────────────────────────
-// IN-GAME all juice audio runs through the focus engine's OWN AudioContext.
-// Using a second context made Safari/iOS silence the focus sounds the moment a
-// new context started outputting (the "focus sounds vanish when I move" bug) —
-// browsers there effectively give audio output to one context. `_juiceCtx` is a
-// tiny fallback used ONLY on the login screen (no focus engine yet), and it's
-// parked once we're in-game.
-let _juiceCtx = null, _entSndBuf = null, _uiSndBuf = null;
-let _entLoading = false, _uiLoading = false;
-let _entPending = false, _entPendingAt = 0;   // entrance sound queued for the first gesture (refresh autoplay block)
+// ── Juice audio (entrance whoosh + UI blips) ─────────────────────────────────
+// CRITICAL: never create a second AudioContext. On iOS/Safari all contexts share
+// one audio session and the newest output owner silences the others — that was
+// the "focus sounds vanish when I move" bug. Everything routes through the focus
+// engine's ONE context via its registered buffers (FocusAudioEngine.playPitched),
+// and we never touch its init timing (which would disturb the focus sounds).
+let _entPending = false, _entPendingAt = 0;
 
-function _juiceCtxGet() {
-    const fe = gameState.focusAudioEngine;
-    if (fe && fe.ctx) return fe.ctx;   // in-game: share the focus engine's context
-    if (!_juiceCtx) {
-        try { _juiceCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch (_) { _juiceCtx = null; }
-    }
-    return _juiceCtx;
-}
-
-// Fully CLOSE the login-only fallback context before the focus engine creates
-// its own. On iOS/Safari all contexts share one audio session and the newest
-// running one takes over output — a merely-suspended leftover still poisoned the
-// session, silencing the focus sounds the moment one resumed (the "focus sounds
-// vanish when I move" bug). Closing releases the session cleanly.
-function _juiceCloseLoginCtx() {
-    if (_juiceCtx) { try { _juiceCtx.close(); } catch (_) {} _juiceCtx = null; }
-    _uiSndBuf = null; _uiLoading = false;   // buffer belonged to the closed ctx — re-decode on the shared one
-}
-
-// On a refresh that auto-resumes, there's NO user gesture at load, so the context
-// starts suspended and the browser blocks audio until the user interacts. Resume
-// the active context on the first interaction of ANY kind (move/click/tap) and
-// flush a queued entrance sound so it isn't lost.
+// On a gesture-less refresh the context starts suspended (autoplay block). Resume
+// the focus engine's context on the first interaction of ANY kind, and flush a
+// queued entrance sound so it isn't lost.
 function _juiceWireResume() {
     if (gameState._juiceResumeWired) return;
     gameState._juiceResumeWired = true;
     const onGesture = () => {
-        const c = _juiceCtxGet();
-        if (c && c.state === 'suspended') c.resume().catch(() => {});
-        if (_entPending && performance.now() - _entPendingAt < 30000) { _entPending = false; _playEntranceSound(); }
+        const fe = gameState.focusAudioEngine;
+        if (fe && fe.ctx && fe.ctx.state === 'suspended') fe.ctx.resume().catch(() => {});
+        if (_entPending) _playEntranceSound();
     };
     ['pointerdown', 'mousedown', 'keydown', 'touchstart', 'click'].forEach(ev =>
         document.addEventListener(ev, onGesture, { capture: true, passive: true }));
 }
 
-// One-shot buffer playback with a short attack/release envelope (kills the
-// start/stop click → no "cracking", esp. once pitch-shifted). `limit` routes
-// through a brick-wall limiter so the louder entrance sound can't clip the
-// mobile output (the remaining crackle was amplitude clipping, not edge clicks).
-function _juicePlayBuffer(buf, rate, peak, limit) {
-    const ctx = _juiceCtxGet();
-    if (!ctx || !buf) return false;
-    if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); return false; }
-    try {
-        const src = ctx.createBufferSource();
-        src.buffer = buf;
-        src.playbackRate.value = rate;
-        const g = ctx.createGain();
-        const t = ctx.currentTime;
-        const dur = buf.duration / rate;
-        const atk = Math.min(0.014, dur * 0.25);
-        const rel = Math.min(0.05, dur * 0.3);
-        g.gain.setValueAtTime(0.0001, t);
-        g.gain.exponentialRampToValueAtTime(peak, t + atk);
-        g.gain.setValueAtTime(peak, t + Math.max(atk, dur - rel));
-        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-        src.connect(g);
-        let comp = null;
-        if (limit) {
-            comp = ctx.createDynamicsCompressor();
-            comp.threshold.value = -10; comp.knee.value = 0; comp.ratio.value = 20;
-            comp.attack.value = 0.002; comp.release.value = 0.12;
-            g.connect(comp); comp.connect(ctx.destination);
-        } else {
-            g.connect(ctx.destination);
+// Play the entrance whoosh through the focus engine. If the context is suspended
+// (gesture-less refresh) or the buffer/engine isn't ready yet, keep retrying for
+// a short window — it fires the instant the context is running AND the buffer is
+// loaded (so on a refresh where focus audio is already allowed, it plays without
+// waiting for input; otherwise the gesture handler resumes it).
+function _playEntranceSound() {
+    const fe = gameState.focusAudioEngine;
+    if (!fe) return;
+    if (!fe.ctx) { try { fe.init(); } catch (_) {} }
+    if (!_entPending) { _entPending = true; _entPendingAt = performance.now(); }
+    const tick = () => {
+        if (!_entPending) return;                       // already played / cancelled
+        const c = fe.ctx;
+        if (c && c.state === 'suspended') c.resume().catch(() => {});
+        if (fe.playPitched('entranceSound', 0.92 + Math.random() * 0.26, 0.42)) {
+            _entPending = false;                        // success
+            return;
         }
-        src.onended = () => { try { src.disconnect(); g.disconnect(); if (comp) comp.disconnect(); } catch (_) {} };
-        src.start(0);
-        return true;
-    } catch (_) { return false; }
+        if (performance.now() - _entPendingAt < 9000) setTimeout(tick, 130);
+        else _entPending = false;                       // give up after ~9s
+    };
+    tick();
 }
 
-function _preloadEntranceSound() {
-    if (_entSndBuf || _entLoading) return;
-    _entLoading = true;
-    const ctx = _juiceCtxGet();
-    if (!ctx) { _entLoading = false; return; }
-    fetch('Sound/Enterance_Sound.mp3')
-        .then(r => r.arrayBuffer()).then(b => ctx.decodeAudioData(b))
-        .then(buf => { _entSndBuf = buf; }).catch(() => { _entLoading = false; });
-}
-function _playEntranceSound() {
-    const ctx = _juiceCtxGet();
-    // Not ready (buffer still decoding) or blocked (suspended on a gesture-less
-    // refresh): queue it for the first interaction instead of dropping it.
-    if (!ctx || !_entSndBuf || ctx.state === 'suspended') {
-        _entPending = true; _entPendingAt = performance.now();
-        if (ctx && ctx.state === 'suspended') ctx.resume().then(() => {
-            if (_entPending) { _entPending = false; _playEntranceSound(); }
-        }).catch(() => {});
-        return;
-    }
-    _juicePlayBuffer(_entSndBuf, 0.92 + Math.random() * 0.26, 0.5, true);
+// In-game UI cascade blip — quiet, through the focus engine's context.
+function _playUiBlip(rate) {
+    const fe = gameState.focusAudioEngine;
+    if (fe) fe.playPitched('uiBlip', rate, 0.07);
 }
 
 // Put up the black overlay immediately, but DON'T decide the entrance yet — we
 // only know whether we're restoring into an active session once the async
 // Firebase restore resolves. beginEntrance() (called from that restore, and from
 // a failsafe timer) then picks: plain fade if in a session, full cinematic
-// entrance otherwise. The sound is preloaded long before this (in init()).
+// entrance otherwise. The entrance sound rides the focus engine's buffers.
 function playEntranceSequence() {
     if (!JUICE_ENTRANCE || gameState.isSirajGhost) return;
-    _preloadEntranceSound();   // idempotent — already kicked off at init()
 
     const el = document.createElement('div');
     el.id = 'entrance-blackout';
@@ -3940,21 +3911,6 @@ const _JUICE_IN_ANIMS = new Set(['juicePop', 'juiceContainerPop', 'juiceRowIn'])
 // Elements whose pop-in should stay silent (visual animation still plays).
 const _JUICE_SILENT_SEL = '.free-mode-panel, .success-content';
 
-// Menu blip — decoded once, replayed with a rising pitch across each cascade.
-function _preloadUiSound() {
-    if (_uiSndBuf || _uiLoading) return;
-    _uiLoading = true;
-    const ctx = _juiceCtxGet();   // shared with the entrance sound — one context total
-    if (!ctx) { _uiLoading = false; return; }
-    fetch('Sound/Menu_Ui.mp3')
-        .then(r => r.arrayBuffer()).then(b => ctx.decodeAudioData(b))
-        .then(buf => { _uiSndBuf = buf; }).catch(() => { _uiLoading = false; });
-}
-function _playUiBlip(rate) {
-    // Quiet, with an attack/release envelope (no click/crackle on mobile).
-    _juicePlayBuffer(_uiSndBuf, rate, 0.07, false);
-}
-
 // Pitch sweep state: first element of a cascade is the "heaviest" (deepest)
 // pitch, each following element a step higher; the base is randomised per
 // cascade. A gap (or an explicit reset) starts a fresh sweep.
@@ -3975,9 +3931,8 @@ function _uiSeqReset() { _uiSeq.lastT = 0; }   // force the next blip to begin a
 function setupJuiceUi() {
     if (!JUICE_UI || gameState._juiceUiWired) return;
     gameState._juiceUiWired = true;
-    _preloadUiSound();
-    // One blip per element as it POPS IN (pop-outs are silent). Capture phase so
-    // it catches descendants regardless of where they sit.
+    // In-game cascade: one blip per element as it POPS IN (pop-outs are silent),
+    // through the focus engine's context. Capture phase catches descendants.
     document.addEventListener('animationstart', (ev) => {
         if (!_JUICE_IN_ANIMS.has(ev.animationName)) return;
         const t = ev.target;
@@ -3985,12 +3940,20 @@ function setupJuiceUi() {
         _playUiBlip(_uiSeqRate());
     }, true);
 
-    // On the login / lobby flow (before we're in-game) the blip fires on BUTTON
-    // PRESS, not on element appearance.
+    // Login / lobby flow (no focus engine yet): blip on BUTTON PRESS via a plain
+    // HTMLAudio element — deliberately NOT Web Audio, so it can't create a second
+    // AudioContext that would later fight the focus engine on iOS/Safari.
     document.addEventListener('pointerdown', (ev) => {
         if (gameState.userId) return;   // login flow only
         const t = ev.target;
-        if (t && t.closest && t.closest('button, .user-item')) _playUiBlip(0.95 + Math.random() * 0.1);
+        if (t && t.closest && t.closest('button, .user-item')) {
+            try {
+                const a = new Audio('Sound/Menu_Ui.mp3');
+                a.volume = 0.18;
+                a.playbackRate = 0.95 + Math.random() * 0.1;
+                a.play().catch(() => {});
+            } catch (_) {}
+        }
     }, true);
 }
 
