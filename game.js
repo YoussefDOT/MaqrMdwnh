@@ -3277,17 +3277,20 @@ function startGame(userData) {
     // Apply mobile class immediately
     setMobileClass();
 
+    // JUICE: close the login-only fallback AudioContext BEFORE the focus engine
+    // creates its own, so there is only ever ONE context. All juice audio then
+    // shares the focus-engine context (Safari/iOS gives audio output to one
+    // context only — a second one silenced the focus sounds when it resumed).
+    _juiceCloseLoginCtx();
+
     // Initialize Focus Audio Engine & Setup Focus UI
     gameState.focusAudioEngine = new FocusAudioEngine();
     gameState.focusAudioEngine.init();   // create its context now — ALL juice audio shares it
     gameState.focusYTPlayer = new FocusYouTubePlayer();
     setupFocusPanelUI();
 
-    // JUICE: park the login-only fallback context and re-decode the juice sounds
-    // on the shared focus-engine context so playback never spins up a second
-    // competing context (which silenced focus sounds on Safari/iOS).
-    _juiceParkLoginCtx();
-    _uiSndBuf = null;  _uiLoading = false;  _preloadUiSound();
+    // Re-decode the juice sounds on the shared (focus-engine) context.
+    _preloadUiSound();
     if (JUICE_ENTRANCE) { _entSndBuf = null; _entLoading = false; _preloadEntranceSound(); }
 
     // Set active presence in game and set up disconnect presence cleanup
@@ -3675,10 +3678,14 @@ function _juiceCtxGet() {
     return _juiceCtx;
 }
 
-// Once in-game, park the login-only fallback context so two running contexts
-// don't fight for audio output (which silenced the focus sounds).
-function _juiceParkLoginCtx() {
-    if (_juiceCtx) { try { _juiceCtx.suspend(); } catch (_) {} }
+// Fully CLOSE the login-only fallback context before the focus engine creates
+// its own. On iOS/Safari all contexts share one audio session and the newest
+// running one takes over output — a merely-suspended leftover still poisoned the
+// session, silencing the focus sounds the moment one resumed (the "focus sounds
+// vanish when I move" bug). Closing releases the session cleanly.
+function _juiceCloseLoginCtx() {
+    if (_juiceCtx) { try { _juiceCtx.close(); } catch (_) {} _juiceCtx = null; }
+    _uiSndBuf = null; _uiLoading = false;   // buffer belonged to the closed ctx — re-decode on the shared one
 }
 
 // On a refresh that auto-resumes, there's NO user gesture at load, so the context
@@ -3799,14 +3806,16 @@ function beginEntrance(inSession) {
     }
 
     // Full cinematic entrance — timing starts now (preserves the overlay ref).
-    // Mobile gets a lighter zoom-out + smaller start scale: the zoomed-out frame
-    // draws far more of the world and a screen-filling sprite is costly to raster,
-    // which is what made the intro lag (and spike memory) on phones.
+    // Mobile gets a MUCH lighter version: NO camera zoom (the zoomed-out frame
+    // draws far more of the world for ~1.7s) and a small drop scale (a
+    // screen-filling sprite is a costly raster spike). That sustained + spiked
+    // GPU/CPU load was starving the audio thread → the entrance-sound "crackle",
+    // and was what lagged the intro. Desktop keeps the full cinematic version.
     const mobile = isMobile();
     Object.assign(_entrance, {
         active: true, start: performance.now(), targetZoom: 1,
-        zoomStart: mobile ? 0.82 : ENTRY.zoomStart,
-        startScale: mobile ? 8 : ENTRY.startScale,
+        zoomStart: mobile ? 1 : ENTRY.zoomStart,
+        startScale: mobile ? 2.4 : ENTRY.startScale,
         camSnapped: false, dropBaseSet: false, dropBaseT: 0,
         charVisible: false, dropComplete: false,
         dropY: 0, dropScale: 1, dropBlur: 0, squashX: 1, squashY: 1,
