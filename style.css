@@ -1851,6 +1851,28 @@ body {
     from { opacity: 1; transform: scale(1) translateY(0); }
     to   { opacity: 0; transform: scale(0.93) translateY(-8px); }
 }
+/* Sequential entrance for each category heading + row (replays on every open) */
+@keyframes settingsRowIn {
+    from { opacity: 0; transform: translateY(9px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category-title,
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-row {
+    opacity: 0;
+    animation: settingsRowIn 0.4s cubic-bezier(0.22,1,0.36,1) forwards;
+}
+/* Category 1 */
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(1) > .settings-category-title { animation-delay: 0.05s; }
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(1) > .settings-row:nth-child(2) { animation-delay: 0.10s; }
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(1) > .settings-row:nth-child(3) { animation-delay: 0.15s; }
+/* Category 2 */
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(2) > .settings-category-title { animation-delay: 0.20s; }
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(2) > .settings-row:nth-child(2) { animation-delay: 0.25s; }
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(2) > .settings-row:nth-child(3) { animation-delay: 0.30s; }
+/* Category 3 */
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(3) > .settings-category-title { animation-delay: 0.35s; }
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(3) > .settings-row:nth-child(2) { animation-delay: 0.40s; }
+.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(3) > .settings-row:nth-child(3) { animation-delay: 0.45s; }
 .settings-panel-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 14px 16px 12px;
@@ -3141,7 +3163,12 @@ body.game-ready #prayer-panel { display: flex !important; flex-direction: column
     min-width: 290px; max-width: 350px;
     display: flex; flex-direction: column; gap: 13px;
     box-shadow: 0 24px 64px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.05);
-    animation: popInBouncy 0.46s cubic-bezier(0.34,1.56,0.64,1);
+    animation: prayerModalPop 0.34s cubic-bezier(0.34,1.4,0.64,1);
+}
+/* Gentle entrance — subtle scale, no aggressive bounce */
+@keyframes prayerModalPop {
+    from { opacity: 0; transform: scale(0.975) translateY(8px); }
+    to   { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 /* ── Sequential punchy entrance for both modals ── */

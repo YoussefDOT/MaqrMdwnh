@@ -10930,8 +10930,14 @@ function setupSettingsUI() {
 
     if (prayerDelayBtn) {
         prayerDelayBtn.addEventListener('click', () => {
-            const next = getPrayerJamaahDelay() ? '0' : '1';
-            localStorage.setItem(SETTINGS_PRAYER_DELAY_KEY, next);
+            const on = !getPrayerJamaahDelay();
+            // Per-USER preference (follows the account across devices) → store in Firebase;
+            // mirror to localStorage so getPrayerJamaahDelay() stays a cheap sync read.
+            if (on) localStorage.setItem(SETTINGS_PRAYER_DELAY_KEY, '1');
+            else    localStorage.removeItem(SETTINGS_PRAYER_DELAY_KEY);
+            if (gameState.userId) {
+                update(ref(database), { [`users/${gameState.userId}/prayerJamaahDelay`]: on }).catch(() => {});
+            }
             _reflectPrayerDelay();
             // Recompute prayer times immediately so the panel + next-prayer reflect the shift
             if (gameState.prayer && gameState.prayer.times) {
@@ -13499,6 +13505,21 @@ function initPrayerSystem() {
         const adj = snap.val();
         if (adj) gameState.prayer.adjustments = adj;
     });
+
+    // Read صلاة الجماعة (+5 min) — a per-USER preference, so it follows the account
+    // across devices. Firebase is the source of truth; mirror it into localStorage so
+    // getPrayerJamaahDelay() stays a cheap synchronous read everywhere else.
+    get(ref(database, `users/${gameState.userId}/prayerJamaahDelay`)).then(snap => {
+        const on = snap.val() === true;
+        if (on) localStorage.setItem(SETTINGS_PRAYER_DELAY_KEY, '1');
+        else    localStorage.removeItem(SETTINGS_PRAYER_DELAY_KEY);
+        // Reflect in the settings toggle (UI may already be wired by now)
+        const btn = document.getElementById('settings-prayer-delay-btn');
+        const lbl = document.getElementById('settings-prayer-delay-label');
+        if (btn) { btn.dataset.value = on ? 'on' : 'off'; btn.classList.toggle('settings-toggle-on', on); }
+        if (lbl) lbl.textContent = on ? 'مفعّل' : 'مغلق';
+        if (gameState.prayer && gameState.prayer.times) { computeNextPrayer(); updatePrayerPanelDOM(); }
+    }).catch(() => {});
 
     setupPrayerUI();
 }
