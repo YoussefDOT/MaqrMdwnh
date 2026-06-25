@@ -23,9 +23,15 @@ const SETTINGS_NAMES_KEY    = 'mdwnh_hide_names';        // '0' = show, '1' = hi
 const SETTINGS_JOYSTICK_KEY = 'mdwnh_joystick_mode';    // 'auto' | 'always' | 'off'
 const SETTINGS_NOIDLE_KEY   = 'mdwnh_disable_idle_anim'; // '1' = disable idle animation while working
 const SETTINGS_AZKAR_RANDOM_KEY = 'mdwnh_randomize_azkar'; // '1' = shuffle azkar order
+const SETTINGS_PRAYER_DELAY_KEY = 'mdwnh_prayer_jamaah_delay'; // '1' = +5 min to each prayer (mosque mode)
 
 function getDisableIdleAnim() { return localStorage.getItem(SETTINGS_NOIDLE_KEY) === '1'; }
 function getRandomizeAzkar()  { return localStorage.getItem(SETTINGS_AZKAR_RANDOM_KEY) === '1'; }
+function getPrayerJamaahDelay() { return localStorage.getItem(SETTINGS_PRAYER_DELAY_KEY) === '1'; }
+// Extra minutes added to every prayer time when "صلاة الجماعة" is on (gives mosque-goers
+// time to reach the prayer before the overlay/notification fires). Separate from the
+// per-prayer manual adjustments shown in the edit modal.
+function prayerJamaahExtraMin() { return getPrayerJamaahDelay() ? 5 : 0; }
 
 // ─── Touch / joystick detection ──────────────────────────────────────────────
 // `is-mobile` is width-based and drives the whole mobile layout. But the control
@@ -10815,6 +10821,8 @@ function setupSettingsUI() {
     const idleLabel     = document.getElementById('settings-idle-label');
     const azkarRandBtn  = document.getElementById('settings-azkar-random-btn');
     const azkarRandLabel= document.getElementById('settings-azkar-random-label');
+    const prayerDelayBtn   = document.getElementById('settings-prayer-delay-btn');
+    const prayerDelayLabel = document.getElementById('settings-prayer-delay-label');
     if (!settingsBtn || !panel) return;
 
     function _reflectJoystick() {
@@ -10858,6 +10866,14 @@ function setupSettingsUI() {
         azkarRandBtn.dataset.value = on ? 'on' : 'off';
         azkarRandBtn.classList.toggle('settings-toggle-on', on);
         azkarRandLabel.textContent = on ? 'مفعّل' : 'مغلق';
+    }
+
+    function _reflectPrayerDelay() {
+        if (!prayerDelayBtn) return;
+        const on = getPrayerJamaahDelay();
+        prayerDelayBtn.dataset.value = on ? 'on' : 'off';
+        prayerDelayBtn.classList.toggle('settings-toggle-on', on);
+        prayerDelayLabel.textContent = on ? 'مفعّل' : 'مغلق';
     }
 
     function _applyGraphicsSetting() {
@@ -10912,23 +10928,53 @@ function setupSettingsUI() {
         });
     }
 
+    if (prayerDelayBtn) {
+        prayerDelayBtn.addEventListener('click', () => {
+            const next = getPrayerJamaahDelay() ? '0' : '1';
+            localStorage.setItem(SETTINGS_PRAYER_DELAY_KEY, next);
+            _reflectPrayerDelay();
+            // Recompute prayer times immediately so the panel + next-prayer reflect the shift
+            if (gameState.prayer && gameState.prayer.times) {
+                computeNextPrayer();
+                updatePrayerPanelDOM();
+            }
+        });
+    }
+
+    // Open/close with a disappearing animation (close adds a transient class, then hides
+    // after the animation finishes — no more snapping out of existence).
+    let _settingsCloseTimer = null;
+    function openSettingsPanel() {
+        clearTimeout(_settingsCloseTimer);
+        panel.classList.remove('settings-panel-closing');
+        panel.classList.remove('hidden');
+        settingsBtn.classList.add('active');
+    }
+    function closeSettingsPanel() {
+        if (panel.classList.contains('hidden') || panel.classList.contains('settings-panel-closing')) return;
+        panel.classList.add('settings-panel-closing');
+        settingsBtn.classList.remove('active');
+        clearTimeout(_settingsCloseTimer);
+        _settingsCloseTimer = setTimeout(() => {
+            panel.classList.add('hidden');
+            panel.classList.remove('settings-panel-closing');
+        }, 230);
+    }
+
     settingsBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        panel.classList.toggle('hidden');
-        settingsBtn.classList.toggle('active', !panel.classList.contains('hidden'));
+        if (panel.classList.contains('hidden')) openSettingsPanel();
+        else closeSettingsPanel();
     });
 
-    closeBtn.addEventListener('click', () => {
-        panel.classList.add('hidden');
-        settingsBtn.classList.remove('active');
-    });
+    closeBtn.addEventListener('click', () => { closeSettingsPanel(); });
 
     document.addEventListener('click', (e) => {
         if (!panel.classList.contains('hidden') &&
+            !panel.classList.contains('settings-panel-closing') &&
             !panel.contains(e.target) &&
             e.target !== settingsBtn) {
-            panel.classList.add('hidden');
-            settingsBtn.classList.remove('active');
+            closeSettingsPanel();
         }
     });
 
@@ -10937,6 +10983,7 @@ function setupSettingsUI() {
     _reflectJoystick();
     _reflectIdle();
     _reflectAzkarRandom();
+    _reflectPrayerDelay();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -13619,9 +13666,10 @@ function computeNextPrayer() {
     const adj = pr.adjustments;
     const dayMs = [];
 
+    const jamaah = prayerJamaahExtraMin();
     for (let i = 0; i < PRAYER_DATA.length; i++) {
         const p = PRAYER_DATA[i];
-        let ms = prayerTimeToMs(pr.times[p.key], adj[p.key] || 0);
+        let ms = prayerTimeToMs(pr.times[p.key], (adj[p.key] || 0) + jamaah);
         // Siraj test mode: override next upcoming prayer to be 1 min from now
         if (gameState.isSirajGhost && ms > now && !pr._sirajOverrideApplied) {
             ms = now + 60000; // 1 minute from now
@@ -13643,7 +13691,8 @@ function computeNextPrayer() {
     if (!next) {
         const tmrw = new Date();
         tmrw.setDate(tmrw.getDate() + 1);
-        tmrw.setHours(...pr.times.Fajr.split(':').map(Number), 0, 0);
+        const [fh, fm] = pr.times.Fajr.split(':').map(Number);
+        tmrw.setHours(fh, fm + (adj.Fajr || 0) + jamaah, 0, 0);
         next = { key: 'Fajr', arabic: PRAYER_DATA[0].arabic, timeMs: tmrw.getTime(), prevTimeMs: dayMs[dayMs.length - 1].timeMs };
     }
 
@@ -13669,9 +13718,10 @@ function updatePrayerPanelDOM() {
 
     const now = Date.now();
     const adj = pr.adjustments;
+    const jamaah = prayerJamaahExtraMin();
 
     for (const p of PRAYER_DATA) {
-        const ms = prayerTimeToMs(pr.times[p.key], adj[p.key] || 0);
+        const ms = prayerTimeToMs(pr.times[p.key], (adj[p.key] || 0) + jamaah);
         const d = new Date(ms);
         let hrs = d.getHours(), ampm = hrs >= 12 ? 'م' : 'ص';
         hrs = hrs % 12 || 12;
@@ -14487,9 +14537,16 @@ function openAzkarOverlay(type, opts) {
     az.items = (getRandomizeAzkar() && !afterPrayer) ? _shuffledCopy(baseList) : baseList.slice();
     az.counts = az.items.map(z => z.count);
 
-    // Siraj: shorter lock for testing. After-prayer azkar: no forced wait — these
-    // are short post-salah adhkar, so انتهيت is usable as soon as they're done.
-    az.minLockMs = afterPrayer ? 0 : (gameState.isSirajGhost ? 3000 : 180000);
+    // Siraj: shorter lock for testing. After-prayer azkar: the انتهيت here closes BOTH
+    // overlays (returns to work), so it must obey the same lock as the prayer overlay's
+    // "صلّيت" button — otherwise opening azkar then pressing انتهيت would bypass the wait.
+    // We anchor az.startTime to the prayer overlay's start so both timers tick in sync.
+    if (afterPrayer && gameState.prayer && gameState.prayer.isOverlayActive) {
+        az.startTime  = gameState.prayer.overlayStartTime;
+        az.minLockMs  = gameState.prayer.prayerLockMs;
+    } else {
+        az.minLockMs = afterPrayer ? 0 : (gameState.isSirajGhost ? 3000 : 180000);
+    }
 
     document.body.classList.add('azkar-active');
     if (afterPrayer) document.body.classList.add('azkar-after-prayer');
@@ -14726,6 +14783,30 @@ function updateAzkarFinishTimer() {
         // Don't use disabled — it leaks taps on iOS. Use class only; click handler checks .unlocked.
         if (btn) { btn.removeAttribute('disabled'); btn.classList.remove('unlocked'); }
     }
+}
+
+// After-prayer "رجوع": close the azkar overlay but stay in the prayer overlay (no resume).
+// The prayer overlay underneath keeps the work session frozen; we only tear down the azkar
+// UI. The lock is anchored to the prayer overlay, so reopening azkar resumes the same count.
+function closeAzkarToPrayerOverlay() {
+    const az = gameState.azkar;
+    if (!az.active || !az.afterPrayer) return;
+    az.active = false;
+    az.afterPrayer = false;
+
+    const overlay = document.getElementById('azkar-overlay');
+    if (overlay) {
+        overlay.classList.remove('active');
+        setTimeout(() => { overlay.classList.add('hidden'); }, 700);
+    }
+    document.body.classList.remove('azkar-active');
+    document.body.classList.remove('azkar-after-prayer');
+    document.body.classList.remove('azkar-sounds-collapsed');
+    if (az._lockInterval) { clearInterval(az._lockInterval); az._lockInterval = null; }
+    az.type = null;
+    az.items = [];
+    updateAzkarButton();
+    // The prayer overlay stays active and visible — nothing else to do.
 }
 
 function closeAzkarOverlay(markDone) {
@@ -14970,6 +15051,13 @@ function setupAzkarUI() {
         const fb = document.getElementById('azkar-finish-btn');
         if (!fb?.classList.contains('unlocked')) return; // still locked
         closeAzkarOverlay(true);
+    });
+
+    // رجوع — only in the after-prayer flow: hide the azkar overlay and reveal the prayer
+    // overlay underneath WITHOUT resuming the work session (the prayer overlay still owns
+    // the freeze). The 3-min lock keeps running, so flipping back and forth can't bypass it.
+    document.getElementById('azkar-back-btn')?.addEventListener('click', () => {
+        closeAzkarToPrayerOverlay();
     });
 
     // Hide / show the focus-sounds panel during azkar (smooth slide, CSS-driven)
