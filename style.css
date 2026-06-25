@@ -2836,6 +2836,18 @@ body.is-mobile:has(#focus-sounds-panel.active) .sp-coop-tasks {
     display: flex; flex-direction: column; gap: 6px;
 }
 .leave-wrap-hidden { display: none; }
+/* Juice sequencing — when the panel appears its buttons slide in from the left,
+   staggered (no sound). `backwards` fill keeps hover/active transforms working. */
+.leave-wrap:not(.leave-wrap-hidden) > .pomo-leave-btn,
+.leave-wrap:not(.leave-wrap-hidden) > .end-break-btn {
+    animation: leaveWrapSeqIn 0.48s cubic-bezier(0.34,1.56,0.64,1) backwards;
+}
+.leave-wrap:not(.leave-wrap-hidden) > .pomo-leave-btn { animation-delay: 0.02s; }
+.leave-wrap:not(.leave-wrap-hidden) > .end-break-btn  { animation-delay: 0.10s; }
+@keyframes leaveWrapSeqIn {
+    from { opacity: 0; transform: translateX(-16px) scale(0.9); }
+    to   { opacity: 1; transform: translateX(0) scale(1); }
+}
 
 .pomo-leave-btn {
     background: rgba(18,18,18,0.80);
@@ -3500,39 +3512,57 @@ body.is-mobile .prayer-overlay-sub { font-size: 0.8rem; }
     margin-top: -6px;
 }
 
-/* Break prompt that appears below timer after 25 min */
+/* Break prompt — small text (no box) just above the "اعمل على" task panel */
 .free-break-prompt {
+    position: fixed;
+    bottom: 168px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 1002;
     pointer-events: all;
-    margin-top: 14px;
-    background: rgba(14,14,14,0.78);
-    backdrop-filter: blur(16px) saturate(1.4);
-    border: 1px solid rgba(255,255,255,0.1);
-    border-radius: 14px;
-    padding: 10px 16px 12px;
-    display: flex; flex-direction: column; align-items: center; gap: 10px;
-    min-width: 220px;
-    animation: fm-prompt-in 0.35s cubic-bezier(0.34,1.56,0.64,1);
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    text-shadow: 0 2px 12px rgba(0,0,0,0.8), 0 0 4px rgba(0,0,0,0.6);
 }
 .free-break-prompt.hidden { display: none; }
-@keyframes fm-prompt-in {
-    from { opacity: 0; transform: translateY(-8px) scale(0.95); }
+/* Sequenced entrance — text rises in first, buttons follow (juice, no box) */
+.free-break-prompt:not(.fbp-leaving) > * {
+    animation: fbpChildIn 0.46s cubic-bezier(0.34,1.56,0.64,1) backwards;
+}
+.free-break-prompt:not(.fbp-leaving) > .free-prompt-label { animation-delay: 0.02s; }
+.free-break-prompt:not(.fbp-leaving) > .free-prompt-btns  { animation-delay: 0.11s; }
+@keyframes fbpChildIn {
+    from { opacity: 0; transform: translateY(10px) scale(0.9); }
     to   { opacity: 1; transform: translateY(0) scale(1); }
 }
-#free-prompt-label {
-    font-size: 0.78rem; font-weight: 600; color: rgba(255,255,255,0.75);
+/* Sequenced exit — buttons drop out first, then the text */
+.free-break-prompt.fbp-leaving > * {
+    animation: fbpChildOut 0.24s ease forwards;
+}
+.free-break-prompt.fbp-leaving > .free-prompt-btns  { animation-delay: 0s; }
+.free-break-prompt.fbp-leaving > .free-prompt-label { animation-delay: 0.05s; }
+@keyframes fbpChildOut {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateY(8px) scale(0.92); }
+}
+.free-prompt-label {
+    font-size: 0.82rem; font-weight: 600; color: rgba(255,255,255,0.92);
     text-align: center; line-height: 1.4;
 }
 .free-prompt-btns { display: flex; gap: 8px; }
-.free-prompt-yes, .free-prompt-vote {
-    padding: 7px 22px;
+.free-prompt-yes, .free-prompt-no, .free-prompt-vote {
+    padding: 6px 20px;
     border-radius: 50px; border: none; cursor: pointer;
-    font-family: inherit; font-size: 0.82rem; font-weight: 700;
+    font-family: inherit; font-size: 0.8rem; font-weight: 700;
     transition: all 0.18s cubic-bezier(0.34,1.56,0.64,1);
 }
 .free-prompt-yes {
-    background: rgba(59,185,171,0.9); color: white;
+    background: rgba(59,185,171,0.92); color: white;
 }
 .free-prompt-yes:hover { background: #3bb9ab; transform: scale(1.05); }
+.free-prompt-no {
+    background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85);
+    border: 1px solid rgba(255,255,255,0.2);
+}
+.free-prompt-no:hover { background: rgba(255,255,255,0.22); transform: scale(1.05); }
 .free-prompt-vote {
     background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.8);
     border: 1px solid rgba(255,255,255,0.18);
@@ -3560,6 +3590,26 @@ body.is-mobile .prayer-overlay-sub { font-size: 0.8rem; }
 @keyframes fm-picker-in {
     from { opacity: 0; transform: translate(-50%,-50%) scale(0.9); }
     to   { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+}
+/* Sequenced entrance — picker rows stagger in (juice) */
+.free-break-picker:not(.fbp-leaving) > * {
+    animation: fbpPickChildIn 0.42s cubic-bezier(0.34,1.56,0.64,1) backwards;
+}
+.free-break-picker:not(.fbp-leaving) > .fbp-label   { animation-delay: 0.04s; }
+.free-break-picker:not(.fbp-leaving) > .fbp-opts    { animation-delay: 0.09s; }
+.free-break-picker:not(.fbp-leaving) > .fbp-confirm { animation-delay: 0.14s; }
+.free-break-picker:not(.fbp-leaving) > .fbp-back    { animation-delay: 0.18s; }
+@keyframes fbpPickChildIn {
+    from { opacity: 0; transform: translateY(12px) scale(0.92); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+/* Sequenced exit — whole picker eases out before it's hidden */
+.free-break-picker.fbp-leaving {
+    animation: fbpPickerOut 0.22s ease forwards;
+}
+@keyframes fbpPickerOut {
+    from { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+    to   { opacity: 0; transform: translate(-50%,-50%) scale(0.9); }
 }
 .fbp-label {
     font-size: 0.95rem; font-weight: 700; color: white;
@@ -3716,7 +3766,7 @@ body.is-mobile .free-timer-text { font-size: 5rem; }
 /* Push break prompt below the 3-button row (buttons bottom ≈ 186px + gap).
    Panel starts at 16px; timer (80px) + label (~18px, mt:-6) ends at ~108px;
    original margin-top was 14px → prompt at ~122px; needs to be at ~200px. */
-body.is-mobile .free-break-prompt { margin-top: 92px; }
+body.is-mobile .free-break-prompt { bottom: 152px; }
 body.is-mobile .free-votes-pill { top: 124px; }
 
 /* ═══════════════════════════════════════════════════════
@@ -3983,28 +4033,47 @@ body.is-mobile .mode-card-desc { font-size: 11px; }
     cursor: pointer;
     overflow: hidden;
     isolation: isolate;
+    /* Explicit max-height (well above content) so the collapse transition has a
+       length to animate FROM — this is what lets the user-card resize smoothly
+       instead of snapping when the button appears/disappears. */
+    max-height: 80px;
     transition: transform 0.28s cubic-bezier(0.34,1.56,0.64,1),
                 opacity 0.28s ease,
                 background 0.3s ease,
                 border-color 0.3s ease,
-                box-shadow 0.3s ease;
+                box-shadow 0.3s ease,
+                max-height 0.34s cubic-bezier(0.34,1.56,0.64,1),
+                margin-top 0.34s cubic-bezier(0.34,1.56,0.64,1),
+                padding-top 0.32s ease,
+                padding-bottom 0.32s ease,
+                border-width 0.3s ease;
     animation: azkarPulse 2.4s ease-in-out infinite;
     -webkit-tap-highlight-color: transparent;
 }
 .azkar-btn.hidden { display: none; }
 /* Smooth appear / disappear — JS adds .azkar-leaving, waits for the fade, then
-   adds .hidden (collapse). Prevents the button snapping away when it clears. */
+   adds .hidden (collapse). The button collapses its own height/margin/padding so
+   the user-card panel reflows down smoothly (bouncily) instead of snapping. */
 .azkar-btn.azkar-leaving {
     opacity: 0;
     transform: scale(0.82) translateY(-4px);
     animation: none;
     pointer-events: none;
+    max-height: 0;
+    margin-top: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-top-width: 0;
+    border-bottom-width: 0;
 }
 @keyframes azkarBtnEnter {
-    from { opacity: 0; transform: scale(0.82) translateY(-4px); }
-    to   { opacity: 1; transform: scale(1) translateY(0); }
+    0%   { opacity: 0; transform: scale(0.82) translateY(-4px);
+           max-height: 0; margin-top: 0; padding-top: 0; padding-bottom: 0; }
+    55%  { opacity: 1; }
+    100% { opacity: 1; transform: scale(1) translateY(0);
+           max-height: 80px; margin-top: 4px; padding-top: 9px; padding-bottom: 9px; }
 }
-.azkar-btn.azkar-entering { animation: azkarBtnEnter 0.36s cubic-bezier(0.34,1.56,0.64,1); }
+.azkar-btn.azkar-entering { animation: azkarBtnEnter 0.44s cubic-bezier(0.34,1.56,0.64,1); }
 .azkar-btn:hover { transform: translateY(-1px) scale(1.02); }
 .azkar-btn:active { transform: scale(0.97); }
 
@@ -4050,15 +4119,28 @@ body.is-mobile .mode-card-desc { font-size: 11px; }
     filter: blur(10px);
 }
 
-/* Evening theme — midnight blue */
+/* Evening theme — starry midnight blue, white text */
 .azkar-btn.evening {
-    background: linear-gradient(140deg, #11214a 0%, #1a2b5f 55%, #0d1633 100%);
-    color: rgba(220,230,255,0.95);
-    border-color: rgba(120,150,220,0.45);
-    box-shadow: 0 6px 22px rgba(20,40,90,0.55),
-                0 1px 0 rgba(255,255,255,0.10) inset,
-                0 0 18px rgba(80,120,220,0.30);
+    /* Layered star field (static dots) over a deep-blue gradient */
+    background:
+        radial-gradient(1.6px 1.6px at 18% 32%, rgba(255,255,255,0.95) 0%, transparent 100%),
+        radial-gradient(1.1px 1.1px at 34% 70%, rgba(255,255,255,0.7) 0%, transparent 100%),
+        radial-gradient(1.5px 1.5px at 52% 22%, rgba(255,255,255,0.9) 0%, transparent 100%),
+        radial-gradient(1px 1px at 67% 60%, rgba(200,220,255,0.7) 0%, transparent 100%),
+        radial-gradient(1.7px 1.7px at 80% 30%, rgba(255,255,255,0.95) 0%, transparent 100%),
+        radial-gradient(1.1px 1.1px at 90% 72%, rgba(255,255,255,0.6) 0%, transparent 100%),
+        radial-gradient(1px 1px at 45% 50%, rgba(255,255,255,0.5) 0%, transparent 100%),
+        linear-gradient(140deg, #0e1a3e 0%, #182a60 52%, #0a1330 100%);
+    color: #ffffff;
+    border-color: rgba(140,170,235,0.5);
+    text-shadow: 0 1px 6px rgba(10,20,60,0.6);
+    box-shadow: 0 6px 22px rgba(15,30,80,0.6),
+                0 1px 0 rgba(255,255,255,0.14) inset,
+                0 0 18px rgba(70,110,210,0.32);
 }
+/* The shared diagonal sheen looked bad on the dark button — drop it for evening;
+   the stars carry the look instead. */
+.azkar-btn.evening::before { display: none; }
 .azkar-btn.evening .azkar-btn-glow {
     background: radial-gradient(ellipse at 50% 50%, rgba(120,160,255,0.40) 0%, transparent 70%);
     opacity: 1;

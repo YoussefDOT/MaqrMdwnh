@@ -12292,7 +12292,46 @@ function showFreeModeBreakPrompt() {
     const totalMins = Math.floor((fm.totalWorkMs + (Date.now() - fm.workStartTime)) / 60000);
     if (label) label.textContent = `عملت ${formatDurationArabic(totalMins)} — هل تريد راحة؟`;
 
+    // Re-trigger the sequenced entrance even if it was just hidden.
+    prompt.classList.remove('fbp-leaving');
+    if (prompt._fbpHideTimer) { clearTimeout(prompt._fbpHideTimer); prompt._fbpHideTimer = null; }
     prompt.classList.remove('hidden');
+}
+
+/** Hide the break prompt — animated (sequenced exit) by default, then collapse. */
+function hideFreeModeBreakPrompt(animated = true) {
+    const prompt = document.getElementById('free-break-prompt');
+    if (!prompt || prompt.classList.contains('hidden')) return;
+    if (prompt._fbpHideTimer) { clearTimeout(prompt._fbpHideTimer); prompt._fbpHideTimer = null; }
+    if (!animated) { prompt.classList.add('hidden'); prompt.classList.remove('fbp-leaving'); return; }
+    prompt.classList.add('fbp-leaving');
+    prompt._fbpHideTimer = setTimeout(() => {
+        prompt.classList.add('hidden');
+        prompt.classList.remove('fbp-leaving');
+        prompt._fbpHideTimer = null;
+    }, 300);
+}
+
+/** Open the break duration picker with its sequenced entrance. */
+function showFreeBreakPicker() {
+    const picker = document.getElementById('free-break-picker');
+    if (!picker) return;
+    if (picker._fbpHideTimer) { clearTimeout(picker._fbpHideTimer); picker._fbpHideTimer = null; }
+    picker.classList.remove('fbp-leaving', 'hidden');
+}
+
+/** Hide the break duration picker — animated exit then collapse. */
+function hideFreeBreakPicker(animated = true) {
+    const picker = document.getElementById('free-break-picker');
+    if (!picker || picker.classList.contains('hidden')) return;
+    if (picker._fbpHideTimer) { clearTimeout(picker._fbpHideTimer); picker._fbpHideTimer = null; }
+    if (!animated) { picker.classList.add('hidden'); picker.classList.remove('fbp-leaving'); return; }
+    picker.classList.add('fbp-leaving');
+    picker._fbpHideTimer = setTimeout(() => {
+        picker.classList.add('hidden');
+        picker.classList.remove('fbp-leaving');
+        picker._fbpHideTimer = null;
+    }, 220);
 }
 
 function startFreeModeBreak(durationMins) {
@@ -12306,12 +12345,14 @@ function startFreeModeBreak(durationMins) {
     fm.breakPromptShown    = false;
     fm.nextBreakPromptMs   = 25 * 60 * 1000;
 
+    if (fm._breakPromptSnooze) { clearTimeout(fm._breakPromptSnooze); fm._breakPromptSnooze = null; }
+
     saveFreeModStateToFirebase();
     gameState.isLockedIn = false;
     if (gameState.anim.active) { gameState.anim.active = false; gameState.anim.phase = 'none'; }
 
-    document.getElementById('free-break-prompt')?.classList.add('hidden');
-    document.getElementById('free-break-picker')?.classList.add('hidden');
+    hideFreeModeBreakPrompt(false);
+    hideFreeBreakPicker();
     document.getElementById('free-mode-panel')?.classList.add('hidden');
     document.getElementById('focus-sounds-panel')?.classList.remove('active');
     document.getElementById('current-task-panel')?.classList.remove('active');
@@ -12409,6 +12450,7 @@ function endFreeMode() {
     fm.totalWorkMs   = 0;
     fm.breakEndTime  = 0;
     fm.breakPromptShown = false;
+    if (fm._breakPromptSnooze) { clearTimeout(fm._breakPromptSnooze); fm._breakPromptSnooze = null; }
 
     gameState.isLockedIn  = false;
     gameState.anim.active = false;
@@ -12508,12 +12550,26 @@ function setupFreeModeUI() {
         const defaultBtn = document.querySelector('.fbp-btn[data-val="5"]');
         if (defaultBtn) defaultBtn.classList.add('active');
         gameState.freeMode.selectedBreakMins = 5;
-        document.getElementById('free-break-picker')?.classList.remove('hidden');
+        showFreeBreakPicker();
     };
 
     document.getElementById('free-break-yes-btn')?.addEventListener('click', () => {
-        document.getElementById('free-break-prompt')?.classList.add('hidden');
+        const fm = gameState.freeMode;
+        if (fm._breakPromptSnooze) { clearTimeout(fm._breakPromptSnooze); fm._breakPromptSnooze = null; }
+        hideFreeModeBreakPrompt();
         openPicker();
+    });
+
+    // "لا" — dismiss the prompt; re-ask again in 5 minutes (no UI sound)
+    document.getElementById('free-break-no-btn')?.addEventListener('click', () => {
+        const fm = gameState.freeMode;
+        hideFreeModeBreakPrompt();
+        fm.breakPromptShown = true;   // keep the loop from re-showing immediately
+        if (fm._breakPromptSnooze) clearTimeout(fm._breakPromptSnooze);
+        fm._breakPromptSnooze = setTimeout(() => {
+            fm._breakPromptSnooze = null;
+            if (fm.active && fm.phase === 'work') showFreeModeBreakPrompt();
+        }, 5 * 60 * 1000);
     });
 
     document.querySelectorAll('.fbp-btn').forEach(btn => {
@@ -12555,8 +12611,8 @@ function setupFreeModeUI() {
     }
 
     document.getElementById('fbp-back-btn')?.addEventListener('click', () => {
-        document.getElementById('free-break-picker')?.classList.add('hidden');
-        document.getElementById('free-break-prompt')?.classList.remove('hidden');
+        hideFreeBreakPicker();
+        showFreeModeBreakPrompt();
     });
 
     document.getElementById('free-break-go-btn')?.addEventListener('click', () => {
@@ -14310,7 +14366,7 @@ function updateAzkarButton() {
         if (az._btnHideTimer) { clearTimeout(az._btnHideTimer); az._btnHideTimer = null; }
         btn.classList.remove('hidden', 'azkar-leaving');
         btn.classList.add('azkar-entering');
-        setTimeout(() => btn.classList.remove('azkar-entering'), 380);
+        setTimeout(() => btn.classList.remove('azkar-entering'), 460);
         az._btnShown = true;
     } else if (!shouldShow && wasShown) {
         // Disappear — fade/scale out, THEN collapse (display:none) so it never snaps.
