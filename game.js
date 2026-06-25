@@ -2877,7 +2877,8 @@ function loadAssets() {
 }
 
 function initWindParticles() {
-    const count = isPotato() ? WIND_PARTICLE_COUNT_MOBILE : WIND_PARTICLE_COUNT;
+    if (isPotato()) return;   // potato: no ambient particles at all
+    const count = isReducedGraphics() ? WIND_PARTICLE_COUNT_MOBILE : WIND_PARTICLE_COUNT;
     for (let i = 0; i < count; i++) {
         gameState.windParticles.push({
             x: Math.random() * window.innerWidth,
@@ -8650,15 +8651,12 @@ function drawFocusMask(W, H) {
         const pScreenY = centerY + (playerY + gameState.camera.y) * zoom * dpr;
 
         const pRadius = (gameState.isLockedIn ? 85 : 75) * zoom * dpr;
-        if (gameState._potato) {
-            // Potato: solid circle (sharp edge) instead of a soft radial fade
-            mCtx.fillStyle = 'rgba(255, 255, 255, 1)';
-        } else {
-            const pGrad = mCtx.createRadialGradient(pScreenX, pScreenY, pRadius * 0.4, pScreenX, pScreenY, pRadius);
-            pGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
-            pGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-            mCtx.fillStyle = pGrad;
-        }
+        // Soft radial fade on every tier — the gradient is cheap (one alloc/frame)
+        // and the sharp-edged potato version looked harsh + felt too dim in-session.
+        const pGrad = mCtx.createRadialGradient(pScreenX, pScreenY, pRadius * 0.4, pScreenX, pScreenY, pRadius);
+        pGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+        pGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        mCtx.fillStyle = pGrad;
         mCtx.beginPath();
         mCtx.arc(pScreenX, pScreenY, pRadius, 0, Math.PI * 2);
         mCtx.fill();
@@ -8668,14 +8666,10 @@ function drawFocusMask(W, H) {
             const lScreenX = centerX + (mls.x + gameState.camera.x) * zoom * dpr;
             const lScreenY = centerY + (mls.y + gameState.camera.y) * zoom * dpr;
             const lRadius = 100 * zoom * dpr;
-            if (gameState._potato) {
-                mCtx.fillStyle = `rgba(255, 255, 255, ${la})`;
-            } else {
-                const lGrad = mCtx.createRadialGradient(lScreenX, lScreenY, lRadius * 0.4, lScreenX, lScreenY, lRadius);
-                lGrad.addColorStop(0, `rgba(255, 255, 255, ${la})`);
-                lGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-                mCtx.fillStyle = lGrad;
-            }
+            const lGrad = mCtx.createRadialGradient(lScreenX, lScreenY, lRadius * 0.4, lScreenX, lScreenY, lRadius);
+            lGrad.addColorStop(0, `rgba(255, 255, 255, ${la})`);
+            lGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            mCtx.fillStyle = lGrad;
             mCtx.beginPath();
             mCtx.arc(lScreenX, lScreenY, lRadius, 0, Math.PI * 2);
             mCtx.fill();
@@ -9252,6 +9246,7 @@ function drawLockedInOverlay() {
 }
 
 function drawWindParticles(W, H) {
+    if (gameState._potato) return;   // potato: no ambient particles at all
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
     // Logical viewport dimensions (ctx is DPR-scaled when called from render)
@@ -9381,8 +9376,17 @@ function drawFocusFog(W, H) {
     ctx.globalAlpha = gameState.focusFogAlpha * 0.85;
 
     if (gameState._potato) {
-        // Simple static overlay on potato — no gradient allocation every frame
-        ctx.fillStyle = 'rgba(10, 15, 30, 0.35)';
+        // Potato: a static (non-animated) radial gradient — clear in the centre so the
+        // session view doesn't feel dim, darker only at the edges. Cheaper than the
+        // animated version (no sin/cos, fixed centre) but no longer a flat dark wash.
+        const grad = ctx.createRadialGradient(
+            w / 2, h / 2, Math.min(w, h) * 0.35,
+            w / 2, h / 2, Math.max(w, h) * 0.95
+        );
+        grad.addColorStop(0, 'rgba(10, 15, 30, 0)');
+        grad.addColorStop(0.6, 'rgba(10, 15, 30, 0.12)');
+        grad.addColorStop(1, 'rgba(13, 27, 42, 0.45)');
+        ctx.fillStyle = grad;
         ctx.fillRect(0, 0, w, h);
     } else {
         const t = Date.now() * 0.0004;
@@ -10827,7 +10831,7 @@ function setupSettingsUI() {
         graphicsBtn.dataset.value = tier;
         graphicsBtn.classList.toggle('settings-toggle-on',  tier === 'high');
         graphicsBtn.classList.toggle('settings-toggle-low', tier === 'potato');
-        const labels = { high: 'عالية', low: 'منخفضة', potato: 'بطاطس' };
+        const labels = { high: 'عالية', low: 'متوسطة', potato: 'بطاطس' };
         graphicsLabel.textContent = labels[tier];
         _applyGraphicsSetting();
     }
@@ -10869,7 +10873,7 @@ function setupSettingsUI() {
         resizeCanvas();
     }
 
-    // Cycles the explicit tiers: عالية → منخفضة → بطاطس. Operates on the resolved tier
+    // Cycles the explicit tiers: عالية → متوسطة → بطاطس. Operates on the resolved tier
     // (device default until first chosen) so a press always visibly changes something.
     graphicsBtn.addEventListener('click', () => {
         const cycle = { high: 'low', low: 'potato', potato: 'high' };
