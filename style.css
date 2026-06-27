@@ -305,6 +305,7 @@ body {
     width: 100vw; height: 100vh;
     height: 100dvh;
     background: rgba(0,0,0,0.65);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2);
     backdrop-filter: blur(12px) saturate(1.2);
     display: none;
     justify-content: center;
@@ -343,13 +344,16 @@ body {
     animation: popInBouncy 0.48s cubic-bezier(0.34,1.56,0.64,1) forwards;
 }
 
-/* End/success card uses the old white UI style */
+/* End/success card uses the old white UI style. The card itself is a TRANSPARENT
+   wrapper — the white "paper" lives on the two cut pieces (.success-cut-top /
+   .success-cut-body) so the top piece can tear off as one white block (paper + text)
+   while the body paper stays. Shadow sits on the body (the main mass). */
 .success-content {
-    background: #ffffff;
+    background: transparent;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    border-color: rgba(0,0,0,0.07);
-    box-shadow: 0 24px 60px rgba(0,0,0,0.24);
+    border-color: transparent;
+    box-shadow: none;
 }
 
 .modal-content h3 {
@@ -5463,7 +5467,7 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
    lines are phase-aligned to this 34px grid in JS (dashAlignJournalLines) so the two
    line systems sit exactly on top of each other — no mismatch, both kept. */
 .dash-day-content {
-    position: absolute; inset: 0; padding: 26px 26px 22px; overflow: hidden;
+    position: absolute; inset: 0; padding: 14px 26px 20px; overflow: hidden;
     /* Flex column so child margins never collapse — the JS grid-snap relies on
        margin-top actually moving each divider (collapsing left the first one stuck). */
     display: flex; flex-direction: column;
@@ -5519,13 +5523,19 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
 
 .dash-stats { display: flex; gap: 12px; }
 .dash-stat {
-    flex: 1; background: rgba(120,96,60,0.06); border-radius: 10px; padding: 10px 12px;
+    flex: 1; min-width: 0;   /* allow the chip to shrink so a long task name can ellipsis */
+    background: rgba(120,96,60,0.06); border-radius: 10px; padding: 10px 12px;
 }
 .dash-stat-label { font-size: 13px; color: #8a7350; font-weight: 600; }
 .dash-stat-val { font-size: 19px; font-weight: 800; color: #4a3a26; margin-top: 3px; }
+/* "أكثر مهمة عملت عليها" can be long — keep it to ONE line (smaller font, … overflow)
+   so it never wraps to a second line and throws off the ruled-grid alignment below. */
+#dash-stat-task {
+    font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* High scores — compact single-line chips so they take little vertical space */
-.dash-highscores { display: flex; gap: 6px; margin-top: 8px; }
+.dash-highscores { display: flex; gap: 6px; margin-top: 12px; }
 .dash-hs {
     flex: 1; display: flex; align-items: baseline; justify-content: center; gap: 5px;
     background: rgba(120,96,60,0.06); border-radius: 8px; padding: 5px 6px;
@@ -5539,9 +5549,8 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
     padding: 0; background: transparent; box-sizing: border-box;
     font-family: 'Methlama','Rubik',sans-serif; font-size: 17px; font-weight: 500;
     color: #3a2f22; line-height: 34px; direction: rtl;
-    /* Own ruled lines that scroll with the text; JS phase-aligns them to the page grid. */
-    background-image: repeating-linear-gradient(transparent, transparent 33px, rgba(120,96,60,0.18) 34px);
-    background-attachment: local;
+    /* No ruled lines of its own — the journal leans on the paper texture showing through.
+       JS snaps the textarea's top to the 34px grid so the text sits on those lines. */
 }
 .dash-journal::placeholder { color: #b3a079; opacity: 0.6; }
 .dash-journal-count { text-align: left; font-size: 12px; color: #a98d5e; margin-top: 2px; }
@@ -5619,11 +5628,20 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
     -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
 }
 .dash-swipe-hint.show { opacity: 1; }
-.dash-swipe-arrow { font-size: 32px; line-height: 1; animation: dashSwipeNudge 1.15s ease-in-out infinite; }
+.dash-swipe-dirs { display: flex; gap: 30px; }
+.dash-swipe-dir { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.dash-swipe-arrow { font-size: 28px; line-height: 1; }
+.dash-swipe-arrow-right { animation: dashSwipeNudge 1.15s ease-in-out infinite; }
+.dash-swipe-arrow-left  { animation: dashSwipeNudgeLeft 1.15s ease-in-out infinite; }
 .dash-swipe-label { font-family: 'Rubik', sans-serif; font-size: 14px; font-weight: 600; }
+.dash-swipe-sub { font-family: 'Rubik', sans-serif; font-size: 13px; font-weight: 600; opacity: 0.75; }
 @keyframes dashSwipeNudge {
     0%, 100% { transform: translateX(-13px); opacity: 0.55; }
     50%      { transform: translateX(13px);  opacity: 1; }
+}
+@keyframes dashSwipeNudgeLeft {
+    0%, 100% { transform: translateX(13px);  opacity: 0.55; }
+    50%      { transform: translateX(-13px); opacity: 1; }
 }
 
 /* Idle-protection (>2h) confirm modal */
@@ -5667,6 +5685,10 @@ body.is-mobile .dash-overlay {
 }
 body.is-mobile.dash-active #game-canvas { display: none !important; }
 
+/* Lock page scroll while the dashboard is open — wheel/touch must not scroll the site
+   behind the overlay (mirrors body.azkar-active). */
+body.dash-active { overflow: hidden; }
+
 /* Responsive: scale the stage down on small / short viewports */
 body.is-mobile .dash-stage { width: min(420px, 92vw); height: min(82vh, 620px); }
 body.is-mobile .dash-paper-date { font-size: 22px; }
@@ -5681,11 +5703,11 @@ body.is-mobile .dash-todo-header { font-size: 21px; }
    Redesigned end-of-session card + image drop / 1:1 crop / taped-on photo
    ============================================================================ */
 .success-content {
-    max-width: 300px; padding: 26px 22px; text-align: center;   /* a bit narrower, closer to a memory card */
+    max-width: 300px; padding: 0; text-align: center;   /* a bit narrower, closer to a memory card */
 }
 /* Centered header (avatar on top), matching the original card. The text rules are
    scoped under .success-content so they beat the dark `.modal-content h3/p` colours. */
-.success-head { text-align: center; margin-bottom: 14px; }
+.success-head { text-align: center; margin-bottom: 0; }   /* spacing moved to .success-cut-top's padding-bottom so it can't margin-collapse out of the white paper */
 .success-avatar {
     width: 88px; height: 88px; margin: 0 auto 12px; border-radius: 50%; overflow: hidden;
     background: #eee; border: 4px solid var(--clr-blue);
@@ -5745,15 +5767,10 @@ body.is-mobile .dash-todo-header { font-size: 21px; }
 .success-receipt {
     position: relative;
     border-radius: 0;            /* flat top + torn bottom, like a real receipt */
-    padding-bottom: 18px;
-    box-shadow: 0 22px 50px rgba(0,0,0,0.28);
+    padding-bottom: 0;           /* the white paper + its padding now live on the cut pieces */
+    box-shadow: none;
 }
-/* torn-receipt teeth: a row of downward white triangles hanging off the bottom edge */
-.success-receipt::after {
-    content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 11px;
-    background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="11" viewBox="0 0 16 11"><path d="M0 0H16L8 11Z" fill="%23ffffff"/></svg>') repeat-x top center;
-    background-size: 16px 11px;
-}
+/* (torn bottom edge moved to .success-cut-body::after so the body shadow can't darken it) */
 /* a dashed receipt separator under the header */
 .success-rule {
     height: 0; border-top: 2px dashed #d8d8d8; margin: 0 -4px 16px;
@@ -5799,11 +5816,25 @@ body.is-mobile .dash-todo-header { font-size: 21px; }
 }
 
 /* overlay fade-out at the very end (keep it flexed while opacity animates → no snap) */
-#success-modal.success-fading { opacity: 0; }
+/* slow, gentle fade of the screen darkness + blur as the card leaves. Fade the blur
+   to 0 explicitly (not just via opacity) — on Safari, an element whose opacity AND
+   backdrop-filter both change at once can flash black; ramping the blur down avoids it. */
+#success-modal.success-fading {
+    opacity: 0;
+    -webkit-backdrop-filter: blur(0px) saturate(1);
+    backdrop-filter: blur(0px) saturate(1);
+    transition: opacity 0.85s ease, backdrop-filter 0.85s ease, -webkit-backdrop-filter 0.85s ease;
+}
 
-/* cut pieces — invisible at rest; the dashed rule is the seam */
-.success-cut-top { position: relative; }
-.success-cut-body { position: relative; }
+/* cut pieces — each carries its OWN white paper so the top tears off as one block.
+   The dashed rule is the seam; both pieces share the same 22px side padding so they
+   line up gaplessly into one receipt. Body sits ABOVE the top (z-index) so the torn
+   top piece drops cleanly BEHIND it rather than over the photo/stats. */
+.success-cut-top { position: relative; z-index: 1; background: #fff; padding: 26px 22px 14px; }
+.success-cut-body {
+    position: relative; z-index: 2; background: #fff; padding: 0 22px 18px;
+    box-shadow: 0 22px 50px rgba(0,0,0,0.28);
+}
 
 /* the cut line drawn left→right across the seam (the tear stroke) */
 .success-cut-line {
@@ -5814,30 +5845,27 @@ body.is-mobile .dash-todo-header { font-size: 21px; }
     box-shadow: 0 0 7px rgba(0,0,0,0.25);
 }
 
-/* torn zigzag edges appear once the cut is made (white paper teeth vs the dark overlay) */
-.success-cut-top::after {
-    content: ''; position: absolute; left: -26px; right: -26px; bottom: -1px; height: 8px; z-index: 2;
-    background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'><path d='M0 0H14L7 8Z' fill='%23ffffff'/></svg>") repeat-x top center;
-    background-size: 14px 8px; opacity: 0; transition: opacity 0.15s ease;
+/* torn bottom edge of the body paper — its OWN ::after (not the card's) so it paints
+   ON TOP of the body's drop-shadow and stays paper-white, not darkened. White teeth
+   hang below the body over the dark overlay = the receipt's torn bottom. */
+.success-cut-body::after {
+    content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 11px; z-index: 3;
+    background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="11" viewBox="0 0 16 11"><path d="M0 0H16L8 11Z" fill="%23ffffff"/></svg>') repeat-x top center;
+    background-size: 16px 11px;
 }
-.success-cut-body::before {
-    content: ''; position: absolute; left: -26px; right: -26px; top: -1px; height: 8px; z-index: 2;
-    background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='14' height='8' viewBox='0 0 14 8'><path d='M0 8H14L7 0Z' fill='%23ffffff'/></svg>") repeat-x top center;
-    background-size: 14px 8px; opacity: 0; transition: opacity 0.15s ease;
-}
-#success-card.tearing .success-cut-top::after,
-#success-card.tearing .success-cut-body::before { opacity: 1; }
 
-/* once cut, the whole top piece FALLS off as ONE rigid block (its contents move together,
-   no scatter). Only AFTER it's gone does its space collapse so the body slides up — the
-   card never visibly "scales". */
-.success-cut-top { transition: max-height 0.4s ease, margin 0.4s ease; max-height: 400px; }
-#success-card.tearing .success-cut-top { animation: successTopFall 0.8s cubic-bezier(0.45, 0.05, 0.6, 1) forwards; }
-#success-card.cut-collapsed .success-cut-top { max-height: 0; margin: 0; overflow: hidden; }
+/* once cut, the whole top piece (its own white paper + text) FALLS off the screen as
+   ONE rigid block — no fade, it just drops out of view behind the body. The body is
+   moved up to re-centre in JS, timed with this fall so it reads as one motion. */
+.success-cut-top { max-height: 400px; }
+#success-card.tearing .success-cut-top {
+    animation: successTopFall 0.9s cubic-bezier(0.5, 0, 0.75, 0.35) forwards;
+    will-change: transform; backface-visibility: hidden; -webkit-backface-visibility: hidden;
+}
 @keyframes successTopFall {
-    0%   { transform: translateY(0)   rotate(0deg);  opacity: 1; }
-    12%  { transform: translateY(7px) rotate(-2deg); opacity: 1; }    /* tips loose */
-    100% { transform: translateY(265px) rotate(9deg); opacity: 0; }   /* falls straight down */
+    0%   { transform: translateY(0)    rotate(0deg);  }
+    9%   { transform: translateY(8px)  rotate(-2deg); }    /* tips loose */
+    100% { transform: translateY(115vh) rotate(11deg); }   /* drops clean off-screen, no fade */
 }
 
 /* حفظ — normal-sized button (flex:none so it doesn't stretch tall in the column);
@@ -5853,23 +5881,25 @@ body.is-mobile .dash-todo-header { font-size: 21px; }
 
 /* The ink mark (logo PNG) sits bottom-left; the TOP-DOWN stamp (Stamp.svg) is bigger and
    OPAQUE so it fully covers the mark — the mark only shows once the stamp slides away. */
+/* sit tight in the bottom-LEFT corner so the mark doesn't cover the text/stats */
 .success-stamp-imprint {
-    position: absolute; left: 16px; bottom: 16px; width: 80px; height: 80px; pointer-events: none;
-    object-fit: contain; opacity: 0; transition: opacity 0.2s ease; z-index: 5;
+    position: absolute; left: 8px; bottom: 8px; width: 64px; height: 64px; pointer-events: none;
+    object-fit: contain; opacity: 0; transition: opacity 0.35s ease; z-index: 5;
 }
 .success-stamp-imprint.show { opacity: 0.82; }   /* a bit transparent, becomes part of the invoice */
 .success-stamp {
-    position: absolute; left: 8px; bottom: 8px; width: 96px; height: 96px; pointer-events: none;
+    position: absolute; left: -8px; bottom: -8px; width: 96px; height: 96px; pointer-events: none;
     object-fit: contain; transform-origin: 50% 50%; opacity: 0; z-index: 30;
 }
-.success-stamp.run { animation: successStamp 1.5s cubic-bezier(0.4, 0, 0.2, 1) forwards; }
+.success-stamp.run { animation: successStamp 1.6s cubic-bezier(0.33, 0, 0.2, 1) forwards; }
+/* smoother: ease gently down, soft press, settle — no hard snap */
 @keyframes successStamp {
-    0%   { opacity: 0; transform: scale(1.3)  rotate(-5deg); }
-    18%  { opacity: 1; transform: scale(1.14) rotate(0deg); }   /* drop onto the spot */
-    36%  { opacity: 1; transform: scale(0.9)  rotate(0deg); }   /* press (impact) */
-    48%  { opacity: 1; transform: scale(1.0)  rotate(0deg); }   /* settle */
-    66%  { opacity: 1; transform: scale(1.0)  rotate(0deg); }   /* hold (cover the mark) */
-    100% { opacity: 0; transform: translate(84px, -78px) rotate(30deg) scale(1); } /* lift away → reveal */
+    0%   { opacity: 0; transform: scale(1.22) rotate(-4deg); }
+    26%  { opacity: 1; transform: scale(1.06) rotate(0deg); }   /* glide onto the spot */
+    46%  { opacity: 1; transform: scale(0.97) rotate(0deg); }   /* gentle press */
+    58%  { opacity: 1; transform: scale(1.0)  rotate(0deg); }   /* settle */
+    70%  { opacity: 1; transform: scale(1.0)  rotate(0deg); }   /* hold (cover the mark) */
+    100% { opacity: 0; transform: translate(80px, -76px) rotate(26deg) scale(1); } /* lift away → reveal */
 }
 
 /* star particles bursting from the stamp point */

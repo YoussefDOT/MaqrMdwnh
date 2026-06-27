@@ -67,7 +67,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 173 · Updated 3:29 PM</div>
+    <div id="build-number" class="build-number">Build 174 · Updated 5:22 PM</div>
 
     <!-- شاشة الترحيب: للمستخدمين المسجلين عبر ديسكورد -->
     <div id="discord-welcome-screen" class="screen">
@@ -814,8 +814,17 @@
 
             <!-- تلميح السحب (للجوال، أول مرة فقط) -->
             <div id="dash-swipe-hint" class="dash-swipe-hint" aria-hidden="true">
-                <div class="dash-swipe-arrow">➜</div>
-                <div class="dash-swipe-label">اسحب للتنقل بين الصفحات</div>
+                <div class="dash-swipe-dirs">
+                    <div class="dash-swipe-dir">
+                        <div class="dash-swipe-arrow dash-swipe-arrow-right">➜</div>
+                        <div class="dash-swipe-label">اسحب لليمين</div>
+                    </div>
+                    <div class="dash-swipe-dir">
+                        <div class="dash-swipe-arrow dash-swipe-arrow-left">⬅</div>
+                        <div class="dash-swipe-label">اسحب للشمال</div>
+                    </div>
+                </div>
+                <div class="dash-swipe-sub">لتقليب الصفحات</div>
             </div>
         </div>
 

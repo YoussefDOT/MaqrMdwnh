@@ -4228,6 +4228,8 @@ function setupControls() {
         }
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
+        // Disable scroll zoom while the dashboard overlay is open
+        if (dashboardIsOpen()) return;
         const zoomSpeed = 0.001;
         gameState.zoom -= e.deltaY * zoomSpeed;
         gameState.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, gameState.zoom));
@@ -17416,36 +17418,43 @@ function dashScheduleAlign() {
     }
 }
 
-// Snap content onto each paper's 34px texture grid (lines at content-y ≡ 33 mod 34) so
-// text + boxes sit cleanly on/between the printed lines. The summary + stats rows are
-// left alone (already aligned); we only nudge the high-scores row and the later headings
-// down, plus phase-align the journal lines and the to-do rows. Flex column on the content
-// means margin-top actually moves things (no collapse).
+// Snap the WRITTEN text onto each paper's 34px texture grid (lines at content-y ≡ 33 mod 34) so
+// it sits cleanly on the printed lines: the date, each heading, the journal, the completed-tasks
+// block, and the to-do rows are snapped top-to-bottom (later blocks re-measure after earlier ones
+// moved, so no drift accumulates). The summary/high-score CHIP rows are left in natural flow on
+// purpose — they're boxes, not writing, and snapping them made them overlap. Flex column on the
+// content means margin-top actually moves things (no collapse).
 function dashAlignGridLines() {
     const PERIOD = 34, PHASE = 33;
-    const snap = (y) => Math.round((y - PHASE) / PERIOD) * PERIOD + PHASE;
-    // Move `el` by adjusting its margin-top so the y returned by edgeFn lands on a line.
-    const align = (el, edgeFn) => {
+    const snapLine = (y) => Math.round((y - PHASE) / PERIOD) * PERIOD + PHASE;   // onto a printed line (≡33)
+    const snapBox  = (y) => Math.round(y / PERIOD) * PERIOD;                     // line-box start (≡0)
+    // Move `el` by adjusting its margin-top so the y returned by edgeFn lands where snapFn wants.
+    const adjust = (el, snapFn, edgeFn) => {
         if (!el) return;
         el.style.marginTop = '';
         const y = edgeFn(el);
         const cur = parseFloat(getComputedStyle(el).marginTop) || 0;
-        el.style.marginTop = (cur + (snap(y) - y)) + 'px';
+        el.style.marginTop = (cur + (snapFn(y) - y)) + 'px';
     };
+    const align = (el, edgeFn) => adjust(el, snapLine, edgeFn);
+    const baseline = el => el.offsetTop + el.offsetHeight;   // text sits on its own bottom line
+    const top = el => el.offsetTop;
 
     const content = document.getElementById('dash-day-paper');
     if (content) {
-        // High-score chips: snap the row top onto a line so the boxes sit in the band below.
-        align(content.querySelector('.dash-highscores'), el => el.offsetTop);
-        // Headings after the first (يوميات اليوم, المهام المنجزة): snap their baseline to a line.
-        [...content.querySelectorAll('.dash-section-title')].slice(1)
-            .forEach(t => align(t, el => el.offsetTop + el.offsetHeight));
-        // Journal's own ruled lines → same grid.
-        const journal = document.getElementById('dash-journal');
-        if (journal) {
-            const off = ((journal.offsetTop % PERIOD) + PERIOD) % PERIOD;
-            journal.style.backgroundPositionY = (-off) + 'px';
-        }
+        // Snap the WRITTEN text blocks onto the 34px ruled grid, top-to-bottom (each re-measures
+        // after the one above moved, so no drift accumulates). The chip rows (summary + high
+        // scores) are boxes, not writing — we deliberately leave them in natural flow so they
+        // never overlap; the heading below re-snaps and absorbs any drift they introduce.
+        const titles = [...content.querySelectorAll('.dash-section-title')];
+        align(content.querySelector('.dash-paper-date'), baseline);   // big day title on a line
+        if (titles[0]) align(titles[0], baseline);                    // ملخص عام
+        if (titles[1]) align(titles[1], baseline);                    // يوميات اليوم
+        // The journal has no ruled lines of its own anymore — it leans on the paper texture.
+        // Snap its top to a line-box boundary (≡0) so each 34px text line sits on a texture line.
+        adjust(document.getElementById('dash-journal'), snapBox, top);
+        if (titles[2]) align(titles[2], baseline);                    // المهام المنجزة
+        align(content.querySelector('.dash-day-tasks'), top);         // completed-tasks block
     }
 
     // To-do paper: nudge the list so each 34px row's writing line lands on a texture line.
@@ -17903,11 +17912,14 @@ function _successCardOnShow() {
     // snaps to full dark). Start transparent, then ease to full next frames.
     if (modal) {
         modal.style.opacity = '0';
+        modal.style.overflow = '';   // restore the CSS overflow-y:auto (clipping is only for the leave)
         requestAnimationFrame(() => requestAnimationFrame(() => { modal.style.opacity = ''; }));
     }
     card.querySelectorAll('.success-cut-line').forEach(n => n.remove());
     card.style.cssText = '';        // drop the inline animation/transform from a prior sequence
     if (top) top.style.cssText = '';
+    const bodyEl = document.getElementById('success-cut-body');
+    if (bodyEl) bodyEl.style.cssText = '';   // clear the recenter transform from a prior save
     card.querySelectorAll('.success-stamp, .success-stamp-imprint, .success-star').forEach(n => n.remove());
     // (the "اضافة صورة" button visibility is managed by clearSuccessPhoto on open)
     if (saveBtn) {
@@ -17929,6 +17941,11 @@ function runSaveSequence() {
     _saveSeqRunning = true;
     clearTimeout(_saveBtnTimer);
 
+    // Clip the overlay for the rest of the sequence: the top falls to +115vh and the
+    // card leaves to -120vh — without clipping those off-screen transforms spawn a
+    // scrollbar (Chrome) and the resulting reflow snaps the backdrop to black (Safari).
+    modal.style.overflow = 'hidden';
+
     saveInvoice();   // persist BEFORE tearing the card apart (reads the photo from the DOM)
 
     if (saveBtn) { saveBtn.classList.remove('show'); saveBtn.classList.add('gone'); }   // slide down (stays in layout → no snap)
@@ -17937,25 +17954,42 @@ function runSaveSequence() {
     card.style.animation = 'none';   // freeze the appear animation so we drive transforms
 
     // 1) a cut line is drawn left→right across the dashed line (the tear).
+    const topEl = document.getElementById('success-cut-top');
+    const topH  = topEl ? topEl.offsetHeight : 0;
     const line = document.createElement('div');
     line.className = 'success-cut-line';
     line.style.top = body.offsetTop + 'px';
     card.appendChild(line);
     requestAnimationFrame(() => { line.style.transform = 'scaleX(1)'; });
-    // 2) once cut, the whole top piece falls off; 3) ONLY after it's gone does its space
-    //    collapse so the body slides up to centre (no scaling, no scatter).
-    setTimeout(() => card.classList.add('tearing'), 470);
-    setTimeout(() => { line.remove(); card.classList.add('cut-collapsed'); }, 1330);
-    // 4) stamp; 5) hold so it can be read; 6) fly away while the overlay fades together.
+    // 2) once cut, the whole top piece (its own white paper + text) drops off-screen as
+    //    ONE element, and AT THE SAME TIME the body glides up by half the top's height so
+    //    the remaining receipt ends centred — one continuous motion, no separate collapse.
+    setTimeout(() => {
+        card.classList.add('tearing');
+        body.style.transition = 'transform 0.9s cubic-bezier(0.5, 0, 0.2, 1)';
+        body.style.transform  = `translateY(${-topH / 2}px)`;
+    }, 470);
+    setTimeout(() => { line.remove(); }, 1330);
+    // Once it's off-screen, fully HIDE the fallen top piece — otherwise the final
+    // leave (card flies up -120vh) would drag it back onto the screen.
+    setTimeout(() => { if (topEl) topEl.style.visibility = 'hidden'; }, 1380);
+    // 4) stamp; 5) brief hold; 6) leave with anticipation → slide up → slow fade.
     setTimeout(() => {
         _successRunStamp(body, () => {
             setTimeout(() => {
-                card.style.transition = 'transform 0.65s cubic-bezier(0.5,0,0.7,0.4), opacity 0.6s ease';
-                card.style.transform = 'translateY(-150px) rotate(-5deg)';
-                card.style.opacity = '0';
-                modal.classList.add('success-fading');   // overlay fades WITH the card (no dark peak)
-                setTimeout(() => { modal.classList.remove('active', 'success-fading'); _saveSeqRunning = false; }, 640);
-            }, 1300);   // give time to look at the stamped invoice
+                // anticipation: a slight, smooth dip down with a tiny rotation…
+                card.style.transition = 'transform 0.28s cubic-bezier(0.4, 0, 0.55, 1)';
+                card.style.transform  = 'translateY(15px) rotate(1.5deg)';
+                setTimeout(() => {
+                    // …then smoothly slide up and away with fade + rotation
+                    card.style.transition = 'transform 0.8s cubic-bezier(0.5, 0, 0.7, 0.25), opacity 0.72s ease-in';
+                    card.style.transform  = 'translateY(-120vh) rotate(-8deg)';
+                    card.style.opacity    = '0';
+                    // screen darkness + blur fade out slowly, a touch after the card launches
+                    setTimeout(() => modal.classList.add('success-fading'), 260);
+                    setTimeout(() => { modal.classList.remove('active', 'success-fading'); _saveSeqRunning = false; }, 1100);
+                }, 320);
+            }, 650);   // brief hold to read the stamped invoice, then leave
         });
     }, 1650);
 }
@@ -17981,7 +18015,7 @@ function _successRunStamp(body, done) {
 
 // Star particles bursting from the stamp point (bottom-left of the invoice).
 function _successSpawnStars(body) {
-    const cxL = 16 + 43, cyB = 16 + 43;   // centre of the 86px stamp box at left:16 bottom:16
+    const cxL = 8 + 32, cyB = 8 + 32;   // centre of the 64px imprint at left:8 bottom:8
     const N = 14;
     for (let i = 0; i < N; i++) {
         const s = document.createElement('span');
