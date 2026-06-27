@@ -5513,12 +5513,12 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
     font-size: 14px; font-weight: 600; color: #a98d5e;
 }
 .dash-paper-date {
-    font-size: 26px; font-weight: 800; text-align: center; margin-bottom: 8px;
+    font-size: 26px; font-weight: 800; text-align: center; margin-bottom: 2px;
     color: #4a3a26;
 }
 .dash-section-title {
     font-size: 18px; font-weight: 800; color: #6b5536;
-    margin: 10px 0 4px;   /* no dashed divider — the ruled texture is the only line system */
+    margin: 5px 0 3px;   /* no dashed divider — the ruled texture is the only line system */
 }
 
 .dash-stats { display: flex; gap: 12px; }
