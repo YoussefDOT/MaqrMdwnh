@@ -5358,3 +5358,666 @@ body.is-mobile .pip-fallback {
 }
 body.is-mobile .pip-fb-timer { font-size: 2rem; }
 body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
+
+/* ============================================================================
+   Personal Dashboard (لوحة المتابعة) — handcrafted "paper stack" theme
+   ============================================================================ */
+
+/* Handwritten font (Methlama). Falls back to Rubik automatically if the OTFs
+   fail to load — game.js logs a clear warning when that happens. */
+@font-face { font-family:'Methlama'; src:url('Fonts/KOMethlama-Regular.otf')   format('opentype'); font-weight:400; font-display:swap; }
+@font-face { font-family:'Methlama'; src:url('Fonts/KOMethlama-Medium.otf')    format('opentype'); font-weight:500; font-display:swap; }
+@font-face { font-family:'Methlama'; src:url('Fonts/KOMethlama-SemiBold.otf')  format('opentype'); font-weight:600; font-display:swap; }
+@font-face { font-family:'Methlama'; src:url('Fonts/KOMethlama-Bold.otf')      format('opentype'); font-weight:700; font-display:swap; }
+@font-face { font-family:'Methlama'; src:url('Fonts/KOMethlama-ExtraBold.otf') format('opentype'); font-weight:800; font-display:swap; }
+@font-face { font-family:'Methlama'; src:url('Fonts/KOMethlama-Black.otf')     format('opentype'); font-weight:900; font-display:swap; }
+
+.dash-overlay {
+    position: fixed; inset: 0; z-index: 11000;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(20, 16, 10, 0.66);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    opacity: 0; transition: opacity 0.28s ease;
+}
+.dash-overlay.active { opacity: 1; }
+.dash-overlay.hidden { display: none; }
+
+.dash-close {
+    position: absolute; top: 18px; left: 18px; z-index: 5;
+    width: 44px; height: 44px; border-radius: 50%; border: none; cursor: pointer;
+    background: rgba(255,255,255,0.12); color: #fff; font-size: 20px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.2s, transform 0.2s;
+}
+.dash-close:hover { background: rgba(255,255,255,0.22); transform: scale(1.06); }
+
+.dash-daynav {
+    position: absolute; top: 20px; left: 50%; transform: translateX(-50%); z-index: 5;
+    display: flex; align-items: center; gap: 14px;
+    font-family: 'Methlama','Rubik',sans-serif; color: #f3ead4;
+}
+.dash-daynav-label { font-size: 20px; font-weight: 700; min-width: 90px; text-align: center; }
+.dash-nav-btn {
+    background: rgba(255,255,255,0.10); border: none; color: #f3ead4; cursor: pointer;
+    font-family: inherit; font-size: 16px; font-weight: 600; padding: 8px 16px; border-radius: 50px;
+    transition: background 0.2s;
+}
+.dash-nav-btn:hover { background: rgba(255,255,255,0.2); }
+
+/* Stage holds the day stack (centre) + the to-do paper (peeping right). */
+.dash-stage {
+    position: relative;
+    width: min(440px, 88vw);
+    height: min(86vh, 660px);
+}
+/* Day stack (centre) ⇄ to-do paper (right) side-swap. The invoice peep (a small card,
+   styled separately below) rides along on the LEFT as part of the same block. */
+.dash-main-stack, .dash-todo-paper {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    transition: transform 0.55s cubic-bezier(0.34, 1.15, 0.5, 1), opacity 0.35s ease;
+    will-change: transform;
+}
+.dash-stage.side-main .dash-main-stack  { transform: translateX(0)     rotate(-0.5deg); z-index: 3; }
+.dash-stage.side-main .dash-todo-paper  { transform: translateX(84%)   rotate(3deg);    z-index: 2; cursor: pointer; }
+.dash-stage.side-todo .dash-main-stack  { transform: translateX(-84%)  rotate(-3deg);   z-index: 2; cursor: pointer; }
+.dash-stage.side-todo .dash-todo-paper  { transform: translateX(0)     rotate(0.5deg);  z-index: 3; }
+
+/* Base paper look — every paper surface (sheets, content, to-do paper): an opaque
+   cream fill + a soft radial + a thin margin line near the right edge. NO ruled lines
+   here — those go ONLY on the blank background sheets below, so the active page and
+   the to-do paper stay clean (no texture clashing with the dashed dividers/journal). */
+.dash-paper, .dash-sheet, .dash-day-content {
+    background-color: #f7f0df;
+    background-image:
+        radial-gradient(circle at 20% 12%, rgba(0,0,0,0.02), transparent 60%),
+        linear-gradient(rgba(176, 80, 70, 0.13), rgba(176, 80, 70, 0.13));
+    background-repeat: no-repeat, no-repeat;
+    background-size: 100% 100%, 1.5px 100%;
+    background-position: 0 0, calc(100% - 14px) 0;   /* margin line tucked into the right gutter */
+    border-radius: 7px;
+    box-shadow: 0 22px 55px rgba(0,0,0,0.42), inset 0 0 0 1px rgba(120,96,60,0.10);
+    box-sizing: border-box;
+    color: #3a2f22;
+    font-family: 'Methlama','Rubik',sans-serif;
+}
+
+/* Scattered stack sheets — each absolutely stacked; JS positions them askew and
+   applies the background "tint" via `filter: brightness()` (set inline, transitioned).
+   Ruled-line notebook texture lives here so the blank background sheets read as paper. */
+.dash-sheet {
+    position: absolute; inset: 0; will-change: transform, opacity, filter;
+    backface-visibility: hidden;
+    background-image:
+        radial-gradient(circle at 20% 12%, rgba(0,0,0,0.02), transparent 60%),
+        linear-gradient(rgba(176, 80, 70, 0.13), rgba(176, 80, 70, 0.13)),
+        repeating-linear-gradient(0deg, transparent 0, transparent 33px, rgba(120,96,60,0.15) 33px, rgba(120,96,60,0.15) 34px);
+    background-repeat: no-repeat, no-repeat, repeat;
+    background-size: 100% 100%, 1.5px 100%, 100% 100%;
+    background-position: 0 0, calc(100% - 14px) 0, 0 0;
+}
+
+/* Active page content sits on opaque clean paper (covers the active sheet's ruled
+   lines), so only the journal's own lines + the dashed dividers show — no mismatch. */
+/* Active page: opaque cream + the SAME ruled-line notebook texture as the sheets
+   (lines every 34px from the top), plus the right-margin line. The journal's own
+   lines are phase-aligned to this 34px grid in JS (dashAlignJournalLines) so the two
+   line systems sit exactly on top of each other — no mismatch, both kept. */
+.dash-day-content {
+    position: absolute; inset: 0; padding: 26px 26px 22px; overflow: hidden;
+    /* Flex column so child margins never collapse — the JS grid-snap relies on
+       margin-top actually moving each divider (collapsing left the first one stuck). */
+    display: flex; flex-direction: column;
+    background-color: #f7f0df;
+    background-image:
+        radial-gradient(circle at 20% 12%, rgba(0,0,0,0.02), transparent 60%),
+        linear-gradient(rgba(176, 80, 70, 0.13), rgba(176, 80, 70, 0.13)),
+        repeating-linear-gradient(0deg, transparent 0, transparent 33px, rgba(120,96,60,0.15) 33px, rgba(120,96,60,0.15) 34px);
+    background-repeat: no-repeat, no-repeat, repeat;
+    background-size: 100% 100%, 1.5px 100%, 100% 100%;
+    background-position: 0 0, calc(100% - 14px) 0, 0 0;
+    background-attachment: local, local, local;   /* texture scrolls with the content */
+}
+.dash-day-content > * { flex-shrink: 0; }
+
+/* Avatar — square "taped-on" paper cutout with a warm vintage tint */
+.dash-avatar-tape {
+    position: absolute; top: 16px; left: 18px; z-index: 4;
+    width: 62px; height: 62px; padding: 5px 5px 12px;
+    background: #fbf6ea; transform: rotate(-7deg);
+    box-shadow: 0 6px 14px rgba(0,0,0,0.28);
+}
+.dash-avatar-tape::before {   /* the strip of tape */
+    content: ''; position: absolute; top: -9px; left: 50%; transform: translateX(-50%) rotate(2deg);
+    width: 42px; height: 16px; background: rgba(214, 196, 140, 0.55);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+.dash-avatar {
+    position: relative; width: 100%; height: 52px; overflow: hidden;
+    background: #d9c9a6; display: flex; align-items: center; justify-content: center;
+}
+.dash-avatar img { width: 100%; height: 100%; object-fit: cover; display: none;
+    filter: sepia(0.45) saturate(1.15) contrast(0.97) brightness(1.02); }
+.dash-avatar span { display: none; font-size: 26px; font-weight: 900; color: #7a6446;
+    width: 100%; height: 100%; align-items: center; justify-content: center; }
+.dash-avatar::after {   /* warm yellowish overlay across the photo */
+    content: ''; position: absolute; inset: 0; pointer-events: none;
+    background: rgba(224, 184, 92, 0.30); mix-blend-mode: multiply;
+}
+
+.dash-paper-rel {
+    position: absolute; top: 20px; right: 24px;
+    font-size: 14px; font-weight: 600; color: #a98d5e;
+}
+.dash-paper-date {
+    font-size: 26px; font-weight: 800; text-align: center; margin-bottom: 16px;
+    color: #4a3a26;
+}
+.dash-section-title {
+    font-size: 18px; font-weight: 800; color: #6b5536;
+    margin: 10px 0 4px;   /* no dashed divider — the ruled texture is the only line system */
+}
+
+.dash-stats { display: flex; gap: 12px; }
+.dash-stat {
+    flex: 1; background: rgba(120,96,60,0.06); border-radius: 10px; padding: 10px 12px;
+}
+.dash-stat-label { font-size: 13px; color: #8a7350; font-weight: 600; }
+.dash-stat-val { font-size: 19px; font-weight: 800; color: #4a3a26; margin-top: 3px; }
+
+/* High scores — compact single-line chips so they take little vertical space */
+.dash-highscores { display: flex; gap: 6px; margin-top: 8px; }
+.dash-hs {
+    flex: 1; display: flex; align-items: baseline; justify-content: center; gap: 5px;
+    background: rgba(120,96,60,0.06); border-radius: 8px; padding: 5px 6px;
+    white-space: nowrap; overflow: hidden;
+}
+.dash-hs span { font-size: 11px; color: #8a7350; font-weight: 600; }
+.dash-hs b { font-size: 13px; color: #4a3a26; }
+
+.dash-journal {
+    width: 100%; min-height: 68px; height: 68px; max-height: 140px; resize: none; border: none; outline: none;
+    padding: 0; background: transparent; box-sizing: border-box;
+    font-family: 'Methlama','Rubik',sans-serif; font-size: 17px; font-weight: 500;
+    color: #3a2f22; line-height: 34px; direction: rtl;
+    /* Own ruled lines that scroll with the text; JS phase-aligns them to the page grid. */
+    background-image: repeating-linear-gradient(transparent, transparent 33px, rgba(120,96,60,0.18) 34px);
+    background-attachment: local;
+}
+.dash-journal::placeholder { color: #b3a079; opacity: 0.6; }
+.dash-journal-count { text-align: left; font-size: 12px; color: #a98d5e; margin-top: 2px; }
+
+/* Completed tasks in TWO columns (RTL: ~3 on the right, then 2 on the left) so up to
+   5 items fit without scrolling — no dotted dividers. */
+.dash-day-tasks { margin-top: 4px; column-count: 2; column-gap: 18px; }
+.dash-task-row {
+    display: flex; align-items: center; gap: 8px; padding: 4px 0;
+    font-size: 15px; break-inside: avoid;
+}
+.dash-task-dot { width: 7px; height: 7px; border-radius: 50%; background: #c08a3e; flex-shrink: 0; }
+.dash-task-check {
+    width: 20px; height: 20px; flex-shrink: 0; border-radius: 6px; background: #c9a55f; color: #fff;
+    font-size: 13px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+}
+.dash-task-name { flex: 1; font-weight: 600; color: #4a3a26; line-height: 1.3; }
+.dash-empty { column-span: all; }
+.dash-task-meta { font-size: 13px; color: #9b815a; font-weight: 600; }
+.dash-empty { color: #b3a079; font-size: 15px; padding: 8px 0; font-style: italic; }
+
+/* To-Do paper */
+/* To-do paper carries the same ruled-line notebook texture as the day paper. */
+.dash-todo-paper {
+    padding: 26px 24px; display: flex; flex-direction: column;
+    background-image:
+        radial-gradient(circle at 20% 12%, rgba(0,0,0,0.02), transparent 60%),
+        linear-gradient(rgba(176, 80, 70, 0.13), rgba(176, 80, 70, 0.13)),
+        repeating-linear-gradient(0deg, transparent 0, transparent 33px, rgba(120,96,60,0.15) 33px, rgba(120,96,60,0.15) 34px);
+    background-repeat: no-repeat, no-repeat, repeat;
+    background-size: 100% 100%, 1.5px 100%, 100% 100%;
+    background-position: 0 0, 14px 0, 0 0;
+}
+.dash-todo-header {
+    font-size: 24px; font-weight: 900; color: #4a3a26; text-align: center;
+    margin-bottom: 14px; padding-bottom: 6px;   /* no dashed divider */
+}
+.dash-todo-list { flex: 1; }
+/* Tasks sit ON the printed 34px lines (rows tile on the grid, aligned in JS). The
+   texture line is the writing line — no separate underline. */
+.dash-todo-row { display: flex; align-items: flex-end; gap: 12px; height: 34px; margin: 0; }
+.dash-todo-check {
+    width: 24px; height: 24px; flex-shrink: 0; border-radius: 7px; cursor: pointer; align-self: center;
+    border: 2px solid #b08a4e; background: transparent; color: #6b5536;
+    font-size: 15px; font-weight: 800; display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s;
+}
+.dash-todo-check:disabled { cursor: default; opacity: 0.6; }
+.dash-todo-row.done .dash-todo-check { background: #c9a55f; border-color: #c9a55f; color: #fff; }
+.dash-todo-line {
+    flex: 1; outline: none; font-family: 'Methlama','Rubik',sans-serif; font-size: 19px;
+    font-weight: 500; color: #3a2f22; padding: 0 2px 4px; line-height: 28px;
+}
+.dash-todo-row.done .dash-todo-line { text-decoration: line-through; color: #9b815a; }
+.dash-todo-line:empty::before { content: attr(data-placeholder); color: #c0ac82; }
+.dash-todo-note {
+    font-size: 12.6px; color: #9b815a; font-weight: 600; line-height: 19px;
+    text-align: center; margin-top: 16px; padding-top: 14px;   /* no dashed divider */
+}
+
+/* To-do: snappy entrance for a freshly-generated next line */
+@keyframes dashRowFresh {
+    from { opacity: 0; transform: translateY(-10px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.dash-row-fresh { animation: dashRowFresh 0.28s cubic-bezier(0.34, 1.5, 0.5, 1); }
+
+/* First-time mobile swipe hint — an arrow nudging right to teach the side-swap */
+.dash-swipe-hint {
+    position: absolute; bottom: 15%; left: 50%; transform: translateX(-50%);
+    z-index: 30; display: flex; flex-direction: column; align-items: center; gap: 6px;
+    padding: 12px 18px; border-radius: 16px;
+    background: rgba(20, 14, 6, 0.8); color: #f3ead4;
+    opacity: 0; pointer-events: none; transition: opacity 0.4s ease;
+    -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+}
+.dash-swipe-hint.show { opacity: 1; }
+.dash-swipe-arrow { font-size: 32px; line-height: 1; animation: dashSwipeNudge 1.15s ease-in-out infinite; }
+.dash-swipe-label { font-family: 'Rubik', sans-serif; font-size: 14px; font-weight: 600; }
+@keyframes dashSwipeNudge {
+    0%, 100% { transform: translateX(-13px); opacity: 0.55; }
+    50%      { transform: translateX(13px);  opacity: 1; }
+}
+
+/* Idle-protection (>2h) confirm modal */
+/* Dark glassmorphism — matches the app's panel language (not the paper cards). */
+.dash-lf-overlay .dash-lf-card {
+    max-width: 380px; text-align: center; padding: 30px 28px;
+    font-family: 'Rubik', sans-serif;
+    background: rgba(18, 18, 18, 0.72); color: rgba(255,255,255,0.92);
+    border: 1px solid rgba(255,255,255,0.09); border-radius: 25px;
+    -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
+    box-shadow: 0 4px 24px rgba(0,0,0,0.30);
+}
+.dash-lf-q { font-size: 23px; font-weight: 700; color: #fff; margin-bottom: 22px; }
+.dash-lf-explain {
+    font-size: 12px; color: rgba(255,255,255,0.42); line-height: 1.6;
+    margin: 16px 0 0; padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.08);
+}
+.dash-lf-pickers { display: flex; justify-content: center; gap: 24px; margin-bottom: 26px; }
+.dash-lf-box { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.dash-lf-arrow {
+    width: 52px; height: 34px; border: none; cursor: pointer; border-radius: 10px;
+    background: rgba(255,255,255,0.08); color: rgba(255,255,255,0.7); font-size: 15px;
+    display: flex; align-items: center; justify-content: center; transition: background 0.15s;
+}
+.dash-lf-arrow:hover { background: rgba(255,255,255,0.16); }
+.dash-lf-num { font-size: 40px; font-weight: 800; color: #fff; min-width: 64px; line-height: 1.1; }
+.dash-lf-unit { font-size: 14px; color: rgba(255,255,255,0.42); font-weight: 600; }
+.dash-lf-confirm { width: 100%; font-size: 17px; padding: 13px; margin-bottom: 10px; }
+.dash-lf-discard {
+    width: 100%; background: transparent; border: none; cursor: pointer;
+    color: rgba(255,150,150,0.85); font-size: 15px; font-weight: 600; padding: 8px; font-family: inherit;
+}
+.dash-lf-discard:hover { text-decoration: underline; }
+
+/* Mobile perf: the game loop keeps rendering behind the overlay, so never run a
+   per-frame backdrop-filter over the live canvas — drop the blur and hide the
+   canvas while the dashboard is open (mirrors the azkar overlay). */
+body.is-mobile .dash-overlay {
+    -webkit-backdrop-filter: none; backdrop-filter: none;
+    background: rgba(20, 16, 10, 0.93);
+}
+body.is-mobile.dash-active #game-canvas { display: none !important; }
+
+/* Responsive: scale the stage down on small / short viewports */
+body.is-mobile .dash-stage { width: min(420px, 92vw); height: min(82vh, 620px); }
+body.is-mobile .dash-paper-date { font-size: 22px; }
+body.is-mobile .dash-todo-header { font-size: 21px; }
+@media (max-height: 560px) {
+    .dash-paper-date { font-size: 20px; margin-bottom: 8px; }
+    .dash-section-title { font-size: 16px; margin: 10px 0 5px; }
+    .dash-journal { min-height: 70px; }
+}
+
+/* ============================================================================
+   Redesigned end-of-session card + image drop / 1:1 crop / taped-on photo
+   ============================================================================ */
+.success-content {
+    max-width: 380px; padding: 28px 26px; text-align: center;
+}
+/* Centered header (avatar on top), matching the original card. The text rules are
+   scoped under .success-content so they beat the dark `.modal-content h3/p` colours. */
+.success-head { text-align: center; margin-bottom: 14px; }
+.success-avatar {
+    width: 88px; height: 88px; margin: 0 auto 12px; border-radius: 50%; overflow: hidden;
+    background: #eee; border: 4px solid var(--clr-blue);
+    display: flex; align-items: center; justify-content: center;
+}
+.success-avatar img { width: 100%; height: 100%; object-fit: cover; display: none; }
+#success-avatar-text { font-size: 36px; font-weight: bold; color: #fff; }
+.success-content .success-name { font-size: 20px; font-weight: 700; color: #333; margin: 0 0 4px; }
+.success-content .success-title { font-size: 40px; font-weight: 800; color: var(--clr-carmine); margin: 0 0 4px; line-height: 1; }
+.success-content .success-sub { font-size: 18px; font-weight: 600; color: #888; margin: 0; }
+
+/* Photo focal area (drop zone OR taped photo), dead-centre and large to avoid empty space */
+/* fit-content wrap so the ✕ can pin to the photo box's top-right corner */
+.success-photo-wrap { position: relative; width: fit-content; margin: 2px auto 14px; }
+.success-photo-drop {
+    width: 206px; aspect-ratio: 4 / 3; border-radius: 12px; cursor: pointer; padding: 0;
+    border: 2px dashed #ccc; background: #fafafa; color: #aaa;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    font-family: inherit; transition: border-color .2s, background .2s, color .2s;
+}
+.success-photo-drop:hover,
+.success-photo-wrap.dragover .success-photo-drop {
+    border-color: var(--clr-blue); background: #eef5ff; color: var(--clr-blue);
+}
+.success-photo-icon { font-size: 26px; line-height: 1; }
+.success-photo-text { font-size: 13px; font-weight: 600; max-width: 150px; line-height: 1.4; }
+
+/* Taped-on photo (4:3) — replicates the dashboard avatar tape (warm tint + tape + tilt) */
+.success-photo-taped {
+    position: relative; width: fit-content; padding: 9px 9px 24px; margin: 0 auto;
+    background: #fbf6ea; transform: rotate(-2.5deg); box-shadow: 0 10px 24px rgba(0,0,0,0.22);
+}
+.success-photo-taped::before {
+    content: ''; position: absolute; top: -13px; left: 50%; transform: translateX(-50%) rotate(2deg);
+    width: 84px; height: 22px; background: rgba(214,196,140,0.6); box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+}
+.success-photo-inner { position: relative; width: 232px; aspect-ratio: 4 / 3; overflow: hidden; background: #d9c9a6; }
+.success-photo-inner img {
+    width: 100%; height: 100%; object-fit: cover; display: block;   /* no tint on uploaded photos */
+}
+/* ✕ pinned to the box corner — visible in BOTH the drop and photo states */
+.success-photo-remove {
+    position: absolute; top: -9px; right: -9px; z-index: 6; width: 26px; height: 26px; border-radius: 50%;
+    border: none; cursor: pointer; background: rgba(0,0,0,0.6); color: #fff; font-size: 13px;
+    display: flex; align-items: center; justify-content: center;
+}
+
+.success-stats { background: #f8f8f8; border-radius: 12px; padding: 14px; margin-bottom: 16px; }
+.success-stats-label { font-size: 15px; color: #666; margin-bottom: 4px; }
+.success-stats-value { font-size: 26px; font-weight: 800; color: var(--clr-raisin); }
+.success-stats-sub { font-size: 13px; color: #999; margin-top: 4px; }
+.success-content .success-note { font-size: 14px; color: #777; margin: 0 0 18px; line-height: 1.5; }
+.success-close-btn { width: 100%; font-size: 17px; padding: 12px; }
+
+/* ── Invoice/receipt styling (same layout, receipt flavour) ─────────────── */
+#success-modal { flex-direction: column; gap: 12px; overflow-y: auto; padding: 18px 0; }
+.success-receipt {
+    position: relative;
+    border-radius: 0;            /* flat top + torn bottom, like a real receipt */
+    padding-bottom: 18px;
+    box-shadow: 0 22px 50px rgba(0,0,0,0.28);
+}
+/* torn-receipt teeth: a row of downward white triangles hanging off the bottom edge */
+.success-receipt::after {
+    content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 11px;
+    background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="11" viewBox="0 0 16 11"><path d="M0 0H16L8 11Z" fill="%23ffffff"/></svg>') repeat-x top center;
+    background-size: 16px 11px;
+}
+/* a dashed receipt separator under the header */
+.success-rule {
+    height: 0; border-top: 2px dashed #d8d8d8; margin: 0 -4px 16px;
+}
+/* fake barcode — small, sits under the close button */
+.success-barcode { margin: 12px 0 0; }
+.success-barcode-bars {
+    height: 28px; margin: 0 auto; max-width: 150px;
+    background-color: #fff;
+    background-image: repeating-linear-gradient(90deg,
+        #1c1c1c 0 2px, #fff 2px 4px,
+        #1c1c1c 4px 7px, #fff 7px 8px,
+        #1c1c1c 8px 9px, #fff 9px 13px,
+        #1c1c1c 13px 17px, #fff 17px 18px,
+        #1c1c1c 18px 20px, #fff 20px 23px);
+    background-size: 23px 100%;
+}
+.success-barcode-num {
+    text-align: center; margin-top: 4px; color: #777;
+    font-family: 'Courier New', monospace; font-size: 11px; letter-spacing: 2px;
+}
+/* small clickable text under the card (no pill) */
+.success-add-photo {
+    background: none; border: none; cursor: pointer; padding: 4px 8px;
+    color: rgba(255,255,255,0.85); font-family: inherit; font-size: 15px; font-weight: 600;
+    text-decoration: underline; text-underline-offset: 3px;
+}
+.success-add-photo:hover { color: #fff; }
+
+/* Crop modal (dark glass), sits above the success card */
+.crop-modal { z-index: 12000; }
+.crop-modal .crop-content {
+    background: rgba(18,18,18,0.8); color: #fff; border-radius: 22px; padding: 22px;
+    border: 1px solid rgba(255,255,255,0.1);
+    -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px);
+    max-width: 340px; text-align: center;
+}
+.crop-title { font-size: 18px; font-weight: 700; margin: 0 0 16px; color: #fff; }
+.crop-frame {
+    position: relative; width: min(300px, 82vw); aspect-ratio: 4 / 3;
+    margin: 0 auto 16px; overflow: hidden; border-radius: 10px;
+    background: #000; touch-action: none; cursor: grab;
+    box-shadow: inset 0 0 0 2px rgba(255,255,255,0.25);
+}
+.crop-frame:active { cursor: grabbing; }
+.crop-img { position: absolute; left: 50%; top: 50%; will-change: transform; user-select: none; -webkit-user-drag: none; }
+.crop-zoom-row { display: flex; align-items: center; gap: 10px; margin-bottom: 18px; }
+.crop-zoom-ico { color: rgba(255,255,255,0.6); font-size: 20px; width: 16px; text-align: center; }
+.crop-zoom { flex: 1; accent-color: var(--clr-blue); }
+.crop-actions { display: flex; gap: 10px; }
+.crop-cancel {
+    flex: 1; background: rgba(255,255,255,0.08); border: none; cursor: pointer; color: rgba(255,255,255,0.8);
+    border-radius: 50px; font-family: inherit; font-size: 15px; font-weight: 600; padding: 11px;
+}
+.crop-cancel:hover { background: rgba(255,255,255,0.16); }
+.crop-confirm { flex: 1.4; }
+
+/* ============================================================================
+   Work memories (invoices) — lives INSIDE the dashboard overlay.
+   Every card is a faithful mini-replica of the end-of-session RECEIPT (avatar +
+   name, "أحسنتم!", "جزيتم خيرًا", dashed rule, taped photo, stats box, note, date,
+   barcode, torn bottom, sharp corners). A temp card peeps from the LEFT; clicking
+   it slides the dashboard off right while cards scatter from centre and 3D-flip
+   (blank receipt front → same receipt filled with data on the back).
+   Cards SELF-SIZE to their content (front face drives the height) so the tall
+   receipt never crops — matching the uploaded photo's proportions.
+   ============================================================================ */
+
+/* ── The receipt itself (shared by the peep, the card front, the card back) ── */
+.inv-receipt {
+    position: relative; background: #fff; color: #333; border-radius: 0;   /* sharp corners */
+    font-family: 'Rubik', sans-serif; text-align: center; padding: 13px 12px 14px;
+    display: flex; flex-direction: column; align-items: stretch;
+    box-shadow: 0 14px 34px rgba(0,0,0,0.34);
+}
+.inv-receipt::after {   /* torn-receipt teeth hanging off the bottom edge */
+    content: ''; position: absolute; left: 0; right: 0; top: 100%; height: 9px;
+    background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="16" height="9" viewBox="0 0 16 9"><path d="M0 0H16L8 9Z" fill="%23ffffff"/></svg>') repeat-x top center;
+    background-size: 16px 9px;
+}
+.inv-r-avatar {
+    width: 46px; height: 46px; border-radius: 50%; margin: 2px auto 6px;
+    border: 3px solid var(--clr-blue); background: #eee; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+}
+.inv-r-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.inv-r-avatar span { font-size: 20px; font-weight: 800; color: var(--clr-blue); }
+.inv-r-name  { font-size: 13px; font-weight: 700; color: #333; line-height: 1.15; }
+.inv-r-title { font-size: 23px; font-weight: 800; color: var(--clr-carmine); line-height: 1; margin: 2px 0; }
+.inv-r-sub   { font-size: 12px; font-weight: 600; color: #888; }
+.inv-r-rule  { height: 0; border-top: 1.5px dashed #d8d8d8; margin: 9px 0; }
+
+/* taped photo — cream polaroid frame, like the success card's taped photo */
+.inv-r-photo {
+    position: relative; width: 100%; aspect-ratio: 4 / 3; overflow: hidden; flex-shrink: 0;
+    background: #d9c9a6; border: 5px solid #fbf6ea; border-bottom-width: 11px;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.16);
+    display: flex; align-items: center; justify-content: center;
+}
+.inv-r-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }   /* no tint on uploaded photos */
+.inv-r-photo-blank { background: #ece4d3; }
+.inv-r-photo-ico { font-size: 22px; opacity: 0.5; }
+.inv-spin {
+    width: 20px; height: 20px; border-radius: 50%;
+    border: 3px solid rgba(120,96,60,0.25); border-top-color: #b08a4e;
+    animation: invoiceSpin 0.8s linear infinite;
+}
+@keyframes invoiceSpin { to { transform: rotate(360deg); } }
+
+/* stats box (grey panel) */
+.inv-r-stats { background: #f6f6f6; border-radius: 9px; padding: 8px 6px; margin: 10px 0 8px; }
+.inv-r-stats-label { font-size: 10px; color: #666; margin-bottom: 2px; }
+.inv-r-stats-value { font-size: 17px; font-weight: 800; color: var(--clr-raisin); min-height: 18px; line-height: 1.1; }
+.inv-r-stats-sub   { font-size: 10px; color: #999; margin-top: 3px; min-height: 11px; }
+.inv-r-note { font-size: 11px; color: #777; line-height: 1.4; padding: 0 2px; min-height: 14px;
+    overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.inv-r-date { font-family: 'Courier New', monospace; font-size: 9px; color: #aaa; margin-top: 4px; min-height: 10px; }
+
+/* fake barcode pinned to the bottom */
+.inv-r-barcode { margin-top: auto; padding-top: 8px; }
+.inv-r-bars {
+    height: 16px; margin: 0 auto; max-width: 90px;
+    background-image: repeating-linear-gradient(90deg,
+        #1c1c1c 0 2px, #fff 2px 4px, #1c1c1c 4px 7px, #fff 7px 8px,
+        #1c1c1c 8px 9px, #fff 9px 13px, #1c1c1c 13px 17px, #fff 17px 18px);
+    background-size: 23px 100%;
+}
+.inv-r-num { font-family: 'Courier New', monospace; font-size: 8px; letter-spacing: 1.5px; color: #888; margin-top: 2px; }
+
+/* scribble placeholders on the blank (front/peep) receipt */
+.inv-scrib { display: inline-block; height: 9px; border-radius: 4px; vertical-align: middle;
+    background: linear-gradient(90deg, rgba(60,60,60,0.30), rgba(60,60,60,0.12)); }
+
+/* ── The clickable peep — a small card IDENTICAL to a grid memory card (same size,
+   cropped, placeholder photo + scribble text). It peeks from the LEFT behind the
+   dashboard and rides along as part of the block; clicking it opens the gallery. ── */
+.inv-peep {
+    position: absolute; top: 50%; left: 50%; width: 178px; z-index: 2; cursor: pointer;
+    transition: transform 0.55s cubic-bezier(0.34, 1.32, 0.5, 1), opacity 0.4s ease;
+    filter: drop-shadow(0 18px 34px rgba(0,0,0,0.42));
+}
+.inv-peep .inv-receipt { position: relative; }   /* in-flow → peep height == a card's height */
+.dash-stage.side-main .inv-peep { transform: translate(calc(-50% - 235px), -50%) rotate(-5deg); z-index: 2; }
+.dash-stage.side-todo .inv-peep { transform: translate(calc(-50% - 470px), -50%) rotate(-5deg); z-index: 1; }
+
+/* ── The full-screen invoices view (grid of memory cards) ─────────────────── */
+.dash-invoice-view {
+    position: absolute; inset: 0; z-index: 4; display: none; flex-direction: column;
+    opacity: 0; transition: opacity 0.3s ease;
+}
+.dash-invoice-view.show { opacity: 1; }
+.dash-invoice-head { flex-shrink: 0; padding: 18px 24px 12px; text-align: center; }
+.dash-invoice-title {
+    font-family: 'Methlama','Rubik',sans-serif; font-size: 28px; font-weight: 900; color: #f3ead4; margin: 0;
+}
+/* Fixed 178px columns (centred) so every grid card is EXACTLY the peep's size. */
+.dash-invoice-grid {
+    flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch;
+    display: grid; grid-template-columns: repeat(auto-fill, 178px); justify-content: center;
+    gap: 22px 20px; padding: 10px 26px 44px; align-content: start; align-items: start;
+}
+.inv-empty {
+    grid-column: 1 / -1; text-align: center; color: rgba(255,255,255,0.55);
+    font-family: 'Rubik',sans-serif; font-size: 16px; padding: 50px 0;
+}
+
+/* dashed crop edge at the very top — where the receipt was torn off under "جزيتم خيرًا" */
+.inv-r-crop { height: 0; border-top: 1.5px dashed #d3d3d3; margin: 2px 0 10px; }
+
+/* A memory card flips via a horizontal SQUASH (scaleX 1→0→1) with the two faces swapped
+   at the squashed midpoint — NO rotateY / backface-visibility, so text is never mirrored
+   (works identically on every browser, including mobile). */
+.inv-card  { position: relative; will-change: transform, opacity; }
+.inv-flip  { position: relative; width: 100%; will-change: transform; }
+.inv-front { position: relative; opacity: 0; }   /* in-flow (drives height); resting hidden */
+.inv-back  { position: absolute; inset: 0; opacity: 1; }   /* resting = DATA back shows */
+.inv-back .inv-receipt { position: absolute; inset: 0; }
+.inv-card.inv-hidden { opacity: 0; }             /* pre-reveal */
+
+/* tiny delete ✕ (top corner) + per-card confirm overlay — sit ABOVE the card faces */
+.inv-del {
+    position: absolute; top: 6px; right: 6px; z-index: 8; width: 22px; height: 22px;
+    border: none; border-radius: 50%; cursor: pointer; padding: 0;
+    background: rgba(20,16,10,0.62); color: #fff; font-size: 12px; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.35); opacity: 0.75; transition: opacity 0.15s, background 0.15s;
+}
+.inv-del:hover { opacity: 1; background: #d24a3a; }
+.inv-confirm {
+    position: absolute; inset: 0; z-index: 9; padding: 12px; text-align: center;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
+    background: rgba(20,16,10,0.88); color: #fff; opacity: 0; pointer-events: none; transition: opacity 0.2s;
+}
+.inv-card.confirming .inv-confirm { opacity: 1; pointer-events: auto; }
+.inv-confirm-q { font-family: 'Rubik',sans-serif; font-size: 13px; font-weight: 700; line-height: 1.4; }
+.inv-confirm-row { display: flex; gap: 8px; }
+.inv-confirm-yes, .inv-confirm-no {
+    border: none; border-radius: 50px; cursor: pointer; font-family: 'Rubik',sans-serif;
+    font-size: 12px; font-weight: 700; padding: 6px 14px;
+}
+.inv-confirm-yes { background: #d24a3a; color: #fff; }
+.inv-confirm-no  { background: rgba(255,255,255,0.18); color: #fff; }
+
+/* Reveal: each card emerges FROM BEHIND the centred peep (it deals out from the centre)
+   and flips (blank front → data back) as it travels to its slot — one spin per card. */
+.inv-card.inv-flipin            { animation: invDealIn  0.5s cubic-bezier(0.3, 0.85, 0.4, 1) both; }
+.inv-card.inv-flipin .inv-flip  { animation: invSquash  0.5s ease-in-out both; }
+.inv-card.inv-flipin .inv-front { animation: invFadeOut 0.5s step-end both; }
+.inv-card.inv-flipin .inv-back  { animation: invFadeIn  0.5s step-end both; }
+
+@keyframes invDealIn {
+    0%   { transform: translate(var(--dx, 0), var(--dy, 0)) scale(0.5); opacity: 0; }
+    20%  { opacity: 1; }
+    100% { transform: translate(0, 0) scale(1); opacity: 1; }
+}
+@keyframes invSquash {
+    0%   { transform: scaleX(1); }
+    50%  { transform: scaleX(0.05); }
+    100% { transform: scaleX(1); }
+}
+@keyframes invFadeOut { 0% { opacity: 1; } 50%, 100% { opacity: 0; } }
+@keyframes invFadeIn  { 0% { opacity: 0; } 50%, 100% { opacity: 1; } }
+
+/* The LAST card is delivered by the peep, which already squashed flat (1→0). So this
+   card only does the SECOND half of the spin (0→1) — together that's exactly ONE spin. */
+.inv-card.inv-flipin-last { opacity: 1; }
+.inv-card.inv-flipin-last .inv-flip { animation: invUnsquash 0.24s cubic-bezier(0.2, 0.8, 0.4, 1) both; }
+@keyframes invUnsquash { 0% { transform: scaleX(0.05); } 100% { transform: scaleX(1); } }
+
+/* ── Takeover (Phase A): the dashboard + to-do slide off the right TOGETHER as one block
+   — both travel the SAME distance (+150vw from their resting spots) at the SAME speed,
+   no fade, smooth easing (no sprint). The clicked invoice glides to dead-centre. ────── */
+#dashboard-overlay.invoices-open .dash-main-stack {
+    transform: translateX(150vw) rotate(-0.5deg); pointer-events: none;
+    transition: transform 0.6s cubic-bezier(0.5, 0, 0.4, 1);
+}
+#dashboard-overlay.invoices-open .dash-todo-paper {
+    transform: translateX(calc(84% + 150vw)) rotate(3deg); pointer-events: none;
+    transition: transform 0.6s cubic-bezier(0.5, 0, 0.4, 1);
+}
+#dashboard-overlay.invoices-open .inv-peep {
+    transform: translate(-50%, -50%) rotate(0deg); z-index: 6; pointer-events: none;
+}
+/* Phase B end: the peep flies to the last slot staying mostly flat, then squashes edge-on
+   right at the slot (the first half of the final spin). */
+@keyframes invPeepDeliver {
+    0%   { transform: translate(-50%, -50%) translate(0, 0) scaleX(1); }
+    60%  { transform: translate(-50%, -50%) translate(calc(var(--tx, 0) * 0.82), calc(var(--ty, 0) * 0.82)) scaleX(0.82); }
+    100% { transform: translate(-50%, -50%) translate(var(--tx, 0), var(--ty, 0)) scaleX(0.05); }
+}
+.inv-peep.inv-peep-deliver { animation: invPeepDeliver 0.34s cubic-bezier(0.4, 0, 0.5, 1) both; }
+
+.dash-invoice-back {
+    position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+    z-index: 7; width: 34px; height: 130px; display: none;
+    align-items: center; justify-content: center; cursor: pointer;
+    color: rgba(243,234,212,0.9); font-size: 30px; font-weight: 700;
+    background: rgba(255,255,255,0.08); border-radius: 14px 0 0 14px;
+}
+#dashboard-overlay.invoices-open .dash-invoice-back { display: flex; }
+#dashboard-overlay.invoices-open .dash-daynav { opacity: 0; pointer-events: none; transition: opacity 0.25s ease; }
+
+/* Mobile: narrower cards (peep matches) */
+body.is-mobile .dash-invoice-grid { grid-template-columns: repeat(auto-fill, 150px); gap: 20px 14px; padding: 8px 14px 36px; }
+body.is-mobile .inv-peep { width: 150px; }
+body.is-mobile .dash-stage.side-main .inv-peep { transform: translate(calc(-50% - 165px), -50%) rotate(-5deg); }
+body.is-mobile .dash-stage.side-todo .inv-peep { transform: translate(calc(-50% - 330px), -50%) rotate(-5deg); }

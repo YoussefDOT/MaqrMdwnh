@@ -519,6 +519,100 @@ Render is driven by the **PiP window's own `requestAnimationFrame`** (`_pipFrame
 
 ---
 
+## Personal Dashboard (لوحة المتابعة) — restricted "paper stack" feature
+
+A handwritten, "paper on paper" personal dashboard: per-day journal + completed-tasks, a daily to-do list, and lifetime analytics. Lives at the **end of `game.js`** (one cohesive module after the boss-fight code), with markup in `index.html` (`#dashboard-overlay`, `#dash-longfree-modal`) and styles in `style.css` (the `Personal Dashboard` block).
+
+### Access restriction (feature flag) — IMPORTANT
+The dashboard **entry circle on the map + the dashboard UI** are visible/usable **only** to:
+- user ID **`567266235163738112`** (the owner), and
+- **Siraj test ghosts** (`gameState.isSirajGhost`).
+
+Gate: `dashboardAllowed()` = `userId === DASH_TARGET_UID || isSirajGhost`. Everyone else never sees the circle, prompt, or UI.
+
+**Data tracking is NOT gated** — `dashSaveSession()` / `dashRecordGameOnce()` run for **every** member, each writing to **their own** node (`dashViewUid()` / `dashTrackingEnabled()` now key off `gameState.userId` for everyone). Only the *viewing* (circle + UI) is restricted. A **Siraj ghost builds its own throwaway dashboard node** (read-write, just like a real user) which is **removed from Firebase on disconnect** (`onDisconnect(dashboards/{sirajId}).remove()` armed in `setupDashboardUI`) — so it never inherits or pollutes the owner's data.
+
+### Firebase schema — top-level `dashboards/{uid}`, NOT under `users/`
+This is the key cost decision. The in-game `onValue(ref(database,'users'))` listener fires on **every** descendant change, so a dashboard write under `users/{uid}/…` would re-stream the whole users node to every client (violates the 10GB cap rules). So dashboard data lives at a **dedicated top-level node** read with **one-shot `get()`s only** (zero fan-out, no live listeners):
+
+```
+dashboards/{uid}/
+  _seed: <DASH_SEED_VERSION>                  // mock-data guard marker
+  stats/
+    totalWorkMs: number                        // cumulative valid work
+    mostTask: { name, ms }                      // precomputed "most worked on task"
+    taskTotals/{slug}: { name, ms }             // per-task accumulation (slug = sanitised key)
+    high/ { laptop: ms, race: ms, coffee: pts } // laptop+race = LOWEST time; coffee = HIGHEST score
+  sessions/{finishMs}: { mode, task, finishMs, durMs }     // session log → feeds stats ONLY
+  days/{YYYY-MM-DD}/
+    journal: "text (≤100 words)"
+  todos/{YYYY-MM-DD}: [ { text, done }, … ]      // per-DAY to-dos, max 5
+```
+**Tasks model**: `sessions` feed analytics only (total hours / most-worked task / high scores). The day paper's **"المهام المنجزة"** is **derived from that day's to-do list** — the items whose `done` is true (no timer, just names). To-dos are **per selected day**, so marking one done populates that day's completed list (`dashRenderCompleted`). There is no longer a `days/{date}/tasks` node (the v2 seed nulls any leftover v1 copy).
+Firebase keys can't contain `. # $ / [ ]` → task names used as map keys go through `dashSlug()`.
+
+**Database rules (REQUIRED).** The RTDB rules enumerate top-level nodes, so a brand-new node defaults to **deny**. The `dashboards` node must be allowed or every read/write returns `PERMISSION_DENIED` (the original "data isn't saving/loading" bug). The rule lives in the repo at [database.rules.json](database.rules.json) (`dashboards: { ".read": "auth !== null", ".write": "auth !== null" }`) with a [firebase.json](firebase.json) so `firebase deploy --only database` keeps it in sync. Dashboard writes log failures via `_dashErr()` rather than swallowing them — a `PERMISSION_DENIED` in the console means the rule wasn't deployed.
+
+### Session validation / save rules (`dashSaveSession(mode, task, workedMs)`)
+- **10-minute floor**: sessions under `DASH_MIN_SESSION_MS` are never saved.
+- **Work time is accurate** (excludes breaks): pomodoro uses `pomoWorkedMsNow()` (accumulated via `pomodoro._workStartMs/_workedMs`, stamped in `startPomodoroPhase`); free mode uses `freeWorkedMsNow()` (the engine's `totalWorkMs`).
+- **Pomodoro**: saved on **natural completion** (success card still shows) AND on **premature "انهاء الجلسة"** (`exitPomoNow`, no end card — unchanged) — both subject to the floor.
+- **Free mode**: saved in `endFreeMode`. A session over **2h** (`DASH_LONG_FREE_MS`) intercepts the leave with `openFreeLongConfirmModal()` ("هل عملت لمدة x فعلًا؟") — hour/minute steppers + **save-as-shown** or **discard**; `_dashFreeHandled` stops `endFreeMode` from double-saving.
+- **Minigame high scores** (`dashRecordGameOnce`, once per session via an in-memory guard): race + laptop-boss = best **lowest** finishTime; coffee = best **highest** score.
+
+### Entry point (map circle)
+A dev-art placeholder circle (art production is paused) at world **(-380, 0)** in the freely-walkable **work room** (the break room is gated behind the break-only door, so the circle must go up top). `drawDashboardZone()` renders it; `drawDashboardPrompt()` shows **"انقر للاستعمال"** (mirrors the laptop "انقر للبدء" prompt) when near. Proximity set in `updateInteractions` (`gameState.activeDashboardZone`); click/tap → `openDashboard()`. All gated on `dashboardAllowed()`.
+
+### UI (scattered paper stack)
+- **Font**: Methlama (`Fonts/KOMethlama-*.otf`, 6 weights via `@font-face`); headers use heavy weights (800/900), body 400–600. **Fallback**: if the OTFs fail to load the CSS stack falls back to **Rubik** and `setupDashboardUI` logs a clear warning explaining the path/case to fix.
+- **Scattered stack**: `#dash-main-stack` holds **4** `.dash-sheet` papers, positioned askew by `_dashApplySheet`/`_dashSlotFor` (slots in `DASH_ACTIVE_SLOT`/`DASH_BG_SLOTS`). The background-sheet **tint is `filter: brightness()` set inline** in `_dashApplySheet` with an explicit `filter` transition — a class-toggled `::after` opacity snapped (compositor-accelerated props ignore the transition on toggle, and `getComputedStyle` can't measure them). **Ruled-line notebook texture is on the background sheets, the active page (`.dash-day-content`), AND the to-do paper** — the texture lines are the **only** horizontal line system (the old dashed section dividers / dotted task borders were removed because they couldn't reliably align). `.dash-day-content` is **opaque** (covers the sheet behind it), a **flex column** (so child margins don't collapse — the grid-snap relies on `margin-top` actually moving things), and has **no scroll** (`overflow: hidden`; content is sized to fit). `dashAlignGridLines()` (via `dashScheduleAlign` — run now AND on `document.fonts.ready`, since Methlama's metrics shift the layout) nudges onto the 34px grid (lines at content-y ≡ 33): the **high-scores row** (snapped so chips sit between lines), the **يوميات/المهام headings** (baseline onto a line; the summary + stats rows are left alone — already aligned), the **journal's own lines** (`backgroundPositionY`), and the **to-do list** (so 34px rows sit on lines). **المهام المنجزة** renders in **2 columns** (`column-count: 2` → ~3 right, 2 left in RTL) so up to 5 fit with no scroll. A thin red margin line sits in the right gutter. The single content wrapper (`#dash-day-paper`) lives **inside whichever sheet is active** (`_dashActiveSheet`).
+- **Open/close sequences**: `dashPlayOpenSequence` flies the background sheets in one-by-one, then the main sheet on top; **the to-do paper is hidden until the stack settles, then slides out from behind into its peep**. `closeDashboard` reverses it (main out first, then backgrounds), then hides the overlay after the tail.
+- **Day navigation**: prev/next buttons → `dashGoDay`→`dashAnimateDayChange` — pick a random background sheet, slide it **up north** off-stack (brightening off its tint); only **once it's off-screen** is the content re-parented onto it + the new day rendered (so the page you're leaving stays intact in front until the new one descends — avoids a blank/colour flash); then z-index above the stack and settle it back centred as the new active day; the old active recedes into the vacated background slot. `dashRenderDay` reloads that day's journal **and** to-dos. Can't navigate into the future.
+- **Side swap (peeping papers)**: `#dash-stage` toggles `.side-main` / `.side-todo`; clicking the peeping edge OR a **horizontal swipe** (mobile, any decisive H-swipe toggles — `setupDashboardUI` touch handlers on the overlay) slides that stack to centre and pushes the other to peep (`dashSetSide`). A first-time mobile hint (`#dash-swipe-hint`, arrow nudging right) shows once (`dashMaybeShowSwipeHint`, localStorage `mdwnh_dash_swipe_hint`), dismissed on first side change.
+- **To-do** (`المهمات اليومية`): max **5** tasks, **per selected day**. **Live generation** — `dashHandleTodoInput` fires on every keystroke: the trailing empty row is promoted in place + a fresh empty row spawns (`.dash-row-fresh`). Enter jumps to the trailing empty row; emptying a committed row deletes it on blur. **Tapping a checkbox** toggles done, plays `paperTaskComplete`, and `stopPropagation`s so it never triggers the side-swap; marking done re-renders **المهام المنجزة** for that day. Saves debounced (`dashSaveTodos`).
+- **Task carry-over** (`dashRolloverTodos`, once per day via a `todosRolloverDate` marker): today's **uncompleted** to-dos roll forward from the last managed day (merged + de-duped by text, capped at 5); **completed** ones stay on the day they were finished. Runs in `openDashboard` before the day renders. Skipped for read-only Siraj.
+- **Interaction (swipe-aware)**: one consolidated `click` handler on the overlay (NOT `mousedown` — that fired on touch swipes and self-closed the panel); a horizontal touch swipe toggles the side and sets `_dashSuppressClickUntil` to swallow the trailing synthetic click (fixes the mobile "can't swap / exits by itself"). Scrim click closes; clicking a peeping paper swaps to it.
+- **Avatar widget**: `#dash-avatar` — the user's avatar in a square "taped-on" paper cutout (`.dash-avatar-tape`, tape strip + rotation) with a warm yellow tint (`sepia` filter + `multiply` overlay). Falls back to the username initial.
+- **Input lock**: while the overlay is open (`dashboardIsOpen()`), the window `keydown` handler and `handleMovement` both bail, so typing (W/A/S/D, arrows) never bleeds into player movement.
+- **Paper sounds** (`dashSound(name)` → `focusAudioEngine.playEffect`, Web Audio so it works in a background tab): `paperIntro` on open, `paperExit` on close, `paperSwipe` on the side swap (`dashSetSide`), `paperDaysSwap` on a day swap (`dashAnimateDayChange`), `paperTaskComplete` on completing a to-do. All preloaded via the standard 4-step pattern (`gameState.sounds` + `FocusAudioEngine.buffers` + `loadSoundEffects` + `.preload='auto'`).
+- **Mobile perf**: the game loop keeps rendering behind the overlay, so on `body.is-mobile` the overlay drops `backdrop-filter` and hides `#game-canvas` while open (`body.dash-active`) — same rule as azkar.
+
+### Mock data / testing
+Mock data is **no longer seeded**. `dashClearSeedData()` runs once on login (for the target user or a Siraj ghost) and **wipes `dashboards/{target}`** if the legacy `_seed` marker is present, so old "temp stats" disappear and real data starts clean. It only fires when `_seed` exists, so it never touches genuinely-entered data.
+**Siraj free-mode testing**: a Siraj ghost **always** gets the >2h idle-confirm modal on ending a free session (`gameState.isSirajGhost || elapsed > DASH_LONG_FREE_MS`), so the modal is testable without working two real hours. The confirm modal is **dark glassmorphism** (`.dash-lf-card`, not paper); when the user adjusts the time and confirms, that adjusted value is shown on the end card via `_dashFreeOverrideMins` (consumed in `endFreeMode`).
+
+---
+
+## End-of-Session Card + Image Attachment
+
+The success card (`#success-card` / `.success-content`, **white** bg — the documented exception) is styled as an **invoice/receipt** (`.success-receipt`): a dashed separator under the centred header, a **fake CSS barcode** (`.success-barcode-bars` repeating-linear-gradient + a monospace `#success-barcode-num` set per open in `clearSuccessPhoto`), and a **torn-receipt bottom edge** — an `::after` row of downward white SVG triangles (a CSS `mask`/conic approach was tried first and silently didn't cut, so it's an inline-SVG `background` instead). Same layout as before (avatar + name + "أحسنتم!"; photo focal area; stats; task; note; close). It has a **drag-drop image → 1:1 crop → taped-on photo** flow (`setupSuccessCardUI`, wired in `startGame`). The photo is purely **local/visual** (for the screenshot the user sends) — never persisted.
+
+- **Photo states** (`successPhotoState(state)`): `'drop'` (add zone shown — the default on open, set by `clearSuccessPhoto`), `'photo'` (taped photo + `✕`), `'removed'` (the whole `#success-photo-wrap` is `display:none` so the card **shrinks**, and a no-pill underlined **"اضافة صورة"** text — `#success-add-photo`, a sibling under the card in the column-flex `#success-modal` — appears; clicking it returns to `'drop'`).
+- **Drop/upload**: drag an image anywhere on the card, or click the dashed drop zone → file picker. Either calls `loadCropImage(file)`.
+- **Crop modal** (`#crop-modal`, dark glass): a fixed **4:3 frame** (`aspect-ratio`) with the image `cover`-scaled; pan (mouse/touch drag), zoom (slider + wheel), clamped so the image always fills the frame (`_cropClamp`, uses `_crop.fw/fh`). **Confirm** (`confirmCrop`) draws the visible region to a 480×360 canvas → `toDataURL('image/jpeg')` → `successPhotoState('photo')`. The drop box + taped photo are also 4:3.
+- **Taped-on effect** (`.success-photo-taped`): **replicates the dashboard avatar tape** — cream cutout, tape strip (`::before`), tilt, warm `sepia`+`multiply` tint — sized as a centred focal point. The `✕` is pinned to the photo box corner at the **wrap** level so it shows in BOTH the drop and photo states.
+
+### Invoice archive + browser ("ذكريات العمل")
+Each end-card is archived to Firebase **on close** (`saveInvoice`, wired to `#success-close`). `_pendingInvoice` (`{ mode, minutes, task, finishMs }`) is captured when the card opens; the **displayed** minutes are stored (so a >2h-confirm-adjusted free session saves the adjusted value).
+
+Cost-friendly RTDB layout (one-shot `get()`s only, NO live listeners, photos split from metadata):
+```
+dashboards/{uid}/invoices/{finishMs}      = { mode, task, minutes, finishMs, hasPhoto }   // light, listed
+dashboards/{uid}/invoicePhotos/{finishMs} = "<small 4:3 JPEG dataURL>"                      // heavy, lazy-loaded
+```
+The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~15–30 KB) before saving — never the full-res image, never under `users/`. Siraj writes to its own node (removed on disconnect), so test invoices self-clean.
+
+**Memories view (lives INSIDE the dashboard overlay, gated `dashboardAllowed`).** There is **no** separate browser overlay and **no Shift+click** any more — the dashboard circle always opens the dashboard. A **temp "invoice" card peeps from the LEFT** (`#dash-invoice-peep`, receipt look: cream paper, sharp corners, torn bottom, taped strip, handwritten "gibberish" `.inv-scribble` lines). Mirror of the to-do paper that peeps right.
+
+- **Open** (`dashOpenInvoices`): clicking the peep (or **swipe-right** on mobile) adds `.invoices-open` to `#dashboard-overlay` → the `.dash-stage` slides off to the right leaving a sliver peep + a `#dash-invoice-back` chevron (both act as the back button). The temp card glides to centre (`.to-center`) and the full-screen grid `#dash-invoice-view` fades in.
+- **Scatter + 3D flip** (`dashBuildInvoiceGrid`): cards start stacked at viewport centre (`translate+scale(0.4) rotateY(0)` = temp **front** showing) and animate to their CSS-grid slots while flipping to `rotateY(180deg)` (the data **back**). Each `.inv-card` is `transform-style: preserve-3d` with `.inv-front` (temp) + `.inv-back` (receipt: white, torn bottom, taped photo, barcode). **Virtualization**: only cards within the viewport at build time get the scatter/flip (`r.top > innerHeight+40` → left at rest); the rest render normally below the fold (scroll, no lag).
+- **Collapse** (`dashCloseInvoices`): clicking the dashboard peep/chevron/scrim (or **swipe-left**) reverses — visible cards merge back toward centre + flip to the temp front, the stage slides back in. `dashResetInvoices()` is the no-animation teardown, called by `openDashboard`/`closeDashboard`.
+- **Gestures** form a horizontal strip `[invoices] ← [main] ← [to-do]`: swipe-right moves "back" toward invoices, swipe-left "forward" toward the to-do paper.
+- **Data**: one-shot `get()` of `invoices` metadata, most-recent `INVOICE_LIMIT=60`, photos **lazy-loaded via `IntersectionObserver`** (`_lazyLoadInvoicePhotos`).
+- **Mock data**: `dashSeedMockInvoices()` injects `DASH_MOCK_INVOICE_COUNT=80` fake invoices **only for Siraj test ghosts** (their dashboard node is ephemeral, removed on disconnect) — never the owner's real archive. To test the grid/virtualization, enter as a Siraj ghost.
+
+---
+
 ## Common Bugs & Fixes (lessons learned)
 
 | Bug | Root cause | Fix |

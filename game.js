@@ -418,6 +418,12 @@ class FocusAudioEngine {
             // single context so they never spin up a competing AudioContext.
             entranceSound: null,
             uiBlip: null,
+            // Dashboard (paper) UI sounds
+            paperIntro: null,
+            paperSwipe: null,
+            paperDaysSwap: null,
+            paperExit: null,
+            paperTaskComplete: null,
             // Laptop boss fight
             bossAnticipate: null,
             bossAttackInitiate: null,
@@ -530,6 +536,11 @@ class FocusAudioEngine {
             this.buffers.breakAdded     = await loadBuffer('Sound/BreakAdded.mp3');
             this.buffers.inviteSent     = await loadBuffer('Sound/Invite_Sent.mp3');
             this.buffers.inviteAccepted = await loadBuffer('Sound/Invite_Accepted.mp3');
+            this.buffers.paperIntro     = await loadBuffer('Sound/Paper_Intro.mp3');
+            this.buffers.paperSwipe     = await loadBuffer('Sound/Paper_Swipe.mp3');
+            this.buffers.paperDaysSwap  = await loadBuffer('Sound/Paper_DaysSwap.mp3');
+            this.buffers.paperExit      = await loadBuffer('Sound/Paper_Exit.mp3');
+            this.buffers.paperTaskComplete = await loadBuffer('Sound/Paper_Task_Complete.mp3');
         } catch(e) {
             console.log("Failed to load Web Audio sound effects:", e);
         }
@@ -1495,6 +1506,12 @@ const gameState = {
         prayerCall:              new Audio('Sound/Prayer_CallToPrayer.mp3'),
         inviteSent:              new Audio('Sound/Invite_Sent.mp3'),
         inviteAccepted:          new Audio('Sound/Invite_Accepted.mp3'),
+        // Dashboard (paper) UI sounds
+        paperIntro:              new Audio('Sound/Paper_Intro.mp3'),
+        paperSwipe:              new Audio('Sound/Paper_Swipe.mp3'),
+        paperDaysSwap:           new Audio('Sound/Paper_DaysSwap.mp3'),
+        paperExit:               new Audio('Sound/Paper_Exit.mp3'),
+        paperTaskComplete:       new Audio('Sound/Paper_Task_Complete.mp3'),
     },
     canvas: null,
     ctx: null,
@@ -1627,7 +1644,9 @@ const gameState = {
         workDuration: 25,
         breakDuration: 5,
         totalSessions: 1,
-        createdAt: 0
+        createdAt: 0,
+        _workStartMs: 0,   // Date.now() when the current WORK block began (dashboard time-tracking)
+        _workedMs: 0       // accumulated WORK ms across completed blocks this session (excludes breaks)
     },
     // Shared Pomodoro State
     sharedPomo: {
@@ -1776,6 +1795,11 @@ gameState.sounds.playerWinBoss.preload      = 'auto';
 gameState.sounds.bossApplause.preload       = 'auto';
 gameState.sounds.crowdCheer.preload         = 'auto';
 gameState.sounds.crowdShock.preload         = 'auto';
+gameState.sounds.paperIntro.preload         = 'auto';
+gameState.sounds.paperSwipe.preload         = 'auto';
+gameState.sounds.paperDaysSwap.preload      = 'auto';
+gameState.sounds.paperExit.preload          = 'auto';
+gameState.sounds.paperTaskComplete.preload  = 'auto';
 gameState.sounds.prayerCall.preload              = 'auto';
 gameState.sounds.inviteSent.preload              = 'auto';
 gameState.sounds.inviteAccepted.preload          = 'auto';
@@ -3453,6 +3477,8 @@ function startGame(userData) {
     setupAzkarUI();
     setupPiPUI();
     setupSettingsUI();
+    setupDashboardUI();
+    setupSuccessCardUI();
     setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
     startTabTitleTicker();
 
@@ -4187,6 +4213,9 @@ if (window.visualViewport) {
 
 function setupControls() {
     window.addEventListener('keydown', (e) => {
+        // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
+        // into player movement or game-world keybinds while it's open.
+        if (dashboardIsOpen()) return;
         gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
@@ -4223,6 +4252,12 @@ function setupControls() {
             Math.hypot(clickWorld.x - LAPTOP_BOSS_BTN_CX, clickWorld.y - LAPTOP_BOSS_BTN_CY) < LAPTOP_BOSS_BTN_R + 24;
         if (clickedBossBtn) { triggerLaptopBossTeleport(); return; }
         if (gameState.pomodoro.active || gameState.freeMode.active) return;
+        // Dashboard entry circle — opens the dashboard (work memories live inside it now).
+        if (gameState.activeDashboardZone && !gameState.isLockedIn && !gameState.anim.active &&
+            Math.hypot(clickWorld.x - DASH_ZONE_X, clickWorld.y - DASH_ZONE_Y) < DASH_ZONE_R + 30) {
+            openDashboard();
+            return;
+        }
         if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
             if (gameState.activeLaptop.claimedBy) return;
             showLaptopModeSelect();
@@ -4793,6 +4828,11 @@ function initMobileControls() {
 
             // Open laptop / mode select
             if (gameState.pomodoro.active || gameState.freeMode.active) return;
+            // Dashboard entry circle (proximity-based tap — the player is already standing on it)
+            if (gameState.activeDashboardZone && !gameState.isLockedIn && !gameState.anim.active) {
+                openDashboard();
+                return;
+            }
             if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
                 if (gameState.activeLaptop.claimedBy) return;
                 showLaptopModeSelect();
@@ -5233,6 +5273,8 @@ function updateRaceMode() {
         car.speed = 0;
         gameState.race.localResultSent = true;
         const finishTime = serverNow() - (session.startTime || serverNow());
+        // Dashboard high score: racing is best-by-lowest-time (fires once per session).
+        dashRecordGameOnce('race', gameState.race.sessionKey, finishTime);
         const participants = Object.keys(session.participants || {});
         const results = { ...(session.results || {}), [gameState.userId]: { finishTime, username: car.username } };
         const updates = {
@@ -5577,8 +5619,10 @@ function setupTestModeUI() {
 function showSuccessModal(totalSessions, workDuration, taskText = '') {
     const modal = document.getElementById('success-modal');
     if (!modal) return;
+    clearSuccessPhoto();   // each session starts with an empty photo slot
 
     const totalMins = Math.floor(totalSessions * workDuration);
+    _pendingInvoice = { mode: 'pomodoro', minutes: totalMins, task: (taskText || '').trim(), finishMs: Date.now() };
     document.getElementById('success-total-time').textContent = formatDurationArabic(totalMins);
     document.getElementById('success-sessions-count').textContent = totalSessions;
     const taskEl = document.getElementById('success-task');
@@ -5621,6 +5665,13 @@ function showSuccessModal(totalSessions, workDuration, taskText = '') {
 }
 
 function startPomodoroPhase(phase) {
+    // Dashboard time-tracking: accumulate the WORK block we're leaving, stamp the one we enter.
+    if (gameState.pomodoro._workStartMs) {
+        gameState.pomodoro._workedMs += Date.now() - gameState.pomodoro._workStartMs;
+        gameState.pomodoro._workStartMs = 0;
+    }
+    if (phase === 'work') gameState.pomodoro._workStartMs = Date.now();
+
     gameState.pomodoro.phase = phase;
     gameState.pomodoro.transitioning = false;
     const duration = phase === 'work' ? gameState.pomodoro.workDuration : gameState.pomodoro.breakDuration;
@@ -6166,6 +6217,7 @@ function updateCamera() {
 
 function handleMovement() {
     if (JUICE_ENTRANCE && _entrance.active) return;   // JUICE: lock controls during the login entrance
+    if (dashboardIsOpen()) return;                    // dashboard overlay locks movement
     if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive) return;
     if (document.querySelector('.modal-overlay.active')) return;
     const player = gameState.players[gameState.userId];
@@ -6258,6 +6310,11 @@ function updateInteractions() {
             minDist = dist;
         }
     });
+
+    // Dashboard entry-circle proximity (restricted feature — only for allowed users)
+    gameState.activeDashboardZone = dashboardAllowed()
+        && Math.hypot(player.x - DASH_ZONE_X, player.y - DASH_ZONE_Y) < DASH_ZONE_SELECT_R
+        && !gameState.pomodoro.active && !gameState.freeMode.active;
 
     const prevZonePlayers = gameState.raceZonePlayers || [];
     gameState.raceZonePlayers = isBreakActive() ? Object.values(gameState.players).filter(p => {
@@ -6736,6 +6793,7 @@ function render() {
     drawRaceMachine();
     drawCoffeeMachine();
     drawLaptopBossMachine();
+    drawDashboardZone();
 
     drawConnections();
 
@@ -6756,6 +6814,7 @@ function render() {
     drawRaceHint();
     drawCoffeeHint();
     drawLaptopBossHint();
+    drawDashboardPrompt();
 
     // Blue locked-in circle: solo pomo only, not coop (coop has its own ring)
     if (gameState.isLockedIn && gameState.sharedPomo.phase !== 'active') {
@@ -6971,6 +7030,9 @@ function listenToCoffee() {
             gameState.coffee.active = true;
             gameState.coffee.session = mySession;
             gameState.coffee.showResultsInGame = true;
+            // Dashboard high score: coffee is best-by-highest-score (fires once per session).
+            const myScore = mySession.participants?.[gameState.userId]?.score;
+            if (myScore != null) dashRecordGameOnce('coffee', gameState.coffee.sessionKey, myScore);
         }
     });
 }
@@ -8887,6 +8949,8 @@ function updatePomodoro() {
                 // END SESSION
                 try {
                     const completedTaskText = getCurrentTaskText();
+                    // Dashboard: a fully-completed pomodoro is always saved (subject to the 10-min floor).
+                    dashSaveSession('pomodoro', completedTaskText, pomoWorkedMsNow());
                     gameState.pomodoro.active = false;
                     cancelSessionDisconnect(true);
                     const updates = {};
@@ -12538,12 +12602,26 @@ function endFreeMode() {
         updatePlayerPosition(local?.x || 0, local?.y || 0);
     }
 
-    showFreeModeSuccessModal(totalMins, getCurrentTaskText());
+    // Dashboard: save the free-mode session. The long-session (>2h) confirm flow
+    // saves/discards itself and sets _dashFreeHandled so we don't double-save here.
+    if (!_dashFreeHandled) dashSaveSession('free', getCurrentTaskText(), totalMs);
+    _dashFreeHandled = false;
+
+    // The end card (and its sound + invoice) appear ONLY for sessions that meet the
+    // 10-minute floor. Short sessions — or a ">2h" discard — just leave silently.
+    const cardMins = _dashFreeOverrideMins != null ? _dashFreeOverrideMins : totalMins;
+    const showCard = !_dashFreeDiscarded && (cardMins * 60000 >= DASH_MIN_SESSION_MS);
+    _dashFreeOverrideMins = null;
+    _dashFreeDiscarded = false;
+    if (showCard) showFreeModeSuccessModal(cardMins, getCurrentTaskText());
+    else _pendingInvoice = null;   // nothing to archive for a short/aborted session
 }
 
 function showFreeModeSuccessModal(totalMins, taskText = '') {
     const modal = document.getElementById('success-modal');
     if (!modal) return;
+    clearSuccessPhoto();   // each session starts with an empty photo slot
+    _pendingInvoice = { mode: 'free', minutes: totalMins, task: (taskText || '').trim(), finishMs: Date.now() };
 
     document.getElementById('success-total-time').textContent = formatDurationArabic(totalMins);
 
@@ -12817,7 +12895,16 @@ function setupPomoLeaveBtn() {
         e.stopPropagation();
         resetToBtn();
         if (gameState.freeMode.active) {
-            endFreeMode();
+            // Idle-protection: a free session over 2h asks "did you really work that long?"
+            // before saving, so idle browser time isn't logged as real work.
+            // Siraj test ghosts always see the confirm modal (so it's testable without
+            // working a real 2 hours); everyone else only past the 2h threshold.
+            const elapsedMs = freeWorkedMsNow();
+            if (gameState.isSirajGhost || elapsedMs > DASH_LONG_FREE_MS) {
+                openFreeLongConfirmModal(elapsedMs);   // owns save + endFreeMode
+            } else {
+                endFreeMode();
+            }
         } else {
             // Pomodoro: second confirmation step
             if (_autoReset) clearTimeout(_autoReset);
@@ -12908,6 +12995,9 @@ function endBreakEarly() {
 
 function exitPomoNow() {
     if (gameState.freeMode.active) { endFreeMode(); return; }
+    // Dashboard: a pomodoro ended early via "انهاء الجلسة" still saves its worked time
+    // (no end card — exitPomoNow shows none). The 10-min floor is enforced inside dashSaveSession.
+    dashSaveSession('pomodoro', getCurrentTaskText(), pomoWorkedMsNow());
     const sp = gameState.sharedPomo;
 
     // Leave coop session if in one
@@ -16198,6 +16288,10 @@ function updateLaptopBoss() {
             boss.offScreen = true;
             local.outcome = 'win';
             local.outcomeT = 0;
+            // Dashboard high score: laptop game is best-by-lowest-time (fires once per win).
+            if (gameState.laptopBoss.session?.startTime) {
+                dashRecordGameOnce('laptop', gameState.laptopBoss.sessionKey, serverNow() - gameState.laptopBoss.session.startTime);
+            }
             bossSpawnParticles(local, boss.x, local.groundY, 18, { color: 'rgba(220,180,255,0.95)', speed: 7, life: 40, size: 5 });
             bossAddShake(local, 10);
         }
@@ -16813,6 +16907,1333 @@ function drawBossResultsPanel(ctx, W, H, outcome) {
     ctx.fillText('عودة', bx + btnW / 2, by + btnH / 2);
     gameState.laptopBoss.resultsButtonRect = { x: bx, y: by, w: btnW, h: btnH };
     ctx.restore();
+}
+
+// ============================================================================
+//  Personal Dashboard (لوحة المتابعة) — "paper stack" analytics + journal + to-dos
+//  ------------------------------------------------------------------------
+//  Restricted feature: the map entry-circle + UI are visible ONLY to the target
+//  user and Siraj test ghosts (dashboardAllowed). DATA TRACKING, however, runs
+//  for every real member (dashSaveSession / dashRecordGameOnce).
+//
+//  COST NOTE (Spark plan): dashboard data lives at the top-level `dashboards/{uid}`
+//  node, deliberately NOT under `users/`. The in-game `onValue('users')` listener
+//  fires on every descendant change, so a dashboard write under users/{uid}/… would
+//  re-stream the whole users node to every client. `dashboards/{uid}` is read with
+//  one-shot get()s only — zero fan-out. Per-day journals + denormalized completed
+//  tasks keep each read to a single small day node.
+// ============================================================================
+const DASH_TARGET_UID      = '567266235163738112';
+const DASH_MIN_SESSION_MS  = 10 * 60 * 1000;       // sessions under 10 min are never saved
+const DASH_LONG_FREE_MS    = 2 * 60 * 60 * 1000;   // free sessions over 2h trigger the idle-check
+const DASH_MAX_TODOS       = 5;
+const DASH_JOURNAL_MAX_WORDS = 100;
+const DASH_JOURNAL_PLACEHOLDER = 'يوم مثمر، أنجزت أغلب ما خططت له والحمد لله.';
+const DASH_SEED_VERSION    = 2;                    // bump to re-inject mock data
+
+// World entry circle (dev-art placeholder) — left side of the freely-walkable work room.
+const DASH_ZONE_X = -380, DASH_ZONE_Y = 0, DASH_ZONE_R = 56, DASH_ZONE_SELECT_R = 120;
+
+let _dashFreeHandled = false;   // set by the >2h confirm flow so endFreeMode doesn't double-save
+let _dashFreeOverrideMins = null;  // adjusted minutes from the >2h confirm → shown on the end card
+let _dashFreeDiscarded = false;    // the >2h confirm "discard" choice → suppress the end card
+let _dashJournalSaveTimer = null;
+let _dashTodoSaveTimer = null;
+let _dashState = { open: false, dayOffset: 0, side: 'main', animating: false, todos: [] };
+
+// Scattered-stack slots. Active = bright front (centred); the rest are tinted,
+// askew sheets behind it. z values keep them layered below the active sheet.
+const DASH_ACTIVE_SLOT = { x: 0, y: 0, r: -0.6, z: 40, tint: false };
+const DASH_BG_SLOTS = [
+    { x: -17, y: 13, r: -4.8, z: 10, tint: true },
+    { x: 19,  y: 8,  r: 4.2,  z: 20, tint: true },
+    { x: -8,  y: -9, r: 2.6,  z: 30, tint: true },
+];
+let _dashSheets = [];          // sheet elements in #dash-main-stack
+let _dashActiveSheet = null;   // the one currently holding #dash-day-paper content
+
+function dashboardIsOpen() { return !!(_dashState && _dashState.open); }
+// Paper UI sounds — via the Web Audio engine so they fire even in a background tab.
+function dashSound(name) { try { gameState.focusAudioEngine?.playEffect(name); } catch (_) {} }
+// Surface write failures instead of swallowing them (a PERMISSION_DENIED here means
+// the Realtime Database rules don't allow the `dashboards` node — see database.rules.json).
+function _dashErr(where) {
+    return (e) => console.warn(`[dashboard] ${where} write failed:`, e && (e.code || e.message || e));
+}
+
+function dashboardAllowed() { return gameState.userId === DASH_TARGET_UID || gameState.isSirajGhost; }
+// Everyone — including a Siraj test ghost — reads/writes their OWN node. A Siraj ghost
+// builds its own throwaway dashboard data that is removed from Firebase on disconnect
+// (armed in setupDashboardUI), so it never inherits or pollutes the real owner's data.
+function dashTrackingEnabled() { return !!gameState.userId; }
+function dashViewUid()  { return gameState.userId; }
+function dashReadOnly() { return false; }
+
+// Firebase keys can't contain . # $ / [ ] — sanitise task names used as map keys.
+function dashSlug(s) { return (s || '').replace(/[.#$/\[\]]/g, '_').slice(0, 64) || '_'; }
+
+function pomoWorkedMsNow() {
+    const p = gameState.pomodoro;
+    return (p._workedMs || 0) + (p._workStartMs ? Date.now() - p._workStartMs : 0);
+}
+function freeWorkedMsNow() {
+    const fm = gameState.freeMode;
+    return fm.totalWorkMs + (fm.phase === 'work' && fm.workStartTime > 0 ? Date.now() - fm.workStartTime : 0);
+}
+
+// ── Saving a finished work session (pomodoro OR free) ───────────────────────
+function dashSaveSession(mode, task, workedMs) {
+    if (!dashTrackingEnabled()) return;
+    if (!(workedMs >= DASH_MIN_SESSION_MS)) return;        // 10-minute floor
+    const uid = gameState.userId;
+    const finishMs = Date.now();
+    const tsKey = String(finishMs);
+    const dateKey = _todayDateStr();
+    task = (task || '').trim();
+    // Session log feeds the analytics (total hours / most-worked task / high scores).
+    // The day paper's "المهام المنجزة" comes from the per-day TO-DO list, not from
+    // sessions, so we no longer denormalise tasks under days/{date}.
+    const rec = { mode, task: task || null, finishMs, durMs: workedMs };
+    update(ref(database), { [`dashboards/${uid}/sessions/${tsKey}`]: rec }).catch(_dashErr('session'));
+    dashBumpAnalytics(uid, task, workedMs);
+}
+
+// Read-modify-write the small aggregate doc (infrequent — only at session end).
+function dashBumpAnalytics(uid, task, workedMs) {
+    get(ref(database, `dashboards/${uid}/stats`)).then(snap => {
+        const s = snap.val() || {};
+        const updates = { [`dashboards/${uid}/stats/totalWorkMs`]: (s.totalWorkMs || 0) + workedMs };
+        if (task) {
+            const slug = dashSlug(task);
+            const totals = s.taskTotals || {};
+            const newMs = ((totals[slug] && totals[slug].ms) || 0) + workedMs;
+            totals[slug] = { name: task, ms: newMs };
+            updates[`dashboards/${uid}/stats/taskTotals/${slug}`] = totals[slug];
+            let best = null;
+            for (const k in totals) if (!best || totals[k].ms > best.ms) best = totals[k];
+            if (best) updates[`dashboards/${uid}/stats/mostTask`] = { name: best.name, ms: best.ms };
+        }
+        update(ref(database), updates).catch(_dashErr('analytics'));
+    }).catch(_dashErr('analytics-read'));
+}
+
+// ── Minigame high scores (fires once per session via an in-memory guard) ─────
+// race + laptop: best = LOWEST time (ms). coffee: best = HIGHEST score.
+function dashRecordGameOnce(game, sessionKey, value) {
+    if (!dashTrackingEnabled() || value == null || sessionKey == null) return;
+    gameState._dashGameKeys = gameState._dashGameKeys || new Set();
+    const guard = `${game}:${sessionKey}`;
+    if (gameState._dashGameKeys.has(guard)) return;
+    gameState._dashGameKeys.add(guard);
+    const uid = gameState.userId;
+    const path = `dashboards/${uid}/stats/high/${game}`;
+    get(ref(database, path)).then(snap => {
+        const cur = snap.val();
+        const better = cur == null || (game === 'coffee' ? value > cur : value < cur);
+        if (better) update(ref(database), { [path]: value }).catch(_dashErr('highscore'));
+    }).catch(_dashErr('highscore-read'));
+}
+
+// ── >2h free-mode idle-protection confirm modal ─────────────────────────────
+function openFreeLongConfirmModal(elapsedMs) {
+    const modal = document.getElementById('dash-longfree-modal');
+    if (!modal) { endFreeMode(); return; }   // safety: never trap the user
+    let h = Math.floor(elapsedMs / 3600000);
+    let m = Math.round((elapsedMs % 3600000) / 60000);
+    if (m === 60) { h++; m = 0; }
+    const hBox = document.getElementById('dash-lf-hours');
+    const mBox = document.getElementById('dash-lf-mins');
+    const qEl  = document.getElementById('dash-lf-question');
+    const sync = () => { hBox.textContent = h; mBox.textContent = String(m).padStart(2, '0');
+        qEl.textContent = `هل عملت لمدة ${formatDurationArabic(h * 60 + m)} فعلًا؟`; };
+    sync();
+    modal._adj = (which, delta) => {
+        if (which === 'h') h = Math.max(0, Math.min(23, h + delta));
+        else { m += delta; if (m > 59) m = 0; if (m < 0) m = 59; }
+        sync();
+    };
+    modal._confirm = () => {
+        dashSaveSession('free', getCurrentTaskText(), (h * 60 + m) * 60000);
+        _dashFreeHandled = true;
+        _dashFreeOverrideMins = h * 60 + m;   // the end card should reflect the adjusted time
+        modal.classList.remove('active');
+        endFreeMode();
+    };
+    modal._discard = () => {
+        _dashFreeHandled = true;   // discard: end the session WITHOUT saving to the dashboard
+        _dashFreeDiscarded = true; // …and without the end card / sound
+        modal.classList.remove('active');
+        endFreeMode();
+    };
+    modal.classList.add('active');
+}
+
+// ── World entry-circle drawing + prompt ─────────────────────────────────────
+function drawDashboardZone() {
+    if (!dashboardAllowed()) return;
+    const ctx = gameState.ctx;
+    const t = Date.now() * 0.002;
+    const pulse = 0.5 + 0.5 * Math.sin(t);
+    ctx.save();
+    ctx.translate(DASH_ZONE_X, DASH_ZONE_Y);
+    // soft floor shadow
+    ctx.fillStyle = 'rgba(0,0,0,0.22)';
+    ctx.beginPath(); ctx.ellipse(0, DASH_ZONE_R * 0.62, DASH_ZONE_R * 0.9, DASH_ZONE_R * 0.34, 0, 0, Math.PI * 2); ctx.fill();
+    // dev-art placeholder body: paper-toned disc
+    ctx.fillStyle = '#efe4cc';
+    ctx.beginPath(); ctx.arc(0, 0, DASH_ZONE_R, 0, Math.PI * 2); ctx.fill();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = `rgba(120,96,60,${0.55 + 0.25 * pulse})`;
+    ctx.setLineDash([10, 8]);
+    ctx.beginPath(); ctx.arc(0, 0, DASH_ZONE_R - 4, t, t + Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    // icon
+    ctx.font = '40px serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('📋', 0, 2);
+    ctx.restore();
+}
+
+const _dashPrompt = { alpha: 0, pop: 0 };
+function drawDashboardPrompt() {
+    if (!dashboardAllowed()) return;
+    const ctx = gameState.ctx;
+    const show = !!gameState.activeDashboardZone && !gameState.isLockedIn && !gameState.anim.active
+                 && !gameState.pomodoro.active && !gameState.freeMode.active;
+    const lerp = 1 - Math.pow(1 - 0.22, gameState.dtFactor);
+    _dashPrompt.alpha += ((show ? 1 : 0) - _dashPrompt.alpha) * lerp;
+    _dashPrompt.pop   += ((show ? 1 : 0) - _dashPrompt.pop)   * lerp;
+    if (_dashPrompt.alpha < 0.02) return;
+    const a = _dashPrompt.alpha;
+    const bob = Math.sin(Date.now() * 0.004) * 2.5;
+    const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _dashPrompt.pop));
+    ctx.save();
+    ctx.translate(DASH_ZONE_X, DASH_ZONE_Y - DASH_ZONE_R - 28 - (1 - a) * 10 + bob);
+    ctx.scale(pop, pop);
+    ctx.textAlign = 'center';
+    ctx.shadowBlur = 4; ctx.shadowColor = `rgba(0,0,0,${0.65 * a})`;
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.font = 'bold 16px Rubik';
+    ctx.fillText('انقر للاستعمال', 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+// ── Opening / day navigation / rendering ────────────────────────────────────
+function _dashDateInfo(offset) {
+    const d = new Date();
+    d.setDate(d.getDate() - offset);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    let label;
+    try { label = d.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }); }
+    catch (_) { label = key; }
+    const rel = offset === 0 ? 'اليوم' : offset === 1 ? 'أمس' : `قبل ${offset} أيام`;
+    return { key, label, rel };
+}
+
+// ── Scattered sheet management ──────────────────────────────────────────────
+// The background-sheet "tint" is a `filter: brightness()` set inline here (with an
+// explicit filter transition) rather than a CSS pseudo-element — a class-toggled
+// ::after opacity was snapping instead of fading. This is fully under JS control.
+const DASH_SHEET_TRANSITION = 'transform 0.46s cubic-bezier(0.34,1.12,0.5,1), opacity 0.3s ease, filter 0.5s ease';
+function _dashApplySheet(sheet, slot, withTransition) {
+    sheet._slot = slot;
+    sheet.style.transition = withTransition ? DASH_SHEET_TRANSITION : 'none';
+    sheet.style.transform = `translate(${slot.x}px, ${slot.y}px) rotate(${slot.r}deg)`;
+    sheet.style.zIndex = slot.z;
+    sheet.style.opacity = '1';
+    sheet.style.filter = slot.tint ? 'brightness(0.62)' : 'brightness(1)';
+}
+
+// Resting slot for a given sheet: active sheet → front; others → sequential bg slots.
+function _dashSlotFor(sheet) {
+    if (sheet === _dashActiveSheet) return DASH_ACTIVE_SLOT;
+    const bg = _dashSheets.filter(s => s !== _dashActiveSheet);
+    return DASH_BG_SLOTS[bg.indexOf(sheet) % DASH_BG_SLOTS.length];
+}
+
+function openDashboard() {
+    if (!dashboardAllowed()) return;
+    const ov = document.getElementById('dashboard-overlay');
+    if (!ov) return;
+    _dashState.open = true;
+    _dashState.dayOffset = 0;
+    _dashState.side = 'main';
+    _dashState.animating = false;
+    dashResetInvoices();   // start with the memories view closed (temp card peeping left)
+    dashRenderInvoicePeep();   // fill the peep with a blank (placeholder) cropped receipt
+    _invPeepUnderDashboard();  // hidden under the dashboard until the open sequence slides it out
+    dashSound('paperIntro');
+    document.body.classList.add('dash-active');
+    ov.classList.remove('hidden');
+    requestAnimationFrame(() => ov.classList.add('active'));
+    const stage = document.getElementById('dash-stage');
+    if (stage) { stage.classList.remove('side-todo'); stage.classList.add('side-main'); }
+
+    // Collect sheets; the last one (holding the content) is the active sheet.
+    _dashSheets = Array.from(document.querySelectorAll('#dash-main-stack .dash-sheet'));
+    const contentSheet = document.getElementById('dash-day-paper')?.closest('.dash-sheet');
+    _dashActiveSheet = contentSheet || _dashSheets[_dashSheets.length - 1];
+
+    // Hide the to-do paper completely until the stack intro finishes — it then slides
+    // out from behind the papers into its resting peeping position.
+    const todo = document.getElementById('dash-todo-paper');
+    if (todo) { todo.style.transition = 'none'; todo.style.transform = 'translateX(0) rotate(0deg)'; todo.style.opacity = '0'; }
+
+    dashRenderAvatar();
+    dashRenderStats();
+    dashPlayOpenSequence();
+    // Carry yesterday's unfinished tasks into today (once per day), THEN render the day.
+    dashRolloverTodos().then(() => { if (_dashState.open) dashRenderDay(0); });
+}
+
+// Task carry-over: today's UNCOMPLETED to-dos roll forward from the last managed day;
+// completed ones stay put (they belong to the day they were finished). Runs once per
+// day, gated by a `todosRolloverDate` marker so clearing tasks won't re-pull them.
+function _dashParseTodos(raw) {
+    if (Array.isArray(raw)) return raw.filter(Boolean);
+    if (raw && typeof raw === 'object') return Object.keys(raw).sort().map(k => raw[k]).filter(Boolean);
+    return [];
+}
+function dashRolloverTodos() {
+    return new Promise((resolve) => {
+        if (dashReadOnly() || !gameState.userId) { resolve(); return; }
+        const uid = gameState.userId;
+        const today = _todayDateStr();
+        get(ref(database, `dashboards/${uid}/todosRolloverDate`)).then((mk) => {
+            const last = mk.val();
+            if (last === today) { resolve(); return; }   // already rolled over today
+            const y = new Date(); y.setDate(y.getDate() - 1);
+            const yesterday = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+            const sourceDate = (last && last < today) ? last : yesterday;
+            Promise.all([
+                get(ref(database, `dashboards/${uid}/todos/${sourceDate}`)),
+                get(ref(database, `dashboards/${uid}/todos/${today}`)),
+            ]).then(([ps, ts]) => {
+                const carried = _dashParseTodos(ps.val()).filter(t => !t.done).map(t => ({ text: t.text, done: false }));
+                const merged = [];
+                const seen = new Set();
+                [..._dashParseTodos(ts.val()), ...carried].forEach((t) => {
+                    const k = (t.text || '').trim();
+                    if (!k || seen.has(k)) return;
+                    seen.add(k);
+                    merged.push({ text: t.text, done: !!t.done });
+                });
+                const updates = { [`dashboards/${uid}/todosRolloverDate`]: today };
+                updates[`dashboards/${uid}/todos/${today}`] = merged.slice(0, DASH_MAX_TODOS);
+                update(ref(database), updates).catch(_dashErr('rollover')).finally(resolve);
+            }).catch(() => resolve());
+        }).catch(() => resolve());
+    });
+}
+
+// Opening: background sheets fly in one after another, then the main (active) sheet on
+// top — and finally the to-do paper slides out from behind into its peep.
+function dashPlayOpenSequence() {
+    if (!_dashSheets.length) return;
+    const bg = _dashSheets.filter(s => s !== _dashActiveSheet);
+    const order = [...bg, _dashActiveSheet];   // backgrounds first, main last
+    // Start them all off-screen up north.
+    _dashSheets.forEach((s) => {
+        s.style.transition = 'none';
+        s.style.transform = 'translate(0, -165%) rotate(-2deg)';
+        s.style.opacity = '0';
+    });
+    void _dashSheets[0].offsetWidth;   // commit the start frame
+    order.forEach((s, i) => {
+        setTimeout(() => { if (_dashState.open) _dashApplySheet(s, _dashSlotFor(s), true); }, 70 + i * 95);
+    });
+    // After the stack settles, reveal the to-do paper (slides from behind to its peep).
+    const revealAt = 70 + order.length * 95 + 240;
+    setTimeout(() => {
+        if (!_dashState.open) return;
+        const todo = document.getElementById('dash-todo-paper');
+        if (todo) {
+            todo.style.transition = 'transform 0.55s cubic-bezier(0.34,1.2,0.5,1), opacity 0.4s ease';
+            todo.style.transform = '';   // hand back to the CSS resting (peep) position
+            todo.style.opacity = '1';
+        }
+        dashMaybeShowSwipeHint();
+    }, revealAt);
+    // The invoice peep slides out from under the dashboard on the LEFT, just AFTER the
+    // to-do paper has slid out on the right.
+    setTimeout(() => { if (_dashState.open && !_invOpen) dashSlidePeepOut(); }, revealAt + 240);
+}
+
+function closeDashboard() {
+    const ov = document.getElementById('dashboard-overlay');
+    if (!ov || !_dashState.open) return;
+    _dashState.open = false;
+    dashResetInvoices();   // tear down the memories view if it was open
+    dashSound('paperExit');
+    document.body.classList.remove('dash-active');
+    document.getElementById('dash-swipe-hint')?.classList.remove('show');
+    // Closing: reverse the entrance — main sheet flies out first, then backgrounds one by one.
+    const bg = _dashSheets.filter(s => s !== _dashActiveSheet);
+    const order = [_dashActiveSheet, ...bg].filter(Boolean);
+    order.forEach((s, i) => {
+        setTimeout(() => {
+            s.style.transition = 'transform 0.4s cubic-bezier(0.5,0,0.75,0), opacity 0.32s ease';
+            s.style.transform = 'translate(0, -165%) rotate(-2deg)';
+            s.style.opacity = '0';
+        }, i * 75);
+    });
+    const tail = Math.max(280, order.length * 75 + 320);
+    ov.classList.remove('active');
+    setTimeout(() => { ov.classList.add('hidden'); }, tail);
+}
+
+function dashRenderDay(offset) {
+    const info = _dashDateInfo(offset);
+    const journalEl = document.getElementById('dash-journal');
+    const tasksEl   = document.getElementById('dash-day-tasks');
+    if (!journalEl || !tasksEl) return;
+    setDashText('dash-day-rel', info.rel);
+    setDashText('dash-day-rel-tag', info.rel);
+    setDashText('dash-day-date', info.label);
+    journalEl.value = ''; journalEl.disabled = true;
+    journalEl.readOnly = dashReadOnly();
+    tasksEl.innerHTML = '<div class="dash-empty">…</div>';
+
+    // Journal for this day
+    get(ref(database, `dashboards/${dashViewUid()}/days/${info.key}/journal`)).then(snap => {
+        if (!_dashState.open) return;
+        journalEl.value = snap.val() || '';
+        journalEl.disabled = false;
+        journalEl.dataset.dateKey = info.key;
+        dashClampJournal(journalEl);   // refresh the word counter
+    }).catch(() => { journalEl.disabled = false; });
+
+    // To-dos for this day drive BOTH the to-do paper and "المهام المنجزة".
+    dashLoadTodos(info.key);
+    dashScheduleAlign();   // align dividers + journal lines to the grid (now + after font load)
+}
+
+// "المهام المنجزة" = the DONE items from this day's to-do list (no timer, just names).
+function dashRenderCompleted() {
+    const el = document.getElementById('dash-day-tasks');
+    if (!el) return;
+    const done = (_dashState.todos || []).filter(t => t && t.done && (t.text || '').trim());
+    if (!done.length) {
+        el.innerHTML = '<div class="dash-empty">لا مهام منجزة في هذا اليوم</div>';
+        return;
+    }
+    el.innerHTML = done.map(t =>
+        `<div class="dash-task-row dash-task-done"><span class="dash-task-check">✓</span>
+            <span class="dash-task-name">${escapeDashHtml(t.text)}</span></div>`).join('');
+}
+
+// Day swap: pick a random background sheet, slide it "up north" (fading off its dark
+// tint), raise its z-index above the stack, then settle it back down centred as the
+// new active day. The previous active sheet recedes into the vacated background slot.
+function dashAnimateDayChange(targetOffset) {
+    const movers = _dashSheets.filter(s => s !== _dashActiveSheet);
+    if (!movers.length) { dashRenderDay(targetOffset); return; }
+    _dashState.animating = true;
+    dashSound('paperDaysSwap');
+    const mover = movers[Math.floor(Math.random() * movers.length)];
+    const oldActive = _dashActiveSheet;
+    const moverSlot = mover._slot || DASH_BG_SLOTS[0];
+    const content = document.getElementById('dash-day-paper');
+
+    // Phase A — a blank background sheet slides up north, out of bounds, gradually
+    // brightening off its tint. The old page stays intact & in front the whole time.
+    mover.style.transition = 'transform 0.42s cubic-bezier(0.45,0.02,0.25,1), opacity 0.3s, filter 0.5s ease';
+    mover.style.transform = 'translate(0, -160%) rotate(-1.5deg)';
+    mover.style.filter = 'brightness(1)';
+
+    setTimeout(() => {
+        if (!_dashState.open) { _dashState.animating = false; return; }
+        // Phase B — the mover is now off-screen at the top: hand it the content + the
+        // new day (rendered while hidden) and raise its z-index above the stack.
+        if (content && content.parentElement !== mover) mover.appendChild(content);
+        dashRenderDay(targetOffset);
+        mover.style.zIndex = 60;
+        // Phase C — slide it back down, landing cleanly on top as the new active day.
+        _dashApplySheet(mover, DASH_ACTIVE_SLOT, true);
+        mover.style.zIndex = 60;
+        // The old active recedes into the mover's vacated background slot, darkening.
+        _dashApplySheet(oldActive, moverSlot, true);
+        _dashActiveSheet = mover;
+        setTimeout(() => {
+            mover.style.zIndex = DASH_ACTIVE_SLOT.z;   // normalise layering
+            _dashState.animating = false;
+        }, 480);
+    }, 430);
+}
+
+function dashGoDay(delta) {
+    if (_dashState.animating) return;
+    const next = _dashState.dayOffset + delta;        // delta +1 = older day
+    if (next < 0) return;                              // can't go into the future
+    if (next > 365) return;
+    _dashState.dayOffset = next;
+    dashAnimateDayChange(next);
+}
+
+// User avatar in a "taped-on" paper cutout with a warm vintage tint.
+function dashRenderAvatar() {
+    const img = document.getElementById('dash-avatar-img');
+    const txt = document.getElementById('dash-avatar-text');
+    if (!img || !txt) return;
+    const p = gameState.players[gameState.userId];
+    const avatar = p && p.avatar;
+    if (avatar) {
+        img.src = avatar; img.style.display = 'block'; txt.style.display = 'none';
+    } else {
+        img.style.display = 'none'; txt.style.display = 'flex';
+        txt.textContent = (p && p.username ? p.username.charAt(0) : '؟').toUpperCase();
+    }
+}
+
+function escapeDashHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function dashSaveJournal() {
+    if (dashReadOnly()) return;
+    const el = document.getElementById('dash-journal');
+    const dateKey = el.dataset.dateKey;
+    if (!dateKey) return;
+    clearTimeout(_dashJournalSaveTimer);
+    _dashJournalSaveTimer = setTimeout(() => {
+        update(ref(database), { [`dashboards/${gameState.userId}/days/${dateKey}/journal`]: el.value }).catch(_dashErr('journal'));
+    }, 700);
+}
+
+// Cap the journal to 200 words as the user types.
+function dashClampJournal(el) {
+    const words = el.value.trim().split(/\s+/).filter(Boolean);
+    if (words.length > DASH_JOURNAL_MAX_WORDS) {
+        el.value = words.slice(0, DASH_JOURNAL_MAX_WORDS).join(' ');
+    }
+    const wc = el.value.trim() ? el.value.trim().split(/\s+/).filter(Boolean).length : 0;
+    const counter = document.getElementById('dash-journal-count');
+    if (counter) counter.textContent = `${wc} / ${DASH_JOURNAL_MAX_WORDS} كلمة`;
+}
+
+// Run the grid-snap now AND again once Methlama has loaded — text metrics change when
+// the real font swaps in, which shifts everything off-grid if we only aligned with the
+// Rubik fallback (the reason it looked misaligned on a fresh open).
+function dashScheduleAlign() {
+    requestAnimationFrame(() => { if (_dashState.open) dashAlignGridLines(); });
+    if (document.fonts && document.fonts.ready) {
+        document.fonts.ready.then(() => { if (_dashState.open) requestAnimationFrame(dashAlignGridLines); });
+    }
+}
+
+// Snap content onto each paper's 34px texture grid (lines at content-y ≡ 33 mod 34) so
+// text + boxes sit cleanly on/between the printed lines. The summary + stats rows are
+// left alone (already aligned); we only nudge the high-scores row and the later headings
+// down, plus phase-align the journal lines and the to-do rows. Flex column on the content
+// means margin-top actually moves things (no collapse).
+function dashAlignGridLines() {
+    const PERIOD = 34, PHASE = 33;
+    const snap = (y) => Math.round((y - PHASE) / PERIOD) * PERIOD + PHASE;
+    // Move `el` by adjusting its margin-top so the y returned by edgeFn lands on a line.
+    const align = (el, edgeFn) => {
+        if (!el) return;
+        el.style.marginTop = '';
+        const y = edgeFn(el);
+        const cur = parseFloat(getComputedStyle(el).marginTop) || 0;
+        el.style.marginTop = (cur + (snap(y) - y)) + 'px';
+    };
+
+    const content = document.getElementById('dash-day-paper');
+    if (content) {
+        // High-score chips: snap the row top onto a line so the boxes sit in the band below.
+        align(content.querySelector('.dash-highscores'), el => el.offsetTop);
+        // Headings after the first (يوميات اليوم, المهام المنجزة): snap their baseline to a line.
+        [...content.querySelectorAll('.dash-section-title')].slice(1)
+            .forEach(t => align(t, el => el.offsetTop + el.offsetHeight));
+        // Journal's own ruled lines → same grid.
+        const journal = document.getElementById('dash-journal');
+        if (journal) {
+            const off = ((journal.offsetTop % PERIOD) + PERIOD) % PERIOD;
+            journal.style.backgroundPositionY = (-off) + 'px';
+        }
+    }
+
+    // To-do paper: nudge the list so each 34px row's writing line lands on a texture line.
+    const list = document.getElementById('dash-todo-list');
+    const firstRow = list && list.querySelector('.dash-todo-row');
+    if (list && firstRow) align(list, el => firstRow.offsetTop + firstRow.offsetHeight);
+}
+
+// ── Analytics summary (stats) ───────────────────────────────────────────────
+function dashRenderStats() {
+    get(ref(database, `dashboards/${dashViewUid()}/stats`)).then(snap => {
+        if (!_dashState.open) return;
+        const s = snap.val() || {};
+        const totalMin = Math.round((s.totalWorkMs || 0) / 60000);
+        setDashText('dash-stat-hours', formatDurationArabic(totalMin));
+        setDashText('dash-stat-task', s.mostTask?.name || '—');
+        const high = s.high || {};
+        setDashText('dash-hs-laptop', high.laptop != null ? formatRaceTime(high.laptop) : '—');
+        setDashText('dash-hs-race',   high.race   != null ? formatRaceTime(high.race)   : '—');
+        setDashText('dash-hs-coffee', high.coffee != null ? `${high.coffee} نقطة` : '—');
+    }).catch(() => {});
+}
+function setDashText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
+
+// ── To-Do list (المهمات اليومية) — per selected day, max 5 ──────────────────
+// Marking a to-do "done" is what populates "المهام المنجزة" for that same day.
+function dashLoadTodos(dateKey) {
+    dateKey = dateKey || _todayDateStr();
+    _dashState.todosDate = dateKey;
+    get(ref(database, `dashboards/${dashViewUid()}/todos/${dateKey}`)).then(snap => {
+        if (!_dashState.open || _dashState.todosDate !== dateKey) return;   // day changed mid-fetch
+        const raw = snap.val();
+        let todos = [];
+        if (Array.isArray(raw)) todos = raw.filter(Boolean);
+        else if (raw && typeof raw === 'object') todos = Object.keys(raw).sort().map(k => raw[k]).filter(Boolean);
+        _dashState.todos = todos.slice(0, DASH_MAX_TODOS);
+        dashRenderTodos();
+        dashRenderCompleted();
+    }).catch(() => { _dashState.todos = []; dashRenderTodos(); dashRenderCompleted(); });
+}
+
+function dashSaveTodos() {
+    if (dashReadOnly()) return;
+    const key = _dashState.todosDate || _todayDateStr();
+    clearTimeout(_dashTodoSaveTimer);
+    _dashTodoSaveTimer = setTimeout(() => {
+        update(ref(database), { [`dashboards/${gameState.userId}/todos/${key}`]: _dashState.todos }).catch(_dashErr('todos'));
+    }, 350);
+}
+
+function _dashTodoRowHTML(t, i, fresh) {
+    const ro = dashReadOnly();
+    return `<div class="dash-todo-row ${t.done ? 'done' : ''} ${fresh ? 'dash-row-fresh' : ''}">
+        <button class="dash-todo-check" data-i="${i}" ${ro ? 'disabled' : ''}>${t.done ? '✓' : ''}</button>
+        <div class="dash-todo-line" contenteditable="${ro ? 'false' : 'true'}" data-i="${i}">${escapeDashHtml(t.text || '')}</div>
+    </div>`;
+}
+function _dashEmptyRowHTML(fresh) {
+    if (dashReadOnly()) return '';
+    return `<div class="dash-todo-row empty ${fresh ? 'dash-row-fresh' : ''}">
+        <button class="dash-todo-check" disabled></button>
+        <div class="dash-todo-line dash-todo-new" contenteditable="true" data-i="new" data-placeholder="مهمة جديدة…"></div>
+    </div>`;
+}
+
+// Full re-render (on load / structural change). Live typing uses the lighter path below.
+function dashRenderTodos() {
+    const list = document.getElementById('dash-todo-list');
+    if (!list) return;
+    const rows = _dashState.todos.slice(0, DASH_MAX_TODOS);
+    let html = rows.map((t, i) => _dashTodoRowHTML(t, i, false)).join('');
+    if (!dashReadOnly() && rows.length < DASH_MAX_TODOS) html += _dashEmptyRowHTML(false);
+    list.innerHTML = html;
+    dashScheduleAlign();   // keep the to-do rows on the texture grid
+}
+
+// Live generation: the instant the user types into the trailing empty row, promote it
+// to a real to-do and spawn the next empty checkbox/line below with a snappy entrance —
+// without stealing the caret from the row they're typing in. Cap enforced at 5.
+function dashHandleTodoInput(line) {
+    if (dashReadOnly()) return;
+    const idx = line.dataset.i;
+    const text = line.textContent;
+    if (idx === 'new') {
+        if (text.trim() === '') return;
+        if (_dashState.todos.length >= DASH_MAX_TODOS) return;
+        const newIndex = _dashState.todos.length;
+        _dashState.todos.push({ text, done: false });
+        // This row is now a real to-do — rebind it in place (keeps focus + caret).
+        line.dataset.i = String(newIndex);
+        line.classList.remove('dash-todo-new');
+        line.removeAttribute('data-placeholder');
+        const check = line.parentElement.querySelector('.dash-todo-check');
+        if (check) { check.dataset.i = String(newIndex); check.disabled = false; }
+        dashSaveTodos();
+        // Spawn the next empty row beneath, with its fresh-entrance animation.
+        if (_dashState.todos.length < DASH_MAX_TODOS) {
+            const list = document.getElementById('dash-todo-list');
+            line.closest('.dash-todo-row').insertAdjacentHTML('afterend', _dashEmptyRowHTML(true));
+        }
+    } else {
+        const i = Number(idx);
+        if (_dashState.todos[i]) { _dashState.todos[i].text = text; dashSaveTodos(); }
+    }
+}
+
+// Deleting all text in a committed row removes it (handled on blur to avoid mid-type churn).
+function dashHandleTodoBlur(line) {
+    if (dashReadOnly()) return;
+    const idx = line.dataset.i;
+    if (idx === 'new') return;
+    const i = Number(idx);
+    if (_dashState.todos[i] && line.textContent.trim() === '') {
+        _dashState.todos.splice(i, 1);
+        dashSaveTodos();
+        dashRenderTodos();
+        dashRenderCompleted();
+    }
+}
+
+function dashToggleTodo(i) {
+    if (dashReadOnly() || !_dashState.todos[i]) return;
+    _dashState.todos[i].done = !_dashState.todos[i].done;
+    if (_dashState.todos[i].done) dashSound('paperTaskComplete');   // success chime on completing
+    dashSaveTodos();
+    dashRenderTodos();
+    dashRenderCompleted();   // done to-dos appear in "المهام المنجزة" for this day
+}
+
+function dashSetSide(side) {
+    const stage = document.getElementById('dash-stage');
+    if (!stage || _dashState.side === side) return;
+    _dashState.side = side;
+    dashSound('paperSwipe');
+    stage.classList.toggle('side-todo', side === 'todo');
+    stage.classList.toggle('side-main', side === 'main');
+    dashDismissSwipeHint();   // they've learned the gesture
+}
+
+// First-time mobile hint: a small arrow nudging right to teach the side-swap.
+function dashMaybeShowSwipeHint() {
+    if (!isMobile()) return;
+    try { if (localStorage.getItem('mdwnh_dash_swipe_hint') === '1') return; } catch (_) {}
+    const hint = document.getElementById('dash-swipe-hint');
+    if (!hint) return;
+    hint.classList.add('show');
+    clearTimeout(hint._t);
+    hint._t = setTimeout(dashDismissSwipeHint, 7000);
+}
+function dashDismissSwipeHint() {
+    const hint = document.getElementById('dash-swipe-hint');
+    if (hint) hint.classList.remove('show');
+    try { localStorage.setItem('mdwnh_dash_swipe_hint', '1'); } catch (_) {}
+}
+
+// ── UI wiring (called from startGame) ───────────────────────────────────────
+function setupDashboardUI() {
+    const ovEl = document.getElementById('dashboard-overlay');
+    document.getElementById('dash-close')?.addEventListener('click', closeDashboard);
+    document.getElementById('dash-prev-day')?.addEventListener('click', () => dashGoDay(1));   // older
+    document.getElementById('dash-next-day')?.addEventListener('click', () => dashGoDay(-1));  // newer
+
+    const journal = document.getElementById('dash-journal');
+    journal?.addEventListener('input', () => { dashClampJournal(journal); dashSaveJournal(); });
+
+    // To-Do interactions (delegated). The checkbox toggles "done" and STOPS the click
+    // from bubbling, so tapping a checkbox never triggers the paper side-swap.
+    const todoList = document.getElementById('dash-todo-list');
+    todoList?.addEventListener('click', (e) => {
+        const check = e.target.closest('.dash-todo-check');
+        if (check && check.dataset.i != null && check.dataset.i !== '') {
+            e.stopPropagation();
+            dashToggleTodo(Number(check.dataset.i));
+        }
+    });
+    // Live generation of the next line the instant any character is typed.
+    todoList?.addEventListener('input', (e) => {
+        const line = e.target.closest('.dash-todo-line');
+        if (line) dashHandleTodoInput(line);
+    });
+    todoList?.addEventListener('keydown', (e) => {
+        const line = e.target.closest('.dash-todo-line');
+        if (!line) return;
+        if (e.key === 'Enter') {   // Enter jumps to the trailing empty line
+            e.preventDefault();
+            const nl = todoList.querySelector('.dash-todo-new');
+            if (nl && nl !== line) nl.focus();
+            else line.blur();
+        }
+    });
+    todoList?.addEventListener('blur', (e) => {
+        const line = e.target.closest('.dash-todo-line');
+        if (line) dashHandleTodoBlur(line);
+    }, true);
+
+    // ── Unified, swipe-aware click handling ─────────────────────────────────
+    // A single click handler (not mousedown — mousedown fired on touch swipes and
+    // closed the panel by itself). After a swipe we swallow the trailing synthetic
+    // click so it can't double-fire (the old code's "can't swap / exits by itself").
+    let _dashSuppressClickUntil = 0;
+    ovEl?.addEventListener('click', (e) => {
+        if (Date.now() < _dashSuppressClickUntil) return;
+        if (e.target.closest('.dash-todo-check, button, textarea, input, [contenteditable="true"]')) return;
+        // ── Work-memories (invoices) ────────────────────────────────────────
+        if (_invOpen) {
+            // Clicking the peeping dashboard edge / back chevron / scrim returns.
+            if (e.target.closest('#dash-invoice-grid')) return;   // let the grid scroll
+            if (e.target.closest('.dash-stage') || e.target.closest('#dash-invoice-back') || e.target === ovEl) dashCloseInvoices();
+            return;
+        }
+        if (e.target.closest('#dash-invoice-peep')) { dashOpenInvoices(); return; }   // peep → open
+        if (e.target === ovEl) { closeDashboard(); return; }                 // scrim → close
+        if (e.target.closest('#dash-todo-paper') && _dashState.side === 'main') { dashSetSide('todo'); return; }
+        if (e.target.closest('#dash-main-stack') && _dashState.side === 'todo') { dashSetSide('main'); return; }
+    });
+
+    // Invoice card delete: tiny ✕ → per-card confirm → delete from Firebase.
+    document.getElementById('dash-invoice-grid')?.addEventListener('click', (e) => {
+        const del = e.target.closest('.inv-del');
+        if (del) { e.stopPropagation(); del.closest('.inv-card')?.classList.add('confirming'); return; }
+        const no = e.target.closest('.inv-confirm-no');
+        if (no) { e.stopPropagation(); no.closest('.inv-card')?.classList.remove('confirming'); return; }
+        const yes = e.target.closest('.inv-confirm-yes');
+        if (yes) { e.stopPropagation(); dashDeleteInvoice(yes.dataset.fm, yes.closest('.inv-card')); return; }
+    });
+
+    // Horizontal swipe flips between the dashboard and the to-do paper. Tracks
+    // movement so a tap on a checkbox/field never counts as a swipe.
+    let _g = null;
+    ovEl?.addEventListener('touchstart', (e) => {
+        if (e.target.closest('textarea, input, [contenteditable="true"], button, .dash-todo-check')) { _g = null; return; }
+        const t = e.touches[0]; _g = { x: t.clientX, y: t.clientY };
+    }, { passive: true });
+    ovEl?.addEventListener('touchend', (e) => {
+        if (!_g) return;
+        const g = _g; _g = null;
+        const t = e.changedTouches[0];
+        const dx = t.clientX - g.x, dy = t.clientY - g.y;
+        if (Math.abs(dx) < 45 || Math.abs(dx) < Math.abs(dy) * 1.2) return;   // mostly-horizontal only
+        _dashSuppressClickUntil = Date.now() + 600;     // swallow the trailing synthetic click
+        dashDismissSwipeHint();
+        // Horizontal strip: [invoices] ← [main] ← [to-do]. Swipe-right moves "back"
+        // toward invoices; swipe-left moves "forward" toward the to-do paper.
+        if (_invOpen) { if (dx < 0) dashCloseInvoices(); return; }     // swipe-left → return
+        if (_dashState.side === 'main') {
+            if (dx > 0) dashOpenInvoices();                            // swipe-right → invoices
+            else dashSetSide('todo');                                 // swipe-left → to-do
+        } else if (_dashState.side === 'todo') {
+            if (dx > 0) dashSetSide('main');                          // swipe-right → back to main
+        }
+    }, { passive: true });
+
+    // Long-free confirm modal buttons
+    const lf = document.getElementById('dash-longfree-modal');
+    document.getElementById('dash-lf-h-up')?.addEventListener('click', () => lf._adj && lf._adj('h', 1));
+    document.getElementById('dash-lf-h-down')?.addEventListener('click', () => lf._adj && lf._adj('h', -1));
+    document.getElementById('dash-lf-m-up')?.addEventListener('click', () => lf._adj && lf._adj('m', 1));
+    document.getElementById('dash-lf-m-down')?.addEventListener('click', () => lf._adj && lf._adj('m', -1));
+    document.getElementById('dash-lf-confirm')?.addEventListener('click', () => lf._confirm && lf._confirm());
+    document.getElementById('dash-lf-discard')?.addEventListener('click', () => lf._discard && lf._discard());
+
+    // Methlama font fallback notice (spec): if the OTFs can't load we silently fall
+    // back to Rubik via the CSS stack — log a clear, actionable explanation.
+    if (dashboardAllowed() && document.fonts && document.fonts.load) {
+        document.fonts.load('700 16px Methlama').then(() => {
+            if (!document.fonts.check('700 16px Methlama')) {
+                console.warn('[dashboard] Methlama OTF did not load — falling back to Rubik. ' +
+                    'Check that Fonts/KOMethlama-*.otf are served (correct path/case) and that the server allows .otf. ' +
+                    'To re-enable: confirm the @font-face src paths in style.css resolve from the site root.');
+            }
+        }).catch(() => console.warn('[dashboard] Methlama font load error — using Rubik fallback.'));
+    }
+
+    // Mock/seed data is no longer injected. If a previous build left seeded test data
+    // (marked by the `_seed` key), wipe it once so the dashboard starts from real data.
+    if (dashboardAllowed()) dashClearSeedData();
+
+    // A Siraj test ghost builds its OWN throwaway dashboard node — remove it from
+    // Firebase the moment it disconnects so it never lingers as orphaned test data.
+    if (gameState.isSirajGhost && gameState.userId) {
+        try { onDisconnect(ref(database, `dashboards/${gameState.userId}`)).remove(); } catch (_) {}
+        // Seed a batch of mock invoices into the ghost's throwaway node so the work-
+        // memories grid + virtualization can be tested without affecting real data.
+        dashSeedMockInvoices();
+    }
+}
+
+// One-time cleanup of leftover seeded mock data (the old "temp stats"). Only fires if
+// the `_seed` marker is present, so it never touches genuinely-entered data.
+function dashClearSeedData() {
+    const uid = DASH_TARGET_UID;
+    get(ref(database, `dashboards/${uid}/_seed`)).then(snap => {
+        if (!snap.exists()) return;
+        update(ref(database), { [`dashboards/${uid}`]: null })
+            .then(() => console.log('[dashboard] cleared leftover seeded test data'))
+            .catch(_dashErr('clear-seed'));
+    }).catch(() => {});
+}
+
+// ============================================================================
+//  End-of-session card: drag-drop image → 1:1 crop (pan/zoom) → taped-on photo
+//  The photo is purely local/visual (for the screenshot the user sends) — never
+//  persisted. Reset each time the card opens.
+// ============================================================================
+const _crop = { srcImg: null, baseScale: 1, scale: 1, x: 0, y: 0, fw: 280, fh: 210, natW: 0, natH: 0, dragging: false, lastX: 0, lastY: 0 };
+
+// Photo slot has three states: 'drop' (add zone shown), 'photo' (taped photo + ✕),
+// 'removed' (slot fully collapsed → card shrinks, "اضافة صورة" text shows under it).
+function successPhotoState(state) {
+    const wrap  = document.getElementById('success-photo-wrap');
+    const drop  = document.getElementById('success-photo-drop');
+    const taped = document.getElementById('success-photo-taped');
+    const img   = document.getElementById('success-photo-img');
+    const addBtn = document.getElementById('success-add-photo');
+    if (!wrap) return;
+    if (state !== 'photo' && img) img.src = '';
+    wrap.style.display  = (state === 'removed') ? 'none' : 'flex';
+    if (drop)  drop.style.display  = (state === 'drop')  ? 'flex'  : 'none';
+    if (taped) taped.style.display = (state === 'photo') ? 'block' : 'none';
+    if (addBtn) addBtn.style.display = (state === 'removed') ? 'block' : 'none';
+}
+
+// Reset to the default (add zone) state — called each time the card opens.
+function clearSuccessPhoto() {
+    successPhotoState('drop');
+}
+
+function _cropApply() {
+    const cropImg = document.getElementById('crop-img');
+    if (!cropImg) return;
+    cropImg.style.width  = (_crop.natW * _crop.scale) + 'px';
+    cropImg.style.height = (_crop.natH * _crop.scale) + 'px';
+    cropImg.style.transform = `translate(-50%, -50%) translate(${_crop.x}px, ${_crop.y}px)`;
+}
+function _cropClamp() {
+    const dw = _crop.natW * _crop.scale, dh = _crop.natH * _crop.scale;
+    const maxX = Math.max(0, (dw - _crop.fw) / 2), maxY = Math.max(0, (dh - _crop.fh) / 2);
+    _crop.x = Math.max(-maxX, Math.min(maxX, _crop.x));
+    _crop.y = Math.max(-maxY, Math.min(maxY, _crop.y));
+}
+
+function loadCropImage(file) {
+    if (!file || !file.type || !file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+        const img = new Image();
+        img.onload = () => {
+            const frame = document.getElementById('crop-frame');
+            const cropImg = document.getElementById('crop-img');
+            const zoom = document.getElementById('crop-zoom');
+            if (!frame || !cropImg) return;
+            document.getElementById('crop-modal').classList.add('active');   // active first → frame has size
+            const fr = frame.getBoundingClientRect();
+            _crop.fw = fr.width || 280; _crop.fh = fr.height || 210;
+            _crop.srcImg = img; _crop.natW = img.naturalWidth; _crop.natH = img.naturalHeight;
+            _crop.baseScale = Math.max(_crop.fw / img.naturalWidth, _crop.fh / img.naturalHeight);
+            _crop.scale = _crop.baseScale; _crop.x = 0; _crop.y = 0;
+            if (zoom) zoom.value = 1;
+            cropImg.src = img.src;
+            _cropApply();
+        };
+        img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
+}
+
+function confirmCrop() {
+    if (!_crop.srcImg) { document.getElementById('crop-modal').classList.remove('active'); return; }
+    const OUTW = 480, OUTH = 360;              // 4:3 output
+    const scale = _crop.scale;                 // displayed px per natural px
+    const cropNatW = _crop.fw / scale, cropNatH = _crop.fh / scale;   // natural region in the frame
+    const cxNat = _crop.natW / 2 - _crop.x / scale;
+    const cyNat = _crop.natH / 2 - _crop.y / scale;
+    const sx = cxNat - cropNatW / 2, sy = cyNat - cropNatH / 2;
+    const canvas = document.createElement('canvas');
+    canvas.width = OUTW; canvas.height = OUTH;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(_crop.srcImg, sx, sy, cropNatW, cropNatH, 0, 0, OUTW, OUTH);
+    let dataUrl; try { dataUrl = canvas.toDataURL('image/jpeg', 0.9); } catch (_) { dataUrl = ''; }
+    if (dataUrl) {
+        document.getElementById('success-photo-img').src = dataUrl;
+        successPhotoState('photo');
+    }
+    document.getElementById('crop-modal').classList.remove('active');
+}
+
+function setupSuccessCardUI() {
+    const drop  = document.getElementById('success-photo-drop');
+    const wrap  = document.getElementById('success-photo-wrap');
+    const input = document.getElementById('success-photo-input');
+    const card  = document.getElementById('success-card');
+    if (!drop || !wrap || !input || !card) return;
+
+    drop.addEventListener('click', () => input.click());
+    input.addEventListener('change', () => { if (input.files && input.files[0]) loadCropImage(input.files[0]); input.value = ''; });
+    // ✕ removes the photo completely (card shrinks) and reveals the "اضافة صورة" text.
+    document.getElementById('success-photo-remove')?.addEventListener('click', () => successPhotoState('removed'));
+    // "اضافة صورة" brings back the add-zone and hides itself.
+    document.getElementById('success-add-photo')?.addEventListener('click', () => successPhotoState('drop'));
+
+    // Drag & drop anywhere on the card.
+    let _dragDepth = 0;
+    card.addEventListener('dragenter', (e) => { e.preventDefault(); _dragDepth++; wrap.classList.add('dragover'); });
+    card.addEventListener('dragover',  (e) => { e.preventDefault(); });
+    card.addEventListener('dragleave', (e) => { e.preventDefault(); if (--_dragDepth <= 0) { _dragDepth = 0; wrap.classList.remove('dragover'); } });
+    card.addEventListener('drop', (e) => {
+        e.preventDefault(); _dragDepth = 0; wrap.classList.remove('dragover');
+        const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+        if (f) loadCropImage(f);
+    });
+
+    // Crop modal controls.
+    const frame = document.getElementById('crop-frame');
+    const zoom  = document.getElementById('crop-zoom');
+    zoom?.addEventListener('input', () => { _crop.scale = _crop.baseScale * parseFloat(zoom.value); _cropClamp(); _cropApply(); });
+    document.getElementById('crop-cancel')?.addEventListener('click', () => document.getElementById('crop-modal').classList.remove('active'));
+    document.getElementById('crop-confirm')?.addEventListener('click', confirmCrop);
+
+    // Pan (mouse + touch) and wheel-zoom.
+    const down = (cx, cy) => { _crop.dragging = true; _crop.lastX = cx; _crop.lastY = cy; };
+    const move = (cx, cy) => { if (!_crop.dragging) return; _crop.x += cx - _crop.lastX; _crop.y += cy - _crop.lastY; _crop.lastX = cx; _crop.lastY = cy; _cropClamp(); _cropApply(); };
+    const up = () => { _crop.dragging = false; };
+    frame?.addEventListener('mousedown', (e) => { e.preventDefault(); down(e.clientX, e.clientY); });
+    window.addEventListener('mousemove', (e) => move(e.clientX, e.clientY));
+    window.addEventListener('mouseup', up);
+    frame?.addEventListener('touchstart', (e) => down(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+    frame?.addEventListener('touchmove',  (e) => move(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+    frame?.addEventListener('touchend', up, { passive: true });
+    frame?.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        const z = Math.max(1, Math.min(3, parseFloat(zoom.value) - e.deltaY * 0.001));
+        zoom.value = z; _crop.scale = _crop.baseScale * z; _cropClamp(); _cropApply();
+    }, { passive: false });
+
+    // On close, archive this session as an "invoice" (stats + optional photo) to Firebase.
+    document.getElementById('success-close')?.addEventListener('click', saveInvoice);
+}
+
+// ── Invoice archive: save each end-card (stats + optional photo) to Firebase ──
+// Cost-friendly RTDB layout (no live listeners; one-shot get()s only):
+//   dashboards/{uid}/invoices/{finishMs}      = { mode, task, minutes, finishMs, hasPhoto }  ← light, listed
+//   dashboards/{uid}/invoicePhotos/{finishMs} = "<small JPEG dataURL>"                         ← heavy, lazy-loaded
+let _pendingInvoice = null;
+const INVOICE_LIMIT = 60;   // browser shows the most-recent N
+
+// Downscale + recompress the card photo to a small 4:3 thumbnail for storage.
+function _makeThumb(dataUrl, cb) {
+    const img = new Image();
+    img.onload = () => {
+        try {
+            const W = 320, H = 240;
+            const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+            cv.getContext('2d').drawImage(img, 0, 0, W, H);
+            cb(cv.toDataURL('image/jpeg', 0.55));
+        } catch (_) { cb(null); }
+    };
+    img.onerror = () => cb(null);
+    img.src = dataUrl;
+}
+
+function saveInvoice() {
+    if (!dashTrackingEnabled() || !_pendingInvoice) return;
+    const inv = _pendingInvoice; _pendingInvoice = null;
+    if ((inv.minutes || 0) * 60000 < DASH_MIN_SESSION_MS) return;   // 10-min floor — never archive short sessions
+    const uid = gameState.userId;
+    const taped = document.getElementById('success-photo-taped');
+    const imgEl = document.getElementById('success-photo-img');
+    const hasPhoto = taped && taped.style.display !== 'none' && imgEl && (imgEl.src || '').startsWith('data:');
+    const meta = { mode: inv.mode, task: inv.task || null, minutes: inv.minutes, finishMs: inv.finishMs, hasPhoto: !!hasPhoto };
+    if (!hasPhoto) {
+        update(ref(database), { [`dashboards/${uid}/invoices/${inv.finishMs}`]: meta }).catch(_dashErr('invoice'));
+        return;
+    }
+    _makeThumb(imgEl.src, (thumb) => {
+        const updates = {};
+        if (thumb) updates[`dashboards/${uid}/invoicePhotos/${inv.finishMs}`] = thumb;
+        else meta.hasPhoto = false;
+        updates[`dashboards/${uid}/invoices/${inv.finishMs}`] = meta;
+        update(ref(database), updates).catch(_dashErr('invoice'));
+    });
+}
+
+// ── Work-memories view (invoices) — lives inside the dashboard overlay ───────
+// Entry: a temp card peeps from the LEFT; clicking it (or swipe-right) slides the
+// dashboard off to the right and scatters/flips the real invoice cards into a grid.
+let _invOpen = false;     // is the invoices view showing?
+let _invBusy = false;     // mid-animation guard (ignore re-clicks)
+let _invAnimTimer = null; // cleanup timer for the scatter/flip classes
+
+function dashOpenInvoices() {
+    if (_invOpen || _invBusy || !_dashState.open) return;
+    const ov = document.getElementById('dashboard-overlay');
+    const view = document.getElementById('dash-invoice-view');
+    if (!ov || !view) return;
+    _invOpen = true; _invBusy = true;
+    dashSound('paperSwipe');
+    // Phase A — smoothly slide the dashboard + to-do away (anticipation easing) while
+    // the clicked invoice glides to dead-centre and resets its rotation (CSS handles
+    // both via the `.invoices-open` class).
+    ov.classList.add('invoices-open');
+    view.style.display = 'flex';
+    // Build the grid now (cards hidden) so slot positions are measurable.
+    dashBuildInvoiceGrid().then((vp) => {
+        if (!_invOpen) { _invBusy = false; return; }
+        requestAnimationFrame(() => view.classList.add('show'));
+        // Phase B — after Phase A settles, deal the cards out one-by-one (each flips in),
+        // and finally the clicked peep itself flips into the LAST slot.
+        const PHASE_A = 560;
+        setTimeout(() => { if (_invOpen) dashRunRevealSequence(vp); }, PHASE_A);
+        setTimeout(() => { _invBusy = false; }, PHASE_A + vp.length * 90 + 700);
+    });
+}
+
+// Build the grid with every card hidden; below-the-fold cards just appear at rest
+// (virtualization). Returns the in-viewport cards in order (these get the animation).
+function dashBuildInvoiceGrid() {
+    return new Promise((resolve) => {
+        const grid = document.getElementById('dash-invoice-grid');
+        if (!grid) { resolve([]); return; }
+        grid.innerHTML = '<div class="inv-empty">…</div>';
+        get(ref(database, `dashboards/${dashViewUid()}/invoices`)).then(snap => {
+            const raw = snap.val() || {};
+            const list = Object.values(raw).filter(Boolean).sort((a, b) => b.finishMs - a.finishMs).slice(0, INVOICE_LIMIT);
+            if (!list.length) { grid.innerHTML = '<div class="inv-empty">لا توجد ذكريات عمل محفوظة بعد</div>'; resolve([]); return; }
+            grid.innerHTML = list.map(renderInvoiceCard).join('');
+            const cards = Array.from(grid.querySelectorAll('.inv-card'));
+            const cx = window.innerWidth / 2, cy = window.innerHeight / 2;   // peep centre
+            const vp = [];
+            cards.forEach((card) => {
+                card.classList.add('inv-hidden');
+                const r = card.getBoundingClientRect();
+                if (r.top < window.innerHeight + 40) {
+                    // offset so the card STARTS at the peep's centre, then deals out to its slot
+                    card.style.setProperty('--dx', (cx - (r.left + r.width / 2)) + 'px');
+                    card.style.setProperty('--dy', (cy - (r.top + r.height / 2)) + 'px');
+                    vp.push(card);
+                }
+            });
+            cards.forEach((card) => { if (vp.indexOf(card) === -1) card.classList.remove('inv-hidden'); });
+            _lazyLoadInvoicePhotos();
+            resolve(vp);
+        }).catch(() => { grid.innerHTML = '<div class="inv-empty">تعذّر التحميل</div>'; resolve([]); });
+    });
+}
+
+// Deal the in-viewport cards out one-by-one (each 3D-flips in), and finally the clicked
+// peep itself flips into the LAST slot — "it becomes the last one in order", like the
+// top of a stack settling into place once everything below it is sorted out.
+function dashRunRevealSequence(vp) {
+    const peep = document.getElementById('dash-invoice-peep');
+    if (!vp || !vp.length) { if (peep) peep.style.opacity = '0'; return; }
+    const STAG = 78;
+    const last = vp[vp.length - 1];
+    const others = vp.slice(0, -1);
+    others.forEach((card, i) => setTimeout(() => {
+        if (!_invOpen) return;
+        card.classList.remove('inv-hidden');
+        card.classList.add('inv-flipin');
+    }, i * STAG));
+    setTimeout(() => { if (_invOpen) dashPeepBecomeLast(peep, last); }, others.length * STAG + 40);
+}
+
+// The peep travels from centre to the last slot and squashes away; the real last card
+// flips into its place — so the clickable invoice visually becomes that final card.
+function dashPeepBecomeLast(peep, lastCard) {
+    if (!lastCard) return;
+    if (!peep) { lastCard.classList.remove('inv-hidden'); lastCard.classList.add('inv-flipin'); return; }
+    const pr = peep.getBoundingClientRect();
+    const lr = lastCard.getBoundingClientRect();
+    peep.style.setProperty('--tx', ((lr.left + lr.width / 2) - (pr.left + pr.width / 2)) + 'px');
+    peep.style.setProperty('--ty', ((lr.top + lr.height / 2) - (pr.top + pr.height / 2)) + 'px');
+    peep.classList.add('inv-peep-deliver');
+    setTimeout(() => {
+        if (!_invOpen) return;   // closed mid-animation — leave the peep for the reset
+        peep.style.opacity = '0';
+        // The peep already squashed flat; the real card does only the SECOND half of the
+        // spin (0→1) so the handoff reads as exactly ONE flip, not two.
+        lastCard.classList.remove('inv-hidden');
+        lastCard.classList.add('inv-flipin-last');
+    }, 300);
+}
+
+function dashCloseInvoices(instant) {
+    const ov = document.getElementById('dashboard-overlay');
+    const view = document.getElementById('dash-invoice-view');
+    const grid = document.getElementById('dash-invoice-grid');
+    if (!ov || !_invOpen) return;
+    _invOpen = false;
+    _invResetPeep();
+    if (instant) { ov.classList.remove('invoices-open'); if (view) { view.classList.remove('show'); view.style.display = 'none'; } if (grid) grid.innerHTML = ''; _invBusy = false; return; }
+    _invBusy = true;
+    dashSound('paperSwipe');
+    _invPeepUnderDashboard();                  // keep the peep hidden under the returning dashboard
+    ov.classList.remove('invoices-open');      // dashboard + to-do slide back in
+    if (view) view.classList.remove('show');   // fade the grid out as the dashboard returns
+    setTimeout(() => {
+        if (view) view.style.display = 'none';
+        if (grid) grid.innerHTML = '';
+    }, 520);
+    // Once the dashboard has settled back, the invoice peep slides out from under it again.
+    setTimeout(() => { if (_dashState.open && !_invOpen) dashSlidePeepOut(); _invBusy = false; }, 640);
+}
+
+// Reset the peep back to a clean (visible, no-deliver, no inline transform) state.
+function _invResetPeep() {
+    const peep = document.getElementById('dash-invoice-peep');
+    if (!peep) return;
+    peep.classList.remove('inv-peep-deliver');
+    peep.style.opacity = '';
+    peep.style.transition = '';
+    peep.style.transform = '';
+    peep.style.removeProperty('--tx');
+    peep.style.removeProperty('--ty');
+}
+
+// Park the peep hidden (opacity 0) under the dashboard (centred, behind the main paper)
+// with no transition. It stays invisible during the dashboard's own intro/return so you
+// never glimpse it before its slide-out begins.
+function _invPeepUnderDashboard() {
+    const peep = document.getElementById('dash-invoice-peep');
+    if (!peep) return;
+    peep.style.transition = 'none';
+    peep.style.transform = 'translate(-50%, -50%) rotate(0deg)';
+    peep.style.opacity = '0';
+    void peep.offsetWidth;   // commit the start frame
+}
+
+// Slide the peep out from under the dashboard to its resting left peek. It becomes
+// visible instantly (still hidden behind the dashboard paper), then slides into view.
+function dashSlidePeepOut() {
+    const peep = document.getElementById('dash-invoice-peep');
+    if (!peep) return;
+    peep.style.opacity = '1';     // appear instantly while still behind the dashboard
+    void peep.offsetWidth;
+    peep.style.transition = '';   // back to the .inv-peep CSS transition
+    peep.style.transform = '';    // → the side-main peek position (slides out from under)
+}
+
+// Hard reset (no animation) — used when the dashboard itself opens/closes.
+function dashResetInvoices() {
+    _invOpen = false; _invBusy = false;
+    clearTimeout(_invAnimTimer);
+    const ov = document.getElementById('dashboard-overlay');
+    const view = document.getElementById('dash-invoice-view');
+    const grid = document.getElementById('dash-invoice-grid');
+    ov?.classList.remove('invoices-open');
+    _invResetPeep();
+    if (view) { view.classList.remove('show'); view.style.display = 'none'; }
+    if (grid) grid.innerHTML = '';
+}
+
+// Delete one saved memory (metadata + photo) after the per-card confirm.
+function dashDeleteInvoice(fm, card) {
+    if (!fm || dashReadOnly() || !gameState.userId) return;
+    const uid = gameState.userId;
+    update(ref(database), {
+        [`dashboards/${uid}/invoices/${fm}`]: null,
+        [`dashboards/${uid}/invoicePhotos/${fm}`]: null,
+    }).catch(_dashErr('invoice-del'));
+    dashSound('paperExit');
+    if (card) {
+        card.style.transition = 'transform 0.3s ease, opacity 0.3s ease';
+        card.style.transform = 'scale(0.6)'; card.style.opacity = '0';
+        setTimeout(() => card.remove(), 300);
+    }
+}
+
+// The memory cards are the end-of-session receipt CROPPED at the dashed line under
+// "جزيتم خيرًا" — so no avatar / أحسنتم / جزيتم خيرًا; the card starts at the photo,
+// then stats, note, date, barcode. A dashed line sits at the very top as the crop edge.
+// `data` null → blank template (the clickable peep): placeholder photo + scribble text.
+function _invReceiptHTML(data) {
+    const ph = !data;
+    const photo = ph
+        ? `<div class="inv-r-photo inv-r-photo-blank"><span class="inv-r-photo-ico">📷</span></div>`
+        : (data.photoHtml || `<div class="inv-r-photo inv-r-photo-blank"><span class="inv-r-photo-ico">📷</span></div>`);
+    const valHtml  = ph ? `<span class="inv-scrib" style="width:62%"></span>` : escapeDashHtml(data.time);
+    const subHtml  = ph ? `<span class="inv-scrib" style="width:38%"></span>` : escapeDashHtml(data.tag);
+    const noteHtml = ph ? `<span class="inv-scrib" style="width:70%"></span>` : (data.task ? escapeDashHtml(data.task) : 'جلسة عمل');
+    const dateHtml = ph ? '' : escapeDashHtml(data.dateStr);
+    return `<div class="inv-receipt">
+        <div class="inv-r-crop"></div>
+        ${photo}
+        <div class="inv-r-stats">
+            <div class="inv-r-stats-label">إجمالي وقت العمل</div>
+            <div class="inv-r-stats-value">${valHtml}</div>
+            <div class="inv-r-stats-sub">${subHtml}</div>
+        </div>
+        <div class="inv-r-note">${noteHtml}</div>
+        <div class="inv-r-date">${dateHtml}</div>
+        <div class="inv-r-barcode"><div class="inv-r-bars"></div><div class="inv-r-num">MDWNH · 1445</div></div>
+    </div>`;
+}
+
+function renderInvoiceCard(inv) {
+    const d = new Date(inv.finishMs);
+    let dateStr; try { dateStr = d.toLocaleDateString('ar-EG', { day: 'numeric', month: 'long', year: 'numeric' }); }
+    catch (_) { dateStr = ''; }
+    const time = formatDurationArabic(inv.minutes || 0);
+    const tag = inv.mode === 'free' ? 'وضع حر' : 'بومودورو';
+    const photoHtml = inv.hasPhoto
+        ? `<div class="inv-r-photo" data-fm="${inv.finishMs}"><div class="inv-spin"></div></div>`
+        : `<div class="inv-r-photo inv-r-photo-blank"><span class="inv-r-photo-ico">📋</span></div>`;
+    const back = _invReceiptHTML({ time, tag, task: inv.task, dateStr, photoHtml });
+    const front = _invReceiptHTML(null);
+    const fm = inv.finishMs;
+    return `<div class="inv-card">
+        <div class="inv-flip">
+            <div class="inv-face inv-front">${front}</div>
+            <div class="inv-face inv-back">${back}</div>
+        </div>
+        <button class="inv-del" data-fm="${fm}" aria-label="حذف الذكرى">✕</button>
+        <div class="inv-confirm">
+            <div class="inv-confirm-q">حذف هذه الذكرى؟</div>
+            <div class="inv-confirm-row">
+                <button class="inv-confirm-yes" data-fm="${fm}">حذف</button>
+                <button class="inv-confirm-no">إلغاء</button>
+            </div>
+        </div>
+    </div>`;
+}
+
+// Fill the peep with a blank (placeholder) cropped receipt — identical in size/look to
+// a grid memory card, but with a placeholder photo + scribble text instead of data.
+function dashRenderInvoicePeep() {
+    const peep = document.getElementById('dash-invoice-peep');
+    if (peep) peep.innerHTML = _invReceiptHTML(null);
+}
+
+// Lazy-load each card's photo only when it scrolls into view (keeps downloads minimal).
+function _lazyLoadInvoicePhotos() {
+    const root = document.getElementById('dash-invoice-grid');
+    const slots = document.querySelectorAll('#dash-invoice-grid .inv-r-photo[data-fm]');
+    const load = (slot) => {
+        const fm = slot.dataset.fm; if (!fm) return;
+        slot.removeAttribute('data-fm');
+        get(ref(database, `dashboards/${dashViewUid()}/invoicePhotos/${fm}`)).then(s => {
+            const url = s.val();
+            if (url) { slot.innerHTML = `<img src="${url}" alt="">`; }
+            else { slot.classList.add('inv-r-photo-blank'); slot.innerHTML = '<span class="inv-r-photo-ico">📋</span>'; }
+        }).catch(() => { slot.classList.add('inv-r-photo-blank'); slot.innerHTML = '<span class="inv-r-photo-ico">📋</span>'; });
+    };
+    if ('IntersectionObserver' in window) {
+        const io = new IntersectionObserver((entries, obs) => {
+            entries.forEach(en => { if (en.isIntersecting) { load(en.target); obs.unobserve(en.target); } });
+        }, { root, rootMargin: '200px' });
+        slots.forEach(s => io.observe(s));
+    } else {
+        slots.forEach(load);
+    }
+}
+
+// Inject a batch of mock invoices for testing the grid/virtualization. Restricted to
+// Siraj test ghosts (their dashboard node is ephemeral — removed on disconnect), so it
+// never pollutes the owner's real work memories. Run once per ghost session.
+const DASH_MOCK_INVOICE_COUNT = 80;
+function _mockInvoicePhoto(i) {
+    try {
+        const cv = document.createElement('canvas'); cv.width = 80; cv.height = 60;
+        const g = cv.getContext('2d').createLinearGradient(0, 0, 80, 60);
+        const hue = (i * 47) % 360;
+        g.addColorStop(0, `hsl(${hue},55%,55%)`); g.addColorStop(1, `hsl(${(hue + 60) % 360},55%,40%)`);
+        const ctx2 = cv.getContext('2d'); ctx2.fillStyle = g; ctx2.fillRect(0, 0, 80, 60);
+        return cv.toDataURL('image/jpeg', 0.5);
+    } catch (_) { return null; }
+}
+function dashSeedMockInvoices() {
+    if (!gameState.isSirajGhost || !gameState.userId) return;
+    const uid = gameState.userId;
+    const tasks = ['مراجعة الكود', 'قراءة كتاب', 'حفظ القرآن', 'حل تمارين الرياضيات', 'كتابة المقال',
+        'تصميم الواجهة', 'مذاكرة الفيزياء', 'تنظيم المهام', 'بحث علمي', 'تعلّم لغة جديدة', 'مراجعة عامة'];
+    const updates = {};
+    const now = Date.now();
+    for (let i = 0; i < DASH_MOCK_INVOICE_COUNT; i++) {
+        const fm = now - (i + 1) * 3600000 * (2 + (i % 6));
+        const mode = i % 3 === 0 ? 'free' : 'pomodoro';
+        const minutes = 15 + ((i * 13) % 170);
+        const hasPhoto = i % 4 === 0;
+        updates[`dashboards/${uid}/invoices/${fm}`] = { mode, task: tasks[i % tasks.length], minutes, finishMs: fm, hasPhoto };
+        if (hasPhoto) { const ph = _mockInvoicePhoto(i); if (ph) updates[`dashboards/${uid}/invoicePhotos/${fm}`] = ph; }
+    }
+    update(ref(database), updates).catch(_dashErr('mock-invoices'));
 }
 
 // EOF
