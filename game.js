@@ -193,12 +193,35 @@ function clearDiscordSession() {
     localStorage.removeItem(DISCORD_SESSION_KEY);
 }
 
+// Cache user info inside the session record so it survives API failures.
+function _cacheDiscordUser(user) {
+    try {
+        const raw = localStorage.getItem(DISCORD_SESSION_KEY);
+        if (!raw) return;
+        const s = JSON.parse(raw);
+        s.cachedUser = user;
+        localStorage.setItem(DISCORD_SESSION_KEY, JSON.stringify(s));
+    } catch {}
+}
+function _loadCachedDiscordUser() {
+    try {
+        const raw = localStorage.getItem(DISCORD_SESSION_KEY);
+        if (!raw) return null;
+        return JSON.parse(raw).cachedUser || null;
+    } catch { return null; }
+}
+
+// Returns the user object on success.
+// Returns the symbol DISCORD_TOKEN_REVOKED when Discord says 401 (token truly dead).
+// Returns null on network error / temporary failure — caller should NOT clear the session.
+const DISCORD_TOKEN_REVOKED = Symbol('revoked');
 async function fetchDiscordUser(token) {
     try {
         const res = await fetch('https://discord.com/api/users/@me', {
             headers: { Authorization: `Bearer ${token}` }
         });
-        if (!res.ok) return null;
+        if (res.status === 401) return DISCORD_TOKEN_REVOKED;
+        if (!res.ok) return null; // 429, 5xx, etc. — transient, keep session
         const data = await res.json();
         let avatarUrl;
         if (data.avatar) {
@@ -213,7 +236,7 @@ async function fetchDiscordUser(token) {
             username: data.global_name || data.username,
             avatar:   avatarUrl
         };
-    } catch { return null; }
+    } catch { return null; } // network error — treat as transient, keep session
 }
 
 // Parse #access_token=... from URL on OAuth callback. Saves session + cleans URL.
@@ -356,13 +379,29 @@ async function initDiscordOAuth() {
         return;
     }
 
-    // Keep spinner while we validate the token + read Firebase
-    const user = await fetchDiscordUser(session.token);
-    if (!user) {
+    // Keep spinner while we validate the token + read Firebase.
+    // fetchDiscordUser returns: user object | DISCORD_TOKEN_REVOKED | null (network error).
+    const fetchResult = await fetchDiscordUser(session.token);
+    let user;
+    if (fetchResult === DISCORD_TOKEN_REVOKED) {
+        // Discord explicitly rejected the token — it's dead, force re-auth.
         clearDiscordSession();
         loading?.classList.remove('active');
         lobby?.classList.add('active');
         return;
+    } else if (fetchResult === null) {
+        // Network failure / Discord API down — don't kill the session.
+        // Fall back to the user info we cached last time it succeeded.
+        user = _loadCachedDiscordUser();
+        if (!user) {
+            // No cache at all (e.g. first ever load with no network) — can't proceed.
+            loading?.classList.remove('active');
+            lobby?.classList.add('active');
+            return;
+        }
+    } else {
+        user = fetchResult;
+        _cacheDiscordUser(user); // keep cache fresh for future network failures
     }
 
     const resolvedLobby = await resolveUserLobby(user.id);
