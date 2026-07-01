@@ -3969,10 +3969,13 @@ body.is-mobile .modal-overlay, body.reduced-gfx .modal-overlay {
 
 /* Controls INSIDE the card (duration buttons, mode-select cards) are their own,
    separately-transparent layers — solidify those too so text sits on a clear
-   surface, not just the outer card. */
-body.is-mobile .opt-btn,       body.reduced-gfx .opt-btn,
-body.is-mobile .custom-input,  body.reduced-gfx .custom-input,
-body.is-mobile .mode-card,     body.reduced-gfx .mode-card {
+   surface, not just the outer card. :not(.active) so the SELECTED duration
+   button keeps its bright white background (its own .opt-btn.active rule) —
+   this selector's specificity would otherwise beat it and leave dark text on
+   a near-invisible background, reading as black instead of white/selected. */
+body.is-mobile .opt-btn:not(.active),       body.reduced-gfx .opt-btn:not(.active),
+body.is-mobile .custom-input,               body.reduced-gfx .custom-input,
+body.is-mobile .mode-card,                  body.reduced-gfx .mode-card {
     background-color: rgba(255,255,255,0.14);
 }
 
