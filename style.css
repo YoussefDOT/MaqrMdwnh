@@ -2485,6 +2485,49 @@ body.is-mobile .race-hud { top: 70px; }
 .sp-chip-icon { margin-left: auto; font-size: 13px; color: rgba(59,185,171,0.7); font-weight: 700; }
 
 /* ── Invite toast ── */
+/* Session-not-saved toast — small glass pill, bottom-centre, bouncy sequential in/out.
+   Hidden by default (no .show); JS toggles .show to reveal, .hide to play the exit. */
+.session-toast {
+    position: fixed; left: 50%; bottom: 28px; z-index: 9200;
+    display: none; align-items: center; gap: 9px;
+    max-width: min(88vw, 420px);
+    padding: 11px 20px 11px 16px;
+    background: rgba(18,18,18,0.72);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255,255,255,0.09);
+    border-radius: 50px;
+    box-shadow: 0 6px 26px rgba(0,0,0,0.34);
+    color: rgba(255,255,255,0.9); direction: rtl; pointer-events: none;
+    transform: translateX(-50%);
+}
+.session-toast.show, .session-toast.hide { display: flex; }
+.session-toast.show { animation: sessionToastIn 0.42s cubic-bezier(0.34,1.56,0.64,1) both; }
+.session-toast.hide { animation: sessionToastOut 0.34s cubic-bezier(0.5,0,0.75,0.2) both; }
+.session-toast-icon {
+    flex-shrink: 0; display: flex; color: #f0c674;
+    transform: scale(0);
+}
+.session-toast-text { font-size: 13.5px; font-weight: 600; white-space: nowrap; opacity: 0; }
+.session-toast.show .session-toast-icon { animation: sessionChipPop 0.4s cubic-bezier(0.34,1.7,0.5,1) 0.06s both; }
+.session-toast.show .session-toast-text { animation: sessionChipPop 0.4s cubic-bezier(0.34,1.7,0.5,1) 0.15s both; }
+.session-toast.hide .session-toast-icon,
+.session-toast.hide .session-toast-text { opacity: 1; transform: none; }
+@keyframes sessionToastIn {
+    from { opacity: 0; transform: translateX(-50%) translateY(22px) scale(0.9); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+@keyframes sessionToastOut {
+    from { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateX(-50%) translateY(18px) scale(0.92); }
+}
+@keyframes sessionChipPop {
+    from { opacity: 0; transform: translateY(7px) scale(0.6); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+body.is-mobile .session-toast { bottom: 92px; }
+body.is-mobile .session-toast-text { font-size: 12.5px; white-space: normal; text-align: center; }
+
 .sp-invite-toast {
     position: fixed;
     bottom: 90px; right: 20px;
@@ -5512,6 +5555,7 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
     background-size: 100% 100%, 1.5px 100%, 100% 100%;
     background-position: 0 0, calc(100% - 14px) 0, 0 0;
     background-attachment: local, local, local;   /* texture scrolls with the content */
+    word-spacing: 3px;   /* airier hand-written spacing between Arabic words */
 }
 .dash-day-content > * { flex-shrink: 0; }
 
@@ -5546,10 +5590,11 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
 }
 .dash-paper-date {
     font-size: 26px; font-weight: 800; text-align: center; margin-bottom: 2px;
-    color: #4a3a26;
+    color: #4a3a26; line-height: 34px;   /* one grid row — baseline snapped in JS */
 }
 .dash-section-title {
     font-size: 18px; font-weight: 800; color: #6b5536;
+    line-height: 34px;   /* one grid row so the heading baseline lands on a ruled line */
     margin: 5px 0 3px;   /* no dashed divider — the ruled texture is the only line system */
 }
 
@@ -5580,7 +5625,7 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
     width: 100%; min-height: 68px; height: 68px; max-height: 140px; resize: none; border: none; outline: none;
     padding: 0; background: transparent; box-sizing: border-box;
     font-family: 'Methlama','Rubik',sans-serif; font-size: 17px; font-weight: 500;
-    color: #3a2f22; line-height: 34px; direction: rtl;
+    color: #3a2f22; line-height: 34px; direction: rtl; word-spacing: 3px;
     /* No ruled lines of its own — the journal leans on the paper texture showing through.
        JS snaps the textarea's top to the 34px grid so the text sits on those lines. */
 }
@@ -5591,15 +5636,15 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
    5 items fit without scrolling — no dotted dividers. */
 .dash-day-tasks { margin-top: 4px; column-count: 2; column-gap: 18px; }
 .dash-task-row {
-    display: flex; align-items: center; gap: 8px; padding: 4px 0;
-    font-size: 15px; break-inside: avoid;
+    display: flex; align-items: center; gap: 8px; padding: 0; height: 34px;
+    font-size: 15px; break-inside: avoid;   /* each task = one grid row, sits on a ruled line */
 }
 .dash-task-dot { width: 7px; height: 7px; border-radius: 50%; background: #c08a3e; flex-shrink: 0; }
 .dash-task-check {
     width: 20px; height: 20px; flex-shrink: 0; border-radius: 6px; background: #c9a55f; color: #fff;
     font-size: 13px; font-weight: 800; display: flex; align-items: center; justify-content: center;
 }
-.dash-task-name { flex: 1; font-weight: 600; color: #4a3a26; line-height: 1.3; }
+.dash-task-name { flex: 1; font-weight: 600; color: #4a3a26; line-height: 34px; }
 .dash-empty { column-span: all; }
 .dash-task-meta { font-size: 13px; color: #9b815a; font-weight: 600; }
 .dash-empty { color: #b3a079; font-size: 15px; padding: 8px 0; font-style: italic; }
@@ -5607,7 +5652,7 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
 /* To-Do paper */
 /* To-do paper carries the same ruled-line notebook texture as the day paper. */
 .dash-todo-paper {
-    padding: 26px 24px; display: flex; flex-direction: column;
+    padding: 26px 24px; display: flex; flex-direction: column; word-spacing: 3px;
     background-image:
         radial-gradient(circle at 20% 12%, rgba(0,0,0,0.02), transparent 60%),
         linear-gradient(rgba(176, 80, 70, 0.13), rgba(176, 80, 70, 0.13)),
@@ -5623,7 +5668,7 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
 .dash-todo-list { flex: 1; }
 /* Tasks sit ON the printed 34px lines (rows tile on the grid, aligned in JS). The
    texture line is the writing line — no separate underline. */
-.dash-todo-row { display: flex; align-items: flex-end; gap: 12px; height: 34px; margin: 0; }
+.dash-todo-row { display: flex; align-items: center; gap: 12px; height: 34px; margin: 0; }
 .dash-todo-check {
     width: 24px; height: 24px; flex-shrink: 0; border-radius: 7px; cursor: pointer; align-self: center;
     border: 2px solid #b08a4e; background: transparent; color: #6b5536;
@@ -5637,7 +5682,7 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
        next font in the stack — Jacquard 12 (Google Font) instead of plain Rubik, so
        English tasks still look hand-styled instead of default sans-serif. */
     flex: 1; outline: none; font-family: 'Methlama','Jacquard 12','Rubik',sans-serif; font-size: 19px;
-    font-weight: 500; color: #3a2f22; padding: 0 2px 4px; line-height: 28px;
+    font-weight: 500; color: #3a2f22; padding: 0 2px; line-height: 34px; word-spacing: 3px;
 }
 .dash-todo-row.done .dash-todo-line { text-decoration: line-through; color: #9b815a; }
 .dash-todo-line:empty::before { content: attr(data-placeholder); color: #c0ac82; }

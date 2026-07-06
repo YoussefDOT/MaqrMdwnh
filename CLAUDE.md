@@ -48,15 +48,53 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 ## File Map
 
 ```
-game.js        ~10500 lines — all game logic, classes, Firebase, rendering
-index.html       ~900 lines  — single page; all panels/overlays live here
-style.css       ~4400 lines  — all styling; mobile rules under body.is-mobile
+game.js        ~19000 lines — all game logic, classes, Firebase, rendering
+index.html      ~1400 lines — single page; all panels/overlays live here
+style.css       ~6300 lines — all styling; mobile rules under body.is-mobile
 firebase-config.js           — exports { database, ref, onValue, update, get, onDisconnect, set }
+sw.js                        — service worker: cache-first for Sound/Art/Fonts (see Loading strategy)
 Sound/                       — UI/minigame sound effects (.mp3)
 Sound/Focus Sounds/          — ambient focus audio files (.mp3)
 Art/                         — sprite sheets, background image, assets
 pomo9.json                   — background tilemap/layout (don't edit)
 ```
+
+---
+
+## Loading Strategy (keep the first load FAST)
+
+The repo carries ~60 MB of media (Sound/ 43 MB, Art/ 18 MB). **Nothing heavy may load
+before the game is playable.** The current model:
+
+- **At page parse**: nothing downloads except CSS, logo, and game.js. All
+  `gameState.sounds` audio elements are created via `_lazyAudio()` with
+  `preload='none'` — they must NOT fetch at parse (45 parallel MP3 fetches used to
+  crush the login screen). **Never add a `new Audio(src)` at module scope or set
+  `preload='auto'` outside `warmGameSounds()`.**
+- **After spawn** (`startGame` restore): `warmGameSounds()` preloads the core in-game
+  SFX immediately (kidnap/timers/prayer/invites) and everything else on
+  `requestIdleCallback`. New SFX just need the standard 4-step pattern — the warm-up
+  loops over all of `gameState.sounds` automatically.
+- **Ambient focus sounds are lazy** (`ensureFocusBuffer(key)`): a buffer downloads +
+  decodes only when that sound is active (restored mix) or first toggled. Toggling is
+  still instant — `startSound` streams via a media element and hands off to the
+  seamless buffer loop when it arrives. Never restore the old "download all 7 on init"
+  behaviour (~21 MB + a huge decode on weak phones).
+- **Race track** (`Art/RaceTrack Var1.png`, 6 MB + CPU-heavy pixel classification):
+  `loadRaceTrackAsset()` is idempotent and lazy — kicked on idle after spawn and
+  ensured by every race entry path. Never call it in `init()`.
+- **Service worker (`sw.js`)**: cache-first for `Sound/ Art/ Fonts/` + image/audio/font
+  extensions; skips Range requests (Safari audio streaming) and everything else passes
+  through (code is never served stale). **If you replace a media file, bump its `?v=`
+  query in the code or bump `CACHE_VERSION` in sw.js**, or returning visitors keep the
+  old file.
+- **Login/spawn network path is parallel**: `initDiscordOAuth` resolves the lobby
+  concurrently with the Discord token check (cached user id); `startGame` fetches
+  `pomodoro` + `users/{uid}` + `dashboards/{uid}/profile` in one `Promise.all`;
+  `enterGameAsDiscordUser` reuses the `resolveUserLobby` snapshot and doesn't await its
+  profile write. Don't add serial `await get(...)` chains to this path.
+- **Exit**: `doLogout` reloads after max 2s even if writes haven't acked (armed
+  `onDisconnect` ops cover the cleanup server-side).
 
 ---
 
@@ -116,28 +154,27 @@ Android reports **stale** `innerWidth/innerHeight` for up to ~1s after rotating,
 ### How it works
 
 1. `init()` creates `AudioContext` + `masterGain`, then calls `loadFocusSoundBuffers()` async.
-2. `loadFocusSoundBuffers()` fetches all 7 MP3 files → `decodeAudioData` → stores in `this.focusBuffers[key]`.
-3. `startSound(name)` for file-based sounds: creates `AudioBufferSourceNode`, sets `loop = true`, uses `loopStart`/`loopEnd` to skip file fade-in/fade-out edges (`fadePad = Math.min(2.0, duration * 0.08)`), calls `source.start(0, fadePad)`.
+2. `loadFocusSoundBuffers()` only prefetches buffers for sounds already **active**; everything else loads on demand via `ensureFocusBuffer(key)` (fetch → `decodeAudioData` → `this.focusBuffers[key]`). See **Loading Strategy**.
+3. `startSound(name)` for file-based sounds: buffer ready → seamless crossfade loop; buffer missing → **streams instantly** through a media element, then `_handoffToBuffer` crossfades to the loop when the decode lands.
 4. Gain chain: `source → gainNode (sound.volume * baseVolumeScale) → masterGain (overallVolume) → destination`.
-5. `saveToFirebase()` writes `users/{userId}/focusMix` with active/volume per sound + overall volume.
-6. `applyState()` reads it back on login and restores UI + state. Old `stream` key data is silently ignored (safe migration from old key name).
+5. `saveToFirebase()` writes `dashboards/{uid}/profile/focusMix` with active/volume per sound + overall volume (private data — deliberately NOT under the live-listened `/users` node).
+6. `applyState()` reads it back on login (from the profile get in `startGame`) and restores UI + state, prefetching buffers for the active sounds.
 
 ### baseVolumeScale
 File-based sounds use `1.0` (full file level). `plane` (synthesized) uses `0.09` (synthesized noise is much louder raw).
 
 ### Sound preloading and background-tab rules
-**All sounds must be preloaded.** Every new sound file must be:
-1. Added as `new Audio('Sound/Filename.mp3')` in `gameState.sounds`
+**Sounds preload AFTER spawn, never at page parse** (see Loading Strategy). Every new sound file must be:
+1. Added as `_lazyAudio('Sound/Filename.mp3')` in `gameState.sounds` (`preload='none'` at parse; `warmGameSounds()` upgrades it on idle after spawn — add it to the priority list there only if it can fire within seconds of spawning)
 2. Added to `FocusAudioEngine.buffers` with a `null` entry
-3. Loaded in `loadSoundEffects()` via `await loadBuffer(...)`
-4. Preloaded via `gameState.sounds.X.preload = 'auto'` after `gameState` declaration
+3. Loaded in `loadSoundEffects()` via `await loadBuffer(...)` (or deferred like the boss set)
 
 **Sounds must work in background tabs.** Use `focusAudioEngine.playEffect('key')` (Web Audio API) rather than `playSoundRobust(gameState.sounds.X)` (HTMLAudioElement) for any sound that must fire when the tab is not focused. HTMLAudioElement playback can be throttled/blocked in background tabs; Web Audio nodes play regardless.
 
 **`ctx.resume()` is async — await it before playing.** Always chain: `ctx.resume().then(_doPlay)`. The `playEffect()` method already does this — never rewrite it to fire-and-forget.
 
 ### Ambient sound loading (mobile-safe)
-`loadFocusSoundBuffers()` loads all 7 MP3s **in parallel** via `Promise.all`. Do not rewrite as sequential (`for...await`).
+Ambient buffers are **lazy** (`ensureFocusBuffer`) — only actively-used sounds download/decode. Do not restore the old "fetch all 7 at init" behaviour, and never make loading sequential (`for...await`) — one slow file must not block another.
 
 **`visibilitychange` restart rule**: Only restart when `ctx.state === 'suspended'`. Running context means sounds are still alive — do NOT restart (that resets loop position).
 
@@ -280,15 +317,18 @@ A laptop must **never** linger as a claimed-but-empty "ghost" (a timer floating 
 
 | Helper | Role |
 |---|---|
-| `persistReclaimSnapshot()` | Writes a **live** snapshot to `users/{uid}/lastPomoSession` with `abandonedAt: null`. Kept fresh so a disconnect only has to stamp the timestamp (no read-race on reload). |
-| `armSessionDisconnect()` | `onDisconnect(laptop).remove()` (free it) + `onDisconnect(lastPomoSession/abandonedAt).set(serverTimestamp)`. Cancels the **previous** laptop's remove if we relocated. |
-| `trackSessionForReclaim()` | persist + arm together. Called at pomo start, **every** `startPomodoroPhase`, free start, periodic `saveFreeModStateToFirebase` (15s), and at end of login restore. |
+| `persistReclaimSnapshot()` | Writes a **live** snapshot to `dashboards/{uid}/profile/lastPomoSession` (see `dashProfilePath()` — private data, zero fan-out) with `abandonedAt: null`. Kept fresh so a disconnect only has to stamp the timestamp (no read-race on reload). |
+| `armSessionDisconnect()` | `onDisconnect(laptop).remove()` (free it) + `onDisconnect(profile lastPomoSession/abandonedAt).set(serverTimestamp)`. Cancels the **previous** laptop's remove if we relocated. |
+| `trackSessionForReclaim()` | persist + arm together. Called at pomo start, **every** `startPomodoroPhase`, free start, periodic `saveFreeModStateToFirebase` (15s; the lobby-visible laptop **doc** inside it is throttled to 45s — nobody reads the live timer from it), and at end of login restore. |
 | `cancelSessionDisconnect(clearStash)` | Clean exit — cancels both handlers, optionally wipes the stash. Called from `exitPomoNow`, `endFreeMode`, natural completion (both work-end and break-end), and explicit `doLogout`. |
 | `reassertActiveSessionAfterReconnect()` | After a silent reconnect: re-claim our laptop (or **relocate** to a free one via `_relocateActiveSession` if it was taken during the dropout), persist a fresh snapshot, re-arm. |
 
 **Reclaim on login** (in `startGame`'s restore): only when `lastPomoSession.abandonedAt` is **set** (a live snapshot has it `null` → ignored) and within `RECLAIM_WINDOW_MS` (4h). **Prefers the original laptop** (`ls.laptopId` if free) else any free laptop; restores `mode==='free'` or pomo accordingly; seats the player at `laptop.sitX/sitY` and syncs position so all clients see them correctly on the new laptop. Stale (>4h) / no free device → discarded.
 
 **Pitfall (fixed):** never clear `lastPomoSession` to `null` and then arm only the `abandonedAt` child — a later disconnect then stamps a timestamp onto an empty object and the session is **lost**. Always re-**persist** a full live snapshot (`trackSessionForReclaim`), never `set(null)` while still in-session.
+
+### The private profile node — `dashboards/{uid}/profile` (`dashProfilePath()`)
+`focusMix`, `focusPlayer`, and `lastPomoSession` are **private** (only their owner ever reads them) yet used to live under `users/{uid}` — where every write fanned out to every client in both lobbies through the global `/users` listener, and where they inflated the initial `/users` snapshot everyone downloads at login. They now live under `dashboards/{uid}/profile` (nobody holds a live listener on `dashboards`; reads are one-shot `get()`s in `startGame`). A one-time migration in `startGame` copies any legacy values over and nulls the old keys. **Any NEW per-user private state that gets written more than ~once a day belongs here, not under `users/{uid}`.** Siraj ghosts self-clean (their whole `dashboards` node is removed on disconnect).
 
 ---
 
@@ -363,7 +403,9 @@ Prayer location stored in localStorage (`mdwnh_prayer_location`).
 4. **Do NOT use a small offset** — clients need the full 3.5s window for 3-2-1 countdown
 
 ### Race minigame
-Track is built from image pixel classification (`classifyRacePixel`). Physics: friction zones on/off-track. Camera rotates on mobile to always show car heading "up".
+Track is built from image pixel classification (`classifyRacePixel`); the 6 MB track PNG is **lazy-loaded** (`loadRaceTrackAsset()` — idempotent; idle after spawn + ensured on race entry). Physics: friction zones on/off-track. Camera rotates on mobile to always show car heading "up".
+
+**Car sync rides the WebSocket relay, NOT Firebase.** `syncRaceCar` sends `{t:'car', cuid, k:sessionKey, x,y,a,s,d,l,f,u}` over the presence socket ~11×/sec (`sendRaceCarWS`); `onRaceCarWS` merges it into `session.cars` (the same struct `updateRaceCarVisuals` lerps from). Firebase gets a **1s authoritative fallback** write (4/sec if the socket is down) so relay-less clients still see a working, choppier race. The field is `cuid` (not `uid`) on purpose so older clients drop the message instead of mistaking it for an avatar position. `listenToRace` keeps WS-fresh car positions when a fallback snapshot arrives (same anti-snap idea as avatars, `race._carWsAt`). **Never restore the old 90ms Firebase car writes** — every client in the lobby live-listens to the sessions node, so that was the app's most expensive Firebase pattern.
 
 ### Coffee minigame
 Sugar falls from top. `progress = (serverNow() - spawnTime) / fallDuration` — computed by all clients independently. First writer wins the catch. Bad sugars (14% chance) give −3 pts.
@@ -391,7 +433,7 @@ Sugar falls from top. `progress = (serverNow() - spawnTime) / fallDuration` — 
 
 ## Graphics Tiers & Mobile Performance
 
-Stored in `localStorage[SETTINGS_GRAPHICS_KEY]` as `'high' | 'low' | 'potato'`, or **absent = device-auto** (`graphicsTier()` → mobile `'low'`, desktop `'high'`). The settings toggle cycles only the three explicit tiers (عالية → منخفضة → بطاطس) — there is **no `'auto'` value/button** (it confused users: on a phone "auto" already = low, so the press looked like a no-op). Per-frame the loop caches `gameState._lowGfx = isReducedGraphics()` and `gameState._potato = isPotato()`; hot draw code reads those flags (never call the helpers per-draw — they hit localStorage).
+Stored in `localStorage[SETTINGS_GRAPHICS_KEY]` as `'high' | 'low' | 'potato'`, or **absent = device-auto** (`graphicsTier()` → mobile `'low'`, desktop `'high'`). The settings toggle cycles only the three explicit tiers (عالية → متوسطة → بطاطس) — there is **no `'auto'` value/button** (it confused users: on a phone "auto" already = low, so the press looked like a no-op). The loop caches `gameState._lowGfx/_potato/_disableIdleAnim/_hideNames` and re-reads localStorage only **once per second** (the settings toggles zero `gameState._settingsFlagsAt` so a change still applies next frame); hot draw code reads those flags (never call the helpers per-draw — they hit localStorage).
 
 | Helper | Meaning |
 |---|---|
@@ -399,9 +441,11 @@ Stored in `localStorage[SETTINGS_GRAPHICS_KEY]` as `'high' | 'low' | 'potato'`, 
 | `isPotato()` (بطاطس) | most aggressive; **additionally** drops the atmosphere gradients. For very weak phones. |
 | `isLowGraphics()` | back-compat alias of `isReducedGraphics()`. |
 
-**Reduced (low + potato)** applies: DPR cap (`Math.min(dpr, 1.5)`, potato `1.25`) in `resizeCanvas`; **no `backdrop-filter`** on `body.is-mobile` (a blurred panel over the 60fps canvas re-rasterizes its backdrop *every frame* — the #1 mobile killer, and the "css rebuilding" users perceive); canvas shadows clamped to 0 via `installLowGfxShadowGuard(ctx)` (intercepts the `shadowBlur` setter — `ctx.shadowBlur` is a per-draw Gaussian blur used ~20×/frame); fewer wind particles.
+**Reduced (low + potato)** applies: DPR cap (`Math.min(dpr, 1.5)`, potato `1.25`) in `resizeCanvas`; **no `backdrop-filter`** on `body.is-mobile` (a blurred panel over the 60fps canvas re-rasterizes its backdrop *every frame* — the #1 mobile killer, and the "css rebuilding" users perceive); canvas shadows clamped to 0 via `installLowGfxShadowGuard(ctx)` (intercepts the `shadowBlur` setter — `ctx.shadowBlur` is a per-draw Gaussian blur used ~20×/frame); fewer wind particles; **static cached `drawFocusFog`** (the animated fog is 3 full-screen gradient fills rebuilt per frame — the heaviest in-session cost on phones); **half-resolution focus mask** (soft gradients — the upscale is invisible, the fill cost drops 4×); **no live `ctx.filter` on avatars** (pre-tinted copies via `_tintedAvatar` instead — live canvas filters force a slow path on mobile GPUs).
 
-**Potato-only** (gated on `gameState._potato`): `drawSunRays`, the parallax `drawBackgroundAtmosphere`, the soft `drawFocusMask` fade, animated `drawFocusFog`, and ambient motes all fall back to cheap/no versions. So **low looks close to desktop** (gradients on) while keeping the compositing wins.
+**Potato-only** (gated on `gameState._potato`): `drawSunRays`, the parallax `drawBackgroundAtmosphere`, and ambient motes all fall back to cheap/no versions. So **low looks close to desktop** (gradients on) while keeping the compositing wins.
+
+**All-tier render costs are cached, never rebuilt per frame**: atmosphere/sun gradient objects are cached per canvas size on the ctx (`ctx._atmoCache/_sunCache` — parallax applied via `ctx.translate`, visually identical, and PiP's own ctx keeps its own cache), and `drawFocusMask` skips its offscreen re-render entirely when nothing moved (`gameState._maskKey` — the common seated-in-session case).
 
 **Sound:** boss-fight SFX (15 files, only used in that minigame) are deferred to `requestIdleCallback` (`ensureBossSounds()`, also force-loaded on boss-fight entry) so they don't compete during cold-start.
 

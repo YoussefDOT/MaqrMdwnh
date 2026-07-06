@@ -72,7 +72,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 181 · Updated 6:56 PM</div>
+    <div id="build-number" class="build-number">Build 182 · Updated 11:54 AM</div>
 
     <!-- شاشة الترحيب: للمستخدمين المسجلين عبر ديسكورد -->
     <div id="discord-welcome-screen" class="screen">
@@ -369,6 +369,18 @@
 
     <!-- Proximity panel: nearby players who can be invited -->
     <div id="sp-nearby" class="sp-nearby hidden"></div>
+
+    <!-- Session-not-saved notice: shown when a work session ends under the 10-minute floor -->
+    <div id="session-toast" class="session-toast" aria-live="polite">
+        <span class="session-toast-icon">
+            <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor"
+                 stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"></circle>
+                <path d="M12 7.5V12l3 2"></path>
+            </svg>
+        </span>
+        <span class="session-toast-text">لم يتم حفظ الجلسة لأنها أقل من ١٠ دقائق</span>
+    </div>
 
     <!-- Invite toast: shown to the person being invited -->
     <div id="sp-invite-toast" class="sp-invite-toast hidden">
@@ -1287,7 +1299,16 @@
 
     <script>
     (function () {
-        // Already installed as a PWA — skip entirely
+        // Register the service worker for EVERYONE (including installed PWAs) —
+        // it caches the heavy Sound/Art/Fonts files so repeat loads are fast.
+        // Must run before the standalone early-return below.
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function () {
+                navigator.serviceWorker.register('./sw.js').catch(function () {});
+            });
+        }
+
+        // Already installed as a PWA — skip the install-button UI entirely
         if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true) return;
 
         var ua = navigator.userAgent;
@@ -1303,12 +1324,8 @@
         var toastTimer     = null;
         var screenObserver = null;
 
-        // Register service worker (unlocks beforeinstallprompt on Chrome/Edge/Android)
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', function () {
-                navigator.serviceWorker.register('./sw.js').catch(function () {});
-            });
-        }
+        // (Service worker registration moved above the standalone check — it also
+        // unlocks beforeinstallprompt on Chrome/Edge/Android.)
 
         // Chrome / Edge / Android Chrome — capture the native install prompt when it fires
         window.addEventListener('beforeinstallprompt', function (e) {

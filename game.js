@@ -268,6 +268,10 @@ function _loadCachedDiscordUser() {
     } catch { return null; }
 }
 
+// Snapshot of users/{uid} taken by resolveUserLobby — reused by
+// enterGameAsDiscordUser so the enter click doesn't re-read the same node.
+let _lobbyResolveCache = null;
+
 // Returns the user object on success.
 // Returns the symbol DISCORD_TOKEN_REVOKED when Discord says 401 (token truly dead).
 // Returns null on network error / temporary failure — caller should NOT clear the session.
@@ -313,6 +317,9 @@ function parseDiscordOauthHash() {
 async function resolveUserLobby(discordId) {
     const snap = await get(ref(database, `users/${discordId}`));
     const data = snap.val() || {};
+    // Cache the snapshot so enterGameAsDiscordUser doesn't re-read the same node
+    // seconds later (one less round-trip between pressing الدخول and spawning).
+    _lobbyResolveCache = { id: discordId, data };
     if (data.lobby && LOBBY_CONFIG[data.lobby]) return data.lobby;
     if (data.categoryName) {
         for (const [key, cfg] of Object.entries(LOBBY_CONFIG)) {
@@ -342,15 +349,25 @@ async function enterGameAsDiscordUser(user, lobby) {
     gameState.selectedLobby = lobby;
     localStorage.setItem(`mdwnh_discord_lobby_${user.id}`, lobby);
 
-    const snap = await get(ref(database, `users/${user.id}`));
-    const existing = snap.val() || {};
+    // Reuse the users/{uid} snapshot from resolveUserLobby (fetched moments ago
+    // at page load) instead of a fresh round-trip; only used for `username`.
+    let existing;
+    if (_lobbyResolveCache && _lobbyResolveCache.id === user.id) {
+        existing = _lobbyResolveCache.data || {};
+    } else {
+        const snap = await get(ref(database, `users/${user.id}`));
+        existing = snap.val() || {};
+    }
     const updates = {
         [`users/${user.id}/lobby`]:       lobby,
         [`users/${user.id}/avatar`]:      user.avatar,   // always refresh from Discord
         [`users/${user.id}/channelName`]: null,          // clear stale VC channel
     };
     if (!existing.username) updates[`users/${user.id}/username`] = user.username;
-    await update(ref(database), updates);
+    // No await: Firebase applies writes in order on this connection, so the reads
+    // startGame fires next are guaranteed to see this update — waiting for the
+    // server ack here just delayed the spawn by a round-trip.
+    update(ref(database), updates).catch(() => {});
 
     document.getElementById('lobby-screen')?.classList.remove('active');
     document.getElementById('login-screen')?.classList.remove('active');
@@ -437,6 +454,15 @@ async function initDiscordOAuth() {
     }
 
     // Keep spinner while we validate the token + read Firebase.
+    // The Discord token check and the Firebase lobby lookup are INDEPENDENT
+    // network round-trips — when we know the user's id from the cached session,
+    // fire the lobby lookup in parallel instead of after the Discord reply.
+    // (Used to be serial: Discord RTT + Firebase RTT stacked up on the spinner.)
+    const cachedUser = _loadCachedDiscordUser();
+    const earlyLobbyPromise = cachedUser?.id
+        ? resolveUserLobby(cachedUser.id).catch(() => null)
+        : null;
+
     // fetchDiscordUser returns: user object | DISCORD_TOKEN_REVOKED | null (network error).
     const fetchResult = await fetchDiscordUser(session.token);
     let user;
@@ -449,7 +475,7 @@ async function initDiscordOAuth() {
     } else if (fetchResult === null) {
         // Network failure / Discord API down — don't kill the session.
         // Fall back to the user info we cached last time it succeeded.
-        user = _loadCachedDiscordUser();
+        user = cachedUser;
         if (!user) {
             // No cache at all (e.g. first ever load with no network) — can't proceed.
             loading?.classList.remove('active');
@@ -461,7 +487,10 @@ async function initDiscordOAuth() {
         _cacheDiscordUser(user); // keep cache fresh for future network failures
     }
 
-    const resolvedLobby = await resolveUserLobby(user.id);
+    // Reuse the parallel lookup when it was for the same user; otherwise resolve now.
+    const resolvedLobby = (earlyLobbyPromise && cachedUser.id === user.id)
+        ? await earlyLobbyPromise
+        : await resolveUserLobby(user.id);
     loading?.classList.remove('active');
     if (resolvedLobby) {
         // Auto-login (auto-resume straight into the game on refresh) is DISABLED on
@@ -693,11 +722,27 @@ class FocusAudioEngine {
     }
 
     async loadFocusSoundBuffers() {
-        // Load all sounds in parallel — each becomes available as soon as its own
-        // buffer is ready (previously sequential: one slow file blocked all others).
-        await Promise.all(Object.entries(this.focusFiles).map(async ([key, url]) => {
+        // LAZY LOADING: the 7 ambient files total ~21 MB — downloading + decoding
+        // them all on init was a huge chunk of the slow first load (and of memory
+        // on weak phones). Only prefetch the buffers for sounds that are already
+        // active (a restored mix); everything else loads on first toggle via
+        // ensureFocusBuffer(). Toggling stays instant either way: startSound()
+        // streams through a media element until the buffer arrives, then hands
+        // off seamlessly (_handoffToBuffer).
+        for (const key of this.fileSoundKeys) {
+            if (this.sounds[key]?.active) this.ensureFocusBuffer(key);
+        }
+    }
+
+    // Fetch + decode one ambient sound's buffer on demand. Safe to call repeatedly.
+    ensureFocusBuffer(key) {
+        if (!this.focusFiles[key] || this.focusBuffers[key] || !this.ctx) return;
+        this._focusBufLoading = this._focusBufLoading || {};
+        if (this._focusBufLoading[key]) return;
+        this._focusBufLoading[key] = true;
+        (async () => {
             try {
-                const response = await fetch(url);
+                const response = await fetch(this.focusFiles[key]);
                 const arrayBuffer = await response.arrayBuffer();
                 this.focusBuffers[key] = await this.ctx.decodeAudioData(arrayBuffer);
                 // Remove loading indicator now that this sound is buffered
@@ -715,8 +760,10 @@ class FocusAudioEngine {
                 }
             } catch(e) {
                 console.log(`Failed to load focus sound [${key}]:`, e);
+            } finally {
+                this._focusBufLoading[key] = false;
             }
-        }));
+        })();
     }
 
     // Schedule a gap-free, cross-dissolving loop of `buf` into `gainNode`.
@@ -935,6 +982,9 @@ class FocusAudioEngine {
         let secondaryNodes = [];
 
         if (this.fileSoundKeys.includes(name)) {
+            // Lazy buffers: kick off the download/decode for this sound if it
+            // hasn't happened yet (no-op when already loaded/loading).
+            this.ensureFocusBuffer(name);
             const buf = this.focusBuffers?.[name];
             if (buf) {
                 // Buffer ready → start the seamless cross-dissolving loop immediately.
@@ -1138,6 +1188,9 @@ class FocusAudioEngine {
             if (this.sounds[name]) {
                 this.sounds[name].active = config.active;
                 this.sounds[name].volume = config.volume !== undefined ? config.volume : 0.5;
+                // Lazy buffers: prefetch only the sounds this user actually uses,
+                // so they're decoded before the next work session starts.
+                if (config.active) this.ensureFocusBuffer(name);
 
                 const el = document.querySelector(`.sound-item[data-sound="${name}"]`);
                 if (el) {
@@ -1167,7 +1220,7 @@ class FocusAudioEngine {
             mixState[name] = { active: config.active, volume: config.volume };
         }
         const updates = {};
-        updates[`users/${gameState.userId}/focusMix`] = mixState;
+        updates[`${dashProfilePath()}/focusMix`] = mixState;
         update(ref(database), updates);
     }
 
@@ -1184,7 +1237,8 @@ class FocusAudioEngine {
 }
 
 // Simple YouTube-based focus player using the IFrame API. Persists per-user
-// playback state to `users/{userId}/focusPlayer` so timestamp+link survive sessions.
+// playback state to `dashboards/{uid}/profile/focusPlayer` so timestamp+link
+// survive sessions (private data — kept off the live-listened /users node).
 class FocusYouTubePlayer {
     constructor() {
         this.player = null;
@@ -1276,7 +1330,7 @@ class FocusYouTubePlayer {
             this._ensureUiVisible(true);
             if (saveToFirebase && gameState.userId) {
                 const updates = {};
-                updates[`users/${gameState.userId}/focusPlayer`] = { url: this.url, videoId: this.videoId, timestamp: Math.floor(startSec), loop: this.loop };
+                updates[`${dashProfilePath()}/focusPlayer`] = { url: this.url, videoId: this.videoId, timestamp: Math.floor(startSec), loop: this.loop };
                 update(ref(database), updates);
             }
             return true;
@@ -1319,7 +1373,7 @@ class FocusYouTubePlayer {
         this.loop = !!v;
         const btn = document.getElementById('mini-yt-repeat');
         if (btn) btn.classList.toggle('active', this.loop);
-        if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/focusPlayer/loop`]: this.loop });
+        if (gameState.userId) update(ref(database), { [`${dashProfilePath()}/focusPlayer/loop`]: this.loop });
     }
 
     setVolumePercent(pct) {
@@ -1434,7 +1488,7 @@ class FocusYouTubePlayer {
                 if (sec !== this._lastSavedTs && (!this._lastTsSaveAt || now - this._lastTsSaveAt >= 15000)) {
                     this._lastSavedTs = sec;
                     this._lastTsSaveAt = now;
-                    update(ref(database), { [`users/${gameState.userId}/focusPlayer/timestamp`]: sec });
+                    update(ref(database), { [`${dashProfilePath()}/focusPlayer/timestamp`]: sec });
                 }
             }
         } catch(e) {}
@@ -1549,7 +1603,7 @@ class FocusYouTubePlayer {
         this._ensureUiVisible(false);
         const input = document.getElementById('yt-url-input');
         if (input) input.value = '';
-        if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/focusPlayer`]: null });
+        if (gameState.userId) update(ref(database), { [`${dashProfilePath()}/focusPlayer`]: null });
     }
 
     async loadFromProfile(profile) {
@@ -1567,6 +1621,16 @@ class FocusYouTubePlayer {
     }
 }
 
+
+// Create an Audio element that does NOT download anything yet. preload must be
+// set before src for the browser to skip the fetch entirely. warmGameSounds()
+// upgrades these to preload='auto' (in priority order) once the game has started.
+function _lazyAudio(src) {
+    const a = new Audio();
+    a.preload = 'none';
+    a.src = src;
+    return a;
+}
 
 // Game State
 const gameState = {
@@ -1595,49 +1659,54 @@ const gameState = {
         bossWeak:       new Image(),
         bossShield:     new Image(),
     },
+    // Sound effects (HTMLAudioElement fallbacks + direct-play SFX).
+    // _lazyAudio creates each element with preload='none' so NOTHING downloads at
+    // page parse — 45 parallel MP3 fetches used to compete with the login screen,
+    // Firebase, and fonts on every cold load. warmGameSounds() (called after the
+    // game starts) flips them to preload='auto' in priority order instead.
     sounds: {
-        kidnap:                new Audio('Sound/LaptopGrab.mp3'),
-        timeBreak:             new Audio('Sound/TimeBreak.mp3'),
-        timeReturn:            new Audio('Sound/TimeReturn.mp3'),
-        yipee:                 new Audio('Sound/Yipee.mp3'),
-        breakAdded:            new Audio('Sound/BreakAdded.mp3'),
-        minigameReady:         new Audio('Sound/Minigame_Ready.mp3'),
-        minigameButtonPressed: new Audio('Sound/Minigame_ButtonPressed.mp3'),
-        minigameCountdown:       new Audio('Sound/Minigame_Racing_Countdown.mp3'),
-        minigameCoffeeCountdown: new Audio('Sound/Minigame_Coffee_Countdown.mp3'),
-        minigameCoffeeCollect:   new Audio('Sound/Minigame_Coffee_Collect.mp3'),
-        minigameCoffeeBad:       new Audio('Sound/Minigame_Coffee_Collect_Bad.mp3'),
-        minigameCoffeeTimerClose: new Audio('Sound/Minigame_Coffee_TimerClose.mp3'),
-        minigameApplause:        new Audio('Sound/Minigame_Aplause.mp3'),
+        kidnap:                _lazyAudio('Sound/LaptopGrab.mp3'),
+        timeBreak:             _lazyAudio('Sound/TimeBreak.mp3'),
+        timeReturn:            _lazyAudio('Sound/TimeReturn.mp3'),
+        yipee:                 _lazyAudio('Sound/Yipee.mp3'),
+        breakAdded:            _lazyAudio('Sound/BreakAdded.mp3'),
+        minigameReady:         _lazyAudio('Sound/Minigame_Ready.mp3'),
+        minigameButtonPressed: _lazyAudio('Sound/Minigame_ButtonPressed.mp3'),
+        minigameCountdown:       _lazyAudio('Sound/Minigame_Racing_Countdown.mp3'),
+        minigameCoffeeCountdown: _lazyAudio('Sound/Minigame_Coffee_Countdown.mp3'),
+        minigameCoffeeCollect:   _lazyAudio('Sound/Minigame_Coffee_Collect.mp3'),
+        minigameCoffeeBad:       _lazyAudio('Sound/Minigame_Coffee_Collect_Bad.mp3'),
+        minigameCoffeeTimerClose: _lazyAudio('Sound/Minigame_Coffee_TimerClose.mp3'),
+        minigameApplause:        _lazyAudio('Sound/Minigame_Aplause.mp3'),
         // Laptop boss fight sounds
-        bossAnticipate:     new Audio('Sound/LaptopMinigame/Laptop_Anticipate.mp3'),
-        bossAttackInitiate: new Audio('Sound/LaptopMinigame/Laptop_Attack_Initiate .mp3'),
-        bossGrabInitiate:   new Audio('Sound/LaptopMinigame/Laptop_Grab_initiate.mp3'),
-        bossGrabSuccess:    new Audio('Sound/LaptopMinigame/Laptop_Grab_Success.mp3'),
-        bossWeakIdle:       new Audio('Sound/LaptopMinigame/Laptop_Weak_Idle.mp3'),
-        bossWeakInitiate:   new Audio('Sound/LaptopMinigame/Laptop_Weak_Inititate.mp3'),
-        bossWeakEnd:        new Audio('Sound/LaptopMinigame/Laptop_Weak_End.mp3'),
-        bossHit:            new Audio('Sound/LaptopMinigame/Laptop_Hit.mp3'),
-        bossAttackStomp:    new Audio('Sound/LaptopMinigame/Laptop_Attack_Stomp.mp3'),
-        playerHitBoss:      new Audio('Sound/LaptopMinigame/Player_Hit.mp3'),
-        playerLooseBoss:    new Audio('Sound/LaptopMinigame/Player_Loose.mp3'),
-        playerWinBoss:      new Audio('Sound/LaptopMinigame/Player_Win.mp3'),
-        bossApplause:       new Audio('Sound/Minigame_Aplause.mp3'),
-        crowdCheer:         new Audio('Sound/LaptopMinigame/Crowd_Cheer.mp3'),
-        crowdShock:         new Audio('Sound/LaptopMinigame/Crowd_Shock.mp3'),
-        prayerCall:              new Audio('Sound/Prayer_CallToPrayer.mp3'),
-        inviteSent:              new Audio('Sound/Invite_Sent.mp3'),
-        inviteAccepted:          new Audio('Sound/Invite_Accepted.mp3'),
+        bossAnticipate:     _lazyAudio('Sound/LaptopMinigame/Laptop_Anticipate.mp3'),
+        bossAttackInitiate: _lazyAudio('Sound/LaptopMinigame/Laptop_Attack_Initiate .mp3'),
+        bossGrabInitiate:   _lazyAudio('Sound/LaptopMinigame/Laptop_Grab_initiate.mp3'),
+        bossGrabSuccess:    _lazyAudio('Sound/LaptopMinigame/Laptop_Grab_Success.mp3'),
+        bossWeakIdle:       _lazyAudio('Sound/LaptopMinigame/Laptop_Weak_Idle.mp3'),
+        bossWeakInitiate:   _lazyAudio('Sound/LaptopMinigame/Laptop_Weak_Inititate.mp3'),
+        bossWeakEnd:        _lazyAudio('Sound/LaptopMinigame/Laptop_Weak_End.mp3'),
+        bossHit:            _lazyAudio('Sound/LaptopMinigame/Laptop_Hit.mp3'),
+        bossAttackStomp:    _lazyAudio('Sound/LaptopMinigame/Laptop_Attack_Stomp.mp3'),
+        playerHitBoss:      _lazyAudio('Sound/LaptopMinigame/Player_Hit.mp3'),
+        playerLooseBoss:    _lazyAudio('Sound/LaptopMinigame/Player_Loose.mp3'),
+        playerWinBoss:      _lazyAudio('Sound/LaptopMinigame/Player_Win.mp3'),
+        bossApplause:       _lazyAudio('Sound/Minigame_Aplause.mp3'),
+        crowdCheer:         _lazyAudio('Sound/LaptopMinigame/Crowd_Cheer.mp3'),
+        crowdShock:         _lazyAudio('Sound/LaptopMinigame/Crowd_Shock.mp3'),
+        prayerCall:              _lazyAudio('Sound/Prayer_CallToPrayer.mp3'),
+        inviteSent:              _lazyAudio('Sound/Invite_Sent.mp3'),
+        inviteAccepted:          _lazyAudio('Sound/Invite_Accepted.mp3'),
         // Dashboard (paper) UI sounds
-        paperIntro:              new Audio('Sound/Paper_Intro.mp3'),
-        paperSwipe:              new Audio('Sound/Paper_Swipe.mp3'),
-        paperDaysSwap:           new Audio('Sound/Paper_DaysSwap.mp3'),
-        paperExit:               new Audio('Sound/Paper_Exit.mp3'),
-        paperTaskComplete:       new Audio('Sound/Paper_Task_Complete.mp3'),
-        paperInvoiceIntro:       new Audio('Sound/Paper_Invoice_Intro.mp3'),
-        paperInvoiceExit:        new Audio('Sound/Paper_Invoice_Exit.mp3'),
-        paperInvoiceFlip:        new Audio('Sound/Paper_Invoice_Flip.mp3'),
-        invoiceCardSave:         new Audio('Sound/Invoice_Card_Sounds.mp3'),
+        paperIntro:              _lazyAudio('Sound/Paper_Intro.mp3'),
+        paperSwipe:              _lazyAudio('Sound/Paper_Swipe.mp3'),
+        paperDaysSwap:           _lazyAudio('Sound/Paper_DaysSwap.mp3'),
+        paperExit:               _lazyAudio('Sound/Paper_Exit.mp3'),
+        paperTaskComplete:       _lazyAudio('Sound/Paper_Task_Complete.mp3'),
+        paperInvoiceIntro:       _lazyAudio('Sound/Paper_Invoice_Intro.mp3'),
+        paperInvoiceExit:        _lazyAudio('Sound/Paper_Invoice_Exit.mp3'),
+        paperInvoiceFlip:        _lazyAudio('Sound/Paper_Invoice_Flip.mp3'),
+        invoiceCardSave:         _lazyAudio('Sound/Invoice_Card_Sounds.mp3'),
     },
     canvas: null,
     ctx: null,
@@ -1892,47 +1961,31 @@ const gameState = {
     },
 };
 
-// Preload all sounds so they fire instantly with no lag
-gameState.sounds.kidnap.preload                = 'auto';
-gameState.sounds.timeBreak.preload             = 'auto';
-gameState.sounds.timeReturn.preload            = 'auto';
-gameState.sounds.breakAdded.preload            = 'auto';
-gameState.sounds.yipee.preload                 = 'auto';
-gameState.sounds.minigameReady.preload         = 'auto';
-gameState.sounds.minigameButtonPressed.preload = 'auto';
-gameState.sounds.minigameCountdown.preload       = 'auto';
-gameState.sounds.minigameCoffeeCountdown.preload = 'auto';
-gameState.sounds.minigameCoffeeCollect.preload   = 'auto';
-gameState.sounds.minigameCoffeeBad.preload       = 'auto';
-gameState.sounds.minigameCoffeeTimerClose.preload = 'auto';
-gameState.sounds.minigameApplause.preload        = 'auto';
-gameState.sounds.bossAnticipate.preload     = 'auto';
-gameState.sounds.bossAttackInitiate.preload = 'auto';
-gameState.sounds.bossGrabInitiate.preload   = 'auto';
-gameState.sounds.bossGrabSuccess.preload    = 'auto';
-gameState.sounds.bossWeakIdle.preload       = 'auto';
-gameState.sounds.bossWeakInitiate.preload   = 'auto';
-gameState.sounds.bossWeakEnd.preload        = 'auto';
-gameState.sounds.bossHit.preload            = 'auto';
-gameState.sounds.bossAttackStomp.preload    = 'auto';
-gameState.sounds.playerHitBoss.preload      = 'auto';
-gameState.sounds.playerLooseBoss.preload    = 'auto';
-gameState.sounds.playerWinBoss.preload      = 'auto';
-gameState.sounds.bossApplause.preload       = 'auto';
-gameState.sounds.crowdCheer.preload         = 'auto';
-gameState.sounds.crowdShock.preload         = 'auto';
-gameState.sounds.paperIntro.preload         = 'auto';
-gameState.sounds.paperSwipe.preload         = 'auto';
-gameState.sounds.paperDaysSwap.preload      = 'auto';
-gameState.sounds.paperExit.preload          = 'auto';
-gameState.sounds.paperTaskComplete.preload  = 'auto';
-gameState.sounds.paperInvoiceIntro.preload  = 'auto';
-gameState.sounds.paperInvoiceExit.preload   = 'auto';
-gameState.sounds.paperInvoiceFlip.preload   = 'auto';
-gameState.sounds.invoiceCardSave.preload    = 'auto';
-gameState.sounds.prayerCall.preload              = 'auto';
-gameState.sounds.inviteSent.preload              = 'auto';
-gameState.sounds.inviteAccepted.preload          = 'auto';
+// Staged sound warm-up — called from startGame(), NOT at page parse.
+// Core in-game sounds load immediately on spawn (they can fire within seconds:
+// kidnap/timers/prayer). Everything else (boss fight, papers, minigames) waits
+// for browser idle time so it never competes with the entrance, avatars, or
+// Firebase on a cold load. Every sound still ends up fully preloaded — just
+// after the game is playable instead of before the login screen exists.
+function warmGameSounds() {
+    if (warmGameSounds._done) return;
+    warmGameSounds._done = true;
+    const warm = (key) => {
+        const a = gameState.sounds[key];
+        if (!a) return;
+        try { a.preload = 'auto'; a.load(); } catch (_) {}
+    };
+    // Priority 1 — needed moments after spawn.
+    ['kidnap', 'timeBreak', 'timeReturn', 'yipee', 'breakAdded', 'prayerCall',
+     'minigameReady', 'inviteSent', 'inviteAccepted'].forEach(warm);
+    // Priority 2 — everything else, on idle (minigames + dashboard papers live
+    // behind explicit user actions, so a few seconds of delay is invisible).
+    const warmRest = () => {
+        for (const key of Object.keys(gameState.sounds)) warm(key);
+    };
+    if (window.requestIdleCallback) requestIdleCallback(warmRest, { timeout: 8000 });
+    else setTimeout(warmRest, 3500);
+}
 
 // Constants
 const COLORS = {
@@ -2251,6 +2304,18 @@ function updatePlayerRenderPositions() {
             }
             continue;
         }
+        // Newly-joined remote player: hold invisible while their position settles, then
+        // pop them in AT the settled spot (renderX/Y already pinned to .x/.y by the
+        // presence handlers). This kills the "appear then snap on join" travel.
+        if (player._pendingSpawn != null) {
+            player.renderX = player.x; player.renderY = player.y;
+            if (performance.now() - player._pendingSpawn >= SPAWN_SETTLE_MS) {
+                player._pendingSpawn = null;
+                player._netBuf = null;   // fresh interpolation from the settled position
+                player._entryT = JUICE_ENTRANCE ? performance.now() : null;   // now pop in
+            }
+            continue;
+        }
         // Remote players: smooth snapshot interpolation from the position buffer
         // (fed by both the WebSocket relay and Firebase). Fall back to the plain
         // catch-up lerp until the first sample arrives.
@@ -2321,6 +2386,12 @@ function getRaceCarDrawState(userId, car) {
 }
 
 function loadRaceTrackAsset() {
+    // Idempotent + lazy: the track PNG is ~6 MB and its pixel classification is
+    // CPU-heavy, so it must never load during page boot (it used to be a huge
+    // chunk of the slow first paint). startGame() kicks it off on idle after
+    // spawn; the race-entry paths also call this as a belt-and-braces ensure.
+    if (gameState.race._trackLoadStarted) return;
+    gameState.race._trackLoadStarted = true;
     const img = new Image();
     img.src = RACE_TRACK_SRC;
     img.onload = () => {
@@ -2334,6 +2405,7 @@ function loadRaceTrackAsset() {
         gameState.race.track = buildRaceTrackFromImageData(ctx.getImageData(0, 0, width, height).data, width, height, img);
     };
     img.onerror = () => {
+        gameState.race._trackLoadStarted = false;   // allow a retry on next ensure
         console.error('Failed to load race track image:', RACE_TRACK_SRC);
     };
 }
@@ -2732,7 +2804,7 @@ function cleanupAbandonedPomoSessions(pomoData) {
                     // Stash a reclaimable snapshot (parity with pomo below) instead of
                     // silently deleting — so a free-mode user whose onDisconnect never
                     // landed can still reclaim their accumulated work within 4 hours.
-                    updates[`users/${state.claimedBy}/lastPomoSession`] = {
+                    updates[`${dashProfilePath(state.claimedBy)}/lastPomoSession`] = {
                         mode: 'free', laptopId: parseInt(laptopId),
                         claimedBy: state.claimedBy,
                         totalWorkMs: state.totalWorkMs || 0,
@@ -2752,7 +2824,7 @@ function cleanupAbandonedPomoSessions(pomoData) {
             if (!isExpired && !isVeryOld) continue;
 
             // Preserve progress so the user can reclaim on next login (valid for 4 hours)
-            updates[`users/${state.claimedBy}/lastPomoSession`] = {
+            updates[`${dashProfilePath(state.claimedBy)}/lastPomoSession`] = {
                 ...state, abandonedAt: now, laptopId: parseInt(laptopId)
             };
             updates[lobbyPath(`pomodoro/${laptopId}`)] = null;
@@ -2801,7 +2873,7 @@ function syncLaptopsFromPomodoro(data) {
 // ── Session disconnect / reclaim (solo pomodoro & free mode) ─────────────────
 // On ANY disconnect we (a) free the laptop immediately so others never see a
 // ghost (claimed-but-empty) laptop, and (b) stash the session under
-// users/{uid}/lastPomoSession so the user can reclaim it within 4h on next login
+// dashboards/{uid}/profile/lastPomoSession so the user can reclaim it within 4h on next login
 // (their old laptop if it's free, otherwise a random free one). Shared pomo has
 // its own host-promotion path and is intentionally excluded here.
 const RECLAIM_WINDOW_MS = 4 * 60 * 60 * 1000; // 4 hours
@@ -2829,6 +2901,17 @@ function _pomoDocFromState() {
         totalSessions: p.totalSessions || p.sessionsLeft || 1,
         createdAt:     p.createdAt || Date.now(),
     };
+}
+
+// Private per-user state (focus mix, YouTube player, reclaim stash) lives under
+// dashboards/{uid}/profile — a node NOBODY holds a live listener on — instead of
+// users/{uid}. Every users/{uid} write fans out to every client in BOTH lobbies
+// through the global /users listener, so frequently-written private data there
+// was pure wasted download (Spark-plan 10GB/mo cap). Reads are one-shot get()s
+// at login. The Siraj ghost's dashboards node is removed on disconnect, so its
+// profile self-cleans like the rest of its data.
+function dashProfilePath(uid) {
+    return `dashboards/${uid || gameState.userId}/profile`;
 }
 
 function _buildReclaimSnapshot() {
@@ -2861,7 +2944,7 @@ function persistReclaimSnapshot() {
     const snap = _buildReclaimSnapshot();
     if (!snap) return;
     snap.abandonedAt = null; // live, not abandoned
-    update(ref(database), { [`users/${gameState.userId}/lastPomoSession`]: snap });
+    update(ref(database), { [`${dashProfilePath()}/lastPomoSession`]: snap });
 }
 
 // Arm the disconnect handlers: free the laptop + stamp `abandonedAt` on the stash.
@@ -2877,7 +2960,7 @@ function armSessionDisconnect() {
     }
     gameState._armedDisconnectLaptopId = lapId;
     onDisconnect(ref(database, lobbyPath(`pomodoro/${lapId}`))).remove();
-    onDisconnect(ref(database, `users/${gameState.userId}/lastPomoSession/abandonedAt`)).set({ '.sv': 'timestamp' });
+    onDisconnect(ref(database, `${dashProfilePath()}/lastPomoSession/abandonedAt`)).set({ '.sv': 'timestamp' });
 }
 
 // Persist + arm together. Call on every session state change (start, phase flip,
@@ -2894,9 +2977,9 @@ function cancelSessionDisconnect(clearStash) {
     if (lapId !== null && lapId !== undefined) {
         onDisconnect(ref(database, lobbyPath(`pomodoro/${lapId}`))).cancel();
     }
-    onDisconnect(ref(database, `users/${gameState.userId}/lastPomoSession/abandonedAt`)).cancel();
+    onDisconnect(ref(database, `${dashProfilePath()}/lastPomoSession/abandonedAt`)).cancel();
     gameState._armedDisconnectLaptopId = null;
-    if (clearStash) update(ref(database), { [`users/${gameState.userId}/lastPomoSession`]: null });
+    if (clearStash) update(ref(database), { [`${dashProfilePath()}/lastPomoSession`]: null });
 }
 
 // Move the live solo session onto a different (free) laptop and sync position so
@@ -3004,7 +3087,8 @@ function init() {
     _prefetchEntranceSound();   // FIRST: warm the entrance sound so it's ready at login
     setMobileClass(); // set body.is-mobile before anything renders
     loadAssets();
-    loadRaceTrackAsset();
+    // Race track (6 MB PNG + pixel classification) is deliberately NOT loaded
+    // here — startGame() loads it on idle, race entry ensures it. See loadRaceTrackAsset.
     setupLobbySelection();   // ← shows lobby screen first; calls setupUserSelection internally
     setupModal();
     initWindParticles();
@@ -3620,7 +3704,16 @@ function startGame(userData) {
     onValue(offsetRef, (snap) => {
         gameState.serverTimeOffset = snap.val() || 0;
     });
-    get(ref(database, lobbyPath('pomodoro'))).then((pomoSnapshot) => {
+    // Spawn-path reads run in PARALLEL (they used to be serial round-trips, which
+    // was a visible chunk of the login→spawn delay). The dashboards/{uid}/profile
+    // doc holds the user's PRIVATE state (focus mix, YouTube player, reclaim
+    // stash) — moved out of users/{uid} so its frequent writes stop fanning out
+    // to every client on the global /users listener. See dashProfilePath().
+    Promise.all([
+        get(ref(database, lobbyPath('pomodoro'))),
+        get(ref(database, `users/${gameState.userId}`)).catch(() => null),
+        get(ref(database, dashProfilePath())).catch(() => null),
+    ]).then(([pomoSnapshot, _userSnapshot, _profileSnapshot]) => {
         const pomoData = pomoSnapshot.val() || {};
         syncLaptopsFromPomodoro(pomoData);
         let activeLaptopId = null;
@@ -3677,20 +3770,45 @@ function startGame(userData) {
         // Fire-and-forget: free devices abandoned by offline users for 30+ mins
         cleanupAbandonedPomoSessions(pomoData);
 
-        get(ref(database, `users/${gameState.userId}`)).then((snapshot) => {
-            const data = snapshot.val();
+        {
+            const data = _userSnapshot ? _userSnapshot.val() : null;
+            const profile = _profileSnapshot ? (_profileSnapshot.val() || {}) : {};
             const _defaultSpawn = getRandomSpawnPosition();
             let spawnX = _defaultSpawn.x, spawnY = _defaultSpawn.y;
             let locked = false;
 
-            // Restore Focus Mix from User Profile instead of session!
-            if (data && data.focusMix && gameState.focusAudioEngine) {
-                gameState.focusAudioEngine.applyState(data.focusMix);
+            // One-time migration: private state used to live under users/{uid}
+            // (focusMix / focusPlayer / lastPomoSession), where every write fanned
+            // out to every client via the global /users listener. Copy any legacy
+            // values to dashboards/{uid}/profile and wipe the old keys.
+            if (data && (data.focusMix || data.focusPlayer || data.lastPomoSession)) {
+                const mig = {};
+                if (data.focusMix && !profile.focusMix) {
+                    profile.focusMix = data.focusMix;
+                    mig[`${dashProfilePath()}/focusMix`] = data.focusMix;
+                }
+                if (data.focusPlayer && !profile.focusPlayer) {
+                    profile.focusPlayer = data.focusPlayer;
+                    mig[`${dashProfilePath()}/focusPlayer`] = data.focusPlayer;
+                }
+                if (data.lastPomoSession && !profile.lastPomoSession) {
+                    profile.lastPomoSession = data.lastPomoSession;
+                    mig[`${dashProfilePath()}/lastPomoSession`] = data.lastPomoSession;
+                }
+                mig[`users/${gameState.userId}/focusMix`] = null;
+                mig[`users/${gameState.userId}/focusPlayer`] = null;
+                mig[`users/${gameState.userId}/lastPomoSession`] = null;
+                update(ref(database), mig).catch(() => {});
+            }
+
+            // Restore Focus Mix from the private profile
+            if (profile.focusMix && gameState.focusAudioEngine) {
+                gameState.focusAudioEngine.applyState(profile.focusMix);
             }
 
             // Restore persisted YouTube focus player if present
-            if (data && data.focusPlayer && gameState.focusYTPlayer) {
-                gameState.focusYTPlayer.loadFromProfile(data.focusPlayer);
+            if (profile.focusPlayer && gameState.focusYTPlayer) {
+                gameState.focusYTPlayer.loadFromProfile(profile.focusPlayer);
             }
 
             // Reclaim a session our onDisconnect stashed when we dropped the socket
@@ -3699,8 +3817,8 @@ function startGame(userData) {
             // null and is ignored here. Prefer the original laptop; if it's taken,
             // fall back to any free laptop (position syncs so all clients see us
             // seated correctly on the new one).
-            if (activeLaptopId === null && data?.lastPomoSession && data.lastPomoSession.abandonedAt) {
-                const ls = data.lastPomoSession;
+            if (activeLaptopId === null && profile.lastPomoSession && profile.lastPomoSession.abandonedAt) {
+                const ls = profile.lastPomoSession;
                 const now = Date.now();
                 const isFree = ls.mode === 'free';
                 const withinWindow = (now - ls.abandonedAt) < RECLAIM_WINDOW_MS;
@@ -3721,7 +3839,7 @@ function startGame(userData) {
                     };
                     update(ref(database), {
                         [lobbyPath(`pomodoro/${target.id}`)]: freeDoc,
-                        [`users/${gameState.userId}/lastPomoSession`]: null,
+                        [`${dashProfilePath()}/lastPomoSession`]: null,
                     });
                     applyPomodoroStateToLaptop(target, freeDoc);
                     activeLaptopId = target.id;
@@ -3753,7 +3871,7 @@ function startGame(userData) {
                     };
                     update(ref(database), {
                         [lobbyPath(`pomodoro/${target.id}`)]: restoredDoc,
-                        [`users/${gameState.userId}/lastPomoSession`]: null,
+                        [`${dashProfilePath()}/lastPomoSession`]: null,
                     });
                     applyPomodoroStateToLaptop(target, restoredDoc);
                     activeLaptopId = target.id;
@@ -3769,7 +3887,7 @@ function startGame(userData) {
                     locked = restoredPhase === 'work';
                 } else {
                     // Stale (>4h), no progress, or no free device — discard.
-                    update(ref(database), { [`users/${gameState.userId}/lastPomoSession`]: null });
+                    update(ref(database), { [`${dashProfilePath()}/lastPomoSession`]: null });
                 }
             }
 
@@ -3825,7 +3943,17 @@ function startGame(userData) {
             // (e.g. a weak phone freeing memory when the user went to take a photo),
             // reopen the same card so they land right back where they left off.
             restorePendingEndCardIfAny();
-        });
+        }
+
+        // Deferred heavy assets — now that the world is up, warm the sound
+        // effects and the race track during idle time (they used to load at page
+        // parse and made the login screen crawl on slow connections).
+        warmGameSounds();
+        if (window.requestIdleCallback) {
+            requestIdleCallback(() => loadRaceTrackAsset(), { timeout: 15000 });
+        } else {
+            setTimeout(loadRaceTrackAsset, 6000);
+        }
     });
 
     // Background interval using Web Worker to bypass tab throttling completely
@@ -3866,6 +3994,11 @@ function startGame(userData) {
 // ═══════════════════════════════════════════════════════════════════════════
 const JUICE_ENTRANCE = true;
 const JUICE_EXIT_MS = 420;   // scale-down duration when a remote player disconnects
+// A freshly-seen remote player is held INVISIBLE this long so their position can settle
+// before they pop in — otherwise they appear at a stale/spawn spot and visibly snap to
+// their real position (the "appear then snap on join" bug). During the hold we teleport
+// (never lerp) to each incoming position, then pop them in at the settled spot.
+const SPAWN_SETTLE_MS = 500;
 
 const ENTRY = {
     fadeMs:      1300,   // black overlay fade-out duration
@@ -4458,6 +4591,19 @@ function startKidnapAnimation(laptop) {
     const player = gameState.players[gameState.userId];
     if (!player) return;
 
+    // Stop the walk/run the instant the kidnap begins. handleMovement early-returns while
+    // gameState.anim.active, so a player who clicked a laptop mid-run kept isMoving=true —
+    // leaving the running bounce + walk sound + footstep dust playing through the whole
+    // kidnap and lingering under them at the seat. Reset the flags, broadcast the stop so
+    // others halt our walk too, and clear any leftover footstep dust (the kidnap spawns its
+    // own drag dust separately).
+    player.isMoving = false;
+    player.isSprinting = false;
+    player.bobOffset = 0; player.bobTime = 0;
+    gameState.dustParticles.length = 0;
+    sendPositionWS(player.x, player.y, true);
+    updatePlayerPosition(player.x, player.y);
+
     if (document.hidden) {
         // Skip animation in background, teleport player, lock in, and start work immediately!
         teleportEntity(player, laptop.sitX, laptop.sitY);
@@ -4623,7 +4769,7 @@ function setupFocusPanelUI() {
             const sec = Math.round(dur * pct);
             updateTimeDisplay(sec, dur);
             await gameState.focusYTPlayer.seekTo(sec);
-            if (gameState.userId) update(ref(database), { [`users/${gameState.userId}/focusPlayer/timestamp`]: sec });
+            if (gameState.userId) update(ref(database), { [`${dashProfilePath()}/focusPlayer/timestamp`]: sec });
         });
     }
 
@@ -4637,7 +4783,7 @@ function setupFocusPanelUI() {
             if (gameState.focusYTPlayer) {
                 gameState.focusYTPlayer.setVolumePercent(pct);
                 if (gameState.userId) {
-                    update(ref(database), { [`users/${gameState.userId}/focusPlayer/volume`]: pct });
+                    update(ref(database), { [`${dashProfilePath()}/focusPlayer/volume`]: pct });
                 }
             }
         });
@@ -5111,9 +5257,30 @@ function listenToRace() {
             return;
         }
 
+        // Firebase car data is now a slow (1s) fallback behind the WebSocket
+        // relay stream — keep the fresher relayed positions for any opponent the
+        // relay updated in the last 2s, or the snapshot would yank their car
+        // backward on every fallback write (same anti-snap idea as avatars).
+        {
+            const _wsAt = gameState.race._carWsAt || {};
+            const _prevCars = gameState.race.session?.cars;
+            if (mySession.cars && _prevCars) {
+                const _now = Date.now();
+                for (const uid of Object.keys(mySession.cars)) {
+                    const pc = _prevCars[uid];
+                    if (uid !== gameState.userId && pc && _now - (_wsAt[uid] || 0) < 2000) {
+                        mySession.cars[uid] = {
+                            ...mySession.cars[uid],
+                            x: pc.x, y: pc.y, angle: pc.angle, speed: pc.speed,
+                        };
+                    }
+                }
+            }
+        }
         gameState.race.session = mySession;
         gameState.race.sessionKey = myKey;
         gameState.race.returnPoint = mySession.participants[gameState.userId].returnPoint || gameState.race.returnPoint;
+        loadRaceTrackAsset();   // lazy-loaded — ensure guests have it before the flag drops
 
         if (mySession.phase === 'lobby') {
             gameState.race.active = false;
@@ -5274,6 +5441,7 @@ function startHostedRace() {
     const session = gameState.race.session;
     if (!session || session.hostId !== gameState.userId || session.phase !== 'lobby') return;
     if (!isRaceTrackReady()) {
+        loadRaceTrackAsset();   // lazy-loaded — make sure it's on the way
         showRaceMessage('جاري تحميل حلبة السباق، حاول مرة أخرى');
         return;
     }
@@ -5473,6 +5641,16 @@ function syncRaceCar(force) {
     gameState.race.lastSync = now;
     const car = gameState.race.localCar;
     if (!car || !gameState.race.session) return;
+    // Live car telemetry rides the WebSocket relay (free, ~11/sec — same cadence
+    // as before). Firebase used to take ALL of these writes, and every client in
+    // the lobby holds a live listener on the sessions node — ~11 writes/sec ×
+    // racers × listeners was by far the app's most expensive Firebase pattern.
+    // Firebase now gets a 1s authoritative fallback (4/sec if the socket is down
+    // so old/relay-less clients still see the race, just less smoothly).
+    const wsOk = sendRaceCarWS(car);
+    const fbInterval = wsOk ? 1000 : 250;
+    if (!force && now - (gameState.race.lastFbSync || 0) < fbInterval) return;
+    gameState.race.lastFbSync = now;
     update(ref(database), {
         [raceSessionPath(`cars/${gameState.userId}`)]: {
             username: car.username,
@@ -5480,6 +5658,47 @@ function syncRaceCar(force) {
             distance: car.distance, lap: car.lap, finished: car.finished || false
         }
     });
+}
+
+// Send our race car over the presence relay. The payload deliberately has NO
+// `uid` field (it uses `cuid`), so clients running older code drop it in
+// onPresenceMessage's uid guard instead of mistaking it for an avatar position.
+function sendRaceCarWS(car) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN || !gameState.race.sessionKey) return false;
+    const payload = JSON.stringify({
+        t: 'car',
+        cuid: gameState.userId,
+        k: gameState.race.sessionKey,
+        x: Math.round(car.x), y: Math.round(car.y),
+        a: Math.round((car.angle || 0) * 1000) / 1000,
+        s: Math.round((car.speed || 0) * 100) / 100,
+        d: car.distance || 0, l: car.lap || 1,
+        f: car.finished ? 1 : 0,
+        u: car.username || '',
+    });
+    try { ws.send(payload); return true; } catch (_) { return false; }
+}
+
+// Apply a relayed opponent car to the same structure the Firebase listener
+// feeds (session.cars) — updateRaceCarVisuals lerps from it either way.
+function onRaceCarWS(msg) {
+    if (!msg.cuid || msg.cuid === gameState.userId) return;
+    const race = gameState.race;
+    if (!race.session || !race.sessionKey || msg.k !== race.sessionKey) return;
+    if (!race.session.cars) race.session.cars = {};
+    const prev = race.session.cars[msg.cuid] || {};
+    race.session.cars[msg.cuid] = {
+        ...prev,
+        username: msg.u || prev.username || 'لاعب',
+        x: msg.x, y: msg.y,
+        angle: msg.a || 0, speed: msg.s || 0,
+        distance: msg.d ?? prev.distance ?? 0,
+        lap: msg.l ?? prev.lap ?? 1,
+        finished: msg.f === 1 || prev.finished || false,
+    };
+    race._carWsAt = race._carWsAt || {};
+    race._carWsAt[msg.cuid] = Date.now();
 }
 
 function scheduleRaceReturn() {
@@ -5510,6 +5729,7 @@ function returnFromRace(clearPanel) {
     gameState.race.active = false;
     gameState.race.localCar = null;
     gameState.race.carVisuals = {};
+    gameState.race._carWsAt = {};
     gameState.race.camera = { x: 0, y: 0, angle: 0 };
     gameState.race.localResultSent = false;
     // Clear working flag so others know the player is no longer racing
@@ -5951,6 +6171,11 @@ function doLogout() {
                 raceSession.phase === 'teleporting')) {
                 cleanups[lobbyPath(`minigames/race/sessions/${raceSessionKey}`)] = null;
             }
+            // Reload no matter what after 2s — on a flaky connection the ack can
+            // take forever and the exit felt stuck. The armed onDisconnect ops
+            // fire server-side when the reload drops the socket, so cleanup still
+            // happens even if these writes never ack.
+            setTimeout(() => window.location.reload(), 2000);
             update(ref(database), cleanups)
                 .then(() => window.location.reload())
                 .catch(() => window.location.reload());
@@ -5959,7 +6184,7 @@ function doLogout() {
             // Explicit logout = clean end. Cancel the disconnect handlers + wipe the
             // reclaim stash so we don't keep a laptop or reload into an old session.
             cancelSessionDisconnect(false);
-            logoutCleanups[`users/${gameState.userId}/lastPomoSession`] = null;
+            logoutCleanups[`${dashProfilePath()}/lastPomoSession`] = null;
             const _activeLap = _activeSessionLaptopId();
             if (_activeLap != null && _sessionIsSolo()) {
                 onDisconnect(ref(database, lobbyPath(`pomodoro/${_activeLap}`))).cancel();
@@ -5979,7 +6204,11 @@ function doLogout() {
                     logoutCleanups[spPath(`live/${_sp.sessionId}/participants/${gameState.userId}`)] = null;
                 }
             }
-            if (Object.keys(logoutCleanups).length) update(ref(database), logoutCleanups);
+            if (Object.keys(logoutCleanups).length) update(ref(database), logoutCleanups).catch(() => {});
+            // Reload no matter what after 2s — a slow ack made logout feel stuck.
+            // The onDisconnect(activeInGame=false) armed at login fires server-side
+            // when the reload drops the socket, so presence clears regardless.
+            setTimeout(() => window.location.reload(), 2000);
             set(ref(database, `users/${gameState.userId}/activeInGame`), false)
                 .then(() => window.location.reload())
                 .catch(() => window.location.reload());
@@ -6108,8 +6337,11 @@ function listenToPlayers() {
                             freeWorkStartTime:  userData.freeWorkStartTime || 0,
                             freeTotalWorkMs:    userData.freeTotalWorkMs   || 0,
                             coopHostId:         userData.coopHostId || null,
-                            // JUICE: others pop in with a 0→100% overshoot scale.
-                            _entryT: (JUICE_ENTRANCE && !isCurrentUser) ? performance.now() : null,
+                            // Hold a new remote player invisible until their position settles,
+                            // then pop them in (see SPAWN_SETTLE_MS) — no "snap on join". The
+                            // pop-in `_entryT` is set at promotion time, not here.
+                            _pendingSpawn: (!isCurrentUser) ? performance.now() : null,
+                            _entryT: null,
                         };
                     } else {
                         const player = gameState.players[userId];
@@ -6135,15 +6367,22 @@ function listenToPlayers() {
                             if (userData.x !== undefined && userData.x !== null
                              && userData.y !== undefined && userData.y !== null) {
                                 setEntityTarget(player, userData.x, userData.y);
-                                // Only feed the interpolation buffer from Firebase when the
-                                // WebSocket isn't the live source. A Firebase write carries a
-                                // STALE position (round-trip latency) but a fresh timestamp, so
-                                // interleaving it during active WS streaming yanks the avatar
-                                // backward → the "snapping" users reported. The WS path keeps
-                                // movement smooth; Firebase is only the fallback when WS is quiet.
-                                const _now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-                                if (_now - (player._lastWsSampleAt || 0) > 1000) {
-                                    pushNetSample(player, userData.x, userData.y);
+                                if (player._pendingSpawn != null) {
+                                    // Still settling: pin render to the latest position (no travel,
+                                    // no buffer) so nothing is visible until we pop them in.
+                                    player.renderX = userData.x; player.renderY = userData.y;
+                                    player._netBuf = null;
+                                } else {
+                                    // Only feed the interpolation buffer from Firebase when the
+                                    // WebSocket isn't the live source. A Firebase write carries a
+                                    // STALE position (round-trip latency) but a fresh timestamp, so
+                                    // interleaving it during active WS streaming yanks the avatar
+                                    // backward → the "snapping" users reported. The WS path keeps
+                                    // movement smooth; Firebase is only the fallback when WS is quiet.
+                                    const _now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+                                    if (_now - (player._lastWsSampleAt || 0) > 1000) {
+                                        pushNetSample(player, userData.x, userData.y);
+                                    }
                                 }
                             }
                             player.isMoving          = userData.isMoving || false;
@@ -6273,7 +6512,10 @@ function sendPositionWS(x, y, force) {
 function onPresenceMessage(data) {
     let msg;
     try { msg = JSON.parse(data); } catch (_) { return; }
-    if (!msg || !msg.uid || msg.uid === gameState.userId) return;
+    if (!msg) return;
+    // Race car telemetry (uses `cuid`, not `uid` — see sendRaceCarWS).
+    if (msg.t === 'car') { onRaceCarWS(msg); return; }
+    if (!msg.uid || msg.uid === gameState.userId) return;
     if (msg.t === 'bye') {
         // Firebase presence owns add/remove; just stop their walk animation so
         // they don't keep "moonwalking" until the next Firebase update.
@@ -6295,7 +6537,12 @@ function onPresenceMessage(data) {
         // into the interpolation buffer and snap the avatar backward.
         player._lastWsSampleAt = (typeof performance !== 'undefined') ? performance.now() : Date.now();
         setEntityTarget(player, msg.x, msg.y);  // keep .x/.y authoritative
-        pushNetSample(player, msg.x, msg.y);    // feed the interpolation buffer
+        if (player._pendingSpawn != null) {
+            // Still settling in — pin (no buffered travel) until we pop them in.
+            player.renderX = msg.x; player.renderY = msg.y; player._netBuf = null;
+        } else {
+            pushNetSample(player, msg.x, msg.y);    // feed the interpolation buffer
+        }
     }
 }
 
@@ -6360,7 +6607,6 @@ function handleMovement() {
     if (JUICE_ENTRANCE && _entrance.active) return;   // JUICE: lock controls during the login entrance
     if (dashboardIsOpen()) return;                    // dashboard overlay locks movement
     if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive) return;
-    if (document.querySelector('.modal-overlay.active')) return;
     const player = gameState.players[gameState.userId];
     if (!player) return;
     let dx = 0, dy = 0;
@@ -6380,6 +6626,10 @@ function handleMovement() {
         if (jSprint) isSprinting = true;
     }
     if (dx !== 0 || dy !== 0) {
+        // Modal check only when there IS movement input — the full-document
+        // querySelector ran on every idle frame before and was measurable on
+        // weak phones. Behaviour is identical: with a modal open, input is ignored.
+        if (document.querySelector('.modal-overlay.active')) return;
         player.isMoving = true;
         player.isSprinting = isSprinting;
         const nextX = player.x + dx;
@@ -6772,15 +7022,19 @@ function gameLoop(timestamp) {
     if (deltaTime > 100) deltaTime = 100; // Cap to avoid large jumps if tab is inactive
     gameState.dtFactor = deltaTime / 16.666; // Standardize to 60fps (1000ms / 60 = 16.666ms)
 
-    // Cache the graphics tier once per frame. Hot draw code reads these flags
-    // instead of calling the helpers (which hit localStorage) many times per frame.
+    // Cache the settings-derived flags for the hot draw code. The getters hit
+    // localStorage (a synchronous disk-backed read), so instead of re-reading
+    // them every frame we refresh once a second — and the settings toggles zero
+    // `_settingsFlagsAt` so a change still applies on the very next frame.
     // _lowGfx = reduced compositing (drops shadows etc.); _potato = also drop the
     // atmosphere gradients.
-    gameState._lowGfx = isReducedGraphics();
-    gameState._potato = isPotato();
-    // Cache the "disable my working idle animation" setting once per frame too —
-    // drawPlayers reads it per-avatar and the getter hits localStorage.
-    gameState._disableIdleAnim = getDisableIdleAnim();
+    if (!gameState._settingsFlagsAt || timestamp - gameState._settingsFlagsAt > 1000) {
+        gameState._settingsFlagsAt = timestamp;
+        gameState._lowGfx = isReducedGraphics();
+        gameState._potato = isPotato();
+        gameState._disableIdleAnim = getDisableIdleAnim();
+        gameState._hideNames = getHideNames();
+    }
     // On mobile, cap dtFactor more aggressively to reduce stutters from dropped frames
     if (isMobile() && gameState.dtFactor > 2) gameState.dtFactor = 2;
 
@@ -6813,7 +7067,7 @@ function gameLoop(timestamp) {
     try {
         // Edge bokeh: hide during all three minigames (they each return early before render()).
         // Must run first so the div state is always correct regardless of which path we take.
-        if (!isLowGraphics()) {
+        if (!gameState._lowGfx) {
             const _inMini =
                 (gameState.laptopBoss.active && gameState.laptopBoss.session &&
                     (gameState.laptopBoss.session.phase === 'active' || gameState.laptopBoss.session.phase === 'finished')) ||
@@ -6821,17 +7075,26 @@ function gameLoop(timestamp) {
                     (gameState.race.session.phase === 'race' || gameState.race.session.phase === 'finished')) ||
                 (gameState.coffee.active && gameState.coffee.session &&
                     (gameState.coffee.session.phase === 'active' || gameState.coffee.session.phase === 'finished'));
-            const _bokeh = document.getElementById('edge-bokeh');
+            const _bokeh = gameState._bokehEl || (gameState._bokehEl = document.getElementById('edge-bokeh'));
             if (_bokeh) {
+                // Only touch the DOM when the value actually changes — writing
+                // style.backdropFilter every frame forced a style recalc 60×/sec
+                // even while the zoom was untouched.
                 if (_inMini) {
-                    _bokeh.style.display = 'none';
+                    if (gameState._bokehState !== 'none') {
+                        gameState._bokehState = 'none';
+                        _bokeh.style.display = 'none';
+                    }
                 } else {
                     // Blur scales linearly with zoom: 0px at MIN_ZOOM, 10px at MAX_ZOOM
                     const _zoomT = (gameState.zoom - MIN_ZOOM) / (MAX_ZOOM - MIN_ZOOM);
                     const _blur  = Math.round(_zoomT * 10 * 10) / 10; // 0.0–10.0 px
-                    _bokeh.style.display = 'block';
-                    _bokeh.style.backdropFilter = `blur(${_blur}px) saturate(1.15)`;
-                    _bokeh.style.webkitBackdropFilter = `blur(${_blur}px) saturate(1.15)`;
+                    if (gameState._bokehState !== _blur) {
+                        gameState._bokehState = _blur;
+                        _bokeh.style.display = 'block';
+                        _bokeh.style.backdropFilter = `blur(${_blur}px) saturate(1.15)`;
+                        _bokeh.style.webkitBackdropFilter = `blur(${_blur}px) saturate(1.15)`;
+                    }
                 }
             }
         }
@@ -8298,6 +8561,7 @@ async function triggerRaceTeleport() {
     playSoundRobust(gameState.sounds.minigameButtonPressed);
 
     if (!isRaceTrackReady()) {
+        loadRaceTrackAsset();   // lazy-loaded — make sure it's on the way
         showRaceMessage('جاري تحميل حلبة السباق، حاول مرة أخرى');
         return;
     }
@@ -8821,14 +9085,18 @@ function drawFocusMask(W, H) {
     }
     const mCanvas = gameState.maskCanvas;
     const mCtx = gameState.maskCtx;
-    // mCanvas is always physical resolution to draw sharp masks
-    if (mCanvas.width !== canvas.width || mCanvas.height !== canvas.height) {
-        mCanvas.width  = canvas.width;
-        mCanvas.height = canvas.height;
+    // Reduced tiers render the mask at HALF resolution — it's a soft dark wash
+    // with gradient-faded cutouts, so the upscale is invisible but the per-frame
+    // fill cost drops 4×. High tier keeps full physical resolution.
+    const mScale = gameState._lowGfx ? 0.5 : 1;
+    const mDpr = dpr * mScale;
+    const wantW = Math.max(1, Math.round(canvas.width  * mScale));
+    const wantH = Math.max(1, Math.round(canvas.height * mScale));
+    if (mCanvas.width !== wantW || mCanvas.height !== wantH) {
+        mCanvas.width  = wantW;
+        mCanvas.height = wantH;
+        gameState._maskKey = null;   // size changed → force re-render
     }
-    mCtx.clearRect(0, 0, mCanvas.width, mCanvas.height);
-    mCtx.fillStyle = `rgba(0, 0, 0, ${gameState.focusAlpha})`;
-    mCtx.fillRect(0, 0, mCanvas.width, mCanvas.height);
 
     const player = gameState.players[gameState.userId];
 
@@ -8850,42 +9118,63 @@ function drawFocusMask(W, H) {
         mls.alpha += (1 - mls.alpha) * mLerp;
     }
 
-    if (player) {
-        mCtx.globalCompositeOperation = 'destination-out';
-        const centerX = mCanvas.width  / 2;
-        const centerY = mCanvas.height / 2;
-        const zoom = gameState.zoom;
-        const { x: playerX, y: playerY } = getPlayerRenderPos(player);
-        const pScreenX = centerX + (playerX + gameState.camera.x) * zoom * dpr;
-        const pScreenY = centerY + (playerY + gameState.camera.y) * zoom * dpr;
+    // Skip the offscreen re-render entirely when nothing that shapes the mask
+    // has moved (the common case: seated in a session, camera settled). The
+    // composite below still runs every frame; only the expensive clear + fill +
+    // gradient cutout work is skipped. Values are rounded so the asymptotic
+    // lerps converge to a stable key instead of re-rendering forever.
+    const pPos = player ? getPlayerRenderPos(player) : { x: 0, y: 0 };
+    const maskKey = player ? [
+        (gameState.focusAlpha * 500 | 0), (pPos.x * 10 | 0), (pPos.y * 10 | 0),
+        (gameState.camera.x * 10 | 0), (gameState.camera.y * 10 | 0),
+        (gameState.zoom * 1000 | 0), gameState.isLockedIn ? 1 : 0,
+        mls.id ?? 'n', (mls.alpha * 500 | 0), (mls.x | 0), (mls.y | 0),
+    ].join(',') : `nop,${(gameState.focusAlpha * 500 | 0)}`;
 
-        const pRadius = (gameState.isLockedIn ? 85 : 75) * zoom * dpr;
-        // Soft radial fade on every tier — the gradient is cheap (one alloc/frame)
-        // and the sharp-edged potato version looked harsh + felt too dim in-session.
-        const pGrad = mCtx.createRadialGradient(pScreenX, pScreenY, pRadius * 0.4, pScreenX, pScreenY, pRadius);
-        pGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
-        pGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-        mCtx.fillStyle = pGrad;
-        mCtx.beginPath();
-        mCtx.arc(pScreenX, pScreenY, pRadius, 0, Math.PI * 2);
-        mCtx.fill();
+    if (maskKey !== gameState._maskKey) {
+        gameState._maskKey = maskKey;
 
-        if (mls.id !== null && mls.alpha > 0.02 && !gameState.isLockedIn) {
-            const la = mls.alpha;
-            const lScreenX = centerX + (mls.x + gameState.camera.x) * zoom * dpr;
-            const lScreenY = centerY + (mls.y + gameState.camera.y) * zoom * dpr;
-            const lRadius = 100 * zoom * dpr;
-            const lGrad = mCtx.createRadialGradient(lScreenX, lScreenY, lRadius * 0.4, lScreenX, lScreenY, lRadius);
-            lGrad.addColorStop(0, `rgba(255, 255, 255, ${la})`);
-            lGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
-            mCtx.fillStyle = lGrad;
+        mCtx.clearRect(0, 0, mCanvas.width, mCanvas.height);
+        mCtx.fillStyle = `rgba(0, 0, 0, ${gameState.focusAlpha})`;
+        mCtx.fillRect(0, 0, mCanvas.width, mCanvas.height);
+
+        if (player) {
+            mCtx.globalCompositeOperation = 'destination-out';
+            const centerX = mCanvas.width  / 2;
+            const centerY = mCanvas.height / 2;
+            const zoom = gameState.zoom;
+            const playerX = pPos.x, playerY = pPos.y;
+            const pScreenX = centerX + (playerX + gameState.camera.x) * zoom * mDpr;
+            const pScreenY = centerY + (playerY + gameState.camera.y) * zoom * mDpr;
+
+            const pRadius = (gameState.isLockedIn ? 85 : 75) * zoom * mDpr;
+            // Soft radial fade on every tier — the sharp-edged version looked
+            // harsh + felt too dim in-session.
+            const pGrad = mCtx.createRadialGradient(pScreenX, pScreenY, pRadius * 0.4, pScreenX, pScreenY, pRadius);
+            pGrad.addColorStop(0, 'rgba(255, 255, 255, 1)');
+            pGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+            mCtx.fillStyle = pGrad;
             mCtx.beginPath();
-            mCtx.arc(lScreenX, lScreenY, lRadius, 0, Math.PI * 2);
+            mCtx.arc(pScreenX, pScreenY, pRadius, 0, Math.PI * 2);
             mCtx.fill();
+
+            if (mls.id !== null && mls.alpha > 0.02 && !gameState.isLockedIn) {
+                const la = mls.alpha;
+                const lScreenX = centerX + (mls.x + gameState.camera.x) * zoom * mDpr;
+                const lScreenY = centerY + (mls.y + gameState.camera.y) * zoom * mDpr;
+                const lRadius = 100 * zoom * mDpr;
+                const lGrad = mCtx.createRadialGradient(lScreenX, lScreenY, lRadius * 0.4, lScreenX, lScreenY, lRadius);
+                lGrad.addColorStop(0, `rgba(255, 255, 255, ${la})`);
+                lGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+                mCtx.fillStyle = lGrad;
+                mCtx.beginPath();
+                mCtx.arc(lScreenX, lScreenY, lRadius, 0, Math.PI * 2);
+                mCtx.fill();
+            }
+            mCtx.globalCompositeOperation = 'source-over';
         }
-        mCtx.globalCompositeOperation = 'source-over';
     }
-    // Draw physical-resolution mask at logical size (ctx is DPR-scaled)
+    // Draw the mask at logical size (ctx is DPR-scaled)
     ctx.drawImage(mCanvas, 0, 0, W, H);
 
     ctx.save();
@@ -9485,6 +9774,12 @@ function drawWindParticles(W, H) {
 // ── Ambient void atmosphere ──────────────────────────────────────────────────
 // Deep colour blobs drawn in screen-space into the black void around the world.
 // They parallax with the camera so the empty space feels dimensional.
+// Gradient objects are cached per canvas size and the camera parallax is applied
+// with ctx.translate — building 2 radial gradients (with colour-stop string
+// parsing) EVERY frame was pure allocation churn. Visually identical: a gradient
+// lives in canvas space, so translating the context moves it exactly like
+// re-creating it at the offset position did. The cache hangs off the ctx itself
+// so the PiP window (its own context + size) never thrashes the main one.
 function drawBackgroundAtmosphere(W, H) {
     const ctx  = gameState.ctx;
     const cam  = gameState.camera;
@@ -9493,34 +9788,34 @@ function drawBackgroundAtmosphere(W, H) {
     const ox   = -cam.x * zoom * px;
     const oy   = -cam.y * zoom * px;
 
-    ctx.save();
-
-    if (!gameState._potato) {
+    let _atmoCache = ctx._atmoCache;
+    if (!_atmoCache || _atmoCache.w !== W || _atmoCache.h !== H) {
         // Deep indigo pool — top-left void
-        const g1 = ctx.createRadialGradient(
-            W * 0.05 + ox,        H * 0.10 + oy,        0,
-            W * 0.05 + ox,        H * 0.10 + oy,        W * 0.62
-        );
+        const g1 = ctx.createRadialGradient(W * 0.05, H * 0.10, 0, W * 0.05, H * 0.10, W * 0.62);
         g1.addColorStop(0, 'rgba(42, 18, 78, 0.58)');
         g1.addColorStop(1, 'rgba(8, 4, 18, 0)');
-        ctx.fillStyle = g1;
-        ctx.fillRect(0, 0, W, H);
-
         // Midnight blue — bottom-right void
-        const g2 = ctx.createRadialGradient(
-            W * 0.94 + ox * 0.75, H * 0.88 + oy * 0.75, 0,
-            W * 0.94 + ox * 0.75, H * 0.88 + oy * 0.75, W * 0.54
-        );
+        const g2 = ctx.createRadialGradient(W * 0.94, H * 0.88, 0, W * 0.94, H * 0.88, W * 0.54);
         g2.addColorStop(0, 'rgba(10, 24, 68, 0.52)');
         g2.addColorStop(1, 'rgba(4, 8, 28, 0)');
-        ctx.fillStyle = g2;
-        ctx.fillRect(0, 0, W, H);
-    } else {
         // Potato: single cheaper blob
         const gm = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.max(W, H) * 0.7);
         gm.addColorStop(0, 'rgba(30, 14, 58, 0.45)');
         gm.addColorStop(1, 'rgba(6, 3, 14, 0)');
-        ctx.fillStyle = gm;
+        _atmoCache = ctx._atmoCache = { w: W, h: H, g1, g2, gm };
+    }
+
+    ctx.save();
+
+    if (!gameState._potato) {
+        ctx.translate(ox, oy);
+        ctx.fillStyle = _atmoCache.g1;
+        ctx.fillRect(-ox, -oy, W, H);
+        ctx.translate(ox * -0.25, oy * -0.25);   // g2 parallaxes at 0.75× of g1
+        ctx.fillStyle = _atmoCache.g2;
+        ctx.fillRect(-ox * 0.75, -oy * 0.75, W, H);
+    } else {
+        ctx.fillStyle = _atmoCache.gm;
         ctx.fillRect(0, 0, W, H);
     }
 
@@ -9539,19 +9834,24 @@ function drawSunRays(W, H) {
     const ox   = -cam.x * zoom * px;
     const oy   = -cam.y * zoom * px;
 
-    // Source: just off the top-right corner
-    const cx = W * 0.90 + ox;
-    const cy = H * -0.08 + oy;
-    const r  = Math.max(W, H) * 1.55;
+    // Gradient cached per canvas size (see drawBackgroundAtmosphere) — the
+    // parallax is applied with a translate instead of rebuilding it every frame.
+    let cache = ctx._sunCache;
+    if (!cache || cache.w !== W || cache.h !== H) {
+        // Source: just off the top-right corner
+        const cx = W * 0.90, cy = H * -0.08, r = Math.max(W, H) * 1.55;
+        const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+        grad.addColorStop(0,    'rgba(255, 220, 130, 0.16)');
+        grad.addColorStop(0.25, 'rgba(255, 195,  85, 0.10)');
+        grad.addColorStop(0.55, 'rgba(255, 165,  50, 0.04)');
+        grad.addColorStop(1,    'rgba(255, 140,  30, 0)');
+        cache = ctx._sunCache = { w: W, h: H, grad };
+    }
 
     ctx.save();
-    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
-    grad.addColorStop(0,    'rgba(255, 220, 130, 0.16)');
-    grad.addColorStop(0.25, 'rgba(255, 195,  85, 0.10)');
-    grad.addColorStop(0.55, 'rgba(255, 165,  50, 0.04)');
-    grad.addColorStop(1,    'rgba(255, 140,  30, 0)');
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
+    ctx.translate(ox, oy);
+    ctx.fillStyle = cache.grad;
+    ctx.fillRect(-ox, -oy, W, H);
     ctx.restore();
 }
 
@@ -9586,17 +9886,24 @@ function drawFocusFog(W, H) {
     ctx.save();
     ctx.globalAlpha = gameState.focusFogAlpha * 0.85;
 
-    if (gameState._potato) {
-        // Potato: a static (non-animated) radial gradient — clear in the centre so the
-        // session view doesn't feel dim, darker only at the edges. Cheaper than the
-        // animated version (no sin/cos, fixed centre) but no longer a flat dark wash.
-        const grad = ctx.createRadialGradient(
-            w / 2, h / 2, Math.min(w, h) * 0.35,
-            w / 2, h / 2, Math.max(w, h) * 0.95
-        );
-        grad.addColorStop(0, 'rgba(10, 15, 30, 0)');
-        grad.addColorStop(0.6, 'rgba(10, 15, 30, 0.12)');
-        grad.addColorStop(1, 'rgba(13, 27, 42, 0.45)');
+    if (gameState._lowGfx) {
+        // Reduced tiers (متوسطة + بطاطس): a static (non-animated) radial gradient —
+        // clear in the centre so the session view doesn't feel dim, darker only at
+        // the edges. The animated version below is THREE full-screen gradient fills
+        // rebuilt every frame — the single heaviest per-frame cost during a work
+        // session on a phone — so reduced tiers get the one cached static wash.
+        let grad = ctx._fogCache && ctx._fogCache.w === w && ctx._fogCache.h === h
+            ? ctx._fogCache.grad : null;
+        if (!grad) {
+            grad = ctx.createRadialGradient(
+                w / 2, h / 2, Math.min(w, h) * 0.35,
+                w / 2, h / 2, Math.max(w, h) * 0.95
+            );
+            grad.addColorStop(0, 'rgba(10, 15, 30, 0)');
+            grad.addColorStop(0.6, 'rgba(10, 15, 30, 0.12)');
+            grad.addColorStop(1, 'rgba(13, 27, 42, 0.45)');
+            ctx._fogCache = { w, h, grad };
+        }
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, w, h);
     } else {
@@ -9640,6 +9947,7 @@ function drawConnections() {
     const ctx = gameState.ctx;
     const channelGroups = {};
     for (const player of Object.values(gameState.players)) {
+        if (player._pendingSpawn != null) continue;   // still invisible (settling in)
         if (!channelGroups[player.channelName]) channelGroups[player.channelName] = [];
         channelGroups[player.channelName].push(player);
     }
@@ -9696,6 +10004,30 @@ function blendHexColors(fromHex, toHex, t) {
     return `rgb(${r}, ${g}, ${b})`;
 }
 
+// Pre-tinted avatar variants for the reduced graphics tiers. Setting ctx.filter
+// during hot drawing forces the canvas onto a slow intermediate-surface path on
+// mobile GPUs (per avatar, per frame) — instead we bake the tint ONCE into an
+// offscreen copy and draw that. Where ctx.filter is unsupported (older Safari)
+// the bake is a plain copy, which matches the old behaviour there (the live
+// filter was silently ignored).
+function _tintedAvatar(userId, img, kind) {   // kind: 'gray' (working) | 'ghost' (not in game)
+    const cache = gameState._avatarTintCache || (gameState._avatarTintCache = {});
+    const key = `${userId}|${kind}`;
+    let c = cache[key];
+    if (c === undefined) {
+        try {
+            const w = img.naturalWidth || 128, h = img.naturalHeight || 128;
+            const cv = document.createElement('canvas');
+            cv.width = w; cv.height = h;
+            const tctx = cv.getContext('2d');
+            tctx.filter = kind === 'gray' ? 'grayscale(60%)' : 'saturate(0) brightness(0.72)';
+            tctx.drawImage(img, 0, 0, w, h);
+            c = cache[key] = cv;
+        } catch (_) { c = cache[key] = null; }   // bake failed → fall back to the original
+    }
+    return c || img;
+}
+
 function drawPlayers(onlyLocal = false) {
     const ctx = gameState.ctx;
     const teleportAnim = gameState.race.teleportAnim || gameState.coffee.teleportAnim;
@@ -9703,6 +10035,8 @@ function drawPlayers(onlyLocal = false) {
     for (const player of Object.values(gameState.players)) {
         const isCurrentUser = player.userId === gameState.userId;
         if (onlyLocal && !isCurrentUser) continue;
+        // Held invisible until their join position settles (see SPAWN_SETTLE_MS).
+        if (player._pendingSpawn != null) continue;
 
         const { x: screenX, y: renderY } = getPlayerRenderPos(player);
         const screenY = renderY - (player.bobOffset || 0);
@@ -9825,7 +10159,11 @@ function drawPlayers(onlyLocal = false) {
         ctx.scale(workScaleX * _juiceScale * _juiceSquashX, workScaleY * _juiceScale * _juiceSquashY);
 
         if (grayMix > 0.01) {
-            ctx.filter = `saturate(${colorAlpha}) brightness(${0.72 + 0.28 * colorAlpha})`;
+            // Reduced tiers replace the live filter with pre-tinted avatar copies
+            // (see _tintedAvatar) — only the alpha fade stays live.
+            if (!gameState._lowGfx) {
+                ctx.filter = `saturate(${colorAlpha}) brightness(${0.72 + 0.28 * colorAlpha})`;
+            }
             ctx.globalAlpha = 0.55 + 0.45 * colorAlpha;
         }
 
@@ -9879,9 +10217,28 @@ function drawPlayers(onlyLocal = false) {
 
         const img = gameState.avatarCache[player.userId];
         if (img && img !== 'failed') {
-            if (shouldGrayWorld) ctx.filter = 'grayscale(60%)';
-            ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-            ctx.filter = 'none';
+            if (gameState._lowGfx) {
+                // No live ctx.filter on reduced tiers — draw baked tinted copies.
+                if (grayMix > 0.01) {
+                    // Ghost fade: fully-desaturated copy under, colour on top at
+                    // colorAlpha (approximates the saturate/brightness ramp).
+                    ctx.drawImage(_tintedAvatar(player.userId, img, 'ghost'), -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+                    if (colorAlpha > 0.03) {
+                        const _prevA = ctx.globalAlpha;
+                        ctx.globalAlpha = _prevA * colorAlpha;
+                        ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+                        ctx.globalAlpha = _prevA;
+                    }
+                } else if (shouldGrayWorld) {
+                    ctx.drawImage(_tintedAvatar(player.userId, img, 'gray'), -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+                } else {
+                    ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+                }
+            } else {
+                if (shouldGrayWorld) ctx.filter = 'grayscale(60%)';
+                ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+                ctx.filter = 'none';
+            }
         } else {
             const placeholderColor = isCurrentUser ? COLORS.blue : '#ccc';
             let fillColor = placeholderColor;
@@ -9902,7 +10259,7 @@ function drawPlayers(onlyLocal = false) {
         ctx.globalAlpha = 1;
         ctx.restore(); // restores translate, rotate, scale
 
-        if (player.nameAlpha > 0.01 && !tpData && !getHideNames()) {
+        if (player.nameAlpha > 0.01 && !tpData && !gameState._hideNames) {
             ctx.fillStyle = `rgba(255, 255, 255, ${player.nameAlpha})`;
             ctx.font = '500 14px Rubik';
             ctx.textAlign = 'center';
@@ -11098,6 +11455,7 @@ function setupSettingsUI() {
         // and atmosphere gates react immediately.
         gameState._lowGfx = isReducedGraphics();
         gameState._potato = isPotato();
+        gameState._settingsFlagsAt = 0;   // force the gameLoop cache to re-read next frame
         applyGraphicsBodyClass();   // toggle reduced-gfx/potato-gfx body classes for the CSS wins
         resizeCanvas();
     }
@@ -11114,6 +11472,7 @@ function setupSettingsUI() {
     namesBtn.addEventListener('click', () => {
         const next = getHideNames() ? '0' : '1';
         localStorage.setItem(SETTINGS_NAMES_KEY, next);
+        gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
         _reflectNames();
     });
 
@@ -11129,6 +11488,7 @@ function setupSettingsUI() {
         idleBtn.addEventListener('click', () => {
             const next = getDisableIdleAnim() ? '0' : '1';
             localStorage.setItem(SETTINGS_NOIDLE_KEY, next);
+            gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
             _reflectIdle();
         });
     }
@@ -12453,26 +12813,37 @@ function _startFreeModeWork() {
     if (gameState.focusYTPlayer?.videoId) gameState.focusYTPlayer.fadeInAndResume(1500);
 }
 
-function saveFreeModStateToFirebase() {
+// `docThrottled` is passed ONLY by the periodic 15s heartbeat: the laptop doc
+// lives under the lobby pomodoro node, which EVERY client holds a live listener
+// on — each write fans out to all of them. Nobody derives the live timer from
+// this doc (observers compute it from users/{uid} freeWorkStartTime); the
+// heartbeat copy only serves restore/expiry, so 45s granularity is plenty
+// there. Phase changes and relocations still write immediately. The private
+// reclaim stash (zero fan-out) always refreshes on every call.
+function saveFreeModStateToFirebase(docThrottled = false) {
     const fm = gameState.freeMode;
     if (!fm.active || fm.laptopId == null) return;
     let currentTotalMs = fm.totalWorkMs;
     if (fm.phase === 'work' && fm.workStartTime > 0) {
         currentTotalMs += Date.now() - fm.workStartTime;
     }
-    fm._lastSavedAt = Date.now();
+    const now = Date.now();
+    fm._lastSavedAt = now;
 
-    // Write full doc so Firebase has the correct totalWorkMs on restore
-    update(ref(database), { [lobbyPath(`pomodoro/${fm.laptopId}`)]: {
-        claimedBy:    gameState.userId,
-        phase:        fm.phase === 'break' ? 'free-break' : 'free-work',
-        mode:         'free',
-        createdAt:    fm._createdAt || Date.now(),
-        endTime:      0,
-        totalWorkMs:  currentTotalMs,
-        breakEndTime: fm.phase === 'break' ? fm.breakEndTime : 0,
-        savedAt:      Date.now(),
-    }});
+    if (!docThrottled || !fm._lastDocSavedAt || now - fm._lastDocSavedAt > 45000) {
+        fm._lastDocSavedAt = now;
+        // Write full doc so Firebase has the correct totalWorkMs on restore
+        update(ref(database), { [lobbyPath(`pomodoro/${fm.laptopId}`)]: {
+            claimedBy:    gameState.userId,
+            phase:        fm.phase === 'break' ? 'free-break' : 'free-work',
+            mode:         'free',
+            createdAt:    fm._createdAt || Date.now(),
+            endTime:      0,
+            totalWorkMs:  currentTotalMs,
+            breakEndTime: fm.phase === 'break' ? fm.breakEndTime : 0,
+            savedAt:      Date.now(),
+        }});
+    }
 
     // Refresh the reclaim stash (with current totalWorkMs) + re-arm the disconnect
     // handlers so a sudden disconnect frees the laptop and preserves progress.
@@ -12532,7 +12903,7 @@ function updateFreeMode() {
     // the 1-hour free-mode expiry measured from break-start.
     const _fmTimerRunning = (fm.phase === 'work' && fm.workStartTime > 0) || fm.phase === 'break';
     if (_fmTimerRunning && Date.now() - fm._lastSavedAt > 15000) {
-        saveFreeModStateToFirebase();
+        saveFreeModStateToFirebase(true);   // heartbeat: laptop-doc write throttled to 45s
     }
 
     if (fm.phase === 'work') {
@@ -12754,6 +13125,10 @@ function endFreeMode() {
     // Dashboard: save the free-mode session. The long-session (>2h) confirm flow
     // saves/discards itself and sets _dashFreeHandled so we don't double-save here.
     if (!_dashFreeHandled) dashSaveSession('free', getCurrentTaskText(), totalMs);
+    // Short free session (not a >2h discard) → tell the user why nothing was saved.
+    if (!_dashFreeHandled && !_dashFreeDiscarded && totalMs > 0 && totalMs < DASH_MIN_SESSION_MS) {
+        showSessionNotSavedToast();
+    }
     _dashFreeHandled = false;
 
     // The end card (and its sound + invoice) appear ONLY for sessions that meet the
@@ -13143,7 +13518,9 @@ function exitPomoNow() {
     if (gameState.freeMode.active) { endFreeMode(); return; }
     // Dashboard: a pomodoro ended early via "انهاء الجلسة" still saves its worked time
     // (no end card — exitPomoNow shows none). The 10-min floor is enforced inside dashSaveSession.
-    dashSaveSession('pomodoro', getCurrentTaskText(), pomoWorkedMsNow());
+    const _pomoWorked = pomoWorkedMsNow();
+    dashSaveSession('pomodoro', getCurrentTaskText(), _pomoWorked);
+    if (_pomoWorked > 0 && _pomoWorked < DASH_MIN_SESSION_MS) showSessionNotSavedToast();
     const sp = gameState.sharedPomo;
 
     // Leave coop session if in one
@@ -17124,6 +17501,22 @@ function freeWorkedMsNow() {
 }
 
 // ── Saving a finished work session (pomodoro OR free) ───────────────────────
+// Bouncy toast telling the user a just-ended session was too short to be saved (under the
+// 10-minute floor) — so the missing session/end-card isn't confusing. Auto-hides after ~3.6s.
+function showSessionNotSavedToast() {
+    const el = document.getElementById('session-toast');
+    if (!el) return;
+    clearTimeout(el._hideT); clearTimeout(el._rmT);
+    el.classList.remove('hide', 'show');
+    void el.offsetWidth;            // restart the entrance animation if re-triggered
+    el.classList.add('show');
+    el._hideT = setTimeout(() => {
+        el.classList.remove('show');
+        el.classList.add('hide');
+        el._rmT = setTimeout(() => el.classList.remove('hide'), 360);   // matches sessionToastOut
+    }, 3600);
+}
+
 function dashSaveSession(mode, task, workedMs) {
     if (!dashTrackingEnabled()) return;
     if (!(workedMs >= DASH_MIN_SESSION_MS)) return;        // 10-minute floor
@@ -17564,50 +17957,89 @@ function dashScheduleAlign() {
     }
 }
 
-// Snap the WRITTEN text onto each paper's 34px texture grid (lines at content-y ≡ 33 mod 34) so
-// it sits cleanly on the printed lines: the date, each heading, the journal, the completed-tasks
-// block, and the to-do rows are snapped top-to-bottom (later blocks re-measure after earlier ones
-// moved, so no drift accumulates). The summary/high-score CHIP rows are left in natural flow on
-// purpose — they're boxes, not writing, and snapping them made them overlap. Flex column on the
-// content means margin-top actually moves things (no collapse).
+// Snap the WRITTEN text onto each paper's 34px texture grid so it reads like real handwriting on
+// ruled paper. The ruled line is drawn at content-y ≡ 33.5 mod 34 (the colored 33→34 band). Arabic
+// text must sit on that line by its ALPHABETIC BASELINE — the level of the connecting ـــ stroke —
+// so descenders (و ي ن-tail) drop below the line and ا/ل/أ rise above it, never touching. Aligning
+// by the box top or box bottom (the old bug) floated the text off the line. So we compute the true
+// baseline offset inside each text block's first line (from real font metrics) and nudge the block
+// via margin-top so that baseline lands on the ruled line. UI boxes (summary + high-score chips)
+// are NOT writing — they're centred in the whitespace BETWEEN two ruled lines instead. Flex column
+// on the content means margin-top actually moves things (no collapse); blocks are done top-to-bottom
+// so each re-measures after the one above moved (no drift).
+const DASH_GRID = 34, DASH_LINE_Y = 33.5;   // ruled line sits at y ≡ 33.5 mod 34
+
+// Real baseline offset (px from a line box's top to its alphabetic baseline) for a given font.
+// Uses canvas font metrics — cached per font-size+family. After document.fonts.ready the Methlama
+// metrics are correct; before that we still return a sane estimate.
+let _dashFmCanvas = null;
+const _dashFmCache = {};
+function _dashBaselineOffset(fontSizePx, fontFamily, lineHeightPx) {
+    const key = fontSizePx + '|' + fontFamily;
+    let m = _dashFmCache[key];
+    if (!m) {
+        _dashFmCanvas = _dashFmCanvas || document.createElement('canvas');
+        const ctx = _dashFmCanvas.getContext('2d');
+        ctx.font = `${fontSizePx}px ${fontFamily}`;
+        const t = ctx.measureText('مبنىكلمة');
+        let asc = t.fontBoundingBoxAscent, desc = t.fontBoundingBoxDescent;
+        if (asc == null) { asc = t.actualBoundingBoxAscent || fontSizePx * 0.8; desc = t.actualBoundingBoxDescent || fontSizePx * 0.2; }
+        m = _dashFmCache[key] = { asc, desc };
+    }
+    // Baseline within a line box = half-leading + ascent = lh/2 + (ascent - descent)/2.
+    return lineHeightPx / 2 + (m.asc - m.desc) / 2;
+}
+
 function dashAlignGridLines() {
-    const PERIOD = 34, PHASE = 33;
-    const snapLine = (y) => Math.round((y - PHASE) / PERIOD) * PERIOD + PHASE;   // onto a printed line (≡33)
-    const snapBox  = (y) => Math.round(y / PERIOD) * PERIOD;                     // line-box start (≡0)
-    // Move `el` by adjusting its margin-top so the y returned by edgeFn lands where snapFn wants.
-    const adjust = (el, snapFn, edgeFn) => {
+    // Measure `el`'s first-line baseline and nudge `moveEl` (default `el`) via margin-top so that
+    // baseline lands on a ruled line. (moveEl differs when the writing lives in a child, e.g. a
+    // to-do line inside a flex row — we measure the line but move the whole list.)
+    const alignBaseline = (el, moveEl) => {
+        if (!el) return;
+        moveEl = moveEl || el;
+        moveEl.style.marginTop = '';
+        const cs = getComputedStyle(el);
+        const fs = parseFloat(cs.fontSize) || 16;
+        const lh = parseFloat(cs.lineHeight) || fs * 1.4;
+        const padTop = parseFloat(cs.paddingTop) || 0;
+        const baseline = el.offsetTop + padTop + _dashBaselineOffset(fs, cs.fontFamily, lh);
+        let d = ((DASH_LINE_Y - baseline) % DASH_GRID + DASH_GRID) % DASH_GRID;   // 0..34
+        if (d > DASH_GRID / 2) d -= DASH_GRID;                               // nearest ±17
+        const mcs = getComputedStyle(moveEl);
+        moveEl.style.marginTop = ((parseFloat(mcs.marginTop) || 0) + d) + 'px';
+    };
+    // Centre a UI box in the whitespace between two ruled lines (its centre → mid-gap ≡ 16.5).
+    const centreInGap = (el) => {
         if (!el) return;
         el.style.marginTop = '';
-        const y = edgeFn(el);
-        const cur = parseFloat(getComputedStyle(el).marginTop) || 0;
-        el.style.marginTop = (cur + (snapFn(y) - y)) + 'px';
+        const cs = getComputedStyle(el);
+        const centre = el.offsetTop + el.offsetHeight / 2;
+        const gapMid = DASH_LINE_Y + DASH_GRID / 2;   // ≡ 16.5 mod 34
+        let d = ((gapMid - centre) % DASH_GRID + DASH_GRID) % DASH_GRID;
+        if (d > DASH_GRID / 2) d -= DASH_GRID;
+        el.style.marginTop = ((parseFloat(cs.marginTop) || 0) + d) + 'px';
     };
-    const align = (el, edgeFn) => adjust(el, snapLine, edgeFn);
-    const baseline = el => el.offsetTop + el.offsetHeight;   // text sits on its own bottom line
-    const top = el => el.offsetTop;
 
     const content = document.getElementById('dash-day-paper');
     if (content) {
-        // Snap the WRITTEN text blocks onto the 34px ruled grid, top-to-bottom (each re-measures
-        // after the one above moved, so no drift accumulates). The chip rows (summary + high
-        // scores) are boxes, not writing — we deliberately leave them in natural flow so they
-        // never overlap; the heading below re-snaps and absorbs any drift they introduce.
         const titles = [...content.querySelectorAll('.dash-section-title')];
-        // (date is NOT snapped — let it ride high near the top edge; snapping forced it down
-        // onto the first ruled line and wasted vertical space)
-        if (titles[0]) align(titles[0], baseline);                    // ملخص عام
-        if (titles[1]) align(titles[1], baseline);                    // يوميات اليوم
-        // The journal has no ruled lines of its own anymore — it leans on the paper texture.
-        // Snap its top to a line-box boundary (≡0) so each 34px text line sits on a texture line.
-        adjust(document.getElementById('dash-journal'), snapBox, top);
-        if (titles[2]) align(titles[2], baseline);                    // المهام المنجزة
-        align(content.querySelector('.dash-day-tasks'), top);         // completed-tasks block
+        alignBaseline(document.getElementById('dash-day-date'));   // date → on a line
+        if (titles[0]) alignBaseline(titles[0]);                   // ملخص عام
+        centreInGap(content.querySelector('.dash-stats'));         // summary chips → between lines
+        centreInGap(content.querySelector('.dash-highscores'));    // score chips  → between lines
+        if (titles[1]) alignBaseline(titles[1]);                   // يوميات اليوم
+        alignBaseline(document.getElementById('dash-journal'));    // journal first line → on a line
+        if (titles[2]) alignBaseline(titles[2]);                   // المهام المنجزة
+        const tasks = content.querySelector('.dash-day-tasks');    // completed tasks → on lines
+        const firstTaskName = tasks && tasks.querySelector('.dash-task-name');
+        if (firstTaskName) alignBaseline(firstTaskName, tasks);    // measure a task line, move the block
+        else alignBaseline(tasks);
     }
 
-    // To-do paper: nudge the list so each 34px row's writing line lands on a texture line.
+    // To-do paper: nudge the list so each 34px row's writing baseline lands on a texture line.
     const list = document.getElementById('dash-todo-list');
-    const firstRow = list && list.querySelector('.dash-todo-row');
-    if (list && firstRow) align(list, el => firstRow.offsetTop + firstRow.offsetHeight);
+    const firstLine = list && list.querySelector('.dash-todo-line');
+    if (firstLine) alignBaseline(firstLine, list);   // measure the line, move the whole list
 }
 
 // ── Analytics summary (stats) ───────────────────────────────────────────────
