@@ -248,6 +248,23 @@ function loadDiscordSession() {
 
 function clearDiscordSession() {
     localStorage.removeItem(DISCORD_SESSION_KEY);
+    try { sessionStorage.removeItem(DISCORD_SILENT_RETRY_KEY); } catch (_) {}
+}
+
+// Discord's implicit-grant access token expires (~7d) with no refresh token —
+// the old behaviour just dumped the user back to the lobby's "Login with
+// Discord" button, which felt like getting randomly logged out. Since the
+// user already authorized this app, redirecting through Discord's authorize
+// URL again skips the consent screen and bounces straight back with a fresh
+// token — a brief redirect flicker instead of a dead session. Guarded by a
+// sessionStorage flag so a genuinely revoked authorization (Discord shows its
+// real login/consent screen) can't loop forever.
+const DISCORD_SILENT_RETRY_KEY = 'mdwnh_discord_silent_retry';
+function attemptSilentDiscordReauth() {
+    if (sessionStorage.getItem(DISCORD_SILENT_RETRY_KEY) === '1') return false;
+    sessionStorage.setItem(DISCORD_SILENT_RETRY_KEY, '1');
+    window.location.href = getDiscordAuthorizeUrl();
+    return true;
 }
 
 // Cache user info inside the session record so it survives API failures.
@@ -308,6 +325,7 @@ function parseDiscordOauthHash() {
     if (!token) return false;
     const expiresIn = parseInt(params.get('expires_in') || '604800', 10); // 7d default
     saveDiscordSession(token, expiresIn);
+    try { sessionStorage.removeItem(DISCORD_SILENT_RETRY_KEY); } catch (_) {}
     history.replaceState(null, '', window.location.pathname + window.location.search);
     return true;
 }
@@ -448,6 +466,9 @@ async function initDiscordOAuth() {
 
     const session = loadDiscordSession();
     if (!session) {
+        // Token missing/expired but we know who they were — try a silent
+        // re-auth before giving up and showing the manual login button.
+        if (_loadCachedDiscordUser() && attemptSilentDiscordReauth()) return;
         loading?.classList.remove('active');
         lobby?.classList.add('active');
         return;
@@ -467,8 +488,11 @@ async function initDiscordOAuth() {
     const fetchResult = await fetchDiscordUser(session.token);
     let user;
     if (fetchResult === DISCORD_TOKEN_REVOKED) {
-        // Discord explicitly rejected the token — it's dead, force re-auth.
+        // Discord explicitly rejected the token — try a silent re-auth first
+        // (covers the routine 7-day expiry); only fall back to the manual
+        // login button if Discord itself won't auto-approve any more.
         clearDiscordSession();
+        if (cachedUser && attemptSilentDiscordReauth()) return;
         loading?.classList.remove('active');
         lobby?.classList.add('active');
         return;
@@ -485,6 +509,7 @@ async function initDiscordOAuth() {
     } else {
         user = fetchResult;
         _cacheDiscordUser(user); // keep cache fresh for future network failures
+        try { sessionStorage.removeItem(DISCORD_SILENT_RETRY_KEY); } catch (_) {}
     }
 
     // Reuse the parallel lookup when it was for the same user; otherwise resolve now.
