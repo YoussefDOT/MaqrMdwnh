@@ -19,7 +19,10 @@
 // Everything else (index.html, game.js, style.css, Firebase, Discord, the
 // presence relay) passes straight through to the network — code updates are
 // never served stale.
-const CACHE_VERSION = 'mdwnh-media-v3';
+// Bumping this drops every old cache on activate. v4 exists to evict any
+// truncated/partial media entries the pre-v4 code could store — those are
+// unloadable-forever images that a reload can't clear on its own.
+const CACHE_VERSION = 'mdwnh-media-v4';
 
 const IS_LOCAL = /^(localhost|127\.0\.0\.1|\[::1\]|.*\.local)$/.test(self.location.hostname)
     || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(self.location.hostname);   // LAN phone testing
@@ -62,7 +65,18 @@ self.addEventListener('fetch', (e) => {
         // costs the user nothing (the cached response is already on its way) and
         // the fresh copy lands in the cache for the next load.
         const fetching = fetch(req).then(res => {
-            if (res && res.ok) cache.put(req, res.clone());
+            // Only ever cache a complete, same-origin 200. A 206 (partial) or an
+            // opaque/error response stored here would be handed back as if it were
+            // the real file on every future load — an unloadable image that a
+            // reload can't fix, which is the exact bug this all exists to prevent.
+            // Retry URLs (`_retry=…`) are unique per attempt, so caching them would
+            // just bloat the cache with copies nothing will ever ask for again.
+            if (res && res.status === 200 && res.type === 'basic' && !url.searchParams.has('_retry')) {
+                // put() streams the body; if the connection dies mid-copy it
+                // rejects rather than storing a truncated entry. Swallow it — the
+                // response itself is still fine to hand to the page.
+                cache.put(req, res.clone()).catch(() => {});
+            }
             return res;
         }).catch(() => null);
 

@@ -3691,26 +3691,62 @@ function init() {
 // A flaky connection (or a tab backgrounded mid-download) can interrupt one of
 // these fetches; the service worker then either caches a truncated response or
 // (with nothing cached yet) hands back a network error, and that image never
-// loads for the rest of the tab's life — nothing was ever retrying the request.
-// That's what made this need "a completely new tab" to fix: a plain reload
-// re-requests the SAME url, which the SW/browser can keep answering with the
-// same bad cached response. `onerror` here retries with a cache-busting query
-// so it's treated as a brand-new URL — guaranteed to skip any bad cached copy —
-// with a short capped backoff instead of giving up silently.
+// loads for the rest of the tab's life. Retrying on `onerror` is not enough,
+// because the common failure is NOT an error — the request just STALLS: 16 large
+// layers are requested at once, and if one connection wedges the browser keeps it
+// pending forever. No error event ever fires, so nothing retries, and a plain
+// reload re-issues the same request on the same wedged per-tab connection pool /
+// memory cache — which is exactly why only a brand-new tab (new process, new
+// pool) ever fixed it.
+//
+// So every layer gets a WATCHDOG as well as an error handler. If it hasn't
+// decoded within WORLD_IMG_TIMEOUT_MS, we reassign `src`, which aborts the stuck
+// request and starts a fresh one. Retries carry a unique cache-busting query so
+// they're a brand-new URL to both the SW and the browser cache — guaranteed to
+// skip any bad or wedged cached copy. Capped backoff, so a genuinely-missing file
+// can't loop forever.
 const WORLD_IMG_MAX_RETRIES = 5;
+const WORLD_IMG_TIMEOUT_MS = 20000;
 function _loadWorldImage(img, src) {
     let attempt = 0;
-    img.onerror = () => {
+    let timer = null;
+    let settled = false;
+    const clearWatchdog = () => { if (timer) { clearTimeout(timer); timer = null; } };
+
+    const attempt_ = () => {
+        clearWatchdog();
+        // First try uses the bare URL so a healthy SW cache hit still works. Only
+        // retries bust the cache (a stale-but-valid cached copy is what we want on
+        // the happy path).
+        img.src = attempt === 0
+            ? src
+            : src + (src.includes('?') ? '&' : '?') + '_retry=' + attempt + '.' + Date.now();
+        timer = setTimeout(() => retry('timeout'), WORLD_IMG_TIMEOUT_MS);
+    };
+
+    const retry = (why) => {
+        if (settled) return;
+        clearWatchdog();
         attempt++;
         if (attempt > WORLD_IMG_MAX_RETRIES) {
-            console.warn('[world-art] failed to load after retries:', src);
+            console.warn('[world-art] gave up after', WORLD_IMG_MAX_RETRIES, 'retries (' + why + '):', src);
             return;
         }
-        setTimeout(() => {
-            img.src = src + (src.includes('?') ? '&' : '?') + '_retry=' + attempt;
-        }, 500 * attempt);
+        console.warn('[world-art] retry', attempt, '(' + why + '):', src);
+        setTimeout(attempt_, 400 * attempt);
     };
-    img.src = src;
+
+    img.onload = () => {
+        // Done — stand the retry machinery down. This also matters because
+        // buildWorldCache() intentionally sets `src = ''` to free the decoded
+        // bitmap; that fires an error event, and without this the handler would
+        // re-download the whole layer we just finished with.
+        settled = true;
+        clearWatchdog();
+        img.onerror = null;
+    };
+    img.onerror = () => retry('error');
+    attempt_();
 }
 
 function loadAssets() {
