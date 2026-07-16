@@ -3699,6 +3699,31 @@ function init() {
     setupJuiceUi();          // JUICE: wire the UI blip early so the login/lobby menu blips too
 }
 
+// A flaky connection (or a tab backgrounded mid-download) can interrupt one of
+// these fetches; the service worker then either caches a truncated response or
+// (with nothing cached yet) hands back a network error, and that image never
+// loads for the rest of the tab's life — nothing was ever retrying the request.
+// That's what made this need "a completely new tab" to fix: a plain reload
+// re-requests the SAME url, which the SW/browser can keep answering with the
+// same bad cached response. `onerror` here retries with a cache-busting query
+// so it's treated as a brand-new URL — guaranteed to skip any bad cached copy —
+// with a short capped backoff instead of giving up silently.
+const WORLD_IMG_MAX_RETRIES = 5;
+function _loadWorldImage(img, src) {
+    let attempt = 0;
+    img.onerror = () => {
+        attempt++;
+        if (attempt > WORLD_IMG_MAX_RETRIES) {
+            console.warn('[world-art] failed to load after retries:', src);
+            return;
+        }
+        setTimeout(() => {
+            img.src = src + (src.includes('?') ? '&' : '?') + '_retry=' + attempt;
+        }, 500 * attempt);
+    };
+    img.src = src;
+}
+
 function loadAssets() {
     // ─── NEW WORLD ART ──────────────────────────────────────────────────────────
     // One combined scene (2210×3160). Order below = paint order. The huge
@@ -3717,22 +3742,22 @@ function loadAssets() {
     for (const im of Object.values(gameState.assets)) {
         if (im instanceof Image) { try { im.fetchPriority = 'low'; im.decoding = 'async'; } catch (_) {} }
     }
-    gameState.assets.wBackground.src   = WS + 'Workspace_0014_Background.png';
-    gameState.assets.wWalls.src        = WS + 'Workspace_0013_Walls.png';
-    gameState.assets.wFireplace.src    = WS + 'Workspace_0012_Fireplace.png';
-    gameState.assets.wBooksSofas.src   = WS + 'Workspace_0011_Books_Sofas.png';
-    gameState.assets.wBooksLibrary.src = WS + 'Workspace_0010_Books_Library.png';
-    gameState.assets.wSofa.src         = WS + 'Workspace_0009_Sofa.png';
-    gameState.assets.wLaptops.src      = WS + 'Workspace_0008_Laptops_Table.png';
-    gameState.assets.wLaptopLights.src = WS + 'Workspace_0008_Laptops_Table_Laptop_Lights.png';
-    gameState.assets.wStairs.src       = WS + 'Workspace_0007_Stairs.png';
-    gameState.assets.wGames.src        = WS + 'Workspace_0006_Games_Table.png';
-    gameState.assets.wSecondBg.src     = WS + 'Workspace_0005_Second_Floor_Background.png';
-    gameState.assets.wSecondLaptops.src= WS + 'Workspace_0004_Second_Floor_Laptops_Table.png';
-    gameState.assets.wSecondLaptopLights.src = WS + 'Workspace_0004_Second_Floor_Laptops_Table_Laptop_Lights.png';
-    gameState.assets.wSecondPapers.src = WS + 'Workspace_0003_Second_Floor_Papers_Table.png';
-    gameState.assets.wOverlayDay2.src  = WS + 'Workspace_0002_(Normal)Day-Overlay-2.png';
-    gameState.assets.wOverlayDay.src   = WS + 'Workspace_0001_(Overlay)Day-Overlay.png';
+    _loadWorldImage(gameState.assets.wBackground,   WS + 'Workspace_0014_Background.png');
+    _loadWorldImage(gameState.assets.wWalls,        WS + 'Workspace_0013_Walls.png');
+    _loadWorldImage(gameState.assets.wFireplace,    WS + 'Workspace_0012_Fireplace.png');
+    _loadWorldImage(gameState.assets.wBooksSofas,   WS + 'Workspace_0011_Books_Sofas.png');
+    _loadWorldImage(gameState.assets.wBooksLibrary, WS + 'Workspace_0010_Books_Library.png');
+    _loadWorldImage(gameState.assets.wSofa,         WS + 'Workspace_0009_Sofa.png');
+    _loadWorldImage(gameState.assets.wLaptops,      WS + 'Workspace_0008_Laptops_Table.png');
+    _loadWorldImage(gameState.assets.wLaptopLights, WS + 'Workspace_0008_Laptops_Table_Laptop_Lights.png');
+    _loadWorldImage(gameState.assets.wStairs,       WS + 'Workspace_0007_Stairs.png');
+    _loadWorldImage(gameState.assets.wGames,        WS + 'Workspace_0006_Games_Table.png');
+    _loadWorldImage(gameState.assets.wSecondBg,     WS + 'Workspace_0005_Second_Floor_Background.png');
+    _loadWorldImage(gameState.assets.wSecondLaptops,WS + 'Workspace_0004_Second_Floor_Laptops_Table.png');
+    _loadWorldImage(gameState.assets.wSecondLaptopLights, WS + 'Workspace_0004_Second_Floor_Laptops_Table_Laptop_Lights.png');
+    _loadWorldImage(gameState.assets.wSecondPapers, WS + 'Workspace_0003_Second_Floor_Papers_Table.png');
+    _loadWorldImage(gameState.assets.wOverlayDay2,  WS + 'Workspace_0002_(Normal)Day-Overlay-2.png');
+    _loadWorldImage(gameState.assets.wOverlayDay,   WS + 'Workspace_0001_(Overlay)Day-Overlay.png');
     buildWorldCollision();   // idempotent; re-runs itself once each layer decodes
 
     gameState.assets.book.src = 'Art/Book.png';

@@ -1680,13 +1680,18 @@ body {
 }
 .user-pill:focus-visible { outline: 2px solid var(--brand-teal); outline-offset: 3px; }
 
-/* The white wipe: parked just off the RIGHT edge, slides across on hover. */
+/* The white wipe: parked just off the RIGHT edge, slides across on hover.
+   Extended 30% past the right edge (hidden by the pill's own overflow:hidden)
+   so the --bounce easing's overshoot — which briefly pushes the sweep further
+   LEFT than its translateX(0) rest spot — still has right-edge coverage to
+   spare instead of baring a strip of the pill behind it. */
 .pill-sweep {
     position: absolute;
-    inset: 0;
+    top: 0; left: 0; bottom: 0;
+    right: -30%;
     z-index: 0;
     background: var(--clr-snow);
-    transform: translateX(101%);
+    transform: translateX(78%);
     transition: transform 0.42s var(--bounce);
 }
 .user-pill:hover .pill-sweep,
@@ -1915,7 +1920,7 @@ body.is-mobile .btn-discord { width: 100%; }
 /* No hover on touch — the white sweep would stick after a tap. Only the launch
    state (a real class, not :hover) may fill the pill. */
 @media (hover: none) {
-    .user-pill:hover .pill-sweep { transform: translateX(101%); }
+    .user-pill:hover .pill-sweep { transform: translateX(78%); }
     .user-pill:hover .pill-name  { color: rgba(255,255,255,0.94); }
     .user-pill:hover .pill-tag   { color: var(--brand-teal); background: rgba(59,185,171,0.14); border-color: rgba(59,185,171,0.30); }
     .user-pill:hover .pill-go    { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.85); }
