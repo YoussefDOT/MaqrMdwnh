@@ -12,6 +12,16 @@
 // cache-first behaviour pinned a file forever until its URL or CACHE_VERSION
 // changed — which meant every art tweak needed a hard refresh to see.
 //
+// EXCEPTION — content-hashed URLs (`?h=…`, the world-art layers; see
+// Art/Workspace/manifest.json and the pre-commit hook). Those are IMMUTABLE by
+// construction: the URL only exists for that exact byte content, so a cache hit
+// can never be stale and revalidating it is pure waste. They get pure cache-first
+// with NO background refetch — which is the whole point. Stale-while-revalidate
+// meant every single visit quietly re-downloaded ~18 MB of art it already had,
+// competing with the requests the page is actually waiting on. When a hashed file
+// IS newly cached, every other cached copy of the same path (the old hashes) is
+// dropped, so the cache holds exactly one version of each layer.
+//
 // On localhost this goes further and skips the cache entirely (network-first):
 // while developing, "the file I just saved" must win, always. The cache is a
 // production load-time optimisation, not a dev-loop one.
@@ -22,7 +32,9 @@
 // Bumping this drops every old cache on activate. v4 exists to evict any
 // truncated/partial media entries the pre-v4 code could store — those are
 // unloadable-forever images that a reload can't clear on its own.
-const CACHE_VERSION = 'mdwnh-media-v4';
+// v5 exists so the old stale-while-revalidate copies of the world art (cached
+// under their un-hashed URLs) are evicted rather than lingering forever unread.
+const CACHE_VERSION = 'mdwnh-media-v5';
 
 const IS_LOCAL = /^(localhost|127\.0\.0\.1|\[::1\]|.*\.local)$/.test(self.location.hostname)
     || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(self.location.hostname);   // LAN phone testing
@@ -40,6 +52,17 @@ self.addEventListener('activate', (e) => {
     })());
 });
 
+// Delete every cached copy of `url`'s path except `url` itself — i.e. the previous
+// content hashes of a file we just re-downloaded. Without this the cache would grow
+// a new ~3 MB entry per art edit and never shed the old ones.
+async function dropOtherVersions(cache, url) {
+    const keys = await cache.keys();
+    await Promise.all(keys.map(k => {
+        const ku = new URL(k.url);
+        if (ku.pathname === url.pathname && ku.href !== url.href) return cache.delete(k);
+    }));
+}
+
 self.addEventListener('fetch', (e) => {
     const req = e.request;
     if (req.method !== 'GET') return;
@@ -49,6 +72,11 @@ self.addEventListener('fetch', (e) => {
 
     const url = new URL(req.url);
     if (url.origin !== self.location.origin) return;                       // same-origin only
+    // Manifests live under Art/ but are NOT media — they're the index that decides
+    // which media URLs to ask for. Serving a stale one would pin the old art
+    // forever (the exact staleness this cache exists to avoid). Straight to the
+    // network, always.
+    if (/\.json($|\?)/i.test(url.pathname)) return;
     if (!MEDIA_PATH.test(url.pathname) && !MEDIA_EXT.test(url.pathname)) return;
 
     e.respondWith((async () => {
@@ -58,6 +86,31 @@ self.addEventListener('fetch', (e) => {
         if (IS_LOCAL) {
             try { return await fetch(req, { cache: 'no-store' }); }
             catch (err) { return (await cache.match(req)) || Response.error(); }
+        }
+
+        // A retry (`_retry=…`) exists precisely because a previous attempt wedged —
+        // it must never be answered from, or written to, the cache.
+        if (url.searchParams.has('_retry')) {
+            try { return await fetch(req); } catch (err) { return Response.error(); }
+        }
+
+        // Content-hashed (immutable) media: cache-first, and that's it. No
+        // revalidation — the bytes behind this URL can never change.
+        const hashed = url.searchParams.has('h');
+        if (hashed) {
+            const hit = await cache.match(req);
+            if (hit) return hit;
+            try {
+                const res = await fetch(req);
+                if (res && res.status === 200 && res.type === 'basic') {
+                    await cache.put(req, res.clone()).catch(() => {});
+                    // Drop every other hash of this same file — one version each.
+                    e.waitUntil(dropOtherVersions(cache, url));
+                }
+                return res;
+            } catch (err) {
+                return Response.error();
+            }
         }
 
         const cached = await cache.match(req);
