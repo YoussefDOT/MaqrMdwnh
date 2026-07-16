@@ -7408,3 +7408,255 @@ body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
 #reading-newbook-modal.active .setting-group:nth-of-type(1) { animation-delay: 0.19s; }
 #reading-newbook-modal.active .setting-group:nth-of-type(2) { animation-delay: 0.26s; }
 #reading-newbook-modal.active .pomo-launch-row { animation-delay: 0.33s; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   تخصيص الشخصية — Character Customization
+   A "3D space" scene: a fading backdrop with a shadowed floor, the avatar drops
+   in with squash & stretch, and the customization panel slides in on the left.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── The sparkly settings entry button ─────────────────────────────────────── */
+.settings-sparkle-btn {
+    position: relative;
+    flex: 0 0 auto;
+    padding: 6px 16px;
+    border-radius: 50px;
+    border: 1px solid rgba(255,255,255,0.22);
+    background: linear-gradient(115deg, #6b3fd4 0%, #b6379c 38%, #e0603f 66%, #d9a326 100%);
+    background-size: 220% 100%;
+    color: #fff;
+    font-size: 0.76rem; font-weight: 800;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    isolation: isolate;
+    box-shadow: 0 3px 14px rgba(150,60,200,0.34), inset 0 1px 0 rgba(255,255,255,0.28);
+    transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.2s, background-position 0.5s;
+}
+.settings-sparkle-btn:hover {
+    background-position: 100% 0;
+    transform: translateY(-1px) scale(1.03);
+    box-shadow: 0 6px 22px rgba(180,60,190,0.48), inset 0 1px 0 rgba(255,255,255,0.35);
+}
+.settings-sparkle-btn:active { transform: scale(0.95); }
+.sparkle-label { position: relative; z-index: 2; text-shadow: 0 1px 4px rgba(0,0,0,0.30); }
+/* Sweeping gloss. Transform-only (no repaint of the gradient) so it stays cheap. */
+.sparkle-shine {
+    position: absolute; top: -60%; bottom: -60%; left: -40%; width: 32%;
+    background: linear-gradient(100deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.60) 50%, rgba(255,255,255,0) 100%);
+    transform: translateX(-260%) rotate(14deg);
+    animation: ccShine 3.4s cubic-bezier(0.5,0,0.2,1) infinite;
+    z-index: 1; pointer-events: none;
+}
+@keyframes ccShine { 0% { transform: translateX(-260%) rotate(14deg); } 42%, 100% { transform: translateX(560%) rotate(14deg); } }
+.sparkle-stars { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
+.sparkle-stars i {
+    position: absolute; left: var(--sx); top: var(--sy);
+    width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px;
+    background: #fff; border-radius: 50%;
+    box-shadow: 0 0 6px 1px rgba(255,255,255,0.9);
+    opacity: 0; transform: scale(0.2);
+    animation: ccTwinkle 2.2s ease-in-out infinite;
+    animation-delay: var(--sd);
+}
+@keyframes ccTwinkle {
+    0%, 72%, 100% { opacity: 0; transform: scale(0.2); }
+    82%           { opacity: 1; transform: scale(1); }
+}
+
+/* ── The overlay + 3D space ────────────────────────────────────────────────── */
+.cc-overlay {
+    position: fixed; inset: 0; z-index: 10050;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.42s ease;
+    direction: rtl;
+    font-family: 'Rubik', sans-serif;
+}
+.cc-overlay.hidden { display: none; }
+.cc-overlay.cc-in { opacity: 1; pointer-events: auto; }
+/* The room: a deep gradient with a lit floor plane, so the character reads as
+   standing in an actual space rather than on a flat colour. */
+.cc-space { position: absolute; inset: 0; background: radial-gradient(ellipse 90% 70% at 50% 22%, #2a2f45 0%, #14161f 52%, #08090d 100%); overflow: hidden; }
+.cc-floor {
+    position: absolute; left: -20%; right: -20%; bottom: 0; height: 46%;
+    background: linear-gradient(to bottom, rgba(255,255,255,0.055) 0%, rgba(255,255,255,0.02) 40%, rgba(0,0,0,0.42) 100%);
+    transform: perspective(700px) rotateX(62deg);
+    transform-origin: 50% 0;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.10);
+}
+.cc-glow {
+    position: absolute; left: 50%; top: 4%; width: 62vmin; height: 62vmin;
+    margin-left: -31vmin;
+    background: radial-gradient(circle, rgba(140,170,255,0.16) 0%, rgba(140,170,255,0) 68%);
+    pointer-events: none;
+}
+.cc-stage {
+    position: absolute; left: 0; right: 0; top: 0; bottom: 0;
+    display: flex; align-items: center; justify-content: center;
+    pointer-events: none;
+}
+/* The stage sits right of the panel on desktop so the character isn't covered. */
+@media (min-width: 1024px) { .cc-stage { left: 380px; } }
+.cc-char {
+    position: relative;
+    width: 160px; height: 160px;
+    will-change: transform;
+    pointer-events: auto;
+}
+.cc-ring {
+    position: absolute; inset: 0;
+    border-radius: 50%;
+    background: var(--cc-ring, #086fb6);
+    padding: 9px;
+    box-shadow: 0 18px 44px rgba(0,0,0,0.55), 0 0 34px -6px var(--cc-ring, #086fb6);
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.14s linear, box-shadow 0.14s linear;
+}
+.cc-avatar { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; display: block; }
+.cc-avatar[hidden] { display: none; }
+.cc-initial {
+    width: 100%; height: 100%; border-radius: 50%;
+    display: none; align-items: center; justify-content: center;
+    background: #3a3f52; color: #fff; font-size: 3rem; font-weight: 700;
+}
+.cc-char.no-avatar .cc-initial { display: flex; }
+.cc-hat {
+    position: absolute; left: 50%; top: 50%;
+    display: none;
+    transform-origin: 50% 50%;
+    pointer-events: auto; cursor: grab;
+    filter: drop-shadow(0 8px 14px rgba(0,0,0,0.5));
+    -webkit-user-select: none; user-select: none;
+    -webkit-user-drag: none;
+}
+.cc-hat.cc-hat-on { display: block; }
+.cc-hat.cc-dragging { cursor: grabbing; }
+.cc-shadow {
+    position: absolute; left: 50%; top: 50%;
+    width: 150px; height: 34px; margin: 96px 0 0 -75px;
+    border-radius: 50%;
+    background: radial-gradient(ellipse, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0) 72%);
+    will-change: transform, opacity;
+}
+@media (min-width: 1024px) { .cc-shadow { margin-left: calc(-75px + 190px); } }
+
+/* ── Panel ─────────────────────────────────────────────────────────────────── */
+.cc-panel {
+    position: absolute; top: 0; bottom: 0; left: 0;
+    width: 360px; max-width: 92vw;
+    display: flex; flex-direction: column;
+    background: rgba(18,18,18,0.68);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border-right: 1px solid rgba(255,255,255,0.09);
+    box-shadow: 4px 0 34px rgba(0,0,0,0.42);
+    transform: translateX(-104%);
+    transition: transform 0.5s cubic-bezier(0.34,1.28,0.64,1);
+}
+.cc-overlay.cc-in .cc-panel { transform: translateX(0); }
+.cc-panel-head {
+    flex: 0 0 auto;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 20px 20px 14px;
+    border-bottom: 1px solid rgba(255,255,255,0.07);
+}
+.cc-panel-title { font-size: 1rem; font-weight: 700; color: rgba(255,255,255,0.88); }
+.cc-close {
+    width: 30px; height: 30px; border-radius: 50%;
+    background: rgba(255,255,255,0.07); border: none;
+    color: rgba(255,255,255,0.55); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.18s, color 0.18s;
+}
+.cc-close svg { width: 15px; height: 15px; }
+.cc-close:hover { background: rgba(255,255,255,0.14); color: #fff; }
+.cc-panel-body { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 16px 20px 20px; }
+.cc-section + .cc-section { margin-top: 22px; padding-top: 20px; border-top: 1px solid rgba(255,255,255,0.07); }
+.cc-section-title { font-size: 0.78rem; font-weight: 700; color: rgba(255,255,255,0.42); margin-bottom: 12px; }
+
+/* Colour wheel */
+.cc-wheel-wrap { position: relative; width: 180px; height: 180px; margin: 0 auto 14px; }
+.cc-wheel { width: 100%; height: 100%; border-radius: 50%; display: block; cursor: crosshair; box-shadow: 0 6px 22px rgba(0,0,0,0.42); touch-action: none; }
+.cc-wheel-dot {
+    position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px;
+    border-radius: 50%; border: 2.5px solid #fff; pointer-events: none;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.6), inset 0 0 0 1px rgba(0,0,0,0.35);
+}
+.cc-slider-row { display: flex; align-items: center; gap: 10px; margin-top: 9px; }
+.cc-slider-name { flex: 0 0 52px; font-size: 0.72rem; font-weight: 600; color: rgba(255,255,255,0.42); }
+.cc-range { flex: 1 1 auto; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 50px; background: rgba(255,255,255,0.14); outline: none; }
+.cc-range::-webkit-slider-thumb { -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%; background: #fff; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.45); }
+.cc-range::-moz-range-thumb { width: 15px; height: 15px; border: none; border-radius: 50%; background: #fff; cursor: pointer; }
+.cc-hex-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
+.cc-swatch { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 8px; background: var(--cc-ring, #086fb6); border: 1px solid rgba(255,255,255,0.20); }
+.cc-hex {
+    flex: 1 1 auto; min-width: 0;
+    padding: 6px 10px; border-radius: 8px;
+    background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.85); font-family: inherit; font-size: 0.78rem; font-weight: 600;
+    text-transform: uppercase;
+}
+.cc-hex:focus { outline: none; border-color: rgba(255,255,255,0.28); }
+.cc-mini-btn {
+    flex: 0 0 auto; padding: 6px 11px; border-radius: 50px;
+    background: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.55); font-family: inherit; font-size: 0.70rem; font-weight: 700; cursor: pointer;
+    transition: background 0.18s, color 0.18s;
+}
+.cc-mini-btn:hover { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.88); }
+
+/* Hats */
+.cc-hats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.cc-hat-card {
+    position: relative;
+    aspect-ratio: 1 / 1;
+    border-radius: 14px;
+    background: rgba(255,255,255,0.05);
+    border: 1.5px solid rgba(255,255,255,0.09);
+    cursor: pointer; padding: 8px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+    transition: background 0.2s, border-color 0.2s, transform 0.2s cubic-bezier(0.34,1.56,0.64,1);
+    -webkit-tap-highlight-color: transparent;
+}
+.cc-hat-card:hover { background: rgba(255,255,255,0.10); transform: translateY(-2px); }
+.cc-hat-card.selected { border-color: rgba(59,185,171,0.75); background: rgba(59,185,171,0.14); }
+.cc-hat-card img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cc-hat-card .cc-hat-none { font-size: 0.74rem; font-weight: 700; color: rgba(255,255,255,0.45); }
+.cc-hats-empty { font-size: 0.74rem; color: rgba(255,255,255,0.34); padding: 8px 0; }
+/* Transform tools stay locked until a hat is picked. Visual-only lock via a class —
+   never the `disabled` attribute (it leaks touch events on iOS). */
+.cc-hat-tools { margin-top: 14px; opacity: 0.3; pointer-events: none; transition: opacity 0.25s; }
+.cc-hat-tools.cc-unlocked { opacity: 1; pointer-events: auto; }
+.cc-hat-hint { margin-top: 10px; font-size: 0.68rem; color: rgba(255,255,255,0.30); }
+
+.cc-panel-foot { flex: 0 0 auto; padding: 14px 20px 20px; border-top: 1px solid rgba(255,255,255,0.07); }
+.cc-save-btn {
+    width: 100%; padding: 11px; border-radius: 50px; border: none;
+    background: rgba(59,185,171,0.90); color: #06231f;
+    font-family: inherit; font-size: 0.86rem; font-weight: 800; cursor: pointer;
+    transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), background 0.18s;
+}
+.cc-save-btn:hover { background: #4ad3c2; transform: translateY(-1px); }
+.cc-save-btn:active { transform: scale(0.97); }
+
+/* Mobile: the panel becomes a bottom sheet so the character stays visible above it. */
+body.is-mobile .cc-panel {
+    top: auto; left: 0; right: 0; bottom: 0;
+    width: auto; max-width: none; height: 68vh;
+    border-right: none; border-top: 1px solid rgba(255,255,255,0.09);
+    border-radius: 25px 25px 0 0;
+    transform: translateY(104%);
+    box-shadow: 0 -4px 34px rgba(0,0,0,0.42);
+}
+body.is-mobile .cc-overlay.cc-in .cc-panel { transform: translateY(0); }
+body.is-mobile .cc-stage { left: 0; bottom: 68vh; }
+body.is-mobile .cc-shadow { margin-left: -75px; }
+body.is-mobile .cc-char { width: 120px; height: 120px; }
+/* No live backdrop-filter on mobile — it re-rasterizes over the 60fps canvas. */
+body.is-mobile .cc-panel { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(14,14,16,0.96); }
+/* The game loop keeps rendering behind the overlay — same rule as azkar/dashboard:
+   drop the live blur and hide the canvas on mobile so its 60fps repaint can't
+   contend with the customization scene. */
+body.cc-active { overflow: hidden; }
+body.is-mobile.cc-active #game-canvas { display: none !important; }

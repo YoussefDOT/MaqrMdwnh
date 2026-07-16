@@ -22,6 +22,8 @@ python3 -m http.server 8080
 
 **Never push to git unless the user explicitly asks.** Always test on localhost first. **Always push directly to `main`** — never push to a separate branch (`git push origin HEAD:main`).
 
+**Pre-commit hook**: besides the build number below, it regenerates `Hats/hats.json` from the PNGs in `Hats/` (see Character Customization).
+
 **Build number**: A `#build-number` div sits below the `#siraj-test-link` button on the login screen showing `Build N · Updated H:MM AM/PM`. The `.git/hooks/pre-commit` hook auto-increments the number and timestamps it on every commit — no manual edits needed. If the hook ever fails to find the pattern, it logs a warning and exits cleanly.
 
 ---
@@ -42,6 +44,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Minigames** | Racing / Coffee / laptop-boss. **Entry is TEMPORARILY OFF** — the old break-room zones were removed with the old art; they'll be re-wired to the new **games table** later (all the minigame code still works, it's just unreachable for now). |
 | **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
 | **Mobile mode** | Full touch support — virtual joystick, pull-up sounds drawer, focus-mode UI |
+| **Character customization** | Ring colour (full in-page colour wheel) + hats, placed/scaled/rotated by the user and seen by everyone. See **Character Customization**. |
 | **Menu** | Discord-OAuth-only entry + boot/loading screen. See "The Menu" below. |
 
 **Language**: All UI text is Arabic. Keep it that way.
@@ -51,6 +54,8 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 ## File Map
 
 ```
+Hats/                        — hat PNGs + hats.json (the production manifest; the
+                               pre-commit hook regenerates it). See Character Customization.
 Icon Elements/               — 7 decorative brush icons (masked + brand-tinted in the menu)
 Maqr logo.png                — the brand logo: menu + boot screen
 game.js        ~19000 lines — all game logic, classes, Firebase, rendering
@@ -511,6 +516,13 @@ Lives at the end of `game.js`, after the dashboard module. Markup: `#reading-mod
 `#reading-drawer` in `index.html`; the `Reading Session Feature` block in `style.css`.
 
 ### Book covers are DRAWN, never uploaded (`bookCoverSVG`)
+> **Title placement:** the title is a **header** — parked at `TT = 0.19` (upper third) and
+> rotated by the tilt of the cover's own horizontal **at that t** (`atan2(30 − 60·TT, 140)`
+> ≈ 7.6°), derived from `_bkP`. It used to sit dead-centre at a fixed 12.1° (the tilt of
+> the cover's *top* edge) and read as wildly raked, because the projection only tilts
+> horizontals near the top — at `t = 0.5` a horizontal on this cover is exactly level, so
+> the title fought the shape under it. Don't re-hardcode the angle: it must follow `TT`.
+
 A book = a **name + a style id**. That's all that's stored; the cover art is generated.
 `bookCoverSVG(styleId, name, opts)` returns a self-contained `<svg>` string: a
 two-point-perspective book (spine face left, front cover facing the viewer), gradient
@@ -778,6 +790,20 @@ Stored in `localStorage[SETTINGS_GRAPHICS_KEY]` as `'high' | 'low' | 'potato'`, 
 
 **Potato-only** (gated on `gameState._potato`): `drawSunRays`, the parallax `drawBackgroundAtmosphere`, and ambient motes all fall back to cheap/no versions. So **low looks close to desktop** (gradients on) while keeping the compositing wins.
 
+### Effect overrides (particles / overlays) — these BEAT the tier
+`SETTINGS_PARTICLES_KEY` / `SETTINGS_OVERLAYS_KEY` are tri-state: **absent = follow the
+tier** (the historical behaviour: both auto-drop only on بطاطس), `'on'` = force ON even on
+بطاطس, `'off'` = force OFF even on عالية. Resolved by `particlesEnabled()` /
+`overlaysEnabled()` and **cached per-frame as `gameState._particlesOn` / `_overlaysOn`** —
+hot draw code must read the flags, never the getters (they hit localStorage). Every gate
+that used to read `gameState._potato` now reads these:
+- **particles**: `drawWindParticles`, `drawAmbientMotes`, `drawDustParticles`
+- **overlays**: `drawDayOverlays`, `drawSunRays`, `drawCloudShadows` (+`updateCloudShadows`),
+  `drawFocusFog`, `drawSecondFloorFog`, `drawBackgroundAtmosphere`, `drawVignette`
+
+`drawFocusMask` is deliberately NOT gated — it's functional (it's what dims the room around
+the active laptop), not decoration.
+
 **All-tier render costs are cached, never rebuilt per frame**: atmosphere/sun gradient objects are cached per canvas size on the ctx (`ctx._atmoCache/_sunCache` — parallax applied via `ctx.translate`, visually identical, and PiP's own ctx keeps its own cache), and `drawFocusMask` skips its offscreen re-render entirely when nothing moved (`gameState._maskKey` — the common seated-in-session case).
 
 **Sound:** boss-fight SFX (15 files, only used in that minigame) are deferred to `requestIdleCallback` (`ensureBossSounds()`, also force-loaded on boss-fight entry) so they don't compete during cold-start.
@@ -797,6 +823,8 @@ Opens **under the gear button, top-right** on desktop (`top:130px; right:18px`) 
 | `SETTINGS_JOYSTICK_KEY` | auto | show/hide the on-screen joystick |
 | `SETTINGS_NOIDLE_KEY` | off (`getDisableIdleAnim()`) | when **on**, freeze the local avatar's animation while working |
 | `SETTINGS_AZKAR_RANDOM_KEY` | off (`getRandomizeAzkar()`) | when **on**, shuffle morning/evening azkar order each open |
+| `SETTINGS_PARTICLES_KEY` | absent = follow tier | الجسيمات — tri-state **تلقائي → مفعّلة → مغلقة**. **Overrides the graphics tier** (see Graphics Tiers → Effect overrides) |
+| `SETTINGS_OVERLAYS_KEY` | absent = follow tier | الطبقات الجوية — tri-state, same override semantics |
 | `SETTINGS_PRAYER_DELAY_KEY` | off (`getPrayerJamaahDelay()`) | "صلاة الجماعة" — when **on**, adds **+5 min** to every prayer time (`prayerJamaahExtraMin()`, applied in `computeNextPrayer`/`updatePrayerPanelDOM`). **Per-USER, not per-device**: source of truth is Firebase `users/{uid}/prayerJamaahDelay`, read on login and **mirrored into localStorage** so the getter stays a cheap sync read; the toggle writes both. |
 
 ### Open / close animation
@@ -967,6 +995,86 @@ Mock data is **no longer seeded**. `dashClearSeedData()` runs once on login (for
 
 ---
 
+---
+
+## Character Customization (تخصيص الشخصية) + Hats
+
+Two things a player owns and **everyone** sees: the **ring colour** around their avatar and
+a **hat** on top of it. Opened from the sparkly **تخصيص** button in the الشخصية settings
+category. Code lives at the end of `game.js`; markup is `#char-custom-overlay`; styles are
+the `تخصيص الشخصية` block in `style.css`.
+
+### Firebase — under `users/{uid}`, on purpose
+```
+users/{uid}/ringColor = '#rrggbb'
+users/{uid}/hat       = { id, x, y, scale, rot }   // null = no hat
+```
+This is the documented **exception** to "private per-user state belongs in `dashboards`":
+every client must **read** these to draw the avatar, and they're written only on حفظ (a
+handful of times ever), so the fan-out through the global `/users` listener is negligible.
+`id` = the file name inside `Hats/`. `x`/`y` are offsets in **PLAYER_SIZE units** and
+`scale` is a **multiple of PLAYER_SIZE**, so a placement is resolution-independent and
+survives the second-floor scale-up untouched. `rot` is radians. Anything read back goes
+through `sanitizeHat()` / `_validHex()` before it reaches draw code.
+
+The ring colour **wins over the old defaults**: `player.ringColor || (isCurrentUser ?
+COLORS.blue : '#ffffff')`. The local-player ambient glow is tinted from it too.
+
+### Hats folder — discovery is TWO-PATH (this is the "auto-updates" bit)
+The site is statically hosted, so a directory **cannot** be listed in production.
+`loadHatManifest()`:
+1. **localhost / LAN IP only** → fetch `Hats/` and parse the dev server's directory index.
+   Dropping a new PNG into `Hats/` shows it on the next reload, no manifest step.
+2. **Production** → `Hats/hats.json`, regenerated by the **`.git/hooks/pre-commit` hook**
+   (which also `git add`s it). So committing a new hat ships it automatically.
+
+AppleDouble sidecars (`._name.png`) and dotfiles are filtered out at both ends. The
+manifest is re-read on **every** open of the picker, so a hat added mid-session appears
+without a reload. Preloaded on idle after spawn — never on the login path.
+
+### Cropping is mandatory
+The source PNGs are 1000×1000 with the hat floating in the middle of mostly-empty canvas.
+`_cropHatImage()` alpha-scans to a tight bbox and caches the cropped canvas in
+`_hats.cache[id]` (`{ img, canvas, url, ready, failed }`). **Both** the picker previews and
+the in-world draw use the crop — uncropped, a preview would be a speck and every
+offset/scale would be meaningless.
+
+### Hat behaviour — a lagging, overshooting spring
+`_updateHatSpring()` gives each player a spring (`_HAT_K` stiffness, `_HAT_D` damping < 1)
+that **chases** the avatar's draw anchor instead of being welded to it: it arrives a few
+frames late and **overshoots** on stop, which is what sells it as an object with mass. The
+hat is drawn in `drawPlayers` **after** the avatar's transform is restored (it must not
+inherit the working bounce/rotation), and it leans into its own velocity (`tilt`). Remote
+players' hats swing the same way — their render position drives the same spring. Two
+guards that matter:
+- A >260px jump (teleport / kidnap) **re-anchors** instead of stretching the spring across
+  the map; the lag is also hard-capped at `_HAT_MAX`.
+- **`gameState._pipPass`** — PiP runs its own rAF over the same draw code, so it would
+  integrate the springs a second time each frame (double speed). `renderPiPInto` sets the
+  flag; the spring draws but never advances during that pass.
+
+### The scene
+`openCharCustom()` fades in a "3D space" (gradient room + a perspective floor plane), the
+character **drops from above** and lands with squash & stretch onto its own contact shadow
+(`_ccPlayDrop` — one rAF tween: easeInQuad fall with stretch, then a damped squash
+oscillation; the shadow tightens as it nears the floor), and the panel slides in from the
+left. Desktop offsets the stage right of the panel; mobile makes the panel a bottom sheet
+with the character above it.
+
+- **Colour wheel** (`#cc-wheel`): an HSV wheel painted **once** into a canvas (hue =
+  angle, saturation = radius); the الإضاءة slider supplies value. Plus a hex field and
+  افتراضي. Picking uses `pointer*` events so mouse and touch share one path.
+- **Hats**: cropped previews; picking one unlocks scale / rotate / x / y, and the hat can
+  be **dragged directly on the character**. The tools lock with a **`.cc-unlocked` class,
+  never the `disabled` attribute** (iOS touch leak — see azkar).
+- **حفظ** writes both fields in one `update()`, applies them locally immediately (no
+  round-trip wait), and closes.
+- Editing is a **working copy** (`_cc.hat`) — nothing is committed until حفظ, and
+  `ccSyncFromPlayer()` refuses to stomp an in-progress edit when the users listener fires.
+- **Input lock**: `charCustomIsOpen()` bails the window `keydown`, the wheel-zoom handler
+  and `handleMovement` — same pattern as the dashboard. `body.cc-active` locks body scroll
+  and hides `#game-canvas` on mobile.
+
 ## End-of-Session Card + Image Attachment
 
 The success card (`#success-card` / `.success-content`, **white** bg — the documented exception) is styled as an **invoice/receipt** (`.success-receipt`): a dashed separator under the centred header, a **fake CSS barcode** (`.success-barcode-bars` repeating-linear-gradient + a monospace `#success-barcode-num` set per open in `clearSuccessPhoto`), and a **torn-receipt bottom edge** — an `::after` row of downward white SVG triangles (a CSS `mask`/conic approach was tried first and silently didn't cut, so it's an inline-SVG `background` instead). Same layout as before (avatar + name + "أحسنتم!"; photo focal area; stats; task; note; close). It has a **drag-drop image → 1:1 crop → taped-on photo** flow (`setupSuccessCardUI`, wired in `startGame`). The photo is purely **local/visual** (for the screenshot the user sends) — never persisted.
@@ -1039,6 +1147,7 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | After-prayer azkar: tapping a count button scrolled the whole overlay down | `nextEl.scrollIntoView()` bubbles to the nearest scrollable ancestor; when the list itself couldn't scroll it scrolled the overlay/page | Scroll `listEl` only via a manual `listEl.scrollTo({top})` computed from bounding rects — never `scrollIntoView` |
 | Camera rubber-bands to a default framing on every zoom, forever, after a reading session ends | The `exiting` camera phase only cleared once zoom converged on its target — but the scroll wheel was unblocked during it, so any scroll moved zoom away and the phase **never cleared**. `updateCamera()` early-returns while a reading phase is set, so the exit lerp owned the camera for the rest of the session and fought every gesture | Time-bound the exit tween (`READING_EXIT_MS` + hard `READING_EXIT_MAX_MS`), and have both zoom handlers call `abortReadingCamera()` so a user gesture always hands the camera back |
 | New art needs a hard refresh to show up, every time | `sw.js` was pure cache-first for `Art/` — a cached file was pinned until its URL or `CACHE_VERSION` changed | Stale-while-revalidate in production (fresh copy lands for the next reload), and **network-first on localhost/LAN** (`IS_LOCAL`) so the dev loop always sees the file on disk |
+| Hats run at double speed / jitter while PiP is open | PiP renders the same draw code on its own rAF, so `_updateHatSpring` integrated twice per frame | `gameState._pipPass` set by `renderPiPInto` — the PiP pass draws the spring but never advances it |
 | SVG crescent renders as a plain filled circle | An arc whose radius is smaller than half its chord is silently scaled UP to fit by the SVG spec, so the two-arc crescent became two identical semicircles | Build it as a `<mask>`: a disc with an offset disc punched out |
 
 ---

@@ -24,6 +24,11 @@ const SETTINGS_JOYSTICK_KEY = 'mdwnh_joystick_mode';    // 'auto' | 'always' | '
 const SETTINGS_NOIDLE_KEY   = 'mdwnh_disable_idle_anim'; // '1' = disable idle animation while working
 const SETTINGS_AZKAR_RANDOM_KEY = 'mdwnh_randomize_azkar'; // '1' = shuffle azkar order
 const SETTINGS_PRAYER_DELAY_KEY = 'mdwnh_prayer_jamaah_delay'; // '1' = +5 min to each prayer (mosque mode)
+// Particle / overlay OVERRIDES. These deliberately sit ON TOP of the graphics tier:
+// absent = follow the tier (the historical behaviour), 'on'/'off' = force it either
+// way. So particles can be forced ON while on بطاطس, and overlays forced OFF on عالية.
+const SETTINGS_PARTICLES_KEY = 'mdwnh_particles';  // 'on' | 'off' | absent = follow tier
+const SETTINGS_OVERLAYS_KEY  = 'mdwnh_overlays';   // 'on' | 'off' | absent = follow tier
 
 function getDisableIdleAnim() { return localStorage.getItem(SETTINGS_NOIDLE_KEY) === '1'; }
 function getRandomizeAzkar()  { return localStorage.getItem(SETTINGS_AZKAR_RANDOM_KEY) === '1'; }
@@ -3803,6 +3808,7 @@ function updateAmbientMotes() {
 }
 
 function drawAmbientMotes() {
+    if (!gameState._particlesOn) return;
     if (!gameState.ambientMotes.length) return;
     const ctx = gameState.ctx;
     const tw = Date.now() * 0.002;
@@ -4825,6 +4831,8 @@ function startGame(userData) {
     gameState.ctx = gameState.canvas.getContext('2d');
     gameState._lowGfx = isReducedGraphics();
     gameState._potato = isPotato();
+    gameState._particlesOn = particlesEnabled();
+    gameState._overlaysOn  = overlaysEnabled();
     installLowGfxShadowGuard(gameState.ctx);
     resizeCanvas();
     setupControls();
@@ -4848,6 +4856,7 @@ function startGame(userData) {
     setupAzkarUI();
     setupPiPUI();
     setupSettingsUI();
+    setupCharCustomUI();
     setupDashboardUI();
     setupSuccessCardUI();
     setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
@@ -5112,6 +5121,9 @@ function startGame(userData) {
         // effects and the race track during idle time (they used to load at page
         // parse and made the login screen crawl on slow connections).
         warmGameSounds();
+        // Hats are tiny, but the manifest read is a network hop — keep it off the
+        // spawn path. Nothing waits on it: a hat draws the moment its asset lands.
+        loadHatManifest().catch(() => {});
         if (window.requestIdleCallback) {
             requestIdleCallback(() => loadRaceTrackAsset(), { timeout: 15000 });
         } else {
@@ -5667,7 +5679,7 @@ function setupControls() {
     window.addEventListener('keydown', (e) => {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
-        if (dashboardIsOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen()) return;
         gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
@@ -5680,8 +5692,8 @@ function setupControls() {
         }
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
-        // Disable scroll zoom while the dashboard overlay is open
-        if (dashboardIsOpen()) return;
+        // Disable scroll zoom while the dashboard / customization overlay is open
+        if (dashboardIsOpen() || charCustomIsOpen()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -7687,6 +7699,9 @@ function listenToPlayers() {
                             readingBook:        userData.readingBook || null,
                             readingEnd:         userData.readingEnd || null,
                             booksSofa:          userData.booksSofa || null,
+                            // Customization (تخصيص الشخصية) — everyone sees everyone's.
+                            ringColor:          _validHex(userData.ringColor),
+                            hat:                sanitizeHat(userData.hat),
                             // Hold a new remote player invisible until their position settles,
                             // then pop them in (see SPAWN_SETTLE_MS) — no "snap on join". The
                             // pop-in `_entryT` is set at promotion time, not here.
@@ -7702,6 +7717,12 @@ function listenToPlayers() {
                         player.avatar = userData.avatar;
                         player.currentTask = userData.currentTask || "";
                         player.activeInGame = userData.activeInGame === true;
+                        // Customization applies to the LOCAL player too (a save from
+                        // another device / tab must land here as well), so it sits
+                        // outside the !isCurrentUser block below.
+                        player.ringColor = _validHex(userData.ringColor);
+                        player.hat       = sanitizeHat(userData.hat);
+                        if (isCurrentUser) ccSyncFromPlayer(player);
 
                         if (isCurrentUser) {
                             const taskInput = document.getElementById('current-task-input');
@@ -7998,6 +8019,7 @@ function updateCamera() {
 function handleMovement() {
     if (JUICE_ENTRANCE && _entrance.active) return;   // JUICE: lock controls during the login entrance
     if (dashboardIsOpen()) return;                    // dashboard overlay locks movement
+    if (charCustomIsOpen()) return;                   // تخصيص الشخصية owns all input while open
     if (isMinigameOverlayOpen()) return;               // minigame lobby/confirm/gameplay locks movement
     if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)) return;
@@ -8499,6 +8521,8 @@ function gameLoop(timestamp) {
         gameState._potato = isPotato();
         gameState._disableIdleAnim = getDisableIdleAnim();
         gameState._hideNames = getHideNames();
+        gameState._particlesOn = particlesEnabled();
+        gameState._overlaysOn  = overlaysEnabled();
     }
     // On mobile, cap dtFactor more aggressively to reduce stutters from dropped frames
     if (isMobile() && gameState.dtFactor > 2) gameState.dtFactor = 2;
@@ -8722,7 +8746,7 @@ function render() {
 
     drawWindParticles(W, H);
     drawFocusFog(W, H);
-    if (!gameState._potato) drawSunRays(W, H);
+    drawSunRays(W, H);
     drawVignette(W, H);
     drawTeleportOverlay(W, H);
     drawMinigameLoadFade(W, H);
@@ -8822,9 +8846,10 @@ function drawSecondFloor() {
 // static single drawImages (cheap). The multiply Night overlay is intentionally
 // skipped for now. Overlay-blend layer is dropped on بطاطس (potato).
 function drawDayOverlays() {
+    if (!gameState._overlaysOn) return;
     const A = gameState.assets;
     _drawWorldLayer(A.wOverlayDay2);
-    if (!gameState._potato && A.wOverlayDay.complete && A.wOverlayDay.naturalWidth) {
+    if (A.wOverlayDay.complete && A.wOverlayDay.naturalWidth) {
         const ctx = gameState.ctx;
         ctx.save();
         ctx.globalCompositeOperation = 'overlay';
@@ -8908,7 +8933,7 @@ function updateLaptopLights() {
     }
 }
 function updateCloudShadows() {
-    if (gameState._potato) return;
+    if (!gameState._overlaysOn) return;
     if (!gameState.clouds) _initClouds();
     const dt = gameState.dtFactor / 60;   // ~seconds
     for (const c of gameState.clouds) {
@@ -8918,7 +8943,7 @@ function updateCloudShadows() {
 }
 // Drawn INSIDE the world transform (world-space), so clouds move 1:1 with the world.
 function drawCloudShadows() {
-    if (gameState._potato || !gameState.clouds) return;
+    if (!gameState._overlaysOn || !gameState.clouds) return;
     const ctx = gameState.ctx;
     const spr = _getCloudSprite();
     ctx.save();
@@ -8997,6 +9022,7 @@ function updateSecondFloorFog() {
 }
 // World-space (drawn between the floors, so the mezzanine sits above it). Low opacity.
 function drawSecondFloorFog() {
+    if (!gameState._overlaysOn) return;
     const A = gameState.secondFloorFogA || 0;
     if (A < 0.01 || !gameState.fogPuffs) return;
     const ctx = gameState.ctx;
@@ -10788,6 +10814,7 @@ function updateRaceHud(session, car) {
 }
 
 function drawDustParticles() {
+    if (!gameState._particlesOn) return;
     const ctx = gameState.ctx;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
     gameState.dustParticles.forEach(p => {
@@ -11556,7 +11583,7 @@ function drawLockedInOverlay() {
 }
 
 function drawWindParticles(W, H) {
-    if (gameState._potato) return;   // potato: no ambient particles at all
+    if (!gameState._particlesOn) return;   // tier default (off on بطاطس) unless overridden
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
     // Logical viewport dimensions (ctx is DPR-scaled when called from render)
@@ -11602,6 +11629,7 @@ function drawWindParticles(W, H) {
 // re-creating it at the offset position did. The cache hangs off the ctx itself
 // so the PiP window (its own context + size) never thrashes the main one.
 function drawBackgroundAtmosphere(W, H) {
+    if (!gameState._overlaysOn) return;
     const ctx  = gameState.ctx;
     const cam  = gameState.camera;
     const zoom = gameState.zoom;
@@ -11647,7 +11675,7 @@ function drawBackgroundAtmosphere(W, H) {
 // A single large radial gradient anchored off the top-right, giving the scene
 // a warm golden wash. Mild camera parallax makes it "float" behind the world.
 function drawSunRays(W, H) {
-    if (gameState._potato) return;   // skip only on potato tier
+    if (!gameState._overlaysOn) return;
     const ctx  = gameState.ctx;
     const cam  = gameState.camera;
     const zoom = gameState.zoom;
@@ -11678,6 +11706,7 @@ function drawSunRays(W, H) {
 
 let _vignetteCache = null; // { w, h, grad } — rebuilt only on resize
 function drawVignette(W, H) {
+    if (!gameState._overlaysOn) return;
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
     const w = W || canvas.width  / (gameState.dpr || 1);
@@ -11698,6 +11727,7 @@ function drawVignette(W, H) {
 }
 
 function drawFocusFog(W, H) {
+    if (!gameState._overlaysOn) return;
     if (gameState.focusFogAlpha <= 0.01) return;
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
@@ -11984,7 +12014,9 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
 
         const colorAlpha = isCurrentUser ? 1 : (player.avatarColorAlpha ?? 0);
         const grayMix = 1 - colorAlpha;
-        const ringColor = isCurrentUser ? COLORS.blue : '#ffffff';
+        // The ring colour is customizable per player (تخصيص الشخصية) and synced to
+        // everyone, so it wins over the old defaults — blue for me, white for others.
+        const ringColor = _validHex(player.ringColor) || (isCurrentUser ? COLORS.blue : '#ffffff');
         const mutedRing = '#8a8a8a';
 
         // Soft contact shadow on the ground — shrinks/fades as the avatar bobs upward,
@@ -12034,9 +12066,11 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             const glowPulse = 0.5 + 0.5 * Math.sin(gt);
             const gr = PLAYER_SIZE / 2 + 10 + glowPulse * 6;
             const glow = ctx.createRadialGradient(0, 0, PLAYER_SIZE / 2 - 4, 0, 0, gr);
-            glow.addColorStop(0, 'rgba(49, 178, 255, 0)');
-            glow.addColorStop(0.55, `rgba(49, 178, 255, ${0.10 + 0.06 * glowPulse})`);
-            glow.addColorStop(1, 'rgba(49, 178, 255, 0)');
+            // Tinted with the ring colour so a customized ring glows to match.
+            const gRGB = _hexToRgbStr(ringColor, '49, 178, 255');
+            glow.addColorStop(0, `rgba(${gRGB}, 0)`);
+            glow.addColorStop(0.55, `rgba(${gRGB}, ${0.10 + 0.06 * glowPulse})`);
+            glow.addColorStop(1, `rgba(${gRGB}, 0)`);
             ctx.fillStyle = glow;
             ctx.beginPath();
             ctx.arc(0, 0, gr, 0, Math.PI * 2);
@@ -12118,6 +12152,15 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         ctx.filter = 'none';
         ctx.globalAlpha = 1;
         ctx.restore(); // restores translate, rotate, scale
+
+        // The hat rides OUTSIDE the avatar transform: it chases the avatar's anchor
+        // on its own spring, so it lags a few frames behind and overshoots on stop —
+        // which is what sells it as a real object sitting on the player's head.
+        drawPlayerHat(player,
+            screenX + coopDX,
+            screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY,
+            rScale * _juiceScale,
+            floorVis * (tpFadeOut > 0.01 ? (1 - tpFadeOut) : 1) * (grayMix > 0.01 ? (0.55 + 0.45 * colorAlpha) : 1));
 
         if (player.nameAlpha > 0.01 && !tpData && !gameState._hideNames) {
             const nA = player.nameAlpha * floorVis;
@@ -12470,6 +12513,9 @@ function renderPiPInto(ctx, canvas, dpr) {
     const _ctx = s.ctx, _canvas = s.canvas, _zoom = s.zoom, _cx = s.camera.x, _cy = s.camera.y, _dpr = s.dpr;
     s.ctx = ctx; s.canvas = canvas; s.zoom = s.pip.zoomLevel;
     s.camera.x = s.pip.camera.x; s.camera.y = s.pip.camera.y; s.dpr = dpr;
+    // PiP runs its own rAF, so this pass must not advance any shared simulation
+    // state a second time — the hat springs would integrate at double speed.
+    s._pipPass = true;
     try {
         const W = canvas.width / dpr, H = canvas.height / dpr;
         ctx.save();
@@ -12514,6 +12560,7 @@ function renderPiPInto(ctx, canvas, dpr) {
     } finally {
         s.ctx = _ctx; s.canvas = _canvas; s.zoom = _zoom;
         s.camera.x = _cx; s.camera.y = _cy; s.dpr = _dpr;
+        s._pipPass = false;
     }
 }
 
@@ -13238,9 +13285,36 @@ function isPotato() { return graphicsTier() === 'potato'; }
 // Back-compat alias: historically "low graphics" meant the reduced-compositing set.
 function isLowGraphics() { return isReducedGraphics(); }
 
+// ── Particle / overlay overrides ─────────────────────────────────────────────
+// Both OVERRIDE the graphics tier: an explicit 'on' forces the effect even on
+// بطاطس, an explicit 'off' kills it even on عالية. With no explicit choice they
+// fall back to the tier (particles/overlays are only auto-dropped on بطاطس).
+// Hot draw code must read the cached gameState._particlesOn / _overlaysOn flags —
+// these getters hit localStorage.
+function getParticlesMode() {
+    const v = localStorage.getItem(SETTINGS_PARTICLES_KEY);
+    return (v === 'on' || v === 'off') ? v : 'auto';
+}
+function getOverlaysMode() {
+    const v = localStorage.getItem(SETTINGS_OVERLAYS_KEY);
+    return (v === 'on' || v === 'off') ? v : 'auto';
+}
+function particlesEnabled() {
+    const m = getParticlesMode();
+    return m === 'auto' ? !isPotato() : m === 'on';
+}
+function overlaysEnabled() {
+    const m = getOverlaysMode();
+    return m === 'auto' ? !isPotato() : m === 'on';
+}
+
 function getHideNames() {
     return localStorage.getItem(SETTINGS_NAMES_KEY) === '1';
 }
+
+// Set by setupSettingsUI so other modules (تخصيص الشخصية) can dismiss the panel —
+// closeSettingsPanel itself is a closure over the panel's elements.
+let _closeSettingsPanel = null;
 
 function setupSettingsUI() {
     const settingsBtn   = document.getElementById('settings-btn');
@@ -13250,6 +13324,10 @@ function setupSettingsUI() {
     const graphicsLabel = document.getElementById('settings-graphics-label');
     const namesBtn      = document.getElementById('settings-names-btn');
     const namesLabel    = document.getElementById('settings-names-label');
+    const particlesBtn  = document.getElementById('settings-particles-btn');
+    const particlesLabel= document.getElementById('settings-particles-label');
+    const overlaysBtn   = document.getElementById('settings-overlays-btn');
+    const overlaysLabel = document.getElementById('settings-overlays-label');
     const joystickBtn   = document.getElementById('settings-joystick-btn');
     const joystickLabel = document.getElementById('settings-joystick-label');
     const idleBtn       = document.getElementById('settings-idle-btn');
@@ -13286,6 +13364,19 @@ function setupSettingsUI() {
         namesLabel.textContent = hide ? 'مخفية' : 'ظاهرة';
     }
 
+    // Particles / overlays are TRI-state (تلقائي → مفعّلة → مغلقة) because "auto"
+    // is a real, distinct choice here: it's the only one that tracks the graphics
+    // tier. The explicit states are the whole point — they override that tier.
+    function _reflectEffect(btn, label, mode, resolved) {
+        if (!btn) return;
+        btn.dataset.value = mode;
+        btn.classList.toggle('settings-toggle-on',  mode === 'on'  || (mode === 'auto' && resolved));
+        btn.classList.toggle('settings-toggle-low', mode === 'off');
+        label.textContent = mode === 'auto' ? 'تلقائي' : (mode === 'on' ? 'مفعّلة' : 'مغلقة');
+    }
+    function _reflectParticles() { _reflectEffect(particlesBtn, particlesLabel, getParticlesMode(), particlesEnabled()); }
+    function _reflectOverlays()  { _reflectEffect(overlaysBtn,  overlaysLabel,  getOverlaysMode(),  overlaysEnabled()); }
+
     function _reflectIdle() {
         if (!idleBtn) return;
         // "حركة الجلوس مفعّلة" = idle animation ON (default). Disabled = OFF.
@@ -13320,6 +13411,8 @@ function setupSettingsUI() {
         // and atmosphere gates react immediately.
         gameState._lowGfx = isReducedGraphics();
         gameState._potato = isPotato();
+        gameState._particlesOn = particlesEnabled();
+        gameState._overlaysOn  = overlaysEnabled();
         gameState._settingsFlagsAt = 0;   // force the gameLoop cache to re-read next frame
         applyGraphicsBodyClass();   // toggle reduced-gfx/potato-gfx body classes for the CSS wins
         resizeCanvas();
@@ -13332,7 +13425,31 @@ function setupSettingsUI() {
         const next = cycle[graphicsTier()] || 'low';
         localStorage.setItem(SETTINGS_GRAPHICS_KEY, next);
         _reflectGraphics();
+        _reflectParticles();   // both may be on تلقائي → their resolved state just moved
+        _reflectOverlays();
     });
+
+    // تلقائي → مفعّلة → مغلقة → تلقائي. Removing the key returns to tier-follow.
+    function _cycleEffect(key, current) {
+        const next = { auto: 'on', on: 'off', off: 'auto' }[current];
+        if (next === 'auto') localStorage.removeItem(key);
+        else                 localStorage.setItem(key, next);
+        gameState._particlesOn = particlesEnabled();
+        gameState._overlaysOn  = overlaysEnabled();
+        gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
+    }
+    if (particlesBtn) {
+        particlesBtn.addEventListener('click', () => {
+            _cycleEffect(SETTINGS_PARTICLES_KEY, getParticlesMode());
+            _reflectParticles();
+        });
+    }
+    if (overlaysBtn) {
+        overlaysBtn.addEventListener('click', () => {
+            _cycleEffect(SETTINGS_OVERLAYS_KEY, getOverlaysMode());
+            _reflectOverlays();
+        });
+    }
 
     namesBtn.addEventListener('click', () => {
         const next = getHideNames() ? '0' : '1';
@@ -13406,6 +13523,8 @@ function setupSettingsUI() {
         }, 230);
     }
 
+    _closeSettingsPanel = closeSettingsPanel;
+
     settingsBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (panel.classList.contains('hidden')) openSettingsPanel();
@@ -13425,6 +13544,8 @@ function setupSettingsUI() {
 
     _reflectGraphics();
     _reflectNames();
+    _reflectParticles();
+    _reflectOverlays();
     _reflectJoystick();
     _reflectIdle();
     _reflectAzkarRandom();
@@ -21254,20 +21375,32 @@ function bookCoverSVG(styleId, name, opts) {
     const id = 'bk' + (++_bkUid);
     const coverPts = _bkPts([[0, 0], [1, 0], [1, 1], [0, 1]]);
     const spinePts = _bkPts([[_BK_SPINE_U, 0], [0, 0], [0, 1], [_BK_SPINE_U, 1]]);
-    const [cx, cy] = _bkP(0.5, 0.5);
 
     let title = '';
     if (!o.noText) {
         const lines = _bkWrap(name, 13, 3);
         const fs = lines.length >= 3 ? 17 : (lines.length === 2 ? 20 : 23);
         const lh = fs * 1.28;
-        const y0 = cy - ((lines.length - 1) * lh) / 2 + fs * 0.34;   // manual baseline centring:
+        // A real book's title is a HEADER: up near the top of the cover, and lying
+        // flat along the cover rather than raked across it. The old version sat dead
+        // centre at a fixed 12.1° — the tilt of the cover's TOP edge — which read as
+        // wildly slanted, because the projection only tilts horizontals near the top:
+        // at t = 0.5 a horizontal line on this cover is exactly level, so a 12.1°
+        // title fought the shape it sat on.
+        //
+        // Fix both at once: park the block around t = TT (upper third) and rotate it
+        // by the tilt of the cover's own horizontal AT that t. From _bkP, the line at
+        // t runs (74, 22 + 282t) → (214, 52 + 222t), i.e. rise (30 − 60t) over run 140.
+        const TT = 0.19;
+        const [tx, ty] = _bkP(0.5, TT);
+        const angle = Math.atan2(30 - 60 * TT, 140) * 180 / Math.PI;   // ≈ 7.6°
+        const y0 = ty - ((lines.length - 1) * lh) / 2 + fs * 0.34;   // manual baseline centring:
         //   dominant-baseline on <tspan> is unreliable in Safari, so nudge by hand.
         const tspans = lines.map((ln, i) =>
-            `<tspan x="${cx.toFixed(1)}" y="${(y0 + i * lh).toFixed(1)}">${_bkEsc(ln)}</tspan>`).join('');
+            `<tspan x="${tx.toFixed(1)}" y="${(y0 + i * lh).toFixed(1)}">${_bkEsc(ln)}</tspan>`).join('');
         title = `<text text-anchor="middle" direction="rtl" font-family="Rubik, sans-serif" font-weight="800"`
               + ` font-size="${fs}" fill="${s.text}" stroke="${s.halo}" stroke-width="3.4" stroke-linejoin="round"`
-              + ` paint-order="stroke" transform="rotate(12.1 ${cx.toFixed(1)} ${cy.toFixed(1)})">${tspans}</text>`;
+              + ` paint-order="stroke" transform="rotate(${angle.toFixed(2)} ${tx.toFixed(1)} ${ty.toFixed(1)})">${tspans}</text>`;
     }
 
     return `<svg viewBox="0 0 250 332" xmlns="http://www.w3.org/2000/svg" class="book-svg" role="img" aria-label="${_bkEsc(name || 'كتاب')}">
@@ -22132,3 +22265,622 @@ function renderReadingLeaderboard() {
 }
 
 // EOF
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  CHARACTER CUSTOMIZATION  (تخصيص الشخصية)
+//
+//  Two things a player owns and everyone else sees: the ring colour around their
+//  avatar, and a hat placed on top of it.
+//
+//  Firebase — both live under `users/{uid}` (NOT `dashboards`, despite the private-
+//  data rule): every client must READ them to draw the avatar, and they're written
+//  only when the user presses حفظ (a handful of times ever), so the fan-out is
+//  negligible:
+//      users/{uid}/ringColor = '#rrggbb'
+//      users/{uid}/hat       = { id, x, y, scale, rot }   // null = no hat
+//  `id` is the file name inside Hats/. x/y are offsets in PLAYER_SIZE units and
+//  scale is a multiple of PLAYER_SIZE, so the placement is resolution-independent
+//  and survives the second-floor scale-up unchanged.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const HAT_DEFAULT = { x: 0, y: -0.55, scale: 0.80, rot: 0 };
+const HAT_MANIFEST_URL = 'Hats/hats.json';
+
+// ── Colour helpers ────────────────────────────────────────────────────────────
+function _validHex(v) {
+    return (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) ? v : null;
+}
+function _hexToRgbStr(hex, fallback) {
+    const h = _validHex(hex);
+    if (!h) return fallback;
+    return `${parseInt(h.slice(1, 3), 16)}, ${parseInt(h.slice(3, 5), 16)}, ${parseInt(h.slice(5, 7), 16)}`;
+}
+function _hsvToHex(h, s, v) {
+    const f = n => {
+        const k = (n + h / 60) % 6;
+        const c = v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+        return Math.round(c * 255).toString(16).padStart(2, '0');
+    };
+    return `#${f(5)}${f(3)}${f(1)}`;
+}
+function _hexToHsv(hex) {
+    const h = _validHex(hex) || '#086fb6';
+    const r = parseInt(h.slice(1, 3), 16) / 255,
+          g = parseInt(h.slice(3, 5), 16) / 255,
+          b = parseInt(h.slice(5, 7), 16) / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    let hh = 0;
+    if (d) {
+        if (mx === r)      hh = 60 * (((g - b) / d) % 6);
+        else if (mx === g) hh = 60 * ((b - r) / d + 2);
+        else               hh = 60 * ((r - g) / d + 4);
+    }
+    if (hh < 0) hh += 360;
+    return { h: hh, s: mx ? d / mx : 0, v: mx };
+}
+
+// ── Hat assets ────────────────────────────────────────────────────────────────
+// `_hats.list` is the discovered file list; `_hats.cache[id]` holds the loaded
+// image plus its ALPHA-CROPPED canvas. The source PNGs are 1000×1000 with the hat
+// floating in the middle, so both the previews and the in-world draw use the crop —
+// otherwise the empty margin would dominate the preview and make every offset and
+// scale meaningless.
+const _hats = { list: [], cache: Object.create(null), loadedAt: 0, loading: null };
+
+function hatUrl(id) { return 'Hats/' + encodeURIComponent(id); }
+
+// Discovery. The site is statically hosted, so a directory can't be listed in
+// production — `Hats/hats.json` (regenerated by the pre-commit hook) is the source
+// of truth there. On localhost/LAN the dev server DOES serve a directory index, so
+// we parse that first: dropping a new PNG into Hats/ then shows up on reload with
+// no manifest step. AppleDouble sidecars (`._name.png`) are filtered out.
+async function _fetchHatDirListing() {
+    const host = location.hostname;
+    const isLocal = host === 'localhost' || host === '127.0.0.1' || /^\d+\.\d+\.\d+\.\d+$/.test(host);
+    if (!isLocal) return null;
+    try {
+        const res = await fetch('Hats/', { cache: 'no-store' });
+        if (!res.ok) return null;
+        const html = await res.text();
+        const found = [];
+        const re = /href="([^"]+\.(?:png|webp))"/gi;
+        let m;
+        while ((m = re.exec(html))) {
+            const name = decodeURIComponent(m[1].split('/').pop());
+            if (!name.startsWith('.') && !found.includes(name)) found.push(name);
+        }
+        return found.length ? found.sort() : null;
+    } catch (e) { return null; }
+}
+
+async function loadHatManifest(force) {
+    if (!force && _hats.list.length) return _hats.list;
+    if (_hats.loading) return _hats.loading;
+    _hats.loading = (async () => {
+        let list = await _fetchHatDirListing();
+        if (!list) {
+            try {
+                const res = await fetch(HAT_MANIFEST_URL, { cache: 'no-store' });
+                if (res.ok) {
+                    const json = await res.json();
+                    if (Array.isArray(json)) list = json;
+                }
+            } catch (e) { /* offline / missing manifest → no hats, never a crash */ }
+        }
+        _hats.list = (list || []).filter(n => typeof n === 'string' && !n.startsWith('.'));
+        _hats.loadedAt = Date.now();
+        _hats.loading = null;
+        return _hats.list;
+    })();
+    return _hats.loading;
+}
+
+// Crop the transparent margin off a loaded hat, returning a tight canvas. Falls
+// back to the full image if the alpha scan can't run (a tainted canvas can't
+// happen here — Hats/ is same-origin — but stay defensive).
+function _cropHatImage(img) {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    try {
+        const c = document.createElement('canvas');
+        c.width = w; c.height = h;
+        const cx = c.getContext('2d', { willReadFrequently: true });
+        cx.drawImage(img, 0, 0);
+        const data = cx.getImageData(0, 0, w, h).data;
+        let x0 = w, y0 = h, x1 = -1, y1 = -1;
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                if (data[(y * w + x) * 4 + 3] > 8) {
+                    if (x < x0) x0 = x;
+                    if (x > x1) x1 = x;
+                    if (y < y0) y0 = y;
+                    if (y > y1) y1 = y;
+                }
+            }
+        }
+        if (x1 < x0 || y1 < y0) return null;
+        const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+        const out = document.createElement('canvas');
+        out.width = cw; out.height = ch;
+        out.getContext('2d').drawImage(img, x0, y0, cw, ch, 0, 0, cw, ch);
+        return out;
+    } catch (e) { return null; }
+}
+
+// Idempotent: returns the cache entry, kicking the load on first ask. Entries are
+// `{ img, canvas, url, ready }` — draw code just checks `.ready`.
+function ensureHatAsset(id) {
+    if (!id) return null;
+    let entry = _hats.cache[id];
+    if (entry) return entry;
+    entry = _hats.cache[id] = { img: null, canvas: null, url: null, ready: false, failed: false };
+    const img = new Image();
+    img.decoding = 'async';
+    img.onload = () => {
+        entry.img = img;
+        entry.canvas = _cropHatImage(img) || img;
+        entry.url = (entry.canvas.toDataURL ? entry.canvas.toDataURL('image/png') : hatUrl(id));
+        entry.ready = true;
+    };
+    img.onerror = () => { entry.failed = true; };
+    img.src = hatUrl(id);
+    return entry;
+}
+
+// Normalise whatever Firebase handed us into a safe hat descriptor (or null).
+function sanitizeHat(raw) {
+    if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !raw.id) return null;
+    const num = (v, d, lo, hi) => {
+        const n = Number(v);
+        return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d;
+    };
+    return {
+        id:    raw.id,
+        x:     num(raw.x,     HAT_DEFAULT.x,     -1.5, 1.5),
+        y:     num(raw.y,     HAT_DEFAULT.y,     -2.0, 1.0),
+        scale: num(raw.scale, HAT_DEFAULT.scale,  0.2, 2.0),
+        rot:   num(raw.rot,   HAT_DEFAULT.rot,   -Math.PI, Math.PI),
+    };
+}
+
+// ── Hat physics: a lagging, overshooting spring ───────────────────────────────
+// The hat chases the avatar's anchor instead of being welded to it. An underdamped
+// spring means it arrives a few frames late and overshoots slightly when the player
+// stops — it reads as an object with mass sitting on the head. Per-player state, so
+// remote players' hats swing too (their render position drives the same spring).
+const _HAT_K   = 0.26;   // stiffness — how hard it's pulled toward the anchor
+const _HAT_D   = 0.68;   // damping (<1 ⇒ it overshoots before settling)
+const _HAT_MAX = 30;     // px — hard cap on the lag so a teleport can't fling it
+
+function _updateHatSpring(player, tx, ty) {
+    let h = player._hatSpring;
+    if (!h) { h = player._hatSpring = { x: tx, y: ty, vx: 0, vy: 0 }; return h; }
+    if (gameState._pipPass) return h;   // PiP draws the spring, never advances it
+
+    // A teleport/kidnap jump would otherwise stretch the spring across the map:
+    // re-anchor instead of chasing.
+    if (Math.abs(tx - h.x) > 260 || Math.abs(ty - h.y) > 260) {
+        h.x = tx; h.y = ty; h.vx = 0; h.vy = 0;
+        return h;
+    }
+    const dt = Math.min(2, gameState.dtFactor || 1);
+    h.vx = (h.vx + (tx - h.x) * _HAT_K * dt) * Math.pow(_HAT_D, dt);
+    h.vy = (h.vy + (ty - h.y) * _HAT_K * dt) * Math.pow(_HAT_D, dt);
+    h.x += h.vx * dt;
+    h.y += h.vy * dt;
+    const dx = h.x - tx, dy = h.y - ty;
+    const d = Math.hypot(dx, dy);
+    if (d > _HAT_MAX) { h.x = tx + dx / d * _HAT_MAX; h.y = ty + dy / d * _HAT_MAX; }
+    return h;
+}
+
+// Draw a player's hat at its lagged position. Called from drawPlayers AFTER the
+// avatar's transform is restored, with the anchor the avatar was drawn at.
+function drawPlayerHat(player, anchorX, anchorY, rScale, alpha) {
+    const hat = player.hat;
+    if (!hat || alpha < 0.02) { player._hatSpring = null; return; }
+    const entry = ensureHatAsset(hat.id);
+    if (!entry || !entry.ready) return;
+
+    const spr = _updateHatSpring(player, anchorX, anchorY);
+    const src = entry.canvas;
+    const w = PLAYER_SIZE * hat.scale * rScale;
+    const h = w * (src.height / src.width);
+    // Extra tilt from the spring's own velocity — the hat leans into the lag.
+    const tilt = Math.max(-0.32, Math.min(0.32, spr.vx * 0.014));
+
+    const ctx = gameState.ctx;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(spr.x, spr.y);
+    ctx.translate(hat.x * PLAYER_SIZE * rScale, hat.y * PLAYER_SIZE * rScale);
+    ctx.rotate(hat.rot + tilt);
+    ctx.drawImage(src, -w / 2, -h / 2, w, h);
+    ctx.restore();
+}
+
+// ── The customization scene (overlay) ─────────────────────────────────────────
+// A "3D space": the backdrop fades in, the character DROPS from above and lands
+// with a squash-and-stretch bounce onto its own contact shadow, and the panel
+// slides in from the left. حفظ writes to Firebase and everything fades back out.
+const _cc = {
+    open: false,
+    color: COLORS.blue,
+    hat: null,            // working copy — only committed to Firebase on حفظ
+    hsv: { h: 205, s: 1, v: 0.71 },
+    raf: null,
+    drag: null,
+    wheelDrawn: false,
+};
+
+// Mirror the live player doc into the editor's "last saved" baseline, so opening
+// the panel always starts from what everyone else currently sees.
+function ccSyncFromPlayer(player) {
+    if (_cc.open) return;   // never stomp an in-progress edit
+    _cc.color = _validHex(player.ringColor) || COLORS.blue;
+    _cc.hat   = player.hat ? { ...player.hat } : null;
+}
+
+function _ccEl(id) { return document.getElementById(id); }
+
+// The character's drop + bounce. One rAF tween: fall (accelerating, stretched),
+// then a damped squash oscillation on impact. The contact shadow tightens as the
+// character nears the floor, which is what gives the scene its depth.
+const _CC_FALL_MS = 620;
+const _CC_SETTLE_MS = 900;
+function _ccPlayDrop() {
+    const char = _ccEl('cc-char'), shadow = _ccEl('cc-shadow');
+    if (!char) return;
+    if (_cc.raf) cancelAnimationFrame(_cc.raf);
+    const t0 = performance.now();
+    const dropFrom = -Math.max(320, window.innerHeight * 0.62);
+
+    const frame = (now) => {
+        const t = now - t0;
+        let y, sx, sy, shA = 0, shS = 0.4;
+        if (t < _CC_FALL_MS) {
+            const p = t / _CC_FALL_MS;
+            const e = p * p;                       // easeInQuad — real gravity feel
+            y = dropFrom * (1 - e);
+            const stretch = 0.10 + 0.34 * e;       // stretches as it speeds up
+            sx = 1 - stretch * 0.55;
+            sy = 1 + stretch;
+            shA = e * 0.85;
+            shS = 0.36 + e * 0.64;
+        } else {
+            const p = Math.min(1, (t - _CC_FALL_MS) / _CC_SETTLE_MS);
+            // Damped oscillation around 1 — starts hard-squashed, rings out to rest.
+            const decay = Math.exp(-5.2 * p);
+            const osc = Math.cos(p * Math.PI * 3.1) * decay;
+            sx = 1 + 0.34 * osc;
+            sy = 1 - 0.34 * osc;
+            y = -Math.max(0, (1 - sy)) * 40;       // the squash keeps the feet planted
+            shA = 0.85 + 0.15 * (1 - decay);
+            shS = 1 + 0.30 * osc;
+            if (p >= 1) {
+                char.style.transform = 'translateY(0) scale(1,1)';
+                if (shadow) { shadow.style.opacity = '1'; shadow.style.transform = 'scale(1)'; }
+                _cc.raf = null;
+                return;
+            }
+        }
+        char.style.transform = `translateY(${y.toFixed(2)}px) scale(${sx.toFixed(3)}, ${sy.toFixed(3)})`;
+        if (shadow) {
+            shadow.style.opacity = shA.toFixed(3);
+            shadow.style.transform = `scale(${shS.toFixed(3)})`;
+        }
+        _cc.raf = requestAnimationFrame(frame);
+    };
+    char.style.transform = `translateY(${dropFrom}px) scale(0.9, 1.1)`;
+    if (shadow) { shadow.style.opacity = '0'; shadow.style.transform = 'scale(0.4)'; }
+    _cc.raf = requestAnimationFrame(frame);
+}
+
+// Paint the HSV wheel once (hue around, saturation outward). Value comes from the
+// الإضاءة slider and is applied as a dimming layer, so one canvas covers the space.
+function _ccDrawWheel() {
+    const cv = _ccEl('cc-wheel');
+    if (!cv || _cc.wheelDrawn) return;
+    const ctx = cv.getContext('2d');
+    const W = cv.width, H = cv.height, R = W / 2;
+    const img = ctx.createImageData(W, H);
+    for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+            const dx = x - R, dy = y - R;
+            const d = Math.hypot(dx, dy);
+            const i = (y * W + x) * 4;
+            if (d > R) { img.data[i + 3] = 0; continue; }
+            let hue = Math.atan2(dy, dx) * 180 / Math.PI;
+            if (hue < 0) hue += 360;
+            const hex = _hsvToHex(hue, Math.min(1, d / R), 1);
+            img.data[i]     = parseInt(hex.slice(1, 3), 16);
+            img.data[i + 1] = parseInt(hex.slice(3, 5), 16);
+            img.data[i + 2] = parseInt(hex.slice(5, 7), 16);
+            img.data[i + 3] = d > R - 1.5 ? Math.round(255 * (R - d) / 1.5) : 255;   // soft edge
+        }
+    }
+    ctx.putImageData(img, 0, 0);
+    _cc.wheelDrawn = true;
+}
+
+// Push _cc.color / _cc.hat into the preview character + the controls.
+function _ccReflect() {
+    const overlay = _ccEl('char-custom-overlay');
+    if (overlay) overlay.style.setProperty('--cc-ring', _cc.color);
+    const hex = _ccEl('cc-hex');
+    if (hex && document.activeElement !== hex) hex.value = _cc.color.toUpperCase();
+
+    // Wheel marker: hue = angle, saturation = radius.
+    const dot = _ccEl('cc-wheel-dot'), wrap = _ccEl('cc-wheel');
+    if (dot && wrap) {
+        const R = wrap.clientWidth / 2;
+        const a = _cc.hsv.h * Math.PI / 180;
+        dot.style.left = (R + Math.cos(a) * _cc.hsv.s * R) + 'px';
+        dot.style.top  = (R + Math.sin(a) * _cc.hsv.s * R) + 'px';
+        dot.style.background = _cc.color;
+    }
+    const light = _ccEl('cc-light');
+    if (light && document.activeElement !== light) light.value = Math.round(_cc.hsv.v * 100);
+
+    // Hat preview — mirrors drawPlayerHat's maths against the preview's own size, so
+    // what you place here is exactly what lands in the world.
+    const hatEl = _ccEl('cc-hat'), charEl = _ccEl('cc-char');
+    const tools = _ccEl('cc-hat-tools');
+    if (tools) tools.classList.toggle('cc-unlocked', !!_cc.hat);
+    if (hatEl && charEl) {
+        if (!_cc.hat) { hatEl.classList.remove('cc-hat-on'); hatEl.removeAttribute('src'); }
+        else {
+            const entry = ensureHatAsset(_cc.hat.id);
+            // Not decoded yet (a saved hat on first open): re-reflect when it lands.
+            if (entry && !entry.ready && !entry.failed && !_cc._awaitHat) {
+                _cc._awaitHat = true;
+                const wait = () => {
+                    if (!_cc.open) { _cc._awaitHat = false; return; }
+                    if (entry.ready || entry.failed) { _cc._awaitHat = false; _ccReflect(); }
+                    else setTimeout(wait, 90);
+                };
+                setTimeout(wait, 90);
+            }
+            if (entry && entry.ready) {
+                if (hatEl.dataset.hatId !== _cc.hat.id) {
+                    hatEl.dataset.hatId = _cc.hat.id;
+                    hatEl.src = entry.url;
+                }
+                const S = charEl.clientWidth || 160;   // preview size stands in for PLAYER_SIZE
+                const w = S * _cc.hat.scale;
+                const h = w * (entry.canvas.height / entry.canvas.width);
+                hatEl.style.width = w + 'px';
+                hatEl.style.height = h + 'px';
+                hatEl.style.transform =
+                    `translate(${(-w / 2 + _cc.hat.x * S).toFixed(1)}px, ${(-h / 2 + _cc.hat.y * S).toFixed(1)}px) rotate(${_cc.hat.rot}rad)`;
+                hatEl.classList.add('cc-hat-on');
+            }
+        }
+    }
+    ['cc-hat-scale', 'cc-hat-rot', 'cc-hat-x', 'cc-hat-y'].forEach(id => {
+        const el = _ccEl(id);
+        if (!el || !_cc.hat || document.activeElement === el) return;
+        if (id === 'cc-hat-scale') el.value = Math.round(_cc.hat.scale * 100);
+        if (id === 'cc-hat-rot')   el.value = Math.round(_cc.hat.rot * 180 / Math.PI);
+        if (id === 'cc-hat-x')     el.value = Math.round(_cc.hat.x * 100);
+        if (id === 'cc-hat-y')     el.value = Math.round(_cc.hat.y * 100);
+    });
+    document.querySelectorAll('#cc-hats .cc-hat-card').forEach(card => {
+        card.classList.toggle('selected', (card.dataset.hatId || '') === (_cc.hat ? _cc.hat.id : ''));
+    });
+}
+
+// Build the hat picker. Previews are the CROPPED canvases, so each card shows the
+// hat filling its box instead of a speck in an ocean of transparent pixels.
+async function _ccBuildHats() {
+    const box = _ccEl('cc-hats');
+    if (!box) return;
+    const list = await loadHatManifest(true);   // re-read every open → new files appear
+    box.innerHTML = '';
+
+    const none = document.createElement('div');
+    none.className = 'cc-hat-card';
+    none.dataset.hatId = '';
+    none.innerHTML = '<span class="cc-hat-none">بدون</span>';
+    none.addEventListener('click', () => { _cc.hat = null; _ccReflect(); });
+    box.appendChild(none);
+
+    if (!list.length) {
+        const empty = document.createElement('div');
+        empty.className = 'cc-hats-empty';
+        empty.style.gridColumn = '1 / -1';
+        empty.textContent = 'لا توجد قبعات متاحة حاليًا';
+        box.appendChild(empty);
+    }
+
+    for (const id of list) {
+        const card = document.createElement('div');
+        card.className = 'cc-hat-card';
+        card.dataset.hatId = id;
+        const img = document.createElement('img');
+        img.alt = id.replace(/\.(png|webp)$/i, '');
+        card.appendChild(img);
+        card.addEventListener('click', () => {
+            // Re-picking the same hat keeps its placement; a new hat starts at the default.
+            if (!_cc.hat || _cc.hat.id !== id) _cc.hat = { id, ...HAT_DEFAULT };
+            _ccReflect();
+        });
+        box.appendChild(card);
+
+        const entry = ensureHatAsset(id);
+        const paint = () => {
+            if (entry.ready) { img.src = entry.url; _ccReflect(); }
+            else if (!entry.failed) setTimeout(paint, 90);
+            else card.remove();
+        };
+        paint();
+    }
+    _ccReflect();
+}
+
+function _ccSetColor(hex, fromWheel) {
+    const v = _validHex(hex);
+    if (!v) return;
+    _cc.color = v.toLowerCase();
+    if (!fromWheel) _cc.hsv = _hexToHsv(_cc.color);
+    _ccReflect();
+}
+
+function openCharCustom() {
+    const overlay = _ccEl('char-custom-overlay');
+    if (!overlay || _cc.open) return;
+    _cc.open = true;
+
+    // Start from what's live right now.
+    const me = gameState.players[gameState.userId];
+    _cc.color = _validHex(me && me.ringColor) || COLORS.blue;
+    _cc.hat   = (me && me.hat) ? { ...me.hat } : null;
+    _cc.hsv   = _hexToHsv(_cc.color);
+
+    // The avatar in the scene.
+    const av = _ccEl('cc-avatar'), ini = _ccEl('cc-initial'), charEl = _ccEl('cc-char');
+    const img = gameState.avatarCache[gameState.userId];
+    if (img && img !== 'failed' && img.src) {
+        av.src = img.src; av.hidden = false;
+        charEl.classList.remove('no-avatar');
+    } else {
+        av.hidden = true;
+        charEl.classList.add('no-avatar');
+        ini.textContent = ((me && me.username) || '?').charAt(0).toUpperCase();
+    }
+
+    overlay.classList.remove('hidden');
+    overlay.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('cc-active');
+    // Force a reflow so removing .hidden and adding .cc-in are two separate styles —
+    // otherwise the browser coalesces them and the fade never runs.
+    void overlay.offsetWidth;
+    overlay.classList.add('cc-in');
+
+    _ccDrawWheel();
+    _ccBuildHats();
+    _ccReflect();
+    _ccPlayDrop();
+}
+
+function closeCharCustom() {
+    const overlay = _ccEl('char-custom-overlay');
+    if (!overlay || !_cc.open) return;
+    _cc.open = false;
+    if (_cc.raf) { cancelAnimationFrame(_cc.raf); _cc.raf = null; }
+    overlay.classList.remove('cc-in');
+    overlay.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('cc-active');
+    setTimeout(() => { if (!_cc.open) overlay.classList.add('hidden'); }, 460);
+}
+
+// حفظ — one small multi-path write, then close. Both fields are read by every
+// client's users listener, which is what makes the change visible to everyone.
+function saveCharCustom() {
+    const uid = gameState.userId;
+    if (uid) {
+        const payload = {
+            [`users/${uid}/ringColor`]: _cc.color,
+            [`users/${uid}/hat`]: _cc.hat ? sanitizeHat(_cc.hat) : null,
+        };
+        update(ref(database), payload).catch(e => console.warn('[custom] save failed', e));
+    }
+    // Apply locally right away — don't wait for the round-trip.
+    const me = gameState.players[uid];
+    if (me) {
+        me.ringColor = _cc.color;
+        me.hat = _cc.hat ? sanitizeHat(_cc.hat) : null;
+    }
+    closeCharCustom();
+}
+
+function setupCharCustomUI() {
+    const overlay = _ccEl('char-custom-overlay');
+    if (!overlay) return;
+
+    _ccEl('settings-custom-btn')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _closeSettingsPanel?.();   // the scene owns the screen — don't leave the panel floating
+        openCharCustom();
+    });
+    _ccEl('cc-close')?.addEventListener('click', closeCharCustom);
+    _ccEl('cc-save')?.addEventListener('click', saveCharCustom);
+    _ccEl('cc-reset-color')?.addEventListener('click', () => _ccSetColor(COLORS.blue));
+
+    // Escape closes; typing must never bleed into player movement while open.
+    window.addEventListener('keydown', (e) => {
+        if (_cc.open && e.key === 'Escape') { e.preventDefault(); closeCharCustom(); }
+    });
+
+    // ── Colour wheel picking (pointer = mouse + touch in one path) ────────────
+    const wheel = _ccEl('cc-wheel');
+    if (wheel) {
+        const pick = (ev) => {
+            const r = wheel.getBoundingClientRect();
+            const R = r.width / 2;
+            const dx = ev.clientX - r.left - R, dy = ev.clientY - r.top - R;
+            let hue = Math.atan2(dy, dx) * 180 / Math.PI;
+            if (hue < 0) hue += 360;
+            _cc.hsv.h = hue;
+            _cc.hsv.s = Math.min(1, Math.hypot(dx, dy) / R);
+            _ccSetColor(_hsvToHex(_cc.hsv.h, _cc.hsv.s, _cc.hsv.v), true);
+        };
+        wheel.addEventListener('pointerdown', (e) => {
+            wheel.setPointerCapture(e.pointerId);
+            _cc.drag = 'wheel';
+            pick(e);
+        });
+        wheel.addEventListener('pointermove', (e) => { if (_cc.drag === 'wheel') pick(e); });
+        const end = () => { if (_cc.drag === 'wheel') _cc.drag = null; };
+        wheel.addEventListener('pointerup', end);
+        wheel.addEventListener('pointercancel', end);
+    }
+
+    _ccEl('cc-light')?.addEventListener('input', (e) => {
+        _cc.hsv.v = Math.max(0.12, Number(e.target.value) / 100);
+        _ccSetColor(_hsvToHex(_cc.hsv.h, _cc.hsv.s, _cc.hsv.v), true);
+    });
+    _ccEl('cc-hex')?.addEventListener('input', (e) => {
+        let v = e.target.value.trim();
+        if (v && v[0] !== '#') v = '#' + v;
+        if (_validHex(v)) _ccSetColor(v);
+    });
+
+    // ── Hat transform sliders ────────────────────────────────────────────────
+    const bind = (id, apply) => {
+        const el = _ccEl(id);
+        el?.addEventListener('input', (e) => {
+            if (!_cc.hat) return;
+            apply(Number(e.target.value));
+            _ccReflect();
+        });
+    };
+    bind('cc-hat-scale', v => { _cc.hat.scale = v / 100; });
+    bind('cc-hat-rot',   v => { _cc.hat.rot   = v * Math.PI / 180; });
+    bind('cc-hat-x',     v => { _cc.hat.x     = v / 100; });
+    bind('cc-hat-y',     v => { _cc.hat.y     = v / 100; });
+
+    // ── Drag the hat directly on the character ───────────────────────────────
+    const hatEl = _ccEl('cc-hat'), charEl = _ccEl('cc-char');
+    if (hatEl && charEl) {
+        let start = null;
+        hatEl.addEventListener('pointerdown', (e) => {
+            if (!_cc.hat) return;
+            e.preventDefault();
+            hatEl.setPointerCapture(e.pointerId);
+            hatEl.classList.add('cc-dragging');
+            start = { px: e.clientX, py: e.clientY, hx: _cc.hat.x, hy: _cc.hat.y };
+        });
+        hatEl.addEventListener('pointermove', (e) => {
+            if (!start || !_cc.hat) return;
+            const S = charEl.clientWidth || 160;
+            _cc.hat.x = Math.max(-1.5, Math.min(1.5, start.hx + (e.clientX - start.px) / S));
+            _cc.hat.y = Math.max(-2.0, Math.min(1.0, start.hy + (e.clientY - start.py) / S));
+            _ccReflect();
+        });
+        const stop = () => { start = null; hatEl.classList.remove('cc-dragging'); };
+        hatEl.addEventListener('pointerup', stop);
+        hatEl.addEventListener('pointercancel', stop);
+    }
+}
+
+function charCustomIsOpen() { return !!_cc.open; }
