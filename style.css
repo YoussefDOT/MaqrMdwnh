@@ -7514,4 +7514,7 @@ body.is-mobile .fp-close { top: 12px; left: 12px; width: 40px; height: 40px; }
    overlay centers it and `.fp-bg` already covers the screen behind it. Still
    height-capped for mobile landscape (a short viewport), so it never blows past
    the screen there. */
-body.is-mobile .fp-stage { width: min(132vw, calc(112dvh * 1500 / 1920)); }
+body.is-mobile .fp-stage {
+    width: min(132vw, calc(112dvh * 1500 / 1920));
+    transform: translateY(9dvh);
+}
