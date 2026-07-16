@@ -22036,7 +22036,14 @@ function showReadingPanel() {
     _uiSeqReset();
     kids.forEach((el, i) => {
         el.style.opacity = '0';
-        el.style.animation = `readingRowIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards`;
+        // The "يتم قراءة <book name>" header (first row) gets a much stronger
+        // deceleration — nearly all its motion happens immediately, then it eases
+        // out for a long, slow tail — instead of the gentler cascade easing the
+        // other rows use.
+        const strongEase = i === 0;
+        el.style.animation = strongEase
+            ? `readingRowIn 0.6s cubic-bezier(0.05, 0.9, 0.1, 1) forwards`
+            : `readingRowIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards`;
         el.style.animationDelay = `${0.1 + i * 0.08}s`;
     });
 }
@@ -22140,8 +22147,12 @@ const BOOK_PROP_W = PLAYER_SIZE * 0.80;                 // "slightly less" than 
 const BOOK_PROP_H = BOOK_PROP_W * (933 / 1004);         // Art/Book.png content aspect
 // Travel leaves a small deliberate overlap with the avatar at full extension — it
 // should read as a book held in the lap, not one floating away from them.
-const BOOK_PROP_TRAVEL = PLAYER_SIZE * 0.5;
+const BOOK_PROP_TRAVEL = PLAYER_SIZE * 0.62;
 const BOOK_PROP_SPEED = 1 / 2.5;                        // slide units/sec (0→1) — 2.5s full slide
+// On session end the book must be fully tucked away before the stand-up/couch-jump
+// fires (800ms after endReadingSession) — much faster than the normal slide, and
+// timed to finish alongside the camera's zoom-out (READING_EXIT_MS ≈ 900ms).
+const BOOK_PROP_EXIT_SPEED = 1 / 0.5;
 // Art/Book.png is a 2048² canvas with the book floating in the middle — draw only
 // the painted region so the sprite isn't 75% empty space.
 const BOOK_SRC = { x: 515, y: 423, w: 1004, h: 933 };
@@ -22162,7 +22173,12 @@ function _updateBookProp(player, isLocal) {
         : !!(player.isReading && player.sitSeatId);
     const target = seated ? 1 : 0;
     const cur = player._bookSlide || 0;
-    const step = BOOK_PROP_SPEED * (gameState.dtFactor / 60);
+    // Retract fast (in sync with the camera zoom-out) while this player's own
+    // reading session is exiting — otherwise the normal slow slide is still
+    // mid-way when the couch-jump fires.
+    const exiting = isLocal && gameState.reading._cameraPhase === 'exiting';
+    const speed = (target < cur && exiting) ? BOOK_PROP_EXIT_SPEED : BOOK_PROP_SPEED;
+    const step = speed * (gameState.dtFactor / 60);
     player._bookSlide = target > cur ? Math.min(target, cur + step) : Math.max(target, cur - step);
     return player._bookSlide;
 }
@@ -22442,46 +22458,51 @@ function sanitizeHat(raw) {
     };
 }
 
-// ── Hat physics: a lagging, overshooting spring ───────────────────────────────
-// The hat chases the avatar's anchor instead of being welded to it. An underdamped
-// spring means it arrives a few frames late and overshoots slightly when the player
-// stops — it reads as an object with mass sitting on the head. Per-player state, so
-// remote players' hats swing too (their render position drives the same spring).
-const _HAT_K      = 0.26;   // stiffness — how hard it's pulled toward the anchor
-const _HAT_D_WALK = 0.34;   // damping during ordinary movement — heavy, no overshoot
-const _HAT_D_ANIM = 0.68;   // damping during kidnap/sit-jump (<1 ⇒ overshoots before settling)
-const _HAT_MAX = 30;     // px — hard cap on the lag so a teleport can't fling it
+// ── Hat physics: pinned position, overshooting ROTATION only ─────────────────
+// The hat's position is welded to the avatar's centre anchor every frame — no
+// positional lag, so it never looks like it's floating behind the player. All the
+// "object with mass" feel instead comes from a rotation spring: the anchor's
+// sudden velocity changes (stopping after a run, the kidnap yank, the sit-down
+// jump) impart torque, and the hat's rotation overshoots past level before
+// settling — a small flop, not a chase. Per-player state, so remote players'
+// hats flop too (their render position drives the same spring).
+const _HAT_ROT_K   = 0.10;   // stiffness — how hard rotation is pulled back to level
+const _HAT_ROT_D   = 0.90;   // damping (<1 ⇒ light overshoot before settling)
+const _HAT_TORQUE  = 0.0026; // how much anchor acceleration turns into angular kick
+const _HAT_ROT_MAX = 0.30;   // rad — hard cap so a teleport/kidnap yank can't spin it silly
 
 function _updateHatSpring(player, tx, ty) {
     let h = player._hatSpring;
-    if (!h) { h = player._hatSpring = { x: tx, y: ty, vx: 0, vy: 0 }; return h; }
-    if (gameState._pipPass) return h;   // PiP draws the spring, never advances it
-
-    // A teleport/kidnap jump would otherwise stretch the spring across the map:
-    // re-anchor instead of chasing.
-    if (Math.abs(tx - h.x) > 260 || Math.abs(ty - h.y) > 260) {
-        h.x = tx; h.y = ty; h.vx = 0; h.vy = 0;
+    if (!h) {
+        h = player._hatSpring = { x: tx, y: ty, vx: 0, vy: 0, rot: 0, rotVel: 0 };
         return h;
     }
-    // Overshoot is only wanted for the local player's own dedicated animations
-    // (laptop kidnap, sofa/reading sit-jump) — plain walking uses a heavier,
-    // non-overshooting damping so the hat doesn't wobble on every stop/turn.
-    const isLocal = player.userId === gameState.userId;
-    const overshoots = isLocal && (gameState.anim.active || gameState.sitAnim.active);
-    const D = overshoots ? _HAT_D_ANIM : _HAT_D_WALK;
+    // Position is always pinned to the anchor — no lag.
     const dt = Math.min(2, gameState.dtFactor || 1);
-    h.vx = (h.vx + (tx - h.x) * _HAT_K * dt) * Math.pow(D, dt);
-    h.vy = (h.vy + (ty - h.y) * _HAT_K * dt) * Math.pow(D, dt);
-    h.x += h.vx * dt;
-    h.y += h.vy * dt;
-    const dx = h.x - tx, dy = h.y - ty;
-    const d = Math.hypot(dx, dy);
-    if (d > _HAT_MAX) { h.x = tx + dx / d * _HAT_MAX; h.y = ty + dy / d * _HAT_MAX; }
+    const rawVx = (tx - h.x) / Math.max(dt, 0.001);
+    const rawVy = (ty - h.y) / Math.max(dt, 0.001);
+    h.x = tx; h.y = ty;
+
+    if (gameState._pipPass) return h;   // PiP draws the spring, never advances it
+
+    // A teleport/kidnap jump: re-anchor the rotation spring instead of imparting
+    // a giant one-frame torque (which would look like a spin, not a flop).
+    const jumped = Math.abs(rawVx - h.vx) > 40 || Math.abs(rawVy - h.vy) > 40;
+    const ax = jumped ? 0 : (rawVx - h.vx);
+    h.vx = rawVx; h.vy = rawVy;
+
+    // Torque from the horizontal deceleration/acceleration impulse — this alone
+    // covers "stop after running", the kidnap pull, and the sit-down jump, with
+    // no special-casing needed: any sudden anchor-velocity change flops the hat.
+    h.rotVel += -ax * _HAT_TORQUE * dt;
+    h.rotVel = (h.rotVel - h.rot * _HAT_ROT_K * dt) * Math.pow(_HAT_ROT_D, dt);
+    h.rot += h.rotVel * dt;
+    h.rot = Math.max(-_HAT_ROT_MAX, Math.min(_HAT_ROT_MAX, h.rot));
     return h;
 }
 
-// Draw a player's hat at its lagged position. Called from drawPlayers AFTER the
-// avatar's transform is restored, with the anchor the avatar was drawn at.
+// Draw a player's hat pinned to the avatar's centre anchor. Called from drawPlayers
+// AFTER the avatar's transform is restored, with the anchor the avatar was drawn at.
 function drawPlayerHat(player, anchorX, anchorY, rScale, alpha) {
     const hat = player.hat;
     if (!hat || alpha < 0.02) { player._hatSpring = null; return; }
@@ -22492,15 +22513,13 @@ function drawPlayerHat(player, anchorX, anchorY, rScale, alpha) {
     const src = entry.canvas;
     const w = PLAYER_SIZE * hat.scale * rScale;
     const h = w * (src.height / src.width);
-    // Extra tilt from the spring's own velocity — the hat leans into the lag.
-    const tilt = Math.max(-0.32, Math.min(0.32, spr.vx * 0.014));
 
     const ctx = gameState.ctx;
     ctx.save();
     ctx.globalAlpha = alpha;
     ctx.translate(spr.x, spr.y);
     ctx.translate(hat.x * PLAYER_SIZE * rScale, hat.y * PLAYER_SIZE * rScale);
-    ctx.rotate(hat.rot + tilt);
+    ctx.rotate(hat.rot + spr.rot);
     ctx.drawImage(src, -w / 2, -h / 2, w, h);
     ctx.restore();
 }
@@ -22532,8 +22551,8 @@ function _ccEl(id) { return document.getElementById(id); }
 // The character's drop + bounce. One rAF tween: fall (accelerating, stretched),
 // then a damped squash oscillation on impact. The contact shadow tightens as the
 // character nears the floor, which is what gives the scene its depth.
-const _CC_FALL_MS = 620;
-const _CC_SETTLE_MS = 900;
+const _CC_FALL_MS = 380;
+const _CC_SETTLE_MS = 560;
 function _ccPlayDrop() {
     const char = _ccEl('cc-char'), shadow = _ccEl('cc-shadow');
     if (!char) return;
@@ -22555,14 +22574,14 @@ function _ccPlayDrop() {
             shS = 0.36 + e * 0.64;
         } else {
             const p = Math.min(1, (t - _CC_FALL_MS) / _CC_SETTLE_MS);
-            // Damped oscillation around 1 — starts hard-squashed, rings out to rest.
-            const decay = Math.exp(-5.2 * p);
+            // Damped oscillation around 1 — starts lightly squashed, settles fast.
+            const decay = Math.exp(-8.5 * p);
             const osc = Math.cos(p * Math.PI * 3.1) * decay;
-            sx = 1 + 0.34 * osc;
-            sy = 1 - 0.34 * osc;
-            y = -Math.max(0, (1 - sy)) * 40;       // the squash keeps the feet planted
+            sx = 1 + 0.14 * osc;
+            sy = 1 - 0.14 * osc;
+            y = 0;   // pivot is at the feet now (transform-origin), so no manual foot-plant hack needed
             shA = 0.85 + 0.15 * (1 - decay);
-            shS = 1 + 0.30 * osc;
+            shS = 1 + 0.14 * osc;
             if (p >= 1) {
                 char.style.transform = 'translateY(0) scale(1,1)';
                 if (shadow) { shadow.style.opacity = '1'; shadow.style.transform = 'scale(1)'; }
@@ -22812,6 +22831,10 @@ function setupCharCustomUI() {
     _ccEl('cc-close')?.addEventListener('click', closeCharCustom);
     _ccEl('cc-save')?.addEventListener('click', saveCharCustom);
     _ccEl('cc-reset-color')?.addEventListener('click', () => _ccSetColor(COLORS.blue));
+    _ccEl('cc-presets')?.addEventListener('click', (e) => {
+        const btn = e.target.closest('.cc-preset');
+        if (btn) _ccSetColor(btn.dataset.color);
+    });
     _ccEl('cc-reset-hat')?.addEventListener('click', () => {
         if (!_cc.hat) return;
         _cc.hat = { id: _cc.hat.id, ...HAT_DEFAULT };
@@ -22858,18 +22881,24 @@ function setupCharCustomUI() {
     });
 
     // ── Hat transform sliders ────────────────────────────────────────────────
-    const bind = (id, apply) => {
+    // snapZero: a magnetic 0 — get within _CC_SNAP_TOL of centre and the value
+    // (and the visible thumb) snap dead to 0, so restoring "no rotation / no
+    // offset" doesn't need pixel-perfect dragging.
+    const _CC_SNAP_TOL = 4;
+    const bind = (id, apply, snapZero) => {
         const el = _ccEl(id);
         el?.addEventListener('input', (e) => {
             if (!_cc.hat) return;
-            apply(Number(e.target.value));
+            let v = Number(e.target.value);
+            if (snapZero && Math.abs(v) <= _CC_SNAP_TOL) { v = 0; e.target.value = '0'; }
+            apply(v);
             _ccReflect();
         });
     };
     bind('cc-hat-scale', v => { _cc.hat.scale = v / 100; });
-    bind('cc-hat-rot',   v => { _cc.hat.rot   = v * Math.PI / 180; });
-    bind('cc-hat-x',     v => { _cc.hat.x     = v / 100; });
-    bind('cc-hat-y',     v => { _cc.hat.y     = v / 100; });
+    bind('cc-hat-rot',   v => { _cc.hat.rot   = v * Math.PI / 180; }, true);
+    bind('cc-hat-x',     v => { _cc.hat.x     = v / 100; }, true);
+    bind('cc-hat-y',     v => { _cc.hat.y     = v / 100; }, true);
 
     // ── Drag the hat directly on the character ───────────────────────────────
     const hatEl = _ccEl('cc-hat'), charEl = _ccEl('cc-char');

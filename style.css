@@ -1804,6 +1804,9 @@ body {
     pointer-events: none;
     animation: pillPunch 0.55s var(--bounce);
 }
+/* pointer-events:none drops the live :hover match the instant press fires, which
+   snapped the name back to white mid-launch even though the sweep is still up. */
+.user-pill.launching .pill-name { color: var(--clr-raisin); }
 .user-pill.launching .pill-go {
     animation: arrowEscape 0.62s cubic-bezier(0.45, -0.55, 0.25, 1) forwards;
     background: var(--brand-red);
@@ -2263,6 +2266,8 @@ body.is-mobile .btn-discord { width: 100%; }
     top: 130px; right: 18px;
     z-index: 6000;
     width: 270px;
+    max-height: calc(100vh - 150px);
+    display: flex; flex-direction: column;
     background: rgba(18,18,18,0.92);
     -webkit-backdrop-filter: blur(24px) saturate(1.6);
     backdrop-filter: blur(24px) saturate(1.6);
@@ -2330,7 +2335,14 @@ body.is-mobile .btn-discord { width: 100%; }
 }
 .settings-panel-close svg { width: 13px; height: 13px; }
 .settings-panel-close:hover { background: rgba(255,255,255,0.12); color: #fff; }
-.settings-rows { padding: 6px 0 10px; }
+.settings-panel-header { flex: 0 0 auto; }
+.settings-rows {
+    padding: 6px 0 10px;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+}
 /* Category groups with header labels */
 .settings-category { padding: 2px 0; }
 .settings-category:not(:last-child) { border-bottom: 1px solid rgba(255,255,255,0.07); }
@@ -2391,6 +2403,7 @@ body.is-mobile .settings-panel {
     left: auto;
     right: 10px;
     top: 110px;
+    max-height: calc(100dvh - 130px);
 }
 
 /* Minigame leave button — same position as انهاء الجلسة but only during minigames */
@@ -7415,55 +7428,24 @@ body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
    in with squash & stretch, and the customization panel slides in on the left.
    ═══════════════════════════════════════════════════════════════════════════ */
 
-/* ── The sparkly settings entry button ─────────────────────────────────────── */
-.settings-sparkle-btn {
-    position: relative;
-    flex: 0 0 auto;
-    padding: 6px 16px;
+/* ── The تخصيص entry button — next to the settings gear in user-card-bottom ─── */
+.user-card-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.custom-pill-btn {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 14px;
     border-radius: 50px;
-    border: 1px solid rgba(255,255,255,0.22);
-    background: linear-gradient(115deg, #6b3fd4 0%, #b6379c 38%, #e0603f 66%, #d9a326 100%);
-    background-size: 220% 100%;
+    border: 1px solid rgba(255,255,255,0.13);
+    background: #141414;
     color: #fff;
-    font-size: 0.76rem; font-weight: 800;
+    font-size: 0.76rem; font-weight: 700;
     font-family: inherit;
     cursor: pointer;
     white-space: nowrap;
-    overflow: hidden;
-    isolation: isolate;
-    box-shadow: 0 3px 14px rgba(150,60,200,0.34), inset 0 1px 0 rgba(255,255,255,0.28);
-    transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.2s, background-position 0.5s;
+    transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), background 0.18s;
 }
-.settings-sparkle-btn:hover {
-    background-position: 100% 0;
-    transform: translateY(-1px) scale(1.03);
-    box-shadow: 0 6px 22px rgba(180,60,190,0.48), inset 0 1px 0 rgba(255,255,255,0.35);
-}
-.settings-sparkle-btn:active { transform: scale(0.95); }
-.sparkle-label { position: relative; z-index: 2; text-shadow: 0 1px 4px rgba(0,0,0,0.30); }
-/* Sweeping gloss. Transform-only (no repaint of the gradient) so it stays cheap. */
-.sparkle-shine {
-    position: absolute; top: -60%; bottom: -60%; left: -40%; width: 32%;
-    background: linear-gradient(100deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.60) 50%, rgba(255,255,255,0) 100%);
-    transform: translateX(-260%) rotate(14deg);
-    animation: ccShine 3.4s cubic-bezier(0.5,0,0.2,1) infinite;
-    z-index: 1; pointer-events: none;
-}
-@keyframes ccShine { 0% { transform: translateX(-260%) rotate(14deg); } 42%, 100% { transform: translateX(560%) rotate(14deg); } }
-.sparkle-stars { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
-.sparkle-stars i {
-    position: absolute; left: var(--sx); top: var(--sy);
-    width: 5px; height: 5px; margin: -2.5px 0 0 -2.5px;
-    background: #fff; border-radius: 50%;
-    box-shadow: 0 0 6px 1px rgba(255,255,255,0.9);
-    opacity: 0; transform: scale(0.2);
-    animation: ccTwinkle 2.2s ease-in-out infinite;
-    animation-delay: var(--sd);
-}
-@keyframes ccTwinkle {
-    0%, 72%, 100% { opacity: 0; transform: scale(0.2); }
-    82%           { opacity: 1; transform: scale(1); }
-}
+.custom-pill-btn:hover { background: #202020; }
+.custom-pill-btn:active { transform: scale(0.95); }
+.custom-pill-icon { width: 14px; height: 14px; flex: 0 0 auto; }
 
 /* ── The overlay + 3D space ────────────────────────────────────────────────── */
 .cc-overlay {
@@ -7503,6 +7485,7 @@ body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
     width: 160px; height: 160px;
     will-change: transform;
     pointer-events: auto;
+    transform-origin: 50% 100%;   /* pivot at the feet so squash/stretch keeps him planted on the shadow */
 }
 .cc-ring {
     position: absolute; inset: 0;
@@ -7587,6 +7570,15 @@ body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
 .cc-range { flex: 1 1 auto; -webkit-appearance: none; appearance: none; height: 4px; border-radius: 50px; background: rgba(255,255,255,0.14); outline: none; }
 .cc-range::-webkit-slider-thumb { -webkit-appearance: none; width: 15px; height: 15px; border-radius: 50%; background: #fff; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.45); }
 .cc-range::-moz-range-thumb { width: 15px; height: 15px; border: none; border-radius: 50%; background: #fff; cursor: pointer; }
+.cc-presets { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 14px; }
+.cc-preset {
+    width: 26px; height: 26px; border-radius: 50%;
+    background: var(--pc); border: 2px solid rgba(255,255,255,0.22);
+    cursor: pointer; padding: 0;
+    transition: transform 0.16s cubic-bezier(0.34,1.56,0.64,1), border-color 0.16s;
+}
+.cc-preset:hover { transform: scale(1.14); border-color: rgba(255,255,255,0.55); }
+.cc-preset:active { transform: scale(0.94); }
 .cc-hex-row { display: flex; align-items: center; gap: 8px; margin-top: 14px; }
 .cc-swatch { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 8px; background: var(--cc-ring, #086fb6); border: 1px solid rgba(255,255,255,0.20); }
 .cc-hex {
