@@ -2,6 +2,10 @@
 
 > **This project is entirely vibe-coded.** Every line of JS/HTML/CSS was written by an AI model. Only the art assets and audio files are human-made. When Claude is working on this, it IS the developer — read this file carefully before touching anything.
 
+> **Always use the `caveman` skill in this project.** Every reply in this repo runs in
+> caveman mode (`Skill: anthropic-skills:caveman`) — terse, no filler — while keeping
+> full technical accuracy. Code, commits, and PRs are still written normally.
+
 > **Spell-check all UI text.** Any Arabic or English text that will appear in the UI must be spell-checked before being written into the codebase. Never add user-visible text without verifying spelling and grammar first.
 
 > **The owner is a beginner developer.** Explain things in plain language — what broke, why, and what the fix does — as if to someone who doesn't know much about code. Skip jargon, and when you must use a technical term, define it briefly. Don't over-explain either: keep it short and clear, not a tutorial. Claude is the one writing the code; the owner is steering, so help them understand decisions without drowning them in detail.
@@ -40,6 +44,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **YouTube focus player** | Paste a YouTube link, it plays embedded with loop support |
 | **Prayer times** | Live Adhan scheduling with overlay + rain effect |
 | **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock; optional shuffled order; **after-prayer azkar** reachable from the prayer overlay |
+| **المدفئة / أعضاء الشهر** | Walk to the fireplace → a full-screen look at it with the month's top-3 point scorers framed on the mantel. Points come from a **separate Firebase project**. See **Fireplace / Members of the Month**. |
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
 | **Minigames** | Racing / Coffee / laptop-boss. **Entry is TEMPORARILY OFF** — the old break-room zones were removed with the old art; they'll be re-wired to the new **games table** later (all the minigame code still works, it's just unreachable for now). |
 | **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
@@ -623,6 +628,69 @@ is `--rd-accent`, a warm parchment cream. Desktop `#reading-panel` sits in the l
 timer card with a progress bar, and المتصدرين. Mobile mirrors it in a top header +
 pull-up drawer. Both are fed by `updateReadingSession` via an `isMobile()` id prefix
 (`reading-panel-*` / `reading-mobile-*`) — **keep those two id sets symmetrical**.
+
+---
+
+## Fireplace / Members of the Month (المدفئة — أعضاء الشهر)
+
+Walk near the fireplace on floor 1 → **"انقر للنظر الى المدفئة"** (same plain bobbing
+prompt style as the laptop/library prompts) → click → `#fireplace-overlay`: a
+full-screen view of the fireplace art with the month's **top 3 point scorers** framed
+on it. Code lives at the end of `game.js`; markup is `#fireplace-overlay` in
+`index.html`; styles are the `المدفئة` block in `style.css`.
+
+### The art stack (draw order is fixed)
+`Art/Fireplace BG.png` (1920×1080, `object-fit: cover` behind everything) → `.fp-stage`
+holding `Art/Fireplace.png` (1500×1920) → the 3 member frames → `Art/Fireplace Fire.png`
+(1500×1920, **always on top**). The stage is sized `width: min(100%, 100dvh*1500/1920)`
+with `aspect-ratio: 1500/1920` — **width is the only sized axis on purpose**; a
+`height: 100%` fighting `max-width` breaks the ratio and the frames drift off the art.
+
+### The 3 frames — `FIRE_SLOTS`
+Positions are **fractions of `Fireplace.png`**, measured off the reference overlay, so
+they hold at any screen size. **Middle = 1st place, right = 2nd, left = 3rd** (RTL
+podium). `setupFireplaceUI` builds the slot divs from `FIRE_SLOTS`, so the coordinates
+live in **one place** — tune them there, never in CSS.
+
+### The data join — TWO different Firebase projects
+This is the fiddly part. The two databases were never designed to line up:
+- **Points**: the separate **`mdwnhpoints`** project (`pointsDatabase`, a second named
+  app in `firebase-config.js` — `getDatabase(app)` would hit the main DB). Keyed by
+  **Arabic name**: `players/{name}/totalPoints`. **No UIDs there at all.**
+- **Avatars**: our main DB, keyed by **UID** (`users/{uid}/avatar`).
+
+So: points name → `_fireNormName()` → `FIRE_NAME_TO_UID` → avatar. Gotchas:
+- **`_fireNormName()`** folds hamza/alef/ya/ta-marbuta variants + strips harakat and
+  tatweel — the points DB writes `ابو مزاحم`, our list has `أبو مزاحم`.
+- **`مجود` is spelled `نجود`** in the points DB. That's a genuinely different letter,
+  not a hamza variant, so normalisation can't fix it — **both spellings are mapped to
+  the same UID** in `FIRE_NAME_TO_UID`. Any future mismatch like this gets the same
+  treatment: add the extra spelling as another key.
+- **`FIRE_EXCLUDE_NAMES`** drops `سراج` — the test account has ~19k points and would
+  own first place forever.
+- `FIRE_NAME_TO_UID` is **hand-maintained** — add a member here when they're added to
+  the points bot, or they'll show a letter-initial fallback instead of their avatar.
+
+### Cost
+**One-shot `get()`s only, on open — never a live listener.** The points node is a
+foreign DB whose size we don't control, and the avatars are one `get()` per top-3 UID,
+**memoised for the session** (`_fire.avatars`). A re-open renders the previous result
+instantly, then refreshes in the background.
+
+### Animating the fire later
+The plan is a **normal (opaque) MP4 of the flame on a BLACK background, composited with
+`mix-blend-mode: screen`** on `.fp-fire` — black goes transparent, the flame stays. Do
+**not** reach for a transparent video: alpha video needs VP9-alpha `.webm` for Chrome
+**plus** HEVC-alpha `.mp4` for Safari (two encodes, and Safari has no VP9 alpha), and a
+PNG sequence is far worse — dozens of full-size decoded frames is exactly the memory
+pressure that was OOM-crashing Safari (see **The World → Perf notes**). One short
+looping MP4 is a few hundred KB, hardware-decoded, and one file for every browser.
+
+### Input lock
+`fireplaceIsOpen()` bails the window `keydown`, the wheel-zoom handler and
+`handleMovement` — same pattern as the dashboard / char-customizer. `body.fireplace-active`
+locks body scroll and hides `#game-canvas` on mobile. `z-index: 9000` — **below** the
+prayer/azkar overlays (10000), which must cover it.
 
 ---
 

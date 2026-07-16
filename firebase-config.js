@@ -21,4 +21,19 @@ const database = getDatabase(app);
 const auth = getAuth(app);
 export const authReady = signInAnonymously(auth).catch(() => {});
 
-export { database, ref, onValue, update, get, onDisconnect, set, remove, runTransaction };
+// ── Secondary app: the POINTS database (a separate Firebase project) ────────────
+// Read-only from here, and read ONLY on demand (one `get('players')` when the
+// fireplace view opens — never a live listener). It's a different project, so it
+// needs its own named app instance; `getDatabase(app)` would hit the main DB.
+const pointsApp = initializeApp({
+    apiKey: "AIzaSyDVNQ5Nh8JpaOZIb6bhou6x2JAvjn8Ik4U",
+    authDomain: "mdwnhpoints.firebaseapp.com",
+    databaseURL: "https://mdwnhpoints-default-rtdb.europe-west1.firebasedatabase.app",
+    projectId: "mdwnhpoints",
+    storageBucket: "mdwnhpoints.firebasestorage.app",
+    messagingSenderId: "225704093916",
+    appId: "1:225704093916:web:a1455885c84101b6b02c19"
+}, 'points');
+const pointsDatabase = getDatabase(pointsApp);
+
+export { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, runTransaction };

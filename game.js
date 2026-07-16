@@ -1,4 +1,4 @@
-import { database, ref, onValue, update, get, onDisconnect, set, remove, authReady, runTransaction } from './firebase-config.js';
+import { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, authReady, runTransaction } from './firebase-config.js';
 
 // ─── Mobile detection ────────────────────────────────────────────────────────
 const MOBILE_BREAKPOINT = 1024;
@@ -2631,6 +2631,8 @@ const FIRE_X = sx2w(1110), FIRE_Y = sy2w(3010);
 const FIRE_NEAR = 130;   // full volume within this radius (world px)
 const FIRE_FAR  = 380;   // silent beyond this radius
 const FIRE_MAX_VOL = 0.7;
+const FIRE_SELECT_R = 220;   // proximity: show the "انقر للنظر الى المدفئة" prompt
+const FIRE_CLICK_R  = 150;   // a click/tap must land near the fireplace itself
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SEATING — sofas (floor 1 only)
@@ -4727,6 +4729,7 @@ function startGame(userData) {
     setupCharCustomUI();
     setupDashboardUI();
     setupSuccessCardUI();
+    setupFireplaceUI();
     setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
     startTabTitleTicker();
 
@@ -5560,7 +5563,7 @@ function setupControls() {
     window.addEventListener('keydown', (e) => {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
-        if (dashboardIsOpen() || charCustomIsOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen()) return;
         gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
@@ -5573,8 +5576,8 @@ function setupControls() {
         }
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
-        // Disable scroll zoom while the dashboard / customization overlay is open
-        if (dashboardIsOpen() || charCustomIsOpen()) return;
+        // Disable scroll zoom while the dashboard / customization / fireplace overlay is open
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -5630,6 +5633,12 @@ function setupControls() {
         if (gameState.nearBooksLibrary && !gameState.reading.active &&
             Math.hypot(clickWorld.x - BOOKS_LIBRARY_POS.x, clickWorld.y - BOOKS_LIBRARY_POS.y) < BOOKS_LIBRARY_CLICK_R) {
             openReadingPopup();
+            return;
+        }
+        // Fireplace — أعضاء الشهر (Floor 1 only)
+        if (gameState.nearFireplace &&
+            Math.hypot(clickWorld.x - FIRE_X, clickWorld.y - FIRE_Y) < FIRE_CLICK_R) {
+            openFireplaceOverlay();
             return;
         }
         // Sofa seating: sofa1 uses the CLICKED y (clamped to the strip + nudged off
@@ -6299,6 +6308,12 @@ function initMobileControls() {
             if (gameState.nearBooksLibrary && !gameState.reading.active &&
                 Math.hypot(clickWorld.x - BOOKS_LIBRARY_POS.x, clickWorld.y - BOOKS_LIBRARY_POS.y) < BOOKS_LIBRARY_CLICK_R) {
                 openReadingPopup();
+                return;
+            }
+            // Fireplace — أعضاء الشهر. Same "tap the thing itself" rule as the library.
+            if (gameState.nearFireplace &&
+                Math.hypot(clickWorld.x - FIRE_X, clickWorld.y - FIRE_Y) < FIRE_CLICK_R) {
+                openFireplaceOverlay();
                 return;
             }
             // Sofa seating (proximity-based tap, same as the dashboard/laptop zones above)
@@ -7881,6 +7896,7 @@ function handleMovement() {
     if (JUICE_ENTRANCE && _entrance.active) return;   // JUICE: lock controls during the login entrance
     if (dashboardIsOpen()) return;                    // dashboard overlay locks movement
     if (charCustomIsOpen()) return;                   // تخصيص الشخصية owns all input while open
+    if (fireplaceIsOpen()) return;                     // أعضاء الشهر overlay locks movement
     if (isMinigameOverlayOpen()) return;               // minigame lobby/confirm/gameplay locks movement
     if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)) return;
@@ -8021,6 +8037,12 @@ function updateInteractions() {
     // the click-to-open gate in the click handlers.
     gameState.nearBooksLibrary = pFloor === 1 && canSit() && !gameState.reading.active
         && Math.hypot(player.x - BOOKS_LIBRARY_POS.x, player.y - BOOKS_LIBRARY_POS.y) < BOOKS_LIBRARY_SELECT_R;
+
+    // Fireplace — floor 1 only. Drives the "انقر للنظر الى المدفئة" prompt and the
+    // click gate that opens the أعضاء الشهر view.
+    gameState.nearFireplace = pFloor === 1 && !gameState.isLockedIn && !gameState.anim.active
+        && !sessionBlocksInteraction() && !fireplaceIsOpen()
+        && Math.hypot(player.x - FIRE_X, player.y - FIRE_Y) < FIRE_SELECT_R;
 
     // Games table (race / boss / coffee triggers) — floor 1 only, one big room now
     // (no more separate break room), so proximity alone shows the prompt; whether
@@ -8570,6 +8592,7 @@ function render() {
     // (The laptop "انقر للبدء" prompt is drawn by drawFocusMask when near a laptop.)
     drawDashboardPrompt();      // "انقر لفتح الأوراق" over the papers desk
     drawBooksLibraryPrompt();    // "ابدأ القراءة" near books library
+    drawFireplacePrompt();       // "انقر للنظر الى المدفئة" near the fireplace
     drawSeatPrompt();            // "اضغط للجلوس" near a sofa
     drawStandUpButton();         // وقوف — floats above the local player while seated
     drawGameZonePrompt();        // games-table trigger prompt / locked notice
@@ -22685,3 +22708,227 @@ function setupCharCustomUI() {
 }
 
 function charCustomIsOpen() { return !!_cc.open; }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  المدفئة — أعضاء الشهر (Fireplace / members of the month)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Walk up to the fireplace on floor 1 → "انقر للنظر الى المدفئة" → a full-screen
+// view of the fireplace art with the month's top 3 point-scorers framed on it.
+//
+// Where the data comes from (two DIFFERENT Firebase projects):
+//   • Points live in the SEPARATE `mdwnhpoints` project, keyed by ARABIC NAME
+//     (`players/{name}/totalPoints`) — no UIDs there at all. Read with a single
+//     one-shot `get()` when the view opens; never a live listener (see the cost
+//     rules — it's a foreign DB we don't control the size of).
+//   • Avatars live in OUR main DB (`users/{uid}/avatar`), keyed by UID.
+// So the join is: points name → normalise → FIRE_NAME_TO_UID → avatar. The two
+// databases were never designed to line up, which is why the name map below is
+// hand-maintained: add a member here when they're added to the points bot.
+
+// Arabic name normalisation — the points DB and our UID list disagree on hamza
+// (`ابو مزاحم` vs `أبو مزاحم`), so compare on a folded form: strip diacritics +
+// tatweel and collapse the alef/ya/ta-marbuta variants.
+function _fireNormName(s) {
+    return String(s || '')
+        .replace(/[ً-ْـ]/g, '')   // harakat + tatweel
+        .replace(/[أإآٱ]/g, 'ا')
+        .replace(/ى/g, 'ي')
+        .replace(/ة/g, 'ه')
+        .replace(/[ؤ]/g, 'و')
+        .replace(/[ئ]/g, 'ي')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+// name (as written in the points DB) → Discord UID (for the avatar in our DB).
+// Keys are normalised at build time, so any hamza spelling matches. `مجود` is
+// spelled `نجود` in the points DB (a real different letter, not a hamza variant —
+// normalisation can't fix it), so BOTH spellings map to the same UID.
+const FIRE_NAME_TO_UID = (() => {
+    const raw = {
+        'الشعيرة': '1019357346641739806',
+        'عمر': '1069103376807243806',
+        'مايتو': '1111718176875630664',
+        'علي مجدي': '1172932407926718515',
+        'محمد سمير': '1216106201570349156',
+        'عاصم': '1248232143445037178',
+        'شفق': '1285679602349375564',
+        'سحاب': '1357911505479270400',
+        'ورقاء': '1466854105363255459',
+        'رجب': '1526564826527174779',
+        'نواف': '292276027823095829',
+        'يوسف': '567266235163738112',
+        'جمانة': '622102915439525898',
+        'أبو مزاحم': '627439005495197726',
+        'شارد': '653303368973942794',
+        'خالد حسن': '716650621373251685',
+        'فرات': '717209634020130866',
+        'منة': '720663992657510472',
+        'أبو بندر': '722125498859258048',
+        'مجود': '734601933427441704',
+        'نجود': '734601933427441704',   // how the points DB spells مجود
+        'مصطفى': '792080177177690143',
+        'طه': '793489473861189642',
+        'ملك': '810388695311056896',
+        'مورو': '823261298292293632',
+        'خالد': '983037873991319613',
+    };
+    const out = {};
+    for (const [name, uid] of Object.entries(raw)) out[_fireNormName(name)] = uid;
+    return out;
+})();
+
+// Names in the points DB that are never real members (the Siraj test account has
+// tens of thousands of points and would permanently own first place).
+const FIRE_EXCLUDE_NAMES = new Set(['سراج'].map(_fireNormName));
+
+// The three frames painted into `Art/Fireplace.png`, as fractions of that image
+// (1500×1920) — measured off the reference overlay. Middle = 1st place, right =
+// 2nd, left = 3rd (RTL podium). CSS positions each slot from these, so they stay
+// glued to the art at any screen size. Tweak here if a frame looks off.
+const FIRE_SLOTS = [
+    { rank: 1, x: 0.4227, y: 0.2135, w: 0.1667, h: 0.1188 },   // middle
+    { rank: 2, x: 0.6587, y: 0.2135, w: 0.1680, h: 0.1188 },   // right
+    { rank: 3, x: 0.1813, y: 0.2135, w: 0.1700, h: 0.1188 },   // left
+];
+
+const _fire = { open: false, loading: false, top3: null, avatars: {} };
+function fireplaceIsOpen() { return !!_fire.open; }
+
+const _firePrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null };
+function drawFireplacePrompt() {
+    const key = gameState.nearFireplace ? 'fire' : null;
+    if (!_updatePromptCrossfade(_firePrompt, key, FIRE_X, FIRE_Y)) return;
+    const ctx = gameState.ctx;
+    const a = _firePrompt.alpha;
+    const bob = Math.sin(Date.now() * 0.004) * 2.5;
+    const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _firePrompt.pop));
+    ctx.save();
+    ctx.translate(_firePrompt.x, _firePrompt.y - 70 - (1 - a) * 10 + bob);
+    ctx.scale(pop, pop);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowBlur = 4; ctx.shadowColor = `rgba(0,0,0,${0.65 * a})`;
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.font = 'bold 16px Rubik';
+    ctx.fillText('انقر للنظر الى المدفئة', 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+// One-shot read of the foreign points DB → the top 3 real members, richest first.
+async function fetchFireTop3() {
+    const snap = await get(ref(pointsDatabase, 'players'));
+    if (!snap.exists()) return [];
+    const arr = [];
+    for (const [name, p] of Object.entries(snap.val() || {})) {
+        const norm = _fireNormName(name);
+        if (FIRE_EXCLUDE_NAMES.has(norm)) continue;
+        const pts = Number(p && p.totalPoints) || 0;
+        if (pts <= 0) continue;
+        arr.push({ name, norm, points: pts, uid: FIRE_NAME_TO_UID[norm] || null });
+    }
+    arr.sort((a, b) => b.points - a.points);
+    return arr.slice(0, 3);
+}
+
+// Avatars come from OUR DB, one `get()` per UID, memoised for the session.
+async function fireAvatarFor(uid) {
+    if (!uid) return '';
+    if (_fire.avatars[uid] !== undefined) return _fire.avatars[uid];
+    try {
+        const snap = await get(ref(database, `users/${uid}/avatar`));
+        _fire.avatars[uid] = snap.exists() ? (snap.val() || '') : '';
+    } catch { _fire.avatars[uid] = ''; }
+    return _fire.avatars[uid];
+}
+
+function _fireRenderSlots(top3) {
+    for (const slot of FIRE_SLOTS) {
+        const el = document.getElementById(`fire-slot-${slot.rank}`);
+        if (!el) continue;
+        const m = top3[slot.rank - 1];
+        const photo = el.querySelector('.fp-slot-photo');
+        const nameEl = el.querySelector('.fp-slot-name');
+        if (!m) {
+            el.classList.add('fp-slot-empty');
+            photo.style.backgroundImage = '';
+            photo.textContent = '';
+            nameEl.textContent = '';
+            continue;
+        }
+        el.classList.remove('fp-slot-empty');
+        nameEl.textContent = m.name;
+        const url = m.uid ? _fire.avatars[m.uid] : '';
+        if (url) {
+            photo.style.backgroundImage = `url("${url}")`;
+            photo.textContent = '';
+        } else {
+            // No UID mapping / no avatar on file — fall back to the first letter so
+            // the frame still reads as a person rather than an empty hole.
+            photo.style.backgroundImage = '';
+            photo.textContent = (m.name || '؟').trim().charAt(0);
+        }
+    }
+}
+
+async function openFireplaceOverlay() {
+    if (_fire.open || _fire.loading) return;
+    const overlay = document.getElementById('fireplace-overlay');
+    if (!overlay) return;
+    _fire.open = true;
+    gameState.keys = {};                 // drop any held movement key
+    document.body.classList.add('fireplace-active');
+    overlay.classList.add('active');
+    overlay.setAttribute('aria-hidden', 'false');
+
+    // Show whatever we fetched last time instantly, then refresh in the background.
+    if (_fire.top3) _fireRenderSlots(_fire.top3);
+    _fire.loading = true;
+    try {
+        const top3 = await fetchFireTop3();
+        await Promise.all(top3.map(m => fireAvatarFor(m.uid)));
+        _fire.top3 = top3;
+        if (_fire.open) _fireRenderSlots(top3);
+    } catch (e) {
+        console.warn('[fireplace] points fetch failed', e);
+    } finally {
+        _fire.loading = false;
+    }
+}
+
+function closeFireplaceOverlay() {
+    if (!_fire.open) return;
+    _fire.open = false;
+    const overlay = document.getElementById('fireplace-overlay');
+    if (overlay) {
+        overlay.classList.remove('active');
+        overlay.setAttribute('aria-hidden', 'true');
+    }
+    document.body.classList.remove('fireplace-active');
+}
+
+function setupFireplaceUI() {
+    const overlay = document.getElementById('fireplace-overlay');
+    if (!overlay || overlay._fireWired) return;
+    overlay._fireWired = true;
+
+    // Build the three frames from FIRE_SLOTS so the art coords live in ONE place.
+    const stage = overlay.querySelector('.fp-stage');
+    for (const slot of FIRE_SLOTS) {
+        const el = document.createElement('div');
+        el.id = `fire-slot-${slot.rank}`;
+        el.className = `fp-slot fp-slot-rank${slot.rank} fp-slot-empty`;
+        el.style.left   = `${slot.x * 100}%`;
+        el.style.top    = `${slot.y * 100}%`;
+        el.style.width  = `${slot.w * 100}%`;
+        el.style.height = `${slot.h * 100}%`;
+        el.innerHTML = '<div class="fp-slot-photo"></div><div class="fp-slot-name"></div>';
+        stage.appendChild(el);
+    }
+
+    overlay.querySelector('#fireplace-close')?.addEventListener('click', closeFireplaceOverlay);
+    // Click the backdrop (never the fireplace itself) to close.
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeFireplaceOverlay(); });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && _fire.open) closeFireplaceOverlay(); });
+}
