@@ -215,7 +215,7 @@ function getDiscordRedirectUri() {
     if (host === 'localhost' || host === '127.0.0.1') {
         return window.location.pathname === '/' ? 'http://localhost:8080/' : 'http://localhost:8080';
     }
-    return 'https://youssefdot.github.io/MdwnhCafe/';
+    return 'https://youssefdot.github.io/MaqrMdwnh/';
 }
 
 function getDiscordAuthorizeUrl() {
