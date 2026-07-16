@@ -422,23 +422,16 @@ function _bootCycleMessage(immediate) {
     setTimeout(swap, 450);          // matches the .boot-msg opacity transition
 }
 
-// How far along the world art actually is, 0..1. The two day overlays are drawn
-// per-frame and the ~12 ground/second-floor layers get freed once worldCache is
-// built — so `.complete` alone is not a reliable "done" signal after the fact.
-// worldCache.ground being present IS: buildWorldCache only runs once every layer
-// has decoded.
+// How far along the world art actually is, 0..1. Inspecting the layers themselves
+// tells us nothing: loadWorldArt closes each one the moment it's composited, so a
+// finished layer and a not-yet-started one look identical (both null). It just
+// counts them off as it goes instead — see `_worldLayersDone`.
+let _worldLayersDone = 0;
 function _bootRealProgress() {
-    if (worldCache.ground && worldCache.second) return 1;
-    const A = gameState.assets;
-    const layers = [A.wBackground, A.wWalls, A.wFireplace, A.wBooksSofas,
-        A.wBooksLibrary, A.wSofa, A.wLaptops, A.wLaptopLights, A.wStairs, A.wGames,
-        A.wSecondBg, A.wSecondLaptops, A.wSecondLaptopLights, A.wSecondPapers,
-        A.wOverlayDay2, A.wOverlayDay];
-    let done = 0;
-    for (const im of layers) if (im && im.complete && im.naturalWidth) done++;
-    // Cap at 0.96 — the last 4% belongs to the collision-mask + cache build, which
-    // only finishes when worldCache exists (the branch above).
-    return Math.min(0.96, done / layers.length);
+    if (_worldReady) return 1;
+    // Cap at 0.96 — the last 4% belongs to the collision morphology passes, which
+    // only finish when _worldReady flips (the branch above).
+    return Math.min(0.96, _worldLayersDone / WORLD_LAYERS.length);
 }
 
 // The bar's ONLY driver. `.boot-fill` deliberately has no `transition: width` —
@@ -2027,25 +2020,31 @@ const gameState = {
         shadow: new Image(),
         tables: new Image(),
         // ─── NEW WORLD ART (single combined 2210×3160 scene, layered) ───────────
+        // ── World layers (see WORLD_LAYERS / loadWorldArt) ──────────────────────
+        // These are NOT <img>. loadWorldArt fills them with ImageBitmaps, and only
+        // the four `keep` ones (the two laptop-light sheets + the two day overlays,
+        // all drawn live per-frame) stay filled — the rest are composited into
+        // worldCache, masked, and closed immediately, so they sit at null. Anything
+        // reading them must go through _layerReady(), never `.complete`.
         // Ground-floor stack (painted bottom → top):
-        wBackground:  new Image(),   // Workspace_0014 — the one shared floor for both rooms
-        wWalls:       new Image(),   // Workspace_0013 — outer walls (collision boundary)
-        wFireplace:   new Image(),   // Workspace_0012 — fireplace (+ a soft light that must NOT collide)
-        wBooksSofas:  new Image(),   // Workspace_0011 — two blue sofas
-        wBooksLibrary:new Image(),   // Workspace_0010 — book library desk
-        wSofa:        new Image(),   // Workspace_0009 — big L sofa
-        wLaptops:     new Image(),   // Workspace_0008 — ground laptop desk (4 laptops)
-        wLaptopLights:new Image(),   // Workspace_0008_..._Laptop_Lights — per-laptop screen glow overlay
-        wStairs:      new Image(),   // Workspace_0007 — stairs (no collision, drives floor/scale)
-        wGames:       new Image(),   // Workspace_0006 — games/bar counter
+        wBackground:  null,   // Workspace_0014 — the one shared floor for both rooms
+        wWalls:       null,   // Workspace_0013 — outer walls (collision boundary)
+        wFireplace:   null,   // Workspace_0012 — fireplace (+ a soft light that must NOT collide)
+        wBooksSofas:  null,   // Workspace_0011 — two blue sofas
+        wBooksLibrary:null,   // Workspace_0010 — book library desk
+        wSofa:        null,   // Workspace_0009 — big L sofa
+        wLaptops:     null,   // Workspace_0008 — ground laptop desk (4 laptops)
+        wLaptopLights:null,   // Workspace_0008_..._Laptop_Lights — per-laptop screen glow overlay (resident)
+        wStairs:      null,   // Workspace_0007 — stairs (no collision, drives floor/scale)
+        wGames:       null,   // Workspace_0006 — games/bar counter
         // Second-floor stack (fades out when a ground player walks under it):
-        wSecondBg:    new Image(),   // Workspace_0005 — raised platform + railings
-        wSecondLaptops:new Image(),  // Workspace_0004 — second-floor laptop desk (3 laptops)
-        wSecondLaptopLights: new Image(), // Workspace_0004_..._Laptop_Lights — per-laptop screen glow overlay
-        wSecondPapers:new Image(),   // Workspace_0003 — papers desk = dashboard entry
+        wSecondBg:    null,   // Workspace_0005 — raised platform + railings
+        wSecondLaptops:null,  // Workspace_0004 — second-floor laptop desk (3 laptops)
+        wSecondLaptopLights: null, // Workspace_0004_..._Laptop_Lights — per-laptop screen glow overlay (resident)
+        wSecondPapers:null,   // Workspace_0003 — papers desk = dashboard entry
         // Top overlays (painted over everything):
-        wOverlayDay2: new Image(),   // Workspace_0002 — normal-blend day overlay
-        wOverlayDay:  new Image(),   // Workspace_0001 — "overlay"-blend day overlay
+        wOverlayDay2: null,   // Workspace_0002 — normal-blend day overlay (resident)
+        wOverlayDay:  null,   // Workspace_0001 — "overlay"-blend day overlay (resident)
         // The reading prop — slides out from under a seated reader (see drawBookProp).
         book:         new Image(),
         race: new Image(),
@@ -3688,103 +3687,147 @@ function init() {
     setupJuiceUi();          // JUICE: wire the UI blip early so the login/lobby menu blips too
 }
 
-// A flaky connection (or a tab backgrounded mid-download) can interrupt one of
-// these fetches; the service worker then either caches a truncated response or
-// (with nothing cached yet) hands back a network error, and that image never
-// loads for the rest of the tab's life. Retrying on `onerror` is not enough,
-// because the common failure is NOT an error — the request just STALLS: 16 large
-// layers are requested at once, and if one connection wedges the browser keeps it
-// pending forever. No error event ever fires, so nothing retries, and a plain
-// reload re-issues the same request on the same wedged per-tab connection pool /
-// memory cache — which is exactly why only a brand-new tab (new process, new
-// pool) ever fixed it.
+// ─── World-art loader ───────────────────────────────────────────────────────────
+// Every layer is 2210×3160, so each one costs ~28 MB of RAM once DECODED, no
+// matter how small its .png is on disk. The old loader pointed 16 <img> tags at
+// their URLs at once, and an <img> decodes as soon as its bytes land — so the peak
+// was all 16 alive together, ~450 MB, held until the collision masks and the two
+// cache canvases were built. That is far past what Safari will hand one tab, so it
+// starts failing decodes, and the layer that loses is whichever is still in flight
+// when the ceiling is hit — i.e. the biggest file. Hence "the background, mainly".
 //
-// So every layer gets a WATCHDOG as well as an error handler. If it hasn't
-// decoded within WORLD_IMG_TIMEOUT_MS, we reassign `src`, which aborts the stuck
-// request and starts a fresh one. Retries carry a unique cache-busting query so
-// they're a brand-new URL to both the SW and the browser cache — guaranteed to
-// skip any bad or wedged cached copy. Capped backoff, so a genuinely-missing file
-// can't loop forever.
-const WORLD_IMG_MAX_RETRIES = 5;
-const WORLD_IMG_TIMEOUT_MS = 20000;
-function _loadWorldImage(img, src) {
-    let attempt = 0;
-    let timer = null;
-    let settled = false;
-    const clearWatchdog = () => { if (timer) { clearTimeout(timer); timer = null; } };
+// It also explains why only a new tab fixed it: reloading reuses the same process,
+// whose memory hasn't been reclaimed yet, so the retry hits the same ceiling and
+// fails again. A new tab is a new process with a clean budget.
+//
+// So: fetch the compressed bytes in parallel (all 16 are only ~18 MB of Blob, which
+// is cheap), but DECODE STRICTLY ONE AT A TIME, in paint order. Each layer is drawn
+// into its cache canvas and rasterised into its collision mask the moment it
+// decodes, then closed immediately. Peak decoded memory is ~1 layer plus the four
+// that genuinely have to stay resident, instead of all 16.
+//
+// createImageBitmap (not <img>) is what makes that possible: .close() frees the
+// bitmap deterministically, where an <img> only releases on GC whenever it feels
+// like it.
+const WORLD_FETCH_MAX_RETRIES = 5;
+const WORLD_FETCH_TIMEOUT_MS = 25000;
+const WORLD_FETCH_CONCURRENCY = 4;
 
-    const attempt_ = () => {
-        clearWatchdog();
-        // First try uses the bare URL so a healthy SW cache hit still works. Only
-        // retries bust the cache (a stale-but-valid cached copy is what we want on
-        // the happy path).
-        img.src = attempt === 0
+// Paint order, bottom → top. `cache` = which pre-composited canvas it belongs to;
+// `mask` = which collision mask it feeds; `keep` = drawn live every frame, so it
+// must stay decoded (these four are the ONLY resident layers).
+const WORLD_LAYERS = [
+    { k: 'wBackground',        f: 'Workspace_0014_Background.png',                            cache: 'ground' },
+    { k: 'wWalls',             f: 'Workspace_0013_Walls.png',                                 cache: 'ground', mask: 'walls'  },
+    { k: 'wFireplace',         f: 'Workspace_0012_Fireplace.png',                             cache: 'ground', mask: 'fire'   },
+    { k: 'wBooksSofas',        f: 'Workspace_0011_Books_Sofas.png',                           cache: 'ground', mask: 'furn'   },
+    { k: 'wBooksLibrary',      f: 'Workspace_0010_Books_Library.png',                         cache: 'ground', mask: 'furn'   },
+    { k: 'wSofa',              f: 'Workspace_0009_Sofa.png',                                  cache: 'ground', mask: 'furn'   },
+    // wLaptops is deliberately NOT masked — its collider is the manual
+    // GROUND_TABLE_GHOST_* rect (the auto alpha shape didn't match the desk).
+    { k: 'wLaptops',           f: 'Workspace_0008_Laptops_Table.png',                         cache: 'ground' },
+    { k: 'wStairs',            f: 'Workspace_0007_Stairs.png',                                cache: 'ground', mask: 'stairs' },
+    { k: 'wGames',             f: 'Workspace_0006_Games_Table.png',                           cache: 'ground', mask: 'furn'   },
+    { k: 'wSecondBg',          f: 'Workspace_0005_Second_Floor_Background.png',               cache: 'second' },
+    { k: 'wSecondLaptops',     f: 'Workspace_0004_Second_Floor_Laptops_Table.png',            cache: 'second', mask: 'desks'  },
+    { k: 'wSecondPapers',      f: 'Workspace_0003_Second_Floor_Papers_Table.png',             cache: 'second', mask: 'desks'  },
+    { k: 'wLaptopLights',      f: 'Workspace_0008_Laptops_Table_Laptop_Lights.png',           keep: true },
+    { k: 'wSecondLaptopLights',f: 'Workspace_0004_Second_Floor_Laptops_Table_Laptop_Lights.png', keep: true },
+    { k: 'wOverlayDay2',       f: 'Workspace_0002_(Normal)Day-Overlay-2.png',                 keep: true },
+    { k: 'wOverlayDay',        f: 'Workspace_0001_(Overlay)Day-Overlay.png',                  keep: true },
+];
+
+// Is a world layer drawable? Covers all three things we pass around: an
+// ImageBitmap (a closed one reports width 0), a cache <canvas>, and a plain <img>.
+function _layerReady(x) {
+    if (!x) return false;
+    if (x.tagName === 'IMG') return !!(x.complete && x.naturalWidth);
+    return x.width > 0;
+}
+
+// Fetch one layer's bytes, with a real timeout and capped retries. A stalled
+// request is the other half of this bug: it never fires an error, it just sits
+// pending forever, so nothing retried and a reload re-issued it onto the same
+// wedged connection pool. AbortController gives us the hard cutoff <img> never
+// could. Retries append a unique query so they're a brand-new URL to both the
+// service worker and the HTTP cache — no wedged or truncated copy can be reused.
+async function _fetchWorldBlob(src) {
+    for (let attempt = 0; attempt <= WORLD_FETCH_MAX_RETRIES; attempt++) {
+        const url = attempt === 0
             ? src
             : src + (src.includes('?') ? '&' : '?') + '_retry=' + attempt + '.' + Date.now();
-        timer = setTimeout(() => retry('timeout'), WORLD_IMG_TIMEOUT_MS);
-    };
-
-    const retry = (why) => {
-        if (settled) return;
-        clearWatchdog();
-        attempt++;
-        if (attempt > WORLD_IMG_MAX_RETRIES) {
-            console.warn('[world-art] gave up after', WORLD_IMG_MAX_RETRIES, 'retries (' + why + '):', src);
-            return;
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), WORLD_FETCH_TIMEOUT_MS);
+        try {
+            const res = await fetch(url, {
+                signal: ac.signal,
+                // Retries must not be answered from any cache — a wedged or
+                // truncated copy is exactly what we're retrying to get away from.
+                cache: attempt === 0 ? 'default' : 'reload',
+                // Yield to the requests that decide how fast the menu appears
+                // (Discord token, Firebase lobby, fonts, logo). Ignored where
+                // unsupported.
+                priority: 'low',
+            });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const blob = await res.blob();          // completes only once the FULL body lands
+            if (!blob.size) throw new Error('empty body');
+            clearTimeout(timer);
+            return blob;
+        } catch (err) {
+            clearTimeout(timer);
+            if (attempt === WORLD_FETCH_MAX_RETRIES) {
+                console.warn('[world-art] gave up fetching:', src, err);
+                return null;
+            }
+            console.warn('[world-art] retry', attempt + 1, 'fetching', src, '—', err.message || err);
+            await new Promise(r => setTimeout(r, 400 * (attempt + 1)));
         }
-        console.warn('[world-art] retry', attempt, '(' + why + '):', src);
-        setTimeout(attempt_, 400 * attempt);
-    };
+    }
+    return null;
+}
 
-    img.onload = () => {
-        // Done — stand the retry machinery down. This also matters because
-        // buildWorldCache() intentionally sets `src = ''` to free the decoded
-        // bitmap; that fires an error event, and without this the handler would
-        // re-download the whole layer we just finished with.
-        settled = true;
-        clearWatchdog();
-        img.onerror = null;
+// Start `job` for every item but keep at most `limit` running at once, returning
+// one promise per item (in order) so a consumer can await exactly the one it wants
+// while the rest carry on. Sixteen simultaneous connections is itself a good way to
+// get one wedged; four is plenty to saturate a normal link.
+function _pooledMap(items, limit, job) {
+    let active = 0;
+    const waiting = [];
+    const acquire = () => new Promise(res => {
+        if (active < limit) { active++; res(); } else waiting.push(res);
+    });
+    const release = () => {
+        const next = waiting.shift();
+        if (next) next(); else active--;      // hand the slot straight over, or give it back
     };
-    img.onerror = () => retry('error');
-    attempt_();
+    return items.map(async (item, i) => {
+        await acquire();
+        try { return await job(item, i); } finally { release(); }
+    });
 }
 
 function loadAssets() {
-    // ─── NEW WORLD ART ──────────────────────────────────────────────────────────
-    // One combined scene (2210×3160). Order below = paint order. The huge
-    // background + overlays are a few MB each; render() guards on .complete so the
-    // login screen never waits on them, and the service worker caches Art/ after
-    // the first load. onload on the walls kicks the collision-mask build.
-    const WS = 'Art/Workspace/';
-    // ~15 MB across 16 layers, all kicked off at page parse. Left at default
-    // priority the browser races them against the things that decide how fast the
-    // MENU appears — the Discord token check, the Firebase lobby read, the fonts,
-    // the logo. Marking them low tells the connection scheduler to yield to those
-    // first; the art still lands well before the user finishes reading the menu,
-    // and the boot screen covers whatever's left. `decoding:async` keeps the
-    // 2210×3160 decodes off the main thread so they can't jank the menu's
-    // animations. Both are ignored by browsers that don't support them.
+    // Async pipeline: parallel fetch, serial decode, free as it goes. It already
+    // survives an individual layer failing, but if the loader itself ever throws,
+    // nothing else would flip _worldReady and the user would sit behind the boot
+    // screen until startGame's 15s failsafe. Fail open instead.
+    loadWorldArt().catch(err => {
+        console.error('[world-art] loader crashed:', err);
+        _worldReady = true;
+        if (gameState.userId) finishBootScreen();
+    });
+
+    // Everything below is minigame/prop art that isn't needed to reach the menu.
+    // Left at default priority the browser races it against the things that decide
+    // how fast the MENU appears — the Discord token check, the Firebase lobby read,
+    // the fonts, the logo. `low` tells the connection scheduler to yield to those
+    // first; `decoding:async` keeps the decodes off the main thread so they can't
+    // jank the menu's animations. Both are ignored where unsupported. (The world
+    // layers get the same treatment via fetch priority inside loadWorldArt.)
     for (const im of Object.values(gameState.assets)) {
         if (im instanceof Image) { try { im.fetchPriority = 'low'; im.decoding = 'async'; } catch (_) {} }
     }
-    _loadWorldImage(gameState.assets.wBackground,   WS + 'Workspace_0014_Background.png');
-    _loadWorldImage(gameState.assets.wWalls,        WS + 'Workspace_0013_Walls.png');
-    _loadWorldImage(gameState.assets.wFireplace,    WS + 'Workspace_0012_Fireplace.png');
-    _loadWorldImage(gameState.assets.wBooksSofas,   WS + 'Workspace_0011_Books_Sofas.png');
-    _loadWorldImage(gameState.assets.wBooksLibrary, WS + 'Workspace_0010_Books_Library.png');
-    _loadWorldImage(gameState.assets.wSofa,         WS + 'Workspace_0009_Sofa.png');
-    _loadWorldImage(gameState.assets.wLaptops,      WS + 'Workspace_0008_Laptops_Table.png');
-    _loadWorldImage(gameState.assets.wLaptopLights, WS + 'Workspace_0008_Laptops_Table_Laptop_Lights.png');
-    _loadWorldImage(gameState.assets.wStairs,       WS + 'Workspace_0007_Stairs.png');
-    _loadWorldImage(gameState.assets.wGames,        WS + 'Workspace_0006_Games_Table.png');
-    _loadWorldImage(gameState.assets.wSecondBg,     WS + 'Workspace_0005_Second_Floor_Background.png');
-    _loadWorldImage(gameState.assets.wSecondLaptops,WS + 'Workspace_0004_Second_Floor_Laptops_Table.png');
-    _loadWorldImage(gameState.assets.wSecondLaptopLights, WS + 'Workspace_0004_Second_Floor_Laptops_Table_Laptop_Lights.png');
-    _loadWorldImage(gameState.assets.wSecondPapers, WS + 'Workspace_0003_Second_Floor_Papers_Table.png');
-    _loadWorldImage(gameState.assets.wOverlayDay2,  WS + 'Workspace_0002_(Normal)Day-Overlay-2.png');
-    _loadWorldImage(gameState.assets.wOverlayDay,   WS + 'Workspace_0001_(Overlay)Day-Overlay.png');
-    buildWorldCollision();   // idempotent; re-runs itself once each layer decodes
-
     gameState.assets.book.src = 'Art/Book.png';
     gameState.assets.race.src = 'Art/race.png';
     gameState.assets.coffeeZone.src     = 'Art/Coffee.png';
@@ -3916,7 +3959,7 @@ function initLaptops() {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  WORLD ENGINE — alpha collision masks, floors, dynamic scale, second-floor fade
 // ═══════════════════════════════════════════════════════════════════════════════
-const worldCollision = { floor1: null, floor2desks: null, stairs: null, built: false, _tries: 0 };
+const worldCollision = { floor1: null, floor2desks: null, stairs: null, built: false };
 
 // Rasterise an image into a MASK_W×MASK_H alpha bitmap (1 = solid). `threshold`
 // ignores near-transparent pixels (empty art never collides).
@@ -3972,79 +4015,100 @@ function _morph(src, grow) {
 function _dilate(m, n) { for (let i = 0; i < n; i++) m = _morph(m, true);  return m; }
 function _erode(m, n)  { for (let i = 0; i < n; i++) m = _morph(m, false); return m; }
 
-// Build the floor-1 collision (walls + ground furniture + SOLID fireplace), the
-// floor-2 desk collision, and the tight stair mask. Idempotent + self-retrying
-// until every layer has decoded. Walls are DILATED (thin divider won't be tunneled)
-// and furniture is ERODED (thin legs/feet don't collide — only the real body).
-function buildWorldCollision() {
-    const A = gameState.assets;
-    // wLaptops (ground desk, Workspace_0008) is deliberately NOT alpha-rasterized here —
-    // its collider is a manual rect (GROUND_TABLE_GHOST_*) matched to an art reference
-    // instead, since the auto alpha shape didn't match the desk well.
-    const furniture = [A.wBooksSofas, A.wBooksLibrary, A.wSofa, A.wGames];
-    const desks  = [A.wSecondLaptops, A.wSecondPapers];
-    const need = [...furniture, A.wWalls, A.wStairs, A.wFireplace, ...desks];
-    if (!need.every(im => im.complete && im.naturalWidth > 0)) {
-        if (worldCollision._tries++ < 250) setTimeout(buildWorldCollision, 120);
-        return;
-    }
-    // Threshold 130 catches solid bodies + firm edges but drops the soft drop-shadows
-    // these layers carry (alpha < ~60), so shadows never inflate the hitbox.
-    let walls = _rasterMask(A.wWalls, 130);
-    walls = _dilate(walls, 3);                             // thicken thin walls (divider)
-    let furn = new Uint8Array(MASK_W * MASK_H);
-    for (const im of furniture) _orMask(furn, _rasterMask(im, 130));
-    furn = _erode(furn, 3);                                // peel thin legs/feet
-    const f1 = new Uint8Array(MASK_W * MASK_H);
-    _orMask(f1, walls);
-    _orMask(f1, furn);
-    _orMask(f1, _rasterMask(A.wFireplace, 205));           // fireplace: solid body only, not the soft light
-    _fillMaskRectSrc(f1, STAIR_GHOST_PX0, STAIR_GHOST_PY0, STAIR_GHOST_PX1, STAIR_GHOST_PY1); // stair dead-zone ghost collider
-    _fillMaskRectSrc(f1, GROUND_TABLE_GHOST_PX0, GROUND_TABLE_GHOST_PY0, GROUND_TABLE_GHOST_PX1, GROUND_TABLE_GHOST_PY1); // ground laptop desk collider
-    let fd = new Uint8Array(MASK_W * MASK_H);
-    for (const im of desks) _orMask(fd, _rasterMask(im, 130));
-    fd = _erode(fd, 3);
-    worldCollision.floor1 = f1;
-    worldCollision.floor2desks = fd;
-    // Stair footprint, DILATED generously so the walkable ramp is wide + forgiving
-    // (a tight mask made you stick/oscillate on the edges while climbing).
-    worldCollision.stairs = _dilate(_rasterMask(A.wStairs, 40), 8);
-    worldCollision.built = true;
-    buildWorldCache();
-}
-
 // ── Pre-composited world layers (perf) ──────────────────────────────────────────
 // The scene is ~9 ground layers + 3 second-floor layers. Compositing them into two
-// cached canvases ONCE (built after decode) turns ~12 large per-frame drawImages
-// into 2 — important on the owner's phone. Resolution is capped on reduced tiers so
-// the offscreen canvases don't blow the mobile canvas-memory budget.
-const worldCache = { ground: null, second: null };
-// Set by buildWorldCache once the whole world is decoded + composited. startGame
-// checks it so a user who idled on the menu long enough for the art to finish
-// isn't held on the boot screen for no reason.
+// cached canvases turns ~12 large per-frame drawImages into 2 — important on the
+// owner's phone. Resolution is capped on reduced tiers so the offscreen canvases
+// don't blow the mobile canvas-memory budget. They're created empty up front and
+// filled layer-by-layer as each one decodes, so the world paints in progressively
+// and no layer has to stay decoded waiting for the others.
+const worldCache = { ground: null, second: null, w: 0, h: 0 };
+// Set once every layer is decoded + composited. startGame checks it so a user who
+// idled on the menu long enough for the art to finish isn't held on the boot
+// screen for no reason.
 let _worldReady = false;
-function buildWorldCache() {
+
+// Load the whole world: fetch in parallel, decode one at a time in paint order,
+// compose + mask + free each layer as it lands. See the WORLD_LAYERS block above
+// for why the decode is serial — it's the entire point of this pipeline.
+async function loadWorldArt() {
+    const WS = 'Art/Workspace/';
     const A = gameState.assets;
-    // native width on desktop; smaller on mobile/reduced tiers to save GPU memory
+
     const cw = isReducedGraphics() ? Math.round(IMG_W * 0.7) : IMG_W;
     const ch = Math.round(cw * (IMG_H / IMG_W));
-    const mk = (layers) => {
+    const mkCanvas = () => {
         const c = document.createElement('canvas'); c.width = cw; c.height = ch;
-        const g = c.getContext('2d');
-        for (const im of layers) if (im && im.complete && im.naturalWidth) g.drawImage(im, 0, 0, cw, ch);
         return c;
     };
-    const groundLayers = [A.wBackground, A.wWalls, A.wFireplace, A.wBooksSofas,
-        A.wBooksLibrary, A.wSofa, A.wLaptops, A.wStairs, A.wGames];
-    const secondLayers = [A.wSecondBg, A.wSecondLaptops, A.wSecondPapers];
-    worldCache.ground = mk(groundLayers);
-    worldCache.second = mk(secondLayers);
-    // Free the source layer images now that both the collision masks AND the two
-    // cache canvases are built — keeping ~12 decoded 2210×3160 images alive (~340 MB)
-    // is what was crashing Safari. The day overlays are drawn per-frame so they stay.
-    for (const im of [...groundLayers, ...secondLayers]) {
-        try { im.src = ''; } catch (_) {}
+    worldCache.ground = mkCanvas();
+    worldCache.second = mkCanvas();
+    worldCache.w = cw; worldCache.h = ch;
+    const gctx = { ground: worldCache.ground.getContext('2d'), second: worldCache.second.getContext('2d') };
+
+    // Collision masks accumulate here as their layers go by; the morphology passes
+    // (dilate/erode) need the FULL combined mask, so they run at the end. A mask is
+    // MASK_W×MASK_H bytes (~1.7 MB) — nothing next to a decoded layer.
+    const M = {
+        walls:  new Uint8Array(MASK_W * MASK_H),
+        furn:   new Uint8Array(MASK_W * MASK_H),
+        fire:   new Uint8Array(MASK_W * MASK_H),
+        stairs: new Uint8Array(MASK_W * MASK_H),
+        desks:  new Uint8Array(MASK_W * MASK_H),
+    };
+    // Threshold 130 catches solid bodies + firm edges but drops the soft drop-shadows
+    // these layers carry (alpha < ~60), so shadows never inflate the hitbox. The
+    // fireplace uses 205 (solid body only — its soft light must not collide) and the
+    // stairs 40 (the ramp should be generous).
+    const MASK_THRESHOLD = { walls: 130, furn: 130, fire: 205, stairs: 40, desks: 130 };
+
+    // Kick every fetch off now, four at a time. They download in parallel while the
+    // decode loop below awaits them one at a time, in strict paint order.
+    const blobs = _pooledMap(WORLD_LAYERS, WORLD_FETCH_CONCURRENCY, (def) => _fetchWorldBlob(WS + def.f));
+
+    for (let i = 0; i < WORLD_LAYERS.length; i++) {
+        const def = WORLD_LAYERS[i];
+        const blob = await blobs[i];
+        if (!blob) continue;                     // gave up on it — skip, don't hang the boot
+
+        let bmp = null;
+        try {
+            bmp = await createImageBitmap(blob);
+        } catch (err) {
+            console.warn('[world-art] decode failed:', def.f, err);
+            continue;
+        }
+
+        if (def.cache) gctx[def.cache].drawImage(bmp, 0, 0, cw, ch);
+        if (def.mask)  _orMask(M[def.mask], _rasterMask(bmp, MASK_THRESHOLD[def.mask]));
+
+        if (def.keep) {
+            A[def.k] = bmp;          // drawn live every frame — must stay decoded
+        } else {
+            bmp.close();             // deterministic free; this is what keeps the peak flat
+            A[def.k] = null;
+        }
+        _worldLayersDone++;          // drives the boot bar (see _bootRealProgress)
+        // Yield to the event loop so a 16-layer decode chain can't freeze the menu.
+        await new Promise(r => setTimeout(r, 0));
     }
+
+    // ── Collision, now that every contributing layer has been rasterised ──────────
+    // Walls are DILATED (the thin room-divider can't be tunneled through at sprint
+    // speed); furniture and desks are ERODED (the thin legs/feet the tables draw
+    // shouldn't collide — only the real body).
+    const f1 = new Uint8Array(MASK_W * MASK_H);
+    _orMask(f1, _dilate(M.walls, 3));
+    _orMask(f1, _erode(M.furn, 3));
+    _orMask(f1, M.fire);
+    _fillMaskRectSrc(f1, STAIR_GHOST_PX0, STAIR_GHOST_PY0, STAIR_GHOST_PX1, STAIR_GHOST_PY1); // stair dead-zone ghost collider
+    _fillMaskRectSrc(f1, GROUND_TABLE_GHOST_PX0, GROUND_TABLE_GHOST_PY0, GROUND_TABLE_GHOST_PX1, GROUND_TABLE_GHOST_PY1); // ground laptop desk collider
+    worldCollision.floor1 = f1;
+    worldCollision.floor2desks = _erode(M.desks, 3);
+    // Stair footprint, DILATED generously so the walkable ramp is wide + forgiving
+    // (a tight mask made you stick/oscillate on the edges while climbing).
+    worldCollision.stairs = _dilate(M.stairs, 8);
+    worldCollision.built = true;
 
     // The world is fully decoded, masked and composited — this is the real
     // "loaded" moment, so let the boot screen finish and hand off to the
@@ -5078,7 +5142,7 @@ function startGame(userData) {
     // or for ephemeral Siraj ghosts. See the JUICE block below startGame().
     playEntranceSequence();
 
-    // Hand the boot screen off. Normally buildWorldCache() calls finishBootScreen()
+    // Hand the boot screen off. Normally loadWorldArt() calls finishBootScreen()
     // when the last art layer decodes; these cover the edges:
     //  • the art already finished while the user sat on the menu (no event coming),
     //  • the boot screen isn't up at all — nothing will ever open the gate, so the
@@ -8679,9 +8743,7 @@ function render() {
 // Draw one world-layer image centred on the origin at world scale. Guards on
 // decode so a not-yet-loaded layer just skips (login never waits on the art).
 function _drawWorldLayer(img) {
-    if (!img) return;
-    // <img> exposes .complete/.naturalWidth; a cached <canvas> doesn't (always ready).
-    if (img.tagName === 'IMG' && (!img.complete || !img.naturalWidth)) return;
+    if (!_layerReady(img)) return;
     gameState.ctx.drawImage(img, -WORLD_W / 2, -WORLD_H / 2, WORLD_W, WORLD_H);
 }
 
@@ -8694,7 +8756,7 @@ function drawLaptopLights(floorFilter, groupAlpha) {
     groupAlpha = groupAlpha ?? 1;
     if (groupAlpha < 0.01) return;
     const img = floorFilter === 1 ? gameState.assets.wLaptopLights : gameState.assets.wSecondLaptopLights;
-    if (!img || !img.complete || !img.naturalWidth) return;
+    if (!_layerReady(img)) return;
     const ctx = gameState.ctx;
     for (const laptop of gameState.laptops) {
         if (laptop.floor !== floorFilter || !laptop.lightBox || laptop.lightAlpha <= 0.01) continue;
@@ -8710,19 +8772,11 @@ function drawLaptopLights(floorFilter, groupAlpha) {
 
 // Ground floor: the single shared background + walls + all ground furniture, in
 // paint order (bottom → top). Stairs sit above the floor but below furniture edges.
+// Always one drawImage: loadWorldArt composites straight into this canvas as each
+// layer decodes (and closes the layer right after), so there's no per-layer
+// fallback to fall back TO — before the art lands the canvas is simply still empty.
 function drawWorldGround() {
-    if (worldCache.ground) { _drawWorldLayer(worldCache.ground); return; }
-    // Fallback (cache not built yet): draw each layer directly.
-    const A = gameState.assets;
-    _drawWorldLayer(A.wBackground);
-    _drawWorldLayer(A.wWalls);
-    _drawWorldLayer(A.wFireplace);
-    _drawWorldLayer(A.wBooksSofas);
-    _drawWorldLayer(A.wBooksLibrary);
-    _drawWorldLayer(A.wSofa);
-    _drawWorldLayer(A.wLaptops);
-    _drawWorldLayer(A.wStairs);
-    _drawWorldLayer(A.wGames);
+    _drawWorldLayer(worldCache.ground);
 }
 
 // Second floor: the raised platform + its laptop desk + the papers (dashboard)
@@ -8732,16 +8786,9 @@ function drawSecondFloor() {
     const vis = gameState.secondFloorVis ?? 1;
     if (vis < 0.01) return;
     const ctx = gameState.ctx;
-    const A = gameState.assets;
     ctx.save();
     ctx.globalAlpha = vis;
-    if (worldCache.second) {
-        _drawWorldLayer(worldCache.second);
-    } else {
-        _drawWorldLayer(A.wSecondBg);
-        _drawWorldLayer(A.wSecondLaptops);
-        _drawWorldLayer(A.wSecondPapers);
-    }
+    _drawWorldLayer(worldCache.second);
     ctx.restore();
 }
 
@@ -8753,7 +8800,7 @@ function drawDayOverlays() {
     if (!gameState._overlaysOn) return;
     const A = gameState.assets;
     _drawWorldLayer(A.wOverlayDay2);
-    if (A.wOverlayDay.complete && A.wOverlayDay.naturalWidth) {
+    if (_layerReady(A.wOverlayDay)) {
         const ctx = gameState.ctx;
         ctx.save();
         ctx.globalCompositeOperation = 'overlay';
