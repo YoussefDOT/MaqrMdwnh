@@ -6742,18 +6742,13 @@ body.is-mobile .dash-stage.side-todo .inv-peep { transform: translate(calc(-50% 
 }
 
 /* ─── Setup modal ("يتم قراءة؟") ───────────────────────────────────────────────
-   Anchored above the library desk instead of a centred full-screen dialog — the
-   overlay itself stays transparent (click-through look, click-outside-to-close is
-   wired in JS) and the card is positioned via inline left/top set from world coords
-   (see openReadingPopup / worldToScreen in game.js). */
-#reading-modal {
-    background: transparent;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-}
+   A normal centred dialog like every other .modal-overlay (dark blurred
+   backdrop, flex-centred card) — it used to be anchored above the library desk
+   in world space via inline left/top (worldToScreen in game.js), which put it
+   off-centre and unanchored to the viewport. Only the card's own sizing is
+   customised here; positioning/backdrop come from the shared .modal-overlay /
+   .modal-content rules. */
 #reading-modal .reading-content {
-    position: fixed;
-    margin: 0;
     width: 400px;
     max-width: calc(100vw - 24px);
     max-height: calc(100dvh - 24px);
@@ -7351,10 +7346,26 @@ body.is-mobile .reading-drawer, body.reduced-gfx .reading-drawer {
 
 .reading-drawer-content { padding: 0 20px 20px; }
 .reading-drawer .reading-leaderboard { max-height: 40dvh; }
+
+/* Floats fixed just above the collapsed drawer's peek handle, so it's reachable
+   without pulling the drawer open — this is what replaces وقوف on mobile
+   while reading (see the standUp button gating in game.js). */
 .reading-exit-btn.mobile-exit {
-    margin: 0 20px 10px;
-    width: calc(100% - 40px);
+    position: fixed;
+    left: 20px;
+    right: 20px;
+    bottom: calc(48px + env(safe-area-inset-bottom, 20px) + 12px);
+    z-index: 1101;
+    transform: translateY(0);
+    transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 0.3s ease;
 }
+.reading-exit-btn.mobile-exit.hidden { display: none; }
+
+/* Shared slide-up-from-offscreen entrance for the reading drawer + its exit
+   button — a hard display:none→flex swap read as an instant snap-in, so JS
+   toggles this init state for one frame before letting each element's own
+   transform/transition rule ease it into place. */
+.rd-slide-init { transition: none !important; transform: translateY(120%) !important; }
 
 /* Phones: bigger shelf + a 5-across style grid is too tight, drop to a scroll row */
 body.is-mobile #reading-modal .reading-content { width: min(400px, calc(100vw - 20px)); }

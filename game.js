@@ -642,7 +642,14 @@ function launchIntoGame(user, lobby) {
     // Let the arrow get most of the way out before the boot screen covers it.
     setTimeout(() => {
         showBootScreen('slide');
-        enterGameAsDiscordUser(user, lobby);
+        // bootSlideIn takes 620ms to fully cover the screen. Starting the actual
+        // load (Firebase calls → startGame → the entrance blackout div) any
+        // earlier let that black div paint while boot was still off-screen
+        // (translateY(-100%)), showing a flash of solid black before the boot
+        // bar was visible. Wait for the cover to finish first.
+        setTimeout(() => {
+            enterGameAsDiscordUser(user, lobby);
+        }, 640);
     }, 380);
 }
 
@@ -3655,18 +3662,6 @@ function screenToWorld(clientX, clientY) {
         y: (canvasY - H / 2) / gameState.zoom - gameState.camera.y
     };
 }
-// Inverse of screenToWorld — world coords → page (clientX/clientY) coords, for
-// anchoring DOM UI (popups, prompts) to a point in the world.
-function worldToScreen(wx, wy) {
-    const rect = gameState.canvas.getBoundingClientRect();
-    const dpr = gameState.dpr || 1;
-    const W = gameState.canvas.width / dpr;
-    const H = gameState.canvas.height / dpr;
-    return {
-        x: rect.left + (wx + gameState.camera.x) * gameState.zoom + W / 2,
-        y: rect.top + (wy + gameState.camera.y) * gameState.zoom + H / 2
-    };
-}
 
 // The entrance whoosh, prefetched over the network the moment the page loads (the
 // slow part is the download). We can't DECODE it yet — there's no AudioContext
@@ -5723,9 +5718,9 @@ function setupControls() {
         if (gameState.isSitting && !gameState.sitAnim.active && player) {
             const btnY = player.y - 90;
             if (Math.hypot(clickWorld.x - player.x, clickWorld.y - btnY) < 34) {
-                if (gameState.reading.active) {
-                    if (isMobile()) document.getElementById('reading-exit-modal')?.classList.add('active');
-                } else {
+                // Hidden entirely while reading (see readingBlocksIt in
+                // drawStandUpButton) — the reading exit button handles it now.
+                if (!gameState.reading.active) {
                     standUp();
                 }
                 return;
@@ -6363,9 +6358,9 @@ function initMobileControls() {
             if (gameState.isSitting && !gameState.sitAnim.active && player) {
                 const btnY = player.y - 90;
                 if (Math.hypot(clickWorld.x - player.x, clickWorld.y - btnY) < 34) {
-                    if (gameState.reading.active) {
-                        if (isMobile()) document.getElementById('reading-exit-modal')?.classList.add('active');
-                    } else {
+                    // Hidden entirely while reading (see readingBlocksIt in
+                    // drawStandUpButton) — the reading exit button handles it now.
+                    if (!gameState.reading.active) {
                         standUp();
                     }
                     return;
@@ -19615,9 +19610,10 @@ function drawSeatPrompt() {
 const _standUpBtn = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null };
 function drawStandUpButton() {
     const local = gameState.players[gameState.userId];
-    // While reading, desktop already has the exit button on the reading panel — hide
-    // وقوف there. On mobile it stays, but acts as إنهاء القراءة (see click handlers).
-    const readingBlocksIt = gameState.reading.active && !isMobile();
+    // While reading, the reading panel/drawer already has its own exit button —
+    // hide وقوف everywhere (desktop and mobile) so there's one clear way to end
+    // a reading session.
+    const readingBlocksIt = gameState.reading.active;
     const target = (gameState.isSitting && !gameState.sitAnim.active && local && !readingBlocksIt) ? local : null;
     const key = target ? 'stand' : null;
     if (!_updatePromptCrossfade(_standUpBtn, key, target && target.x, target && target.y)) return;
@@ -21351,15 +21347,10 @@ function setupReadingUI() {
 
     document.getElementById('reading-cancel')?.addEventListener('click', closeReadingPopup);
 
-    // Anchored popup, transparent backdrop — click the backdrop itself (not the
-    // card) to dismiss, same pattern as the other click-outside-closes modals.
+    // Click the backdrop itself (not the card) to dismiss, same pattern as the
+    // other click-outside-closes modals.
     document.getElementById('reading-modal')?.addEventListener('click', (e) => {
         if (e.target === e.currentTarget) closeReadingPopup();
-    });
-    window.addEventListener('resize', () => {
-        if (document.getElementById('reading-modal')?.classList.contains('active')) {
-            _positionReadingModalAboveLibrary();
-        }
     });
 
     // Shelf: the card nearest the track's centre is the selection. Recompute on
@@ -21448,29 +21439,11 @@ function setupReadingUI() {
     _JUICE_IN_ANIMS.add('readingRowIn');
 }
 
-// Anchors the setup card above the library desk in screen space instead of
-// centring it — clamped so it never goes off-screen (library can be near an edge).
-function _positionReadingModalAboveLibrary() {
-    const content = document.querySelector('#reading-modal .reading-content');
-    if (!content) return;
-    const pt = worldToScreen(BOOKS_LIBRARY_POS.x, BOOKS_LIBRARY_POS.y);
-    const w = content.offsetWidth || 420, h = content.offsetHeight || 560;
-    const margin = 12;
-    let left = pt.x - w / 2;
-    let top = pt.y - 90 - h; // float above the desk, clear of the "اضغط لبدء القراءة" prompt
-    left = Math.max(margin, Math.min(window.innerWidth - w - margin, left));
-    top = Math.max(margin, Math.min(window.innerHeight - h - margin, top));
-    content.style.left = `${left}px`;
-    content.style.top = `${top}px`;
-}
-
 function openReadingPopup() {
     if (gameState.reading.active || gameState.isLockedIn) return;
     const modal = document.getElementById('reading-modal');
     if (!modal) return;
-    // Lock movement while the popup is open — it's anchored to the library's
-    // screen position (worldToScreen at open time, re-run only on resize), so
-    // letting the player walk away drags the camera and leaves the card behind.
+    // Lock movement while the popup is open, same as every other modal.
     gameState.isLockedIn = true;
     modal.classList.add('active');
     _uiSeqReset();   // start the row cascade's pitch sweep fresh (deep → high)
@@ -21483,15 +21456,12 @@ function openReadingPopup() {
 
     // Render whatever we already have (instant shelf on a re-open), then refresh.
     renderReadingShelf();
-    _positionReadingModalAboveLibrary();
-    requestAnimationFrame(_positionReadingModalAboveLibrary);
 
     get(ref(database, `dashboards/${gameState.userId}/reading`)).then(snap => {
         const data = snap.exists() ? (snap.val() || {}) : {};
         gameState._readingBooks = data.books || {};
         gameState._readingLastBook = data.lastBook || null;
         renderReadingShelf();
-        _positionReadingModalAboveLibrary();
     }).catch(() => {});
 }
 
@@ -21696,7 +21666,6 @@ function confirmNewBook() {
     closeNewBookModal();
     gameState._readingLastBook = name;
     renderReadingShelf();
-    _positionReadingModalAboveLibrary();
 }
 
 function closeReadingPopup() {
@@ -21884,6 +21853,17 @@ function updateReadingSession() {
     }
 }
 
+// Slides an element up from fully off-screen into its normal resting transform
+// (see .rd-slide-init in style.css) instead of the instant display:none→flex
+// pop the hidden-class toggle gave it before.
+function _rdSlideIn(el) {
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.classList.add('rd-slide-init');
+    void el.offsetWidth;
+    requestAnimationFrame(() => el.classList.remove('rd-slide-init'));
+}
+
 function showReadingPanel() {
     const r = gameState.reading;
     r._panelVisible = true;
@@ -21893,6 +21873,7 @@ function showReadingPanel() {
     if (isMobile()) {
         const header = document.getElementById('reading-mobile-header');
         const drawer = document.getElementById('reading-drawer');
+        const exitBtn = document.getElementById('reading-mobile-exit-btn');
         if (header) {
             header.classList.remove('hidden');
             document.getElementById('reading-mobile-book').innerText = r.bookName;
@@ -21901,7 +21882,8 @@ function showReadingPanel() {
             const d = document.getElementById('reading-mobile-duration');
             if (d) d.innerText = durStr;
         }
-        if (drawer) drawer.classList.remove('hidden');
+        _rdSlideIn(drawer);
+        _rdSlideIn(exitBtn);
         renderReadingLeaderboard();
         return;
     }
@@ -21991,11 +21973,24 @@ function endReadingSession(manual) {
         document.getElementById('reading-mobile-header')?.classList.add('hidden');
         document.getElementById('reading-drawer')?.classList.add('hidden');
         document.getElementById('reading-drawer')?.classList.remove('drawer-open');
+        document.getElementById('reading-mobile-exit-btn')?.classList.add('hidden');
     } else {
         document.getElementById('reading-panel')?.classList.add('hidden');
     }
 
-    // Stand up
+    // Stand up in front of the seat just read at (facing away from it), not
+    // wherever the player stood before sitting down — walking back to a spot
+    // behind them across the room felt wrong. The book-reading seats are always
+    // SOFA2_SPOTS; dir tells us which way is "away from the sofa".
+    const rp = gameState.players[gameState.userId];
+    const seatSpot = rp && SOFA2_SPOTS.find(s => s.id === rp.sitSeatId);
+    if (seatSpot) {
+        const faceOffset = 62; // clear of the sofa's collision footprint
+        gameState.sitReturnPos = {
+            x: seatSpot.x,
+            y: seatSpot.y + (seatSpot.dir === 'down' ? faceOffset : -faceOffset),
+        };
+    }
     setTimeout(() => {
         standUp();
     }, 800);
@@ -22012,11 +22007,14 @@ const BOOK_PROP_W = PLAYER_SIZE * 0.80;                 // "slightly less" than 
 const BOOK_PROP_H = BOOK_PROP_W * (933 / 1004);         // Art/Book.png content aspect
 // Travel leaves a small deliberate overlap with the avatar at full extension — it
 // should read as a book held in the lap, not one floating away from them.
-const BOOK_PROP_TRAVEL = PLAYER_SIZE * 0.85;
-const BOOK_PROP_SPEED = 2.6;                            // slide units/sec (0→1)
+const BOOK_PROP_TRAVEL = PLAYER_SIZE * 0.5;
+const BOOK_PROP_SPEED = 1 / 2.5;                        // slide units/sec (0→1) — 2.5s full slide
 // Art/Book.png is a 2048² canvas with the book floating in the middle — draw only
 // the painted region so the sprite isn't 75% empty space.
 const BOOK_SRC = { x: 515, y: 423, w: 1004, h: 933 };
+// Fast start, slow finish — distinct from the symmetric _easeInOutCubic used by
+// the reading camera tween.
+const _easeOutQuint = (x) => 1 - Math.pow(1 - x, 5);
 
 function _bookSlideDir(seatId) {
     const spot = SOFA2_SPOTS.find(s => s.id === seatId);
@@ -22043,7 +22041,7 @@ function drawBookProp(player, isLocal, screenX, groundY, rScale, alpha) {
 
     const seatId = isLocal ? (player.sitSeatId || gameState.reading.sofaIdx) : player.sitSeatId;
     const sign = _bookSlideDir(seatId) === 'down' ? 1 : -1;
-    const e = _easeInOutCubic(t);
+    const e = _easeOutQuint(t);
     const w = BOOK_PROP_W * rScale, h = BOOK_PROP_H * rScale;
     const y = groundY + sign * BOOK_PROP_TRAVEL * rScale * e;
 

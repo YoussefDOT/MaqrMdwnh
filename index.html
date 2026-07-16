@@ -127,7 +127,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 185 · Updated 1:52 PM</div>
+    <div id="build-number" class="build-number">Build 186 · Updated 2:18 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1278,6 +1278,11 @@
         </div>
     </div>
 
+    <!-- Reading Mobile Exit Button — floats fixed above the leaderboard drawer so it's
+         always reachable without pulling the drawer open (replaces وقوف on mobile
+         while reading). -->
+    <button id="reading-mobile-exit-btn" class="reading-exit-btn mobile-exit hidden">إنهاء القراءة</button>
+
     <!-- Reading Mobile Drawer -->
     <div id="reading-drawer" class="reading-drawer hidden">
         <div class="mobile-drawer-handle">
@@ -1287,7 +1292,6 @@
         <div class="reading-drawer-content">
             <div id="reading-drawer-leaderboard" class="reading-leaderboard"></div>
         </div>
-        <button id="reading-mobile-exit-btn" class="reading-exit-btn mobile-exit">إنهاء القراءة</button>
     </div>
 
     <!-- Reading Exit Confirm -->
@@ -1455,7 +1459,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=196"></script>
+        <script type="module" src="game.js?v=197"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
