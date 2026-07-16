@@ -22118,7 +22118,7 @@ function endReadingSession(manual) {
     const rp = gameState.players[gameState.userId];
     const seatSpot = rp && SOFA2_SPOTS.find(s => s.id === rp.sitSeatId);
     if (seatSpot) {
-        const faceOffset = 62; // clear of the sofa's collision footprint
+        const faceOffset = 105; // clear of the sofa's collision footprint (was 62 — too close, landed player inside the couch mask and stuck them)
         gameState.sitReturnPos = {
             x: seatSpot.x,
             y: seatSpot.y + (seatSpot.dir === 'down' ? faceOffset : -faceOffset),
@@ -22447,8 +22447,9 @@ function sanitizeHat(raw) {
 // spring means it arrives a few frames late and overshoots slightly when the player
 // stops — it reads as an object with mass sitting on the head. Per-player state, so
 // remote players' hats swing too (their render position drives the same spring).
-const _HAT_K   = 0.26;   // stiffness — how hard it's pulled toward the anchor
-const _HAT_D   = 0.68;   // damping (<1 ⇒ it overshoots before settling)
+const _HAT_K      = 0.26;   // stiffness — how hard it's pulled toward the anchor
+const _HAT_D_WALK = 0.34;   // damping during ordinary movement — heavy, no overshoot
+const _HAT_D_ANIM = 0.68;   // damping during kidnap/sit-jump (<1 ⇒ overshoots before settling)
 const _HAT_MAX = 30;     // px — hard cap on the lag so a teleport can't fling it
 
 function _updateHatSpring(player, tx, ty) {
@@ -22462,9 +22463,15 @@ function _updateHatSpring(player, tx, ty) {
         h.x = tx; h.y = ty; h.vx = 0; h.vy = 0;
         return h;
     }
+    // Overshoot is only wanted for the local player's own dedicated animations
+    // (laptop kidnap, sofa/reading sit-jump) — plain walking uses a heavier,
+    // non-overshooting damping so the hat doesn't wobble on every stop/turn.
+    const isLocal = player.userId === gameState.userId;
+    const overshoots = isLocal && (gameState.anim.active || gameState.sitAnim.active);
+    const D = overshoots ? _HAT_D_ANIM : _HAT_D_WALK;
     const dt = Math.min(2, gameState.dtFactor || 1);
-    h.vx = (h.vx + (tx - h.x) * _HAT_K * dt) * Math.pow(_HAT_D, dt);
-    h.vy = (h.vy + (ty - h.y) * _HAT_K * dt) * Math.pow(_HAT_D, dt);
+    h.vx = (h.vx + (tx - h.x) * _HAT_K * dt) * Math.pow(D, dt);
+    h.vy = (h.vy + (ty - h.y) * _HAT_K * dt) * Math.pow(D, dt);
     h.x += h.vx * dt;
     h.y += h.vy * dt;
     const dx = h.x - tx, dy = h.y - ty;
@@ -22805,6 +22812,11 @@ function setupCharCustomUI() {
     _ccEl('cc-close')?.addEventListener('click', closeCharCustom);
     _ccEl('cc-save')?.addEventListener('click', saveCharCustom);
     _ccEl('cc-reset-color')?.addEventListener('click', () => _ccSetColor(COLORS.blue));
+    _ccEl('cc-reset-hat')?.addEventListener('click', () => {
+        if (!_cc.hat) return;
+        _cc.hat = { id: _cc.hat.id, ...HAT_DEFAULT };
+        _ccReflect();
+    });
 
     // Escape closes; typing must never bleed into player movement while open.
     window.addEventListener('keydown', (e) => {

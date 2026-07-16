@@ -7539,7 +7539,6 @@ body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
     background: radial-gradient(ellipse, rgba(0,0,0,0.62) 0%, rgba(0,0,0,0) 72%);
     will-change: transform, opacity;
 }
-@media (min-width: 1024px) { .cc-shadow { margin-left: calc(-75px + 190px); } }
 
 /* ── Panel ─────────────────────────────────────────────────────────────────── */
 .cc-panel {
@@ -7628,6 +7627,7 @@ body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
    never the `disabled` attribute (it leaks touch events on iOS). */
 .cc-hat-tools { margin-top: 14px; opacity: 0.3; pointer-events: none; transition: opacity 0.25s; }
 .cc-hat-tools.cc-unlocked { opacity: 1; pointer-events: auto; }
+.cc-hat-tools .cc-mini-btn { display: block; width: 100%; margin-top: 12px; padding: 8px 11px; }
 .cc-hat-hint { margin-top: 10px; font-size: 0.68rem; color: rgba(255,255,255,0.30); }
 
 .cc-panel-foot { flex: 0 0 auto; padding: 14px 20px 20px; border-top: 1px solid rgba(255,255,255,0.07); }
