@@ -118,18 +118,16 @@ function applyGraphicsBodyClass() {
     document.body.classList.toggle('potato-gfx', isPotato());
 }
 // ─── Lobby configuration ─────────────────────────────────────────────────────
-// To add a new lobby: add one entry.  The key is the internal lobby ID and must
-// match what index.js writes into users/{id}/lobby.
-// categoryName must match the exact Discord category name.
+// To add a new lobby: add one entry.  The key is the internal lobby ID and is
+// the value stored in users/{id}/lobby — the only thing that decides which
+// lobby a player belongs to.
 const LOBBY_CONFIG = {
     male: {
         label:        'الإخوة',
-        categoryName: '🔥 صالة السادة',
         iconClass:    'male'
     },
     female: {
         label:        'الأخوات',
-        categoryName: '🌺صالة السيدات',
         iconClass:    'female'
     }
     // ← add new lobbies here; no other file changes needed
@@ -344,13 +342,7 @@ async function resolveUserLobby(discordId) {
     // seconds later (one less round-trip between pressing الدخول and spawning).
     _lobbyResolveCache = { id: discordId, data };
     if (data.lobby && LOBBY_CONFIG[data.lobby]) return data.lobby;
-    if (data.categoryName) {
-        for (const [key, cfg] of Object.entries(LOBBY_CONFIG)) {
-            if (cfg.categoryName === data.categoryName) return key;
-        }
-        // categoryName is from a non-male/female category (e.g. admin) — ignore it.
-    }
-    // Fallback: localStorage preserves the user's choice across bot-driven Firebase overwrites.
+    // Fallback: localStorage preserves the user's choice across Firebase overwrites.
     const cached = localStorage.getItem(`mdwnh_discord_lobby_${discordId}`);
     if (cached && LOBBY_CONFIG[cached]) {
         update(ref(database), { [`users/${discordId}/lobby`]: cached });
@@ -568,7 +560,6 @@ async function enterGameAsDiscordUser(user, lobby) {
     const updates = {
         [`users/${user.id}/lobby`]:       lobby,
         [`users/${user.id}/avatar`]:      user.avatar,   // always refresh from Discord
-        [`users/${user.id}/channelName`]: null,          // clear stale VC channel
     };
     if (!existing.username) updates[`users/${user.id}/username`] = user.username;
     // No await: Firebase applies writes in order on this connection, so the reads
@@ -578,13 +569,11 @@ async function enterGameAsDiscordUser(user, lobby) {
 
     // NB: #menu-screen is deliberately NOT hidden here — showBootScreen('slide')
     // drops it once the loader has fully covered it (see the comment there).
-    document.getElementById('login-screen')?.classList.remove('active');
     document.getElementById('discord-first-lobby-modal')?.classList.remove('active');
 
     startGame({
         userId:      user.id,
         username:    existing.username || user.username,
-        channelName: null,
         avatar:      user.avatar
     });
 }
@@ -2131,7 +2120,6 @@ const gameState = {
     camera: { x: 0, y: 0 },
     zoom: 1.0,
     keys: {},
-    selectedUser: null,
     positionInitialized: false,
     windParticles: [],
     ambientMotes: [],
@@ -3689,7 +3677,6 @@ function init() {
     // Race track (6 MB PNG + pixel classification) is deliberately NOT loaded
     // here — startGame() loads it on idle, race entry ensures it. See loadRaceTrackAsset.
     setupMenuScreen();       // ← وضع التجربة entry; the menu itself is driven by initDiscordOAuth
-    setupModal();
     setupBossConfirmUI();
     initWindParticles();
     initAmbientMotes();
@@ -4492,9 +4479,7 @@ async function spawnSirajGhost() {
     // Write placeholder first so Firebase write starts immediately
     const placeholderWrite = set(ref(database, `users/${sirajId}`), {
         username: 'سراج',
-        status: 'in-voice',
-        categoryName: LOBBY_CONFIG.male.categoryName,
-        channelName: 'اختبار',
+        lobby: 'male',
         avatar: 'Art/siraj.png',
         activeInGame: false,
         x: 0,
@@ -4513,125 +4498,13 @@ async function spawnSirajGhost() {
 
     gameState.isSirajGhost = true;
     gameState.selectedLobby = 'male';
-    document.getElementById('login-screen')?.classList.remove('active');
     startGame({
         userId: sirajId,
         username: 'سراج',
-        channelName: 'اختبار',
         avatar: avatarDataUrl
     });
 }
 // ─────────────────────────────────────────────────────────────────────────────
-
-// Setup User Selection UI – filtered to the chosen lobby
-function setupUserSelection() {
-    const userListContainer = document.getElementById('user-list');
-    const usersRef = ref(database, 'users');
-
-    const allowedCategory = LOBBY_CONFIG[gameState.selectedLobby]?.categoryName;
-
-    userListContainer.innerHTML = '<div class="loading-spinner"></div>';
-    let firstRender = true;
-    let prevUsersKey = null;
-
-    // Tear down any previous welcome-screen subscription before re-attaching
-    // (the user can bounce between lobby/user screens). Without this each visit
-    // leaks another listener on the GLOBAL /users node.
-    if (gameState._userSelectionUnsub) { try { gameState._userSelectionUnsub(); } catch (_) {} gameState._userSelectionUnsub = null; }
-
-    authReady.then(() => {
-        gameState._userSelectionUnsub = onValue(usersRef, (snapshot) => {
-        const users = snapshot.val();
-        // Once in-game the in-game listener (listenToPlayers) is the source of
-        // truth. Detach this welcome-screen listener so we don't keep streaming
-        // the entire global /users node (both lobbies) for the whole session —
-        // a permanent, redundant download cost against the 10GB/mo cap.
-        if (gameState.userId) {
-            if (gameState._userSelectionUnsub) { try { gameState._userSelectionUnsub(); } catch (_) {} gameState._userSelectionUnsub = null; }
-            return;
-        }
-
-        const WAJEHA_CAT = '📺 واجهة المدونة';
-        const onlineUsers = users
-            ? Object.entries(users).filter(([_, data]) => {
-                if (!data || data.status !== 'in-voice') return false;
-                if (data.categoryName === allowedCategory) return true;
-                if (data.categoryName === WAJEHA_CAT) {
-                    return true; // Always show — they join whatever lobby is currently selected
-                }
-                return false;
-            })
-            : [];
-
-        // Skip re-render + animation replay if the visible list hasn't changed
-        const newKey = onlineUsers.map(([uid, d]) =>
-            `${uid}:${d.username}:${d.activeInGame ? 1 : 0}:${d.avatar || ''}`
-        ).join('|');
-
-        if (!firstRender && newKey === prevUsersKey) return;
-        prevUsersKey = newKey;
-
-        const renderUsers = () => {
-            if (onlineUsers.length === 0) {
-                userListContainer.innerHTML = '<div class="loading-users">' +
-                    (users ? 'لا يوجد مستخدمون في قنوات الصوت حالياً.' : 'لا يوجد مستخدمون متصلون حالياً.') +
-                    '</div>';
-                return;
-            }
-            userListContainer.innerHTML = '';
-            onlineUsers.forEach(([userId, userData]) => {
-                const userItem = document.createElement('div');
-                const isActive = userData.activeInGame === true;
-                userItem.className = 'user-item' + (isActive ? ' disabled' : '');
-
-                const avatarHtml = userData.avatar
-                    ? `<img src="${userData.avatar}" alt="${userData.username}">`
-                    : `<div class="placeholder-avatar">${userData.username.charAt(0).toUpperCase()}</div>`;
-
-                const statusHtml = isActive ? '<div class="in-game-status">داخل اللعبة</div>' : '';
-
-                userItem.innerHTML = `
-                    ${statusHtml}
-                    <div class="avatar-circle">${avatarHtml}</div>
-                    <div class="name">${userData.username}</div>
-                    <div class="channel">${userData.channelName || 'قناة صوتية'}</div>
-                `;
-
-                if (!isActive) {
-                    userItem.addEventListener('click', () => showConfirmModal({ userId, ...userData }));
-                }
-                userListContainer.appendChild(userItem);
-            });
-        };
-
-        if (firstRender) {
-            firstRender = false;
-            setTimeout(renderUsers, 200);
-        } else {
-            renderUsers();
-        }
-        });
-    });
-}
-
-function setupModal() {
-    const modal = document.getElementById('confirm-modal');
-    const cancelBtn = document.getElementById('modal-cancel');
-    const confirmBtn = document.getElementById('modal-confirm');
-    cancelBtn.addEventListener('click', () => { modal.classList.remove('active'); gameState.selectedUser = null; });
-    confirmBtn.addEventListener('click', () => {
-        if (!gameState.selectedUser) return;
-        const user = gameState.selectedUser;
-        modal.classList.remove('active');
-        if (user.categoryName === '📺 واجهة المدونة') {
-            // Trust the lobby selected on the lobby screen. Save it so listenToPlayers can find them.
-            update(ref(database), { [`users/${user.userId}/lobby`]: gameState.selectedLobby });
-            startGame(user);
-        } else {
-            startGame(user);
-        }
-    });
-}
 
 function setupBossConfirmUI() {
     const modal = document.getElementById('boss-confirm-modal');
@@ -4643,34 +4516,6 @@ function setupBossConfirmUI() {
         modal.classList.remove('active');
         triggerLaptopBossTeleport();
     });
-}
-
-function showWajehaGenderPicker(userData) {
-    const modal = document.getElementById('gender-picker-modal');
-    const wrap  = document.getElementById('gender-picker-buttons');
-    if (!modal || !wrap) return;
-    wrap.innerHTML = '';
-    for (const [lobbyId, cfg] of Object.entries(LOBBY_CONFIG)) {
-        const btn = document.createElement('button');
-        btn.className = `lobby-btn ${cfg.iconClass || ''}`;
-        btn.innerHTML = `<div class="lobby-icon" aria-hidden="true"></div><div class="lobby-label">${cfg.label}</div>`;
-        btn.addEventListener('click', () => {
-            modal.classList.remove('active');
-            gameState.selectedLobby = lobbyId;
-            update(ref(database), { [`users/${userData.userId}/lobby`]: lobbyId });
-            startGame(userData);
-        });
-        wrap.appendChild(btn);
-    }
-    modal.classList.add('active');
-}
-
-function showConfirmModal(userData) {
-    gameState.selectedUser = userData;
-    document.getElementById('confirm-name').textContent = userData.username;
-    document.getElementById('confirm-channel').textContent = userData.channelName || 'قناة صوتية';
-    document.getElementById('confirm-avatar').src = userData.avatar || '';
-    document.getElementById('confirm-modal').classList.add('active');
 }
 
 function playSoundRobust(audioElement) {
@@ -4846,7 +4691,6 @@ function startGame(userData) {
         window.addEventListener('online', _resyncPresence);
     }
 
-    document.getElementById('login-screen').classList.remove('active');
     document.getElementById('game-screen').classList.add('active');
     document.body.classList.add('game-ready');
     window.dispatchEvent(new CustomEvent('pwa:gameStarted'));
@@ -4989,6 +4833,19 @@ function startGame(userData) {
                 mig[`users/${gameState.userId}/focusPlayer`] = null;
                 mig[`users/${gameState.userId}/lastPomoSession`] = null;
                 update(ref(database), mig).catch(() => {});
+            }
+
+            // The Discord voice-channel integration is gone — entry is OAuth only.
+            // Wipe the fields the old bot wrote (channelName / categoryName /
+            // status='in-voice') from this user's node so no stale VC data lingers.
+            // Each client cleans its own node, so the whole tree drains as people log in.
+            if (data && (data.channelName !== undefined || data.categoryName !== undefined
+                      || data.status !== undefined)) {
+                update(ref(database), {
+                    [`users/${gameState.userId}/channelName`]:  null,
+                    [`users/${gameState.userId}/categoryName`]: null,
+                    [`users/${gameState.userId}/status`]:       null,
+                }).catch(() => {});
             }
 
             // Restore Focus Mix from the private profile
@@ -5525,13 +5382,13 @@ function setupJuiceUi() {
         _playUiBlip(_uiSeqRate());
     }, true);
 
-    // Login / lobby flow (no focus engine yet): blip on BUTTON PRESS via a plain
+    // Menu / lobby flow (no focus engine yet): blip on BUTTON PRESS via a plain
     // HTMLAudio element — deliberately NOT Web Audio, so it can't create a second
     // AudioContext that would later fight the focus engine on iOS/Safari.
     document.addEventListener('pointerdown', (ev) => {
-        if (gameState.userId) return;   // login flow only
+        if (gameState.userId) return;   // menu flow only
         const t = ev.target;
-        if (t && t.closest && t.closest('button, .user-item')) {
+        if (t && t.closest && t.closest('button')) {
             try {
                 const a = new Audio('Sound/Menu_Ui.mp3');
                 a.volume = 0.18;
@@ -7653,58 +7510,40 @@ function initializePlayerPosition() {
 }
 
 function listenToPlayers() {
-    // We're in-game now — drop the welcome-screen subscription on the global
-    // /users node so we don't pay for two full-node streams per client.
-    if (gameState._userSelectionUnsub) { try { gameState._userSelectionUnsub(); } catch (_) {} gameState._userSelectionUnsub = null; }
     const usersRef = ref(database, 'users');
-    // The category that belongs to the active lobby – used to exclude the other lobby
-    const allowedCategory = LOBBY_CONFIG[gameState.selectedLobby]?.categoryName;
 
     onValue(usersRef, (snapshot) => {
         const users = snapshot.val();
         if (users) {
             const currentIdsInSnapshot = new Set();
             for (const [userId, userData] of Object.entries(users)) {
-                // Hard separation: VC users matched by categoryName; OAuth users matched by lobby field.
-                const inCorrectLobby = userData.categoryName === allowedCategory
-                    || userData.lobby === gameState.selectedLobby;
-                if (!inCorrectLobby) continue;
+                // Lobby separation is decided solely by users/{uid}/lobby.
+                if (userData.lobby !== gameState.selectedLobby) continue;
 
-                if (userData.status === 'in-voice' || userData.activeInGame === true) {
+                // Only players actually in the website are rendered. (This used to
+                // also admit `status === 'in-voice'` users — the Discord voice-channel
+                // integration — who were drawn as faded ghosts. That's gone.)
+                if (userData.activeInGame === true) {
                     currentIdsInSnapshot.add(userId);
                     const isCurrentUser = userId === gameState.userId;
                     if (!gameState.players[userId]) {
                         // Explicit presence check — `!userData.x` wrongly treats a
                         // legitimate x:0 (the centre-column laptop sits at world x≈0)
                         // as "no position", which scattered working users to a random
-                        // spot for everyone else. Only assign a spawn when the position
-                        // is genuinely absent AND the user isn't already in-game (i.e. a
-                        // VC ghost), so in-game players are never relocated by observers.
+                        // spot for everyone else.
                         const hasPos = userData.x !== undefined && userData.x !== null
                                     && userData.y !== undefined && userData.y !== null;
-                        let spawnX = hasPos ? userData.x : 0;
-                        let spawnY = hasPos ? userData.y : 0;
-                        if (!isCurrentUser && !hasPos && userData.activeInGame !== true) {
-                            const ghostSpawn = getRandomSpawnPosition();
-                            spawnX = ghostSpawn.x;
-                            spawnY = ghostSpawn.y;
-                            update(ref(database), {
-                                [`users/${userId}/x`]: spawnX,
-                                [`users/${userId}/y`]: spawnY,
-                            });
-                        }
+                        const spawnX = hasPos ? userData.x : 0;
+                        const spawnY = hasPos ? userData.y : 0;
                         gameState.players[userId] = {
                             userId,
                             username: userData.username,
-                            channelName: userData.channelName,
                             avatar: userData.avatar,
                             x: spawnX,
                             y: spawnY,
                             renderX: spawnX,
                             renderY: spawnY,
                             currentTask: userData.currentTask || "",
-                            activeInGame: userData.activeInGame === true,
-                            avatarColorAlpha: userData.activeInGame === true ? 1 : 0,
                             isMoving: userData.isMoving || false,
                             isSprinting: userData.isSprinting || false,
                             floor:              (userData.floor === 2) ? 2 : 1,
@@ -7737,10 +7576,8 @@ function listenToPlayers() {
                         // JUICE: reconnected mid scale-down → cancel the exit and re-pop in.
                         if (player._exitT != null) { player._exitT = null; player._entryT = performance.now(); }
                         player.username = userData.username;
-                        player.channelName = userData.channelName;
                         player.avatar = userData.avatar;
                         player.currentTask = userData.currentTask || "";
-                        player.activeInGame = userData.activeInGame === true;
                         // Customization applies to the LOCAL player too (a save from
                         // another device / tab must land here as well), so it sits
                         // outside the !isCurrentUser block below.
@@ -8508,19 +8345,6 @@ function updateNametags() {
     }
 }
 
-function updateAvatarColorFade() {
-    for (const player of Object.values(gameState.players)) {
-        if (player.avatarColorAlpha === undefined) {
-            player.avatarColorAlpha = player.activeInGame ? 1 : 0;
-        }
-        const isLocal = player.userId === gameState.userId;
-        const targetAlpha = (isLocal || player.activeInGame) ? 1 : 0;
-        const fadeSpeed = targetAlpha > player.avatarColorAlpha ? 0.1 : 0.18;
-        const lerpFactor = 1 - Math.pow(1 - fadeSpeed, gameState.dtFactor);
-        player.avatarColorAlpha += (targetAlpha - player.avatarColorAlpha) * lerpFactor;
-    }
-}
-
 function gameLoop(timestamp) {
     // Stop the loop if this session was displaced by a newer login elsewhere.
     if (gameState._dupSessionDetected) return;
@@ -8667,7 +8491,6 @@ function gameLoop(timestamp) {
         updateLeavingPlayers();      // JUICE: finish disconnect scale-downs
         updatePlayerBobbing();
         updateNametags();
-        updateAvatarColorFade();
         updateWindParticles();
         updateAmbientMotes();
         updateDustParticles();
@@ -8716,8 +8539,6 @@ function render() {
     // ── Ground floor (both rooms are one open world now) ────────────────────────
     drawWorldGround();
     drawLaptopLights(1);
-
-    drawConnections();
 
     drawAmbientMotes();
     drawDustParticles();
@@ -11332,9 +11153,10 @@ function updatePomodoro() {
     }
 }
 
+// gameState.players only ever holds users with presence (activeInGame === true),
+// so simply being in the map means the owner is in the website.
 function isLaptopOwnerInGame(laptop) {
-    const owner = gameState.players[laptop.claimedBy];
-    return !!(owner && owner.activeInGame);
+    return !!gameState.players[laptop.claimedBy];
 }
 
 // Owner logged out while session waits for them (expired timer or between-phase wait).
@@ -11834,74 +11656,13 @@ function drawFocusFog(W, H) {
     ctx.restore();
 }
 
-function drawConnections() {
-    const ctx = gameState.ctx;
-    const channelGroups = {};
-    for (const player of Object.values(gameState.players)) {
-        if (player._pendingSpawn != null) continue;   // still invisible (settling in)
-        if (!channelGroups[player.channelName]) channelGroups[player.channelName] = [];
-        channelGroups[player.channelName].push(player);
-    }
-
-    // Animated flowing dashes + gentle breathing glow — makes social links feel alive
-    const t = Date.now() * 0.001;
-    const flow = -(Date.now() * 0.02) % 14;       // dashes drift along the line
-    const pulse = 0.5 + 0.5 * Math.sin(t * 1.6);  // 0..1 breathing
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineDashOffset = flow;
-    ctx.setLineDash([4, 10]);
-    for (const players of Object.values(channelGroups)) {
-        if (players.length > 1) {
-            for (let i = 0; i < players.length; i++) {
-                for (let j = i + 1; j < players.length; j++) {
-                    const p1 = players[i], p2 = players[j];
-                    const pos1 = getPlayerRenderPos(p1);
-                    const pos2 = getPlayerRenderPos(p2);
-                    ctx.beginPath();
-                    ctx.moveTo(pos1.x, pos1.y);
-                    ctx.lineTo(pos2.x, pos2.y);
-                    // Soft teal glow underlay
-                    ctx.strokeStyle = `rgba(59, 185, 171, ${0.10 + 0.10 * pulse})`;
-                    ctx.lineWidth = 5;
-                    ctx.stroke();
-                    // Bright flowing dashes on top
-                    ctx.strokeStyle = `rgba(220, 245, 240, ${0.22 + 0.16 * pulse})`;
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
-                }
-            }
-        }
-    }
-    ctx.setLineDash([]);
-    ctx.restore();
-}
-
-function blendHexColors(fromHex, toHex, t) {
-    const clamp = Math.max(0, Math.min(1, t));
-    const parse = (hex) => {
-        const value = hex.replace('#', '');
-        return [
-            parseInt(value.slice(0, 2), 16),
-            parseInt(value.slice(2, 4), 16),
-            parseInt(value.slice(4, 6), 16)
-        ];
-    };
-    const [r1, g1, b1] = parse(fromHex);
-    const [r2, g2, b2] = parse(toHex);
-    const r = Math.round(r1 + (r2 - r1) * clamp);
-    const g = Math.round(g1 + (g2 - g1) * clamp);
-    const b = Math.round(b1 + (b2 - b1) * clamp);
-    return `rgb(${r}, ${g}, ${b})`;
-}
-
 // Pre-tinted avatar variants for the reduced graphics tiers. Setting ctx.filter
 // during hot drawing forces the canvas onto a slow intermediate-surface path on
 // mobile GPUs (per avatar, per frame) — instead we bake the tint ONCE into an
 // offscreen copy and draw that. Where ctx.filter is unsupported (older Safari)
 // the bake is a plain copy, which matches the old behaviour there (the live
 // filter was silently ignored).
-function _tintedAvatar(userId, img, kind) {   // kind: 'gray' (working) | 'ghost' (not in game)
+function _tintedAvatar(userId, img, kind) {   // kind: 'gray' (working)
     const cache = gameState._avatarTintCache || (gameState._avatarTintCache = {});
     const key = `${userId}|${kind}`;
     let c = cache[key];
@@ -11911,7 +11672,7 @@ function _tintedAvatar(userId, img, kind) {   // kind: 'gray' (working) | 'ghost
             const cv = document.createElement('canvas');
             cv.width = w; cv.height = h;
             const tctx = cv.getContext('2d');
-            tctx.filter = kind === 'gray' ? 'grayscale(60%)' : 'saturate(0) brightness(0.72)';
+            tctx.filter = 'grayscale(60%)';
             tctx.drawImage(img, 0, 0, w, h);
             c = cache[key] = cv;
         } catch (_) { c = cache[key] = null; }   // bake failed → fall back to the original
@@ -12036,12 +11797,9 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             }
         }
 
-        const colorAlpha = isCurrentUser ? 1 : (player.avatarColorAlpha ?? 0);
-        const grayMix = 1 - colorAlpha;
         // The ring colour is customizable per player (تخصيص الشخصية) and synced to
         // everyone, so it wins over the old defaults — blue for me, white for others.
         const ringColor = _validHex(player.ringColor) || (isCurrentUser ? COLORS.blue : '#ffffff');
-        const mutedRing = '#8a8a8a';
 
         // Soft contact shadow on the ground — shrinks/fades as the avatar bobs upward,
         // so walking avatars feel like they lift off the floor. Cheap (one ellipse).
@@ -12073,15 +11831,6 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         ctx.translate(screenX + coopDX, screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY);
         ctx.rotate(workAngle);
         ctx.scale(workScaleX * _juiceScale * _juiceSquashX * rScale, workScaleY * _juiceScale * _juiceSquashY * rScale);
-
-        if (grayMix > 0.01) {
-            // Reduced tiers replace the live filter with pre-tinted avatar copies
-            // (see _tintedAvatar) — only the alpha fade stays live.
-            if (!gameState._lowGfx) {
-                ctx.filter = `saturate(${colorAlpha}) brightness(${0.72 + 0.28 * colorAlpha})`;
-            }
-            ctx.globalAlpha = (0.55 + 0.45 * colorAlpha) * floorVis;
-        }
 
         // Local-player ambient glow — a gentle breathing halo so "you" stand out.
         // Desktop only (radial gradient per avatar is the costly bit); skipped on mobile.
@@ -12123,7 +11872,7 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         ctx.shadowOffsetY = 4 + (player.bobOffset || 0);
         ctx.beginPath();
         ctx.arc(0, 0, (PLAYER_SIZE / 2) + 4, 0, Math.PI * 2);
-        ctx.fillStyle = grayMix > 0.01 ? blendHexColors(ringColor, mutedRing, grayMix) : ringColor;
+        ctx.fillStyle = ringColor;
         ctx.fill();
         ctx.shadowBlur = 0;
         ctx.shadowOffsetY = 0;
@@ -12136,18 +11885,8 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         const img = gameState.avatarCache[player.userId];
         if (img && img !== 'failed') {
             if (gameState._lowGfx) {
-                // No live ctx.filter on reduced tiers — draw baked tinted copies.
-                if (grayMix > 0.01) {
-                    // Ghost fade: fully-desaturated copy under, colour on top at
-                    // colorAlpha (approximates the saturate/brightness ramp).
-                    ctx.drawImage(_tintedAvatar(player.userId, img, 'ghost'), -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-                    if (colorAlpha > 0.03) {
-                        const _prevA = ctx.globalAlpha;
-                        ctx.globalAlpha = _prevA * colorAlpha;
-                        ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
-                        ctx.globalAlpha = _prevA;
-                    }
-                } else if (shouldGrayWorld) {
+                // No live ctx.filter on reduced tiers — draw a baked tinted copy.
+                if (shouldGrayWorld) {
                     ctx.drawImage(_tintedAvatar(player.userId, img, 'gray'), -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
                 } else {
                     ctx.drawImage(img, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
@@ -12161,11 +11900,9 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             const placeholderColor = isCurrentUser ? COLORS.blue : '#ccc';
             let fillColor = placeholderColor;
             if (!isCurrentUser && player.isWorking) fillColor = '#9a9a9a';
-            ctx.fillStyle = grayMix > 0.01
-                ? blendHexColors(fillColor, '#9a9a9a', grayMix)
-                : fillColor;
+            ctx.fillStyle = fillColor;
             ctx.fill();
-            ctx.fillStyle = `rgba(255, 255, 255, ${0.55 + 0.45 * colorAlpha})`;
+            ctx.fillStyle = 'rgba(255, 255, 255, 1)';
             ctx.font = 'bold 24px Rubik';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
@@ -12184,7 +11921,7 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             screenX + coopDX,
             screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY,
             rScale * _juiceScale,
-            floorVis * (tpFadeOut > 0.01 ? (1 - tpFadeOut) : 1) * (grayMix > 0.01 ? (0.55 + 0.45 * colorAlpha) : 1));
+            floorVis * (tpFadeOut > 0.01 ? (1 - tpFadeOut) : 1));
 
         if (player.nameAlpha > 0.01 && !tpData && !gameState._hideNames) {
             const nA = player.nameAlpha * floorVis;
@@ -13653,7 +13390,6 @@ function updateSharedPomoProximity() {
     const nearby = [];
     for (const p of Object.values(gameState.players)) {
         if (p.userId === gameState.userId) continue;
-        if (!p.activeInGame) continue;
         if ((p.floor || 1) !== localFloor) continue;   // can't invite across floors
         if (p.isWorking || p.isOnBreak || p.inFreeMode || p.isReading) continue;
         if (sp.session?.participants?.[p.userId]) continue;

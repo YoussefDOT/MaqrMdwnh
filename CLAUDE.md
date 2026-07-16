@@ -271,6 +271,17 @@ reduced tiers.
 | `FocusAudioEngine` | line ~46 | Web Audio API ambient mixer |
 | `FocusYouTubePlayer` | line ~409 | YouTube IFrame API wrapper |
 
+### Discord is OAuth ONLY — the voice-channel integration is gone
+Discord is a **login provider and nothing else**. There is no bot listing voice-channel
+members, no `status: 'in-voice'` users, no `channelName` / `categoryName` on
+`users/{uid}`, no faded low-opacity avatars for "in VC but not in the website", and no
+connection lines drawn between avatars in the same channel. **Don't reintroduce any of
+it.** A user's lobby comes solely from `users/{uid}/lobby`; presence comes solely from
+`activeInGame`. `startGame` runs a one-time cleanup that nulls the legacy
+`channelName` / `categoryName` / `status` keys on the signed-in user's own node, so the
+tree drains itself as people log in — leave it in place until every account has been
+seen at least once, then it can go.
+
 ### Login & auto-resume
 Discord OAuth session in localStorage. On load, `initDiscordOAuth()` validates the token and resolves the lobby. **Auto-resume**: `startGame` writes `localStorage[ACTIVE_SESSION_KEY] = userId` while in-game (cleared on explicit logout / menu logout); on load, if that flag matches the resolved user, re-enter the game directly — `startGame` then restores the pomodoro/free-mode session from Firebase. This is what makes an unintended reload (Android discarding a backgrounded tab) seamless. Siraj ghosts never set the flag (ephemeral).
 
@@ -280,11 +291,11 @@ Discord OAuth session in localStorage. On load, `initDiscordOAuth()` validates t
 
 The site name is **مقر المدونة**. Entry is **Discord-OAuth only** — the male/female
 chooser is **gone** from the menu. The lobby comes from the account
-(`resolveUserLobby` → Firebase `users/{uid}/lobby` / `categoryName`). The only
-buttons are: Discord login, **وضع التجربة**, and the PWA install button.
+(`resolveUserLobby` → Firebase `users/{uid}/lobby`, else the localStorage cache).
+The only buttons are: Discord login, **وضع التجربة**, and the PWA install button.
 
 - **`#discord-first-lobby-modal` is a rare FALLBACK only** — it shows when
-  `resolveUserLobby` returns null (a Discord account the bot has never seen). Do
+  `resolveUserLobby` returns null (a Discord account we've never seen). Do
   not surface it as a normal step.
 - **The avatar pill (`#user-pill`)** replaces the login button once signed in:
   avatar + name + lobby tag (الإخوة / الأخوات) + an arrow chip. In RTL the arrow
@@ -770,7 +781,7 @@ Sugar falls from top. `progress = (serverNow() - spawnTime) / fallDuration` — 
 
 `drawPlayers(onlyLocal, floorFilter)` and `drawTimers(floorFilter)` take a floor filter
 so ground avatars render **below** the mezzanine and floor-2 avatars **above** it (and
-fade with it). `drawConnections` / `drawCoopGroupLabels` still run in the world pass.
+fade with it). `drawCoopGroupLabels` still runs in the world pass.
 
 **DPR scaling**: Canvas is `viewport * dpr` physical, `viewport` CSS. All drawing uses `ctx.scale(dpr, dpr)` so use logical pixels everywhere. `gameState.dpr` holds the ratio.
 
@@ -872,10 +883,10 @@ High-frequency walking used to write `x/y` to Firebase **every animation frame**
 
 `updatePlayerPosition(x, y)` writes `users/{uid}/{x,y,isMoving,isWorking,…}` together (atomic). Still called on **stop**, every frame during the kidnap animation, at the end of `startPomodoroPhase`, on session restore, and via a **4s heartbeat** in the game loop while locked-in/in a session — but **no longer per-frame while walking** (that's the WebSocket's job now).
 
-**Pitfall — never use `!userData.x` to detect "no position":** the centre-column laptops sit at world **x ≈ 0**, and `0` is falsy, so that check made observers treat working users as position-less and scatter them to a random spawn (they looked mid-map to everyone but themselves). Always check `x !== undefined && x !== null`. Observers only assign a spawn to non-`activeInGame` users (VC ghosts), never to in-game players.
+**Pitfall — never use `!userData.x` to detect "no position":** the centre-column laptops sit at world **x ≈ 0**, and `0` is falsy, so that check made observers treat working users as position-less and scatter them to a random spawn (they looked mid-map to everyone but themselves). Always check `x !== undefined && x !== null`. Observers never assign a spawn to another player — everyone writes their own position.
 
 ### Presence self-heal (`activeInGame`)
-Observers render a remote player at **low opacity** (the "in Discord VC but not in the website" look) and hide their timer/`أعمل على` whenever `activeInGame !== true`. A dropped socket (network blip, **PC sleep/wake**) fires `onDisconnect.set(false)` server-side, so a returning user stays a faded ghost until presence is restored. Presence is kept true while the page is open through **three** redundant paths — never rely on just one:
+`activeInGame` is the **only** thing that decides whether a remote player exists for observers: `listenToPlayers` adds a user to `gameState.players` only when it's `true`, so anyone in the map is genuinely in the website (there is no faded "in Discord VC" ghost any more — that integration is gone). A dropped socket (network blip, **PC sleep/wake**) fires `onDisconnect.set(false)` server-side, so a returning user would vanish for everyone until presence is restored. Presence is kept true while the page is open through **three** redundant paths — never rely on just one:
 1. `updatePlayerPosition()` writes `activeInGame: true` on **every** position write (move/stop/heartbeat/restore).
 2. A standalone **10s presence heartbeat** in the game loop (independent of any session — covers idle/walking users the 4s position heartbeat skips).
 3. `visibilitychange` / `window.focus` / `window.online` → `_resyncPresence()` re-asserts `activeInGame` + token and re-broadcasts position/task **immediately** on wake (don't make a woken PC wait for the heartbeat).
@@ -1141,7 +1152,7 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | Disconnected/closed-tab user keeps a laptop unusable for ~30min–2h | The pomo/free doc lingered (claimed) until `cleanupAbandonedPomoSessions` freed it; free mode's `onDisconnect` deliberately kept it claimed as an AFK badge | Unified model: `onDisconnect` **removes** the laptop (others see nothing) + stamps `lastPomoSession.abandonedAt`; reclaim within 4h on next login (old laptop if free, else random). See **Disconnect / session reclaim** |
 | Reclaimed session lost after a reconnect | `reassertActiveSessionAfterReconnect` cleared `lastPomoSession` to `null` then armed only the `abandonedAt` child → a later disconnect stamped a timestamp onto an empty object | Re-**persist** a full live snapshot via `trackSessionForReclaim` (never `set(null)` while still in-session) |
 | Mobile: re-tapping the same laptop fires free/pomo "without asking"; happens only on the same laptop | The opening tap is followed ~300ms later by a synthesized `click` at the same point; if a mode-select button sits under it (depends on the laptop's screen position) it fires immediately | Ghost-click guard: `showLaptopModeSelect()` stamps `_modeSelectOpenedAt`; `mode-select-pomo`/`mode-select-free` ignore presses within 500ms (`modeSelectGhostClick()`) |
-| Reconnected user shows no `أعمل على` / no timer for others; or appears low-opacity (VC-ghost look) after PC sleep/wake | `activeInGame` was set once at login and only re-asserted by `.info/connected`; `updatePlayerPosition` never wrote it, and the position heartbeat only runs during a session — so an idle/walking user stayed `false` after a drop, gating their opacity + timer + task label | Write `activeInGame:true` on every `updatePlayerPosition`; add a session-independent **10s presence heartbeat**; re-assert on `visibilitychange`/`focus`/`online`. See **Presence self-heal** |
+| Reconnected user shows no `أعمل على` / no timer for others; or disappears for them after PC sleep/wake | `activeInGame` was set once at login and only re-asserted by `.info/connected`; `updatePlayerPosition` never wrote it, and the position heartbeat only runs during a session — so an idle/walking user stayed `false` after a drop, gating their presence + timer + task label | Write `activeInGame:true` on every `updatePlayerPosition`; add a session-independent **10s presence heartbeat**; re-assert on `visibilitychange`/`focus`/`online`. See **Presence self-heal** |
 | Friend's avatar "snaps places" occasionally while walking | Two causes: (1) a laggy Firebase position write (4s heartbeat during a break, stop write) fed the interpolation buffer with a stale-but-fresh-timestamped sample → backward yank; (2) WS-over-TCP delayed bursts starved the buffer, then interpolation jumped the avatar forward to catch up when the burst landed | (1) Only `pushNetSample` from Firebase when WS quiet >1s (`player._lastWsSampleAt`); (2) flag the starve (`entity._netStarved`) so the next sample re-anchors at the current render pos. See **Player Position Sync → Anti-snap** |
 | "Disable idle animation while working" setting did nothing in free mode | The per-avatar `isWorking` flag only tracks pomodoro, so in free mode the local avatar fell into the idle-breathing branch and the suppression (gated on `isWorking`) never fired | Gate the local-avatar suppression on `localInWorkPhase()` (covers pomodoro **and** free mode) and freeze both the bounce and the breathing |
 | After-prayer azkar: tapping a count button scrolled the whole overlay down | `nextEl.scrollIntoView()` bubbles to the nearest scrollable ancestor; when the list itself couldn't scroll it scrolled the overlay/page | Scroll `listEl` only via a manual `listEl.scrollTo({top})` computed from bounding rects — never `scrollIntoView` |
