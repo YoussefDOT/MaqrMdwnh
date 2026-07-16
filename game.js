@@ -21628,6 +21628,27 @@ function closeReadingPopup() {
     if (!gameState.reading.active) gameState.isLockedIn = false;
 }
 
+// The reading ghost-cleanup is armed/cancelled PER FIELD, never on the `users/{uid}`
+// parent. `onDisconnect(parent).cancel()` cancels the queued ops of that location AND
+// all its children — so cancelling at the parent silently wiped the presence handlers
+// (`activeInGame` → false, `activeSession` → null) armed at login, and the reader then
+// stayed visible to everyone forever after closing the tab.
+const READING_DISCONNECT_FIELDS = {
+    isReading: false, readingBook: null, readingEnd: null, booksSofa: null,
+};
+
+function armReadingDisconnect() {
+    for (const [field, value] of Object.entries(READING_DISCONNECT_FIELDS)) {
+        onDisconnect(ref(database, `users/${gameState.userId}/${field}`)).set(value);
+    }
+}
+
+function cancelReadingDisconnect() {
+    for (const field of Object.keys(READING_DISCONNECT_FIELDS)) {
+        onDisconnect(ref(database, `users/${gameState.userId}/${field}`)).cancel();
+    }
+}
+
 function startReadingSession(durationMin, bookName, bookStyle) {
     closeReadingPopup();
 
@@ -21688,11 +21709,7 @@ function startReadingSession(durationMin, bookName, bookStyle) {
     // Ghost-cleanup: never leave a "يتم قراءة" badge floating for others if the tab
     // closes mid-session (same rule as every other session type — see CLAUDE.md
     // "ghost laptop" lesson). Siraj ghosts already wipe their whole user node.
-    if (!gameState.isSirajGhost) {
-        onDisconnect(ref(database, `users/${gameState.userId}`)).update({
-            isReading: false, readingBook: null, readingEnd: null, booksSofa: null
-        });
-    }
+    if (!gameState.isSirajGhost) armReadingDisconnect();
 
     // Stop player
     const me = gameState.players[gameState.userId];
@@ -21893,9 +21910,7 @@ function endReadingSession(manual) {
     }).catch(() => {});
 
     // Disarm the disconnect ghost-cleanup — we're clearing these fields right now.
-    if (!gameState.isSirajGhost) {
-        onDisconnect(ref(database, `users/${gameState.userId}`)).cancel();
-    }
+    if (!gameState.isSirajGhost) cancelReadingDisconnect();
 
     // 3. Increment the user's global reading time (for the leaderboard). Siraj test
     //    ghosts are ephemeral and must never appear in المتصدرين, so they skip this
