@@ -7419,13 +7419,21 @@ body.is-mobile.cc-active #game-canvas { display: none !important; }
    broken by a `height: 100%` fighting `max-width`. */
 .fp-stage {
     position: relative;
+    z-index: 1;
     width: min(100%, calc(100dvh * 1500 / 1920));
     aspect-ratio: 1500 / 1920;
-    animation: fpStageIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
 }
-@keyframes fpStageIn {
-    from { opacity: 0; transform: scale(0.94); }
-    to   { opacity: 1; transform: scale(1); }
+/* Fireplace Overlay.png — the last thing painted, over the frames + fire.
+   Same box/scale as the BG (fixed, viewport-covering), not the stage. */
+.fp-topcoat {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover;
+    z-index: 2;
+    user-select: none;
+    -webkit-user-drag: none;
+    pointer-events: none;
 }
 .fp-body, .fp-fire {
     position: absolute;
@@ -7500,3 +7508,10 @@ body.is-mobile.cc-active #game-canvas { display: none !important; }
 body.is-mobile.fireplace-active #game-canvas { display: none !important; }
 body.fireplace-active { overflow: hidden; }
 body.is-mobile .fp-close { top: 12px; left: 12px; width: 40px; height: 40px; }
+/* On portrait phones the base rule's min() always picks the 100% branch (a tall
+   screen never gets height-capped), which reads small on a phone. Push both
+   branches past 100vw so it renders bigger; the overflow crops evenly since the
+   overlay centers it and `.fp-bg` already covers the screen behind it. Still
+   height-capped for mobile landscape (a short viewport), so it never blows past
+   the screen there. */
+body.is-mobile .fp-stage { width: min(132vw, calc(112dvh * 1500 / 1920)); }

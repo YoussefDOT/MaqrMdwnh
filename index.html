@@ -127,7 +127,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 195 · Updated 6:42 PM</div>
+    <div id="build-number" class="build-number">Build 196 · Updated 6:56 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1247,13 +1247,15 @@
          older right, "كتاب جديد" at the left end), duration, then أنا لها. -->
     <!-- المدفئة — أعضاء الشهر. Slots (#fire-slot-1..3) are built by setupFireplaceUI
          from FIRE_SLOTS so the frame coords live in game.js only. Layer order is
-         BG → Fireplace → member frames → Fire (fire always on top). -->
+         BG → Fireplace → member frames → Fire → Overlay (overlay always on top,
+         same viewport-covering scale as BG). -->
     <div id="fireplace-overlay" class="fp-overlay" aria-hidden="true">
         <img class="fp-bg" src="Art/Fireplace BG.png" alt="">
         <div class="fp-stage">
             <img class="fp-body" src="Art/Fireplace.png" alt="المدفئة">
             <img class="fp-fire" src="Art/Fireplace Fire.png" alt="">
         </div>
+        <img class="fp-topcoat" src="Art/Fireplace Overlay.png" alt="">
         <button id="fireplace-close" class="fp-close" aria-label="إغلاق">✕</button>
     </div>
 
