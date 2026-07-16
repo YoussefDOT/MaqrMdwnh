@@ -5577,6 +5577,10 @@ function juiceCloseThenOpen(fromModal, openNext) {
 // when the live graphics tier is "low", every `ctx.shadowBlur = N` is clamped to 0.
 // Calls the native accessor so high-graphics shadows are unchanged, and reads the
 // per-frame flag so a runtime quality switch takes effect immediately.
+// Exception: world prompts (laptop/dashboard/seat/library/fireplace/game-zone) keep
+// their shadow even on متوسط/بطاطس — without it the white text loses all contrast
+// against bright art and becomes hard to read. `gameState._promptShadowsActive` is
+// set for the span of render() that draws those prompts (see render()).
 function installLowGfxShadowGuard(ctx) {
     try {
         let proto = Object.getPrototypeOf(ctx), desc = null;
@@ -5588,7 +5592,7 @@ function installLowGfxShadowGuard(ctx) {
         Object.defineProperty(ctx, 'shadowBlur', {
             configurable: true,
             get() { return desc.get.call(this); },
-            set(v) { desc.set.call(this, gameState._lowGfx ? 0 : v); },
+            set(v) { desc.set.call(this, (gameState._lowGfx && !gameState._promptShadowsActive) ? 0 : v); },
         });
     } catch (_) { /* non-fatal: shadows just stay on */ }
 }
@@ -6496,6 +6500,10 @@ function initMobileControls() {
     }
 
     // ── Focus sounds drawer (drag handle) ─────────────────────────────
+    // Instagram-comments style: a quick flick in either direction snaps the
+    // drawer that way regardless of how far it travelled; only a slow, undecided
+    // drag falls back to a distance threshold (and that threshold is intentionally
+    // small — nobody should have to pull halfway up the screen).
     const drawer = document.getElementById('focus-sounds-panel');
     const handle = document.getElementById('drawer-handle');
     if (drawer && handle) {
@@ -6503,7 +6511,9 @@ function initMobileControls() {
         let dragStartTranslate = 0; // will be set on touch start
         let currentTranslate = 0;
         let isDraggingDrawer = false;
-        const SNAP_THRESHOLD = 0.4; // fraction of drawer height
+        let lastMoveY = 0, lastMoveT = 0, velocity = 0; // px/ms, +down / -up
+        const DIST_FRACTION = 0.22; // fraction of drawer height — slow-drag fallback
+        const FLICK_VELOCITY = 0.5; // px/ms — a deliberate swipe wins outright
 
         const getCollapsedTranslate = () => {
             return drawer.offsetHeight - 72; // 72px visible when collapsed
@@ -6517,13 +6527,21 @@ function initMobileControls() {
             // Determine current position from class
             dragStartTranslate = drawer.classList.contains('drawer-open') ? 0 : getCollapsedTranslate();
             currentTranslate = dragStartTranslate;
+            lastMoveY = dragStartY;
+            lastMoveT = performance.now();
+            velocity = 0;
             drawer.style.transition = 'none';
         }, { passive: false });
 
         window.addEventListener('touchmove', (e) => {
             if (!isDraggingDrawer) return;
             e.preventDefault();
-            const dy = e.touches[0].clientY - dragStartY;
+            const y = e.touches[0].clientY;
+            const now = performance.now();
+            const dt = now - lastMoveT;
+            if (dt > 0) velocity = (y - lastMoveY) / dt;
+            lastMoveY = y; lastMoveT = now;
+            const dy = y - dragStartY;
             const collapsed = getCollapsedTranslate();
             currentTranslate = Math.max(0, Math.min(collapsed, dragStartTranslate + dy));
             drawer.style.transform = `translateY(${currentTranslate}px)`;
@@ -6535,17 +6553,14 @@ function initMobileControls() {
             drawer.style.transition = '';
 
             const collapsed = getCollapsedTranslate();
-            const openThreshold = collapsed * SNAP_THRESHOLD;
-
-            if (currentTranslate < openThreshold) {
-                // Snap open
-                drawer.classList.add('drawer-open');
-                drawer.style.transform = '';
+            let openIt;
+            if (Math.abs(velocity) > FLICK_VELOCITY) {
+                openIt = velocity < 0; // flicked upward => open, downward => close
             } else {
-                // Snap closed (but still visible as handle)
-                drawer.classList.remove('drawer-open');
-                drawer.style.transform = '';
+                openIt = currentTranslate < collapsed * DIST_FRACTION;
             }
+            drawer.classList.toggle('drawer-open', openIt);
+            drawer.style.transform = '';
         };
         window.addEventListener('touchend', endDrag);
         window.addEventListener('touchcancel', endDrag);
@@ -8741,6 +8756,8 @@ function render() {
     drawCoopGroupLabels();
 
     // (The laptop "انقر للبدء" prompt is drawn by drawFocusMask when near a laptop.)
+    // Prompt shadows stay on even at متوسط/بطاطس — see installLowGfxShadowGuard.
+    gameState._promptShadowsActive = true;
     drawDashboardPrompt();      // "انقر لفتح الأوراق" over the papers desk
     drawBooksLibraryPrompt();    // "ابدأ القراءة" near books library
     drawFireplacePrompt();       // "انقر للنظر الى المدفئة" near the fireplace
@@ -8762,6 +8779,7 @@ function render() {
     if (gameState.focusAlpha > 0.01) {
         drawFocusMask(W, H);
     }
+    gameState._promptShadowsActive = false;
 
     drawWindParticles(W, H);
     drawFocusFog(W, H);
@@ -21452,36 +21470,57 @@ function setupReadingUI() {
         endReadingSession(true);
     });
 
-    // Mobile drawer handle
+    // Mobile drawer handle — bidirectional drag (open from the collapsed peek OR
+    // close from open), Instagram-comments style: a quick flick wins outright
+    // regardless of distance, a slow drag only needs a small pull, and a plain tap
+    // toggles. No separate `click` listener — it fired AFTER pointerup and had
+    // already un-done whatever pointerup had just decided.
     const drawer = document.getElementById('reading-drawer');
     const handle = drawer?.querySelector('.mobile-drawer-handle');
     if (handle && drawer) {
-        let startY = 0, currentY = 0, isDragging = false;
+        let dragStartY = 0, dragStartTranslate = 0, currentTranslate = 0, isDragging = false;
+        let lastMoveY = 0, lastMoveT = 0, velocity = 0; // px/ms, +down / -up
+        const PEEK = 48; // px visible when collapsed (matches .reading-drawer's resting transform)
+        const DIST_FRACTION = 0.22;
+        const FLICK_VELOCITY = 0.5;
+        const getCollapsedTranslate = () => drawer.offsetHeight - PEEK;
+
         handle.addEventListener('pointerdown', e => {
             isDragging = true;
-            startY = e.clientY;
-            currentY = 0;   // reset — a stale value from the last drag made a plain tap snap wrong
+            dragStartY = e.clientY;
+            dragStartTranslate = drawer.classList.contains('drawer-open') ? 0 : getCollapsedTranslate();
+            currentTranslate = dragStartTranslate;
+            lastMoveY = dragStartY;
+            lastMoveT = performance.now();
+            velocity = 0;
             drawer.style.transition = 'none';
         });
         window.addEventListener('pointermove', e => {
             if (!isDragging) return;
-            currentY = Math.max(0, e.clientY - startY);
-            drawer.style.transform = `translateY(${currentY}px)`;
+            const y = e.clientY;
+            const now = performance.now();
+            const dt = now - lastMoveT;
+            if (dt > 0) velocity = (y - lastMoveY) / dt;
+            lastMoveY = y; lastMoveT = now;
+            const collapsed = getCollapsedTranslate();
+            currentTranslate = Math.max(0, Math.min(collapsed, dragStartTranslate + (y - dragStartY)));
+            drawer.style.transform = `translateY(${currentTranslate}px)`;
         });
         window.addEventListener('pointerup', () => {
             if (!isDragging) return;
             isDragging = false;
             drawer.style.transition = 'transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
-            if (currentY > 50) {
-                drawer.classList.remove('drawer-open');
-                drawer.style.transform = '';
+            const collapsed = getCollapsedTranslate();
+            let openIt;
+            if (Math.abs(currentTranslate - dragStartTranslate) < 6) {
+                openIt = dragStartTranslate > 0; // plain tap — toggle from whatever it was
+            } else if (Math.abs(velocity) > FLICK_VELOCITY) {
+                openIt = velocity < 0;
             } else {
-                drawer.classList.add('drawer-open');
-                drawer.style.transform = '';
+                openIt = currentTranslate < collapsed * DIST_FRACTION;
             }
-        });
-        handle.addEventListener('click', () => {
-            if (!isDragging || currentY < 10) drawer.classList.toggle('drawer-open');
+            drawer.classList.toggle('drawer-open', openIt);
+            drawer.style.transform = '';
         });
     }
 
