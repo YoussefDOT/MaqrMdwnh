@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>مدونة ستوديو | مساحة العمل الرقمية</title>
+    <title>مقر المدونة</title>
     <link rel="icon" type="image/png" sizes="128x128" href="favicon-128.png">
     <link rel="icon" type="image/png" sizes="any" href="favicon-128.png">
     <link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
@@ -12,42 +12,102 @@
     <meta name="theme-color" content="#0d0d0d">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="مدونة ستوديو">
+    <meta name="apple-mobile-web-app-title" content="مقر المدونة">
+
+    <!-- The boot screen's logo is the very first pixel the user sees — fetch it at
+         top priority, ahead of the ~15 MB of world art game.js starts on parse. -->
+    <link rel="preload" as="image" href="Maqr logo.png" fetchpriority="high">
+    <!-- Fonts were loaded via @import inside style.css, which serialises two extra
+         round-trips BEFORE any CSS applies (blank screen). Preconnect + a plain
+         <link> lets the font CSS download in parallel with style.css instead. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://discord.com">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700;900&display=swap">
     <link rel="stylesheet" href="style.css">
     <!-- JUICE EXPERIMENT: arcade-feel UI animations. Remove this one line to revert. -->
     <link rel="stylesheet" href="juice.css">
+    <!-- Jacquard 12 is only used by one reading-mode input — never block the boot on it. -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jacquard+12&display=swap" media="print" onload="this.media='all'">
 </head>
 
 <body>
-    <!-- شاشة التحميل: تظهر أثناء التحقق من جلسة ديسكورد -->
-    <div id="loading-screen" class="screen active">
-        <div class="loading-ring"></div>
+    <!-- ═══ شاشة التحميل ═══
+         Logo + striped progress bar + rotating messages. Used for BOTH the initial
+         session check and the post-login world load. NOT a `.screen` — it's a fixed
+         overlay so it can slide in/out over whatever is underneath. -->
+    <div id="loading-screen" class="boot active">
+        <div class="boot-deco" aria-hidden="true"></div>
+        <div class="boot-inner">
+            <img class="boot-logo" src="Maqr logo.png" alt="مقر المدونة" fetchpriority="high">
+            <div class="boot-bar" aria-hidden="true">
+                <div class="boot-fill"><span class="boot-stripes"></span></div>
+            </div>
+            <div class="boot-msg-slot">
+                <!-- The rotating message IS the status text for screen readers; the
+                     bar itself is decorative, hence aria-hidden above. -->
+                <div class="boot-msg" id="boot-msg" role="status" aria-live="polite"></div>
+            </div>
+        </div>
     </div>
 
-    <!-- شاشة اختيار الصالة: الإخوة أو الاخوات -->
-    <div id="lobby-screen" class="screen">
-        <div class="lobby-container">
-            <div class="logo-container">
-                <img src="logo.png" alt="مدونة ستوديو Logo">
+    <!-- ═══ القائمة الرئيسية ═══ Discord-only. No gender chooser. -->
+    <div id="menu-screen" class="screen">
+        <div class="menu-deco" aria-hidden="true"></div>
+
+        <div class="menu-card">
+            <div class="menu-logo">
+                <img src="Maqr logo.png" alt="مقر المدونة">
             </div>
-            <h2 class="title">اختر صالتك</h2>
-            <p class="subtitle">اختر الصالة التي تنتمي إليها للدخول</p>
-            <div id="lobby-buttons" class="lobby-buttons">
-                <!-- Buttons are generated dynamically from LOBBY_CONFIG in game.js -->
+            <h1 class="menu-title">مقر المدونة</h1>
+            <p class="menu-sub">مساحة العمل الجماعية</p>
+
+            <div class="menu-actions">
+                <!-- Signed out -->
+                <button id="discord-login-btn" class="btn-discord">
+                    <svg class="discord-logo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M19.27 5.33C17.94 4.71 16.5 4.26 15 4a.09.09 0 0 0-.07.03c-.18.33-.39.76-.53 1.09a16.09 16.09 0 0 0-4.8 0c-.14-.34-.35-.76-.54-1.09-.01-.02-.04-.03-.07-.03c-1.5.26-2.93.71-4.27 1.33c-.01 0-.02.01-.03.02c-2.72 4.07-3.47 8.03-3.1 11.95c0 .02.01.04.03.05c1.8 1.32 3.53 2.12 5.24 2.65c.03.01.06 0 .07-.02c.4-.55.76-1.13 1.07-1.74c.02-.04 0-.08-.04-.09c-.57-.22-1.11-.48-1.64-.78c-.04-.02-.04-.08-.01-.11c.11-.08.22-.17.33-.25c.02-.02.05-.02.07-.01c3.44 1.57 7.15 1.57 10.55 0c.02-.01.05 0 .07.01c.11.09.22.17.33.26c.04.03.04.09-.01.11c-.52.31-1.07.56-1.64.78c-.04.01-.05.06-.04.09c.32.61.68 1.19 1.07 1.74c.03.01.06.02.09.01c1.72-.53 3.45-1.33 5.25-2.65c.02-.01.03-.03.03-.05c.44-4.53-.73-8.46-3.1-11.95c-.01-.01-.02-.02-.04-.02zM8.52 14.91c-1.03 0-1.89-.95-1.89-2.12s.84-2.12 1.89-2.12c1.06 0 1.9.96 1.89 2.12c0 1.17-.84 2.12-1.89 2.12zm6.97 0c-1.03 0-1.89-.95-1.89-2.12s.84-2.12 1.89-2.12c1.06 0 1.9.96 1.89 2.12c0 1.17-.83 2.12-1.89 2.12z"/>
+                    </svg>
+                    <span>تسجيل الدخول بحساب ديسكورد</span>
+                </button>
+
+                <!-- Signed in — the avatar pill replaces the login button -->
+                <div id="user-pill" class="user-pill" role="button" tabindex="0" aria-label="ادخل إلى مساحة العمل">
+                    <span class="pill-sweep" aria-hidden="true"></span>
+                    <span class="pill-content">
+                        <img id="pill-avatar" class="pill-avatar" src="" alt="">
+                        <span class="pill-text">
+                            <span id="pill-name" class="pill-name"></span>
+                            <span id="pill-tag" class="pill-tag"></span>
+                        </span>
+                        <span class="pill-go" aria-hidden="true">
+                            <svg class="pill-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                 stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/>
+                            </svg>
+                        </span>
+                    </span>
+                </div>
+                <button id="menu-logout" class="menu-logout">تغيير الحساب</button>
             </div>
 
-            <!-- Discord OAuth: separator + button -->
-            <div class="lobby-divider">
-                <span class="divider-line"></span>
-                <span class="divider-text">أو</span>
-                <span class="divider-line"></span>
-            </div>
-            <button id="discord-login-btn" class="discord-login-btn">
-                <svg class="discord-logo" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
-                    <path d="M19.27 5.33C17.94 4.71 16.5 4.26 15 4a.09.09 0 0 0-.07.03c-.18.33-.39.76-.53 1.09a16.09 16.09 0 0 0-4.8 0c-.14-.34-.35-.76-.54-1.09-.01-.02-.04-.03-.07-.03c-1.5.26-2.93.71-4.27 1.33c-.01 0-.02.01-.03.02c-2.72 4.07-3.47 8.03-3.1 11.95c0 .02.01.04.03.05c1.8 1.32 3.53 2.12 5.24 2.65c.03.01.06 0 .07-.02c.4-.55.76-1.13 1.07-1.74c.02-.04 0-.08-.04-.09c-.57-.22-1.11-.48-1.64-.78c-.04-.02-.04-.08-.01-.11c.11-.08.22-.17.33-.25c.02-.02.05-.02.07-.01c3.44 1.57 7.15 1.57 10.55 0c.02-.01.05 0 .07.01c.11.09.22.17.33.26c.04.03.04.09-.01.11c-.52.31-1.07.56-1.64.78c-.04.01-.05.06-.04.09c.32.61.68 1.19 1.07 1.74c.03.01.06.02.09.01c1.72-.53 3.45-1.33 5.25-2.65c.02-.01.03-.03.03-.05c.44-4.53-.73-8.46-3.1-11.95c-.01-.01-.02-.02-.04-.02zM8.52 14.91c-1.03 0-1.89-.95-1.89-2.12s.84-2.12 1.89-2.12c1.06 0 1.9.96 1.89 2.12c0 1.17-.84 2.12-1.89 2.12zm6.97 0c-1.03 0-1.89-.95-1.89-2.12s.84-2.12 1.89-2.12c1.06 0 1.9.96 1.89 2.12c0 1.17-.83 2.12-1.89 2.12z"/>
-                </svg>
-                <span>تسجيل الدخول بحساب ديسكورد</span>
+            <!-- زر تثبيت التطبيق (PWA) — يخفيه السكربت في سفاري وداخل التطبيق المثبّت -->
+            <button id="pwa-install-btn" type="button">
+                <span class="pwa-icon-badge">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M8 2v8M5 7l3 3 3-3"/>
+                        <path d="M2 11v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
+                    </svg>
+                </span>
+                <span>أضف إلى الشاشة الرئيسية</span>
             </button>
+
+            <div class="menu-foot" aria-hidden="true">
+                <i class="foot-ico" data-ico="0"></i>
+                <i class="foot-ico" data-ico="3"></i>
+                <i class="foot-ico" data-ico="5"></i>
+                <i class="foot-ico" data-ico="2"></i>
+            </div>
         </div>
     </div>
 
@@ -65,38 +125,11 @@
         </div>
     </div>
 
-    <!-- غطاء تحميل وضع التجربة -->
-    <div id="siraj-loading-overlay" class="siraj-loading-overlay">
-        <div class="loading-ring"></div>
-    </div>
-
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 183 · Updated 4:09 PM</div>
+    <div id="build-number" class="build-number">Build 184 · Updated 1:45 PM</div>
 
-    <!-- شاشة الترحيب: للمستخدمين المسجلين عبر ديسكورد -->
-    <div id="discord-welcome-screen" class="screen">
-        <div class="lobby-container">
-            <div class="logo-container">
-                <img src="logo.png" alt="مدونة ستوديو Logo">
-            </div>
-            <h2 class="title">مرحباً بعودتك</h2>
-            <p class="subtitle">انقر على زر الدخول للعودة إلى مساحة العمل</p>
-
-            <div class="discord-welcome-card">
-                <img id="discord-welcome-avatar" class="discord-welcome-avatar" src="" alt="">
-                <div class="discord-welcome-details">
-                    <span id="discord-welcome-name" class="discord-welcome-name"></span>
-                    <span id="discord-welcome-lobby" class="discord-welcome-lobby"></span>
-                </div>
-            </div>
-
-            <button id="discord-welcome-enter" class="btn-enter-game">ادخل</button>
-            <button id="discord-welcome-logout" class="btn-switch-account">تغيير الحساب</button>
-        </div>
-    </div>
-
-    <!-- نافذة اختيار الصالة لأول مرة (للمستخدمين الجدد عبر ديسكورد) -->
+    <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
         <div class="modal-content">
             <h3>اختر صالتك</h3>
@@ -143,6 +176,18 @@
             <div class="modal-actions">
                 <button id="modal-confirm" class="btn-primary">نعم، أدخل الآن</button>
                 <button id="modal-cancel" class="btn-secondary">إلغاء</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- نافذة تأكيد تحدي الحاسوب (لعبة القفز فردية) -->
+    <div id="boss-confirm-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h3>تحدي الحاسوب</h3>
+            <p>هل تريد الدخول في تحدي فردي؟</p>
+            <div class="modal-actions">
+                <button id="boss-confirm-yes" class="btn-primary">نعم، ادخل</button>
+                <button id="boss-confirm-no" class="btn-secondary">إلغاء</button>
             </div>
         </div>
     </div>
@@ -1140,7 +1185,134 @@
             </div>
         </div>
 
-        <!-- Prayer Overlay (fullscreen, shown at prayer time) -->
+    <!-- ─── Reading Session UI ─── -->
+    <!-- Reading Setup Modal — logo, title, the book shelf (scroll: newest left →
+         older right, "كتاب جديد" at the left end), duration, then أنا لها. -->
+    <div id="reading-modal" class="modal-overlay">
+        <div class="modal-content reading-content">
+            <div class="logo-container">
+                <img src="logo.png" alt="مدونة ستوديو Logo">
+            </div>
+            <h2 class="title reading-title">يتم قراءة؟</h2>
+            <div class="reading-shelf">
+                <div id="reading-shelf-track" class="reading-shelf-track"></div>
+            </div>
+            <div id="reading-shelf-label" class="reading-shelf-label">&nbsp;</div>
+            <div class="setting-group reading-duration">
+                <label>المدة (دقائق)</label>
+                <div class="options" id="reading-time-options">
+                    <button class="opt-btn" data-val="15">15</button>
+                    <button class="opt-btn active" data-val="30">30</button>
+                    <button class="opt-btn" data-val="60">60</button>
+                    <input type="text" inputmode="numeric" class="custom-input" id="reading-custom-time" placeholder="مخصص">
+                </div>
+            </div>
+            <div class="pomo-launch-row reading-launch-row">
+                <button id="reading-confirm" class="btn-primary reading-confirm-btn">أنا لها</button>
+                <button id="reading-cancel" class="btn-secondary">إلغاء</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add a New Book — name + one of the 10 premade covers, live preview -->
+    <div id="reading-newbook-modal" class="modal-overlay">
+        <div class="modal-content reading-newbook-content">
+            <h2 class="title reading-title">كتاب جديد</h2>
+            <div id="reading-newbook-preview" class="reading-newbook-preview"></div>
+            <div class="setting-group">
+                <label>اسم الكتاب</label>
+                <input type="text" id="reading-newbook-name" class="reading-newbook-name"
+                       placeholder="اسم الكتاب" maxlength="60" autocomplete="off">
+            </div>
+            <div class="setting-group">
+                <label>شكل الغلاف</label>
+                <div id="reading-newbook-styles" class="reading-style-grid"></div>
+            </div>
+            <div class="pomo-launch-row reading-launch-row">
+                <button id="reading-newbook-add" class="btn-primary">إضافة</button>
+                <button id="reading-newbook-cancel" class="btn-secondary">إلغاء</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Reading Active Panel (Desktop) -->
+    <div id="reading-panel" class="reading-panel hidden">
+        <div class="reading-panel-top">
+            <div id="reading-panel-cover" class="reading-panel-cover"></div>
+            <div class="reading-panel-meta">
+                <div class="reading-panel-header">يتم قراءة</div>
+                <div id="reading-panel-book" class="reading-panel-book">اسم الكتاب</div>
+                <div class="reading-panel-totals">
+                    <span class="reading-total-label">إجمالي هذا الكتاب</span>
+                    <span id="reading-panel-total" class="reading-panel-total">0 ساعة و 0 دقيقة</span>
+                </div>
+            </div>
+        </div>
+        <div class="reading-timer-card">
+            <div id="reading-panel-timer" class="reading-panel-timer">30:00</div>
+            <div class="reading-timer-sub">
+                <span class="reading-timer-label">المتبقي</span>
+                <span id="reading-panel-duration" class="reading-timer-duration">30 دقيقة</span>
+            </div>
+            <div class="reading-progress"><div id="reading-panel-progress-fill" class="reading-progress-fill"></div></div>
+        </div>
+        <div class="reading-leaderboard-section">
+            <h3 class="reading-lb-title">المتصدرين</h3>
+            <div id="reading-leaderboard" class="reading-leaderboard"></div>
+        </div>
+        <button id="reading-exit-btn" class="reading-exit-btn">إنهاء القراءة</button>
+    </div>
+
+    <!-- Reading Mobile Header Timer -->
+    <div id="reading-mobile-header" class="reading-mobile-header hidden">
+        <div id="reading-mobile-cover" class="reading-mobile-cover"></div>
+        <div class="reading-mobile-meta">
+            <div id="reading-mobile-timer" class="reading-mobile-timer">30:00</div>
+            <div id="reading-mobile-book" class="reading-mobile-book">اسم الكتاب</div>
+            <div class="reading-mobile-totals">
+                <span id="reading-mobile-total" class="reading-mobile-total">0 ساعة و 0 دقيقة</span>
+                <span class="reading-mobile-dot">·</span>
+                <span id="reading-mobile-duration" class="reading-mobile-duration">30 دقيقة</span>
+            </div>
+            <div class="reading-progress"><div id="reading-mobile-progress-fill" class="reading-progress-fill"></div></div>
+        </div>
+    </div>
+
+    <!-- Reading Mobile Drawer -->
+    <div id="reading-drawer" class="reading-drawer hidden">
+        <div class="mobile-drawer-handle">
+            <div class="drawer-pill"></div>
+            <span class="drawer-label">المتصدرين</span>
+        </div>
+        <div class="reading-drawer-content">
+            <div id="reading-drawer-leaderboard" class="reading-leaderboard"></div>
+        </div>
+        <button id="reading-mobile-exit-btn" class="reading-exit-btn mobile-exit">إنهاء القراءة</button>
+    </div>
+
+    <!-- Reading Exit Confirm -->
+    <div id="reading-exit-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width: 320px; text-align: center;">
+            <h3 style="color: white; margin-bottom: 20px;">هل تريد انهاء القراءة؟</h3>
+            <div style="display: flex; gap: 10px;">
+                <button id="reading-exit-yes" class="btn-primary" style="flex:1;">نعم</button>
+                <button id="reading-exit-no" class="btn-secondary" style="flex:1;">لا</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Book Delete Confirm (removes it from the shelf) -->
+    <div id="reading-delete-modal" class="modal-overlay">
+        <div class="modal-content" style="max-width: 320px; text-align: center;">
+            <h3 style="color: white; margin-bottom: 20px;">حذف هذا الكتاب من الرف؟</h3>
+            <div style="display: flex; gap: 10px;">
+                <button id="reading-delete-yes" class="btn-primary" style="flex:1; background: rgba(255,80,80,0.2); border-color: rgba(255,80,80,0.5); color: #ff8888;">حذف</button>
+                <button id="reading-delete-no" class="btn-secondary" style="flex:1;">إلغاء</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Prayer Overlay (fullscreen, shown at prayer time) -->
         <div id="prayer-overlay" class="prayer-overlay hidden">
             <div class="prayer-overlay-bg"></div>
             <canvas id="prayer-rain-canvas"></canvas>
@@ -1283,49 +1455,41 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=173"></script>
+        <script type="module" src="game.js?v=196"></script>
 
-    <!-- زر تثبيت التطبيق (PWA) — يظهر في شاشات الدخول فقط -->
-    <button id="pwa-install-btn" type="button" aria-label="أضف للشاشة الرئيسية">
-        <span class="pwa-icon-badge">
-            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M8 2v8M5 7l3 3 3-3"/>
-                <path d="M2 11v1a2 2 0 002 2h8a2 2 0 002-2v-1"/>
-            </svg>
-        </span>
-        <span>أضف إلى الشاشة الرئيسية</span>
-    </button>
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
     <script>
     (function () {
         // Register the service worker for EVERYONE (including installed PWAs) —
         // it caches the heavy Sound/Art/Fonts files so repeat loads are fast.
-        // Must run before the standalone early-return below.
+        // Must run before the early-returns below.
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', function () {
                 navigator.serviceWorker.register('./sw.js').catch(function () {});
             });
         }
 
-        // Already installed as a PWA — skip the install-button UI entirely
-        if (window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true) return;
-
-        var ua = navigator.userAgent;
-        var isIos       = /iphone|ipad|ipod/i.test(ua) && !window.MSStream;
-        var isSafari    = /^((?!chrome|android).)*safari/i.test(ua);
-        var isMacSafari = isSafari && !isIos;
-        var isAndroid   = /android/i.test(ua);
-        var isFirefox   = /firefox/i.test(ua);
-
         var btn   = document.getElementById('pwa-install-btn');
         var toast = document.getElementById('pwa-toast');
+        if (!btn) return;
+
+        var ua = navigator.userAgent;
+        var isIos     = /iphone|ipad|ipod/i.test(ua) && !window.MSStream;
+        var isSafari  = /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(ua);
+        var isAndroid = /android/i.test(ua);
+        var isFirefox = /firefox/i.test(ua);
+
+        // The button only exists where it can actually DO something:
+        //  • already installed  → nothing to install
+        //  • Safari (mac + iOS) → no beforeinstallprompt; the owner asked for it gone
+        //    rather than degrading into a "use the share menu" instruction card.
+        var installed = window.matchMedia('(display-mode: standalone)').matches
+                     || navigator.standalone === true;
+        if (installed || isSafari) { btn.remove(); return; }
+
         var deferredPrompt = null;
         var toastTimer     = null;
-        var screenObserver = null;
-
-        // (Service worker registration moved above the standalone check — it also
-        // unlocks beforeinstallprompt on Chrome/Edge/Android.)
 
         // Chrome / Edge / Android Chrome — capture the native install prompt when it fires
         window.addEventListener('beforeinstallprompt', function (e) {
@@ -1333,62 +1497,17 @@
             deferredPrompt = e;
         });
 
-        if (!btn) return;
-
-        // Always show on every login screen, on every browser, unless already installed
-        // (checked above). Clicking it uses the native prompt when available, otherwise
-        // falls back to per-browser manual instructions.
-        showBtn();
-
-        function showBtn() {
-            btn.style.display = 'flex';
-            positionBtn();
-            if (!screenObserver) {
-                // Reposition only on real layout changes (screen switch / resize) —
-                // NOT on a per-frame rAF loop. That loop used to overwrite left/top/
-                // transform ~60x/sec, fighting the page's own transitions and clicks
-                // and reading as constant jank/lag across the whole login screen.
-                screenObserver = new MutationObserver(positionBtn);
-                document.querySelectorAll('.screen').forEach(function (s) {
-                    screenObserver.observe(s, { attributes: true, attributeFilter: ['class'] });
-                });
-                window.addEventListener('resize', positionBtn);
-                // The panel itself animates in (loginCardEnter, translateY 32px→0) —
-                // catch it settling so the button doesn't freeze at its mid-animation
-                // (off-by-~20px) position.
-                document.addEventListener('animationend', function (e) {
-                    if (e.target.classList && (e.target.classList.contains('login-container') || e.target.classList.contains('lobby-container'))) positionBtn();
-                }, true);
-            }
-        }
-        function hideBtn() {
-            btn.style.display = 'none';
-            if (screenObserver) { screenObserver.disconnect(); screenObserver = null; }
-        }
-        // Anchors the button just under whichever login/lobby panel is currently visible
-        function positionBtn() {
-            var panel = document.querySelector('.screen.active .login-container, .screen.active .lobby-container');
-            if (!panel) return;
-            var r = panel.getBoundingClientRect();
-            var top = Math.min(r.bottom + 18, window.innerHeight - 56);
-            btn.style.left = (r.left + r.width / 2) + 'px';
-            btn.style.top = top + 'px';
-            btn.style.transform = 'translateX(-50%)';
-        }
-
         btn.addEventListener('click', async function () {
             if (deferredPrompt) {
                 var dp = deferredPrompt;
                 deferredPrompt = null;
                 dp.prompt();
                 var result = await dp.userChoice;
-                if (result.outcome === 'accepted') hideBtn();
+                if (result.outcome === 'accepted') btn.remove();
             } else if (isIos) {
-                showToast('اضغط على زر المشاركة 📤 ثم اختر "أضف إلى الشاشة الرئيسية"');
-            } else if (isMacSafari) {
-                showToast('من قائمة File اختر Add to Dock');
+                showToast('اضغط على زر المشاركة ثم اختر "أضف إلى الشاشة الرئيسية"');
             } else if (isAndroid) {
-                showToast('افتح قائمة المتصفح ⋮ ثم اختر "إضافة إلى الشاشة الرئيسية"');
+                showToast('افتح قائمة المتصفح ثم اختر "إضافة إلى الشاشة الرئيسية"');
             } else if (isFirefox) {
                 showToast('فايرفوكس لا يدعم تثبيت التطبيقات مباشرة — جرّب Chrome أو Edge');
             } else {
@@ -1408,7 +1527,7 @@
         }
 
         // Hide once the game starts (dispatched from game.js)
-        window.addEventListener('pwa:gameStarted', hideBtn);
+        window.addEventListener('pwa:gameStarted', function () { btn.remove(); });
     })();
     </script>
 </body>

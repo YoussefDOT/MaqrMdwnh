@@ -1,5 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Jacquard+12&display=swap');
+/* Google Fonts moved to <link> tags in index.html's <head>. An @import here is
+   render-blocking AND serialised behind style.css itself — two extra round-trips
+   before a single rule applies. Do not put them back. */
 
 :root {
     /* Color Palette from provided image */
@@ -10,6 +11,12 @@
     --clr-verdigris: #3bb9ab;
     --clr-blue: #086fb6;
 
+    /* ── The four brand colours (exact values from the brand sheet) ────────── */
+    --brand-red:    #F04D39;
+    --brand-yellow: #F4C82C;
+    --brand-teal:   #3BB9AB;
+    --brand-blue:   #086FB4;
+
     /* Semantic mapping */
     --bg-primary: var(--clr-snow);
     --bg-secondary: #ffffff;
@@ -18,12 +25,28 @@
     --accent: var(--clr-blue);
     --error: var(--clr-carmine);
     --success: var(--clr-verdigris);
-    
+
     --font-main: 'Rubik', sans-serif;
     --shadow-soft: 0 10px 30px rgba(0, 0, 0, 0.05);
     --shadow-medium: 0 15px 45px rgba(0, 0, 0, 0.1);
     --radius-lg: 24px;
     --radius-md: 12px;
+
+    /* Shared bounce curves — the menu leans on these hard, on purpose. */
+    --bounce:    cubic-bezier(0.34, 1.56, 0.64, 1);
+    --bounce-hi: cubic-bezier(0.22, 1.85, 0.36, 1);
+
+    /* The dark backdrop every entry screen shares (unchanged from the old menu). */
+    --menu-bg: #080a0f;
+
+    /* Decorative brush icons. The folder name has a space — it must stay encoded. */
+    --ico-0: url("Icon%20Elements/Icons_0000_Asset-25.png");
+    --ico-1: url("Icon%20Elements/Icons_0001_Asset-24.png");
+    --ico-2: url("Icon%20Elements/Icons_0002_Asset-23.png");
+    --ico-3: url("Icon%20Elements/Icons_0003_Asset-22.png");
+    --ico-4: url("Icon%20Elements/Icons_0004_Asset-21.png");
+    --ico-5: url("Icon%20Elements/Icons_0005_Asset-20.png");
+    --ico-6: url("Icon%20Elements/Icons_0006_Asset-26.png");
 }
 
 * {
@@ -578,7 +601,15 @@ body {
     max-width: 460px;
 }
 
-.pomodoro-content .logo-container img {
+/* .reading-content overrides text-align to right (RTL setting labels) — re-center
+   just the logo + header so they aren't pulled to the right with everything else. */
+.reading-content .logo-container,
+.reading-content > .title {
+    text-align: center;
+}
+
+.pomodoro-content .logo-container img,
+.reading-content .logo-container img {
     max-width: 128px;
     margin-bottom: 12px;
     filter: invert(1);
@@ -747,11 +778,16 @@ body {
     justify-content: center;
     background: rgba(0, 0, 0, 0.48);
     backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
     z-index: 1900;
+    opacity: 1;
+    pointer-events: all;
+    transition: opacity 0.25s ease;
 }
 
 .race-panel.hidden {
-    display: none;
+    opacity: 0;
+    pointer-events: none;
 }
 
 .race-card {
@@ -1321,57 +1357,589 @@ body {
 .sound-vol:hover::-moz-range-thumb { opacity: 1; }
 .sound-vol::-moz-range-track { background: transparent; }
 
-/* ===== LOBBY SELECTION SCREEN ===== */
-#loading-screen,
-#lobby-screen,
-#discord-welcome-screen {
+/* ═══════════════════════════════════════════════════════════════════════════
+   BOOT (شاشة التحميل) — logo + striped progress bar + rotating messages.
+
+   Not a `.screen`: a fixed overlay above everything (including the entrance
+   blackout at z-index 99999) so it can slide over the live game while the world
+   art decodes, then slide away to reveal it.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.boot {
+    --bar-w: min(340px, 72vw);
+    --bar-pad: 3px;
+    position: fixed;
+    inset: 0;
+    z-index: 100000;
+    display: none;
     justify-content: center;
     align-items: center;
-    background: #080a0f;
+    background: var(--menu-bg);
+    overflow: hidden;
+}
+.boot.active { display: flex; }
+
+/* Slide DOWN over the menu when الدخول is pressed, then slide UP to reveal the world. */
+@keyframes bootSlideIn {
+    from { transform: translateY(-100%); }
+    to   { transform: translateY(0); }
+}
+@keyframes bootSlideOut {
+    from { transform: translateY(0); }
+    to   { transform: translateY(-100%); }
+}
+.boot.slide-in  { animation: bootSlideIn  0.62s cubic-bezier(0.65, 0, 0.35, 1) both; }
+.boot.slide-out { animation: bootSlideOut 0.72s cubic-bezier(0.76, 0, 0.24, 1) both; }
+
+/* Soft brand wash behind the loader — same palette as the menu, calmer. */
+.boot-deco {
+    position: absolute; inset: 0; z-index: 0; pointer-events: none;
+    background:
+        radial-gradient(ellipse 60% 50% at 18% 22%, rgba(8,111,180,0.22) 0%, transparent 70%),
+        radial-gradient(ellipse 55% 55% at 82% 78%, rgba(59,185,171,0.16) 0%, transparent 70%),
+        radial-gradient(ellipse 45% 40% at 60% 12%, rgba(240,77,57,0.10) 0%, transparent 70%);
+}
+
+.boot-inner {
+    position: relative; z-index: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 26px;
+}
+
+@keyframes bootLogoBob {
+    0%, 100% { transform: translateY(0) rotate(-1.5deg); }
+    50%      { transform: translateY(-9px) rotate(1.5deg); }
+}
+.boot-logo {
+    width: min(190px, 46vw);
+    height: auto;
+    animation: bootLogoBob 2.4s ease-in-out infinite;
+    filter: drop-shadow(0 12px 30px rgba(59,185,171,0.22));
+}
+
+/* ── The striped bar ───────────────────────────────────────────────────────── */
+.boot-bar {
+    width: var(--bar-w);
+    height: 16px;
+    padding: var(--bar-pad);
+    border-radius: 50px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.11);
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.45);
     overflow: hidden;
 }
 
-@keyframes spin {
-    to { transform: rotate(360deg); }
+.boot-fill {
+    position: relative;
+    height: 100%;
+    width: 0%;
+    border-radius: 50px;
+    overflow: hidden;
+    /* The gradient is pinned to the BAR's width (not the fill's), so the colour
+       under the bar never shifts as it grows — it just gets revealed, walking
+       blue → teal → yellow → red as loading completes. */
+    background-image: linear-gradient(90deg,
+        var(--brand-blue)   0%,
+        var(--brand-teal)  38%,
+        var(--brand-yellow) 72%,
+        var(--brand-red)  100%);
+    background-repeat: no-repeat;
+    background-size: calc(var(--bar-w) - var(--bar-pad) * 2 - 2px) 100%;
+    /* No `transition: width` on purpose — _bootTick() writes width every frame and
+       does its own lerp. A transition here would retarget on every write, lagging
+       the bar behind the real progress. See the comment on _bootTick in game.js. */
 }
 
-.loading-ring {
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    border: 3px solid rgba(255,255,255,0.08);
-    border-top-color: rgba(255,255,255,0.65);
-    animation: spin 0.75s linear infinite;
+/* Classic barber-pole. The 45° gradient tiles exactly on a 28px square, so a
+   28px x-shift loops seamlessly. Small element → animating background-position
+   here is fine (the "never animate background-position" rule is about
+   full-screen/always-visible elements over the live canvas). */
+@keyframes bootStripes {
+    from { background-position: 0 0; }
+    to   { background-position: 28px 0; }
+}
+.boot-stripes {
+    position: absolute;
+    inset: 0;
+    background-image: linear-gradient(45deg,
+        rgba(255,255,255,0.26) 25%, transparent 25%,
+        transparent 50%, rgba(255,255,255,0.26) 50%,
+        rgba(255,255,255,0.26) 75%, transparent 75%, transparent);
+    background-size: 28px 28px;
+    animation: bootStripes 0.75s linear infinite;
 }
 
-#lobby-screen::before,
-#discord-welcome-screen::before {
+/* ── Rotating messages ─────────────────────────────────────────────────────── */
+.boot-msg-slot {
+    height: 22px;             /* fixed: a taller/shorter message must not jump the bar */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: min(420px, 84vw);
+}
+@keyframes bootMsgIn {
+    from { opacity: 0; transform: translateY(7px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+.boot-msg {
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: rgba(255,255,255,0.42);
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    transition: opacity 0.45s ease;
+}
+.boot-msg.swap { opacity: 0; }
+/* `backwards`, NOT `both`: `both` would hold the 100% frame's opacity:1 forever,
+   and an animated property always beats a transitioned one — so `.swap` could
+   never fade the outgoing message out. `backwards` releases the element back to
+   its own styles once the entrance finishes. */
+.boot-msg.in   { animation: bootMsgIn 0.45s var(--bounce) backwards; }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MENU (القائمة الرئيسية) — Discord-only entry.
+   ═══════════════════════════════════════════════════════════════════════════ */
+#menu-screen {
+    justify-content: center;
+    align-items: center;
+    background: var(--menu-bg);
+    overflow: hidden;
+}
+
+#menu-screen::before {
     content: '';
     position: absolute; inset: 0; z-index: 0; pointer-events: none;
     background:
-        radial-gradient(ellipse 65% 55% at 15% 40%, rgba(110,45,200,0.20) 0%, transparent 70%),
-        radial-gradient(ellipse 55% 65% at 85% 18%, rgba(25,65,180,0.16) 0%, transparent 70%),
-        radial-gradient(ellipse 60% 48% at 55% 88%, rgba(18,110,90,0.13) 0%, transparent 70%);
+        radial-gradient(ellipse 65% 55% at 14% 38%, rgba(8,111,180,0.26) 0%, transparent 70%),
+        radial-gradient(ellipse 55% 65% at 86% 16%, rgba(59,185,171,0.18) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 48% at 58% 90%, rgba(240,77,57,0.13) 0%, transparent 70%),
+        radial-gradient(ellipse 40% 36% at 30% 88%, rgba(244,200,44,0.09) 0%, transparent 70%);
     animation: auroraShift 14s ease-in-out infinite;
 }
 
-.lobby-container {
+/* ── Decorative brush icons scattered across the backdrop ──────────────────── */
+/* Elements are injected by buildMenuDecor() in game.js so the scatter can be
+   randomised. Each gets --ico / --dx / --dy / --r / colour + duration inline. */
+.menu-deco {
+    position: absolute; inset: 0; z-index: 0;
+    pointer-events: none; overflow: hidden;
+}
+
+@keyframes decoDrift {
+    0%, 100% { transform: translate(0, 0) rotate(var(--r, 0deg)); }
+    50%      { transform: translate(var(--dx, 12px), var(--dy, -16px)) rotate(calc(var(--r, 0deg) + 7deg)); }
+}
+.deco-ico {
+    position: absolute;
+    background-color: currentColor;   /* the brand tint is set on `color` */
+    mask: var(--ico) center / contain no-repeat;
+    -webkit-mask: var(--ico) center / contain no-repeat;
+    animation: decoDrift var(--dur, 18s) ease-in-out infinite;
+    animation-delay: var(--delay, 0s);
+}
+
+/* ── The card ─────────────────────────────────────────────────────────────── */
+@keyframes menuCardIn {
+    0%   { opacity: 0; transform: translateY(38px) scale(0.90); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.menu-card {
     position: relative; z-index: 1;
-    background: rgba(12,12,18,0.72);
+    background: rgba(12,12,18,0.70);
     backdrop-filter: blur(28px) saturate(1.5);
+    -webkit-backdrop-filter: blur(28px) saturate(1.5);
     border: 1px solid rgba(255,255,255,0.09);
     box-shadow: 0 8px 48px rgba(0,0,0,0.65), inset 0 1px 0 rgba(255,255,255,0.06);
-    padding: 52px 44px;
-    border-radius: 28px;
+    padding: 46px 44px 30px;
+    border-radius: 32px;
     width: 90%;
-    max-width: 520px;
+    max-width: 470px;
     text-align: center;
     display: flex;
     flex-direction: column;
     align-items: center;
-    animation: loginCardEnter 0.55s cubic-bezier(0.34,1.56,0.64,1) both;
+    animation: menuCardIn 0.62s var(--bounce-hi) both;
 }
 
+/* A thin brand-coloured hairline along the card's top edge. */
+.menu-card::before {
+    content: '';
+    position: absolute;
+    top: -1px; left: 12%; right: 12%;
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(90deg,
+        transparent,
+        var(--brand-red) 18%,
+        var(--brand-yellow) 40%,
+        var(--brand-teal) 62%,
+        var(--brand-blue) 84%,
+        transparent);
+    opacity: 0.75;
+}
+
+@keyframes menuLogoBob {
+    0%, 100% { transform: translateY(0) rotate(-1deg); }
+    50%      { transform: translateY(-7px) rotate(1deg); }
+}
+.menu-logo {
+    animation: menuCardIn 0.6s var(--bounce-hi) 0.06s both;
+}
+.menu-logo img {
+    width: min(150px, 40vw);
+    height: auto;
+    display: block;
+    animation: menuLogoBob 3.2s ease-in-out infinite;
+    filter: drop-shadow(0 10px 26px rgba(59,185,171,0.20));
+}
+
+.menu-title {
+    margin-top: 14px;
+    font-size: clamp(1.9rem, 6vw, 2.5rem);
+    font-weight: 900;
+    letter-spacing: -0.02em;
+    color: rgba(255,255,255,0.94);
+    animation: menuCardIn 0.6s var(--bounce-hi) 0.13s both;
+}
+
+.menu-sub {
+    margin-top: 4px;
+    font-size: 0.92rem;
+    font-weight: 500;
+    color: rgba(255,255,255,0.36);
+    animation: menuCardIn 0.6s var(--bounce-hi) 0.19s both;
+}
+
+.menu-actions {
+    margin-top: 32px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    animation: menuCardIn 0.6s var(--bounce-hi) 0.26s both;
+}
+
+/* ── Discord login button (signed out) ─────────────────────────────────────── */
+.btn-discord {
+    display: none;                     /* JS shows it once we know there's no session */
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 15px 30px;
+    background: #5865F2;
+    color: #fff;
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 50px;
+    font-size: 1.02rem;
+    font-weight: 700;
+    font-family: var(--font-main);
+    cursor: pointer;
+    box-shadow: 0 6px 24px rgba(88,101,242,0.34);
+    transition: background 0.2s, transform 0.3s var(--bounce), box-shadow 0.2s;
+}
+.btn-discord.ready { display: inline-flex; }
+.btn-discord:hover {
+    background: #4752C4;
+    transform: translateY(-3px) scale(1.03);
+    box-shadow: 0 12px 32px rgba(88,101,242,0.48);
+}
+.btn-discord:active { transform: scale(0.96); }
+.btn-discord .discord-logo { width: 22px; height: 22px; flex-shrink: 0; }
+.btn-discord.loading { pointer-events: none; opacity: 0.6; }
+
+/* ── The avatar pill (signed in) ───────────────────────────────────────────── */
+.user-pill {
+    position: relative;
+    display: none;                     /* JS adds .ready once the profile is known */
+    align-items: center;
+    padding: 8px;
+    border-radius: 50px;
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.13);
+    cursor: pointer;
+    user-select: none;
+    /* Masks the arrow the moment it escapes past the left edge, and the white
+       sweep parked off the right edge. */
+    overflow: hidden;
+    /* SAFARI: `overflow: hidden` + `border-radius` silently stops clipping once the
+       element itself is transformed — and .launching animates the pill (pillPunch).
+       Without this the escaping arrow would fly out across the card on Safari
+       instead of vanishing into the pill. The radial mask forces the clip. */
+    -webkit-mask-image: -webkit-radial-gradient(white, black);
+    mask-image: radial-gradient(white, black);
+    max-width: 100%;
+    transition: border-color 0.25s, transform 0.3s var(--bounce), box-shadow 0.25s;
+}
+.user-pill.ready { display: inline-flex; }
+.user-pill:hover {
+    border-color: rgba(255,255,255,0.28);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 34px rgba(0,0,0,0.5);
+}
+.user-pill:focus-visible { outline: 2px solid var(--brand-teal); outline-offset: 3px; }
+
+/* The white wipe: parked just off the RIGHT edge, slides across on hover. */
+.pill-sweep {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background: var(--clr-snow);
+    transform: translateX(101%);
+    transition: transform 0.42s var(--bounce);
+}
+.user-pill:hover .pill-sweep,
+.user-pill:focus-visible .pill-sweep,
+.user-pill.launching .pill-sweep { transform: translateX(0); }
+
+.pill-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.pill-avatar {
+    width: 46px; height: 46px;
+    border-radius: 50%;
+    object-fit: cover;
+    flex-shrink: 0;
+    background: rgba(255,255,255,0.10);
+    border: 2px solid rgba(255,255,255,0.18);
+    transition: border-color 0.3s;
+}
+.user-pill:hover .pill-avatar { border-color: var(--brand-red); }
+
+.pill-text {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 3px;
+    min-width: 0;
+    padding-left: 4px;
+}
+
+.pill-name {
+    font-size: 1rem;
+    font-weight: 700;
+    color: rgba(255,255,255,0.94);
+    max-width: 30ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color 0.3s;
+}
+.user-pill:hover .pill-name { color: var(--clr-raisin); }
+
+.pill-tag {
+    font-size: 0.7rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    padding: 2px 9px;
+    border-radius: 50px;
+    color: var(--brand-teal);
+    background: rgba(59,185,171,0.14);
+    border: 1px solid rgba(59,185,171,0.30);
+    white-space: nowrap;
+    transition: color 0.3s, background 0.3s, border-color 0.3s;
+}
+.user-pill:hover .pill-tag {
+    color: #fff;
+    background: var(--brand-teal);
+    border-color: var(--brand-teal);
+}
+
+/* The arrow chip — last child, so in RTL it sits on the LEFT. */
+.pill-go {
+    width: 42px; height: 42px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: rgba(255,255,255,0.85);
+    background: rgba(255,255,255,0.10);
+    transition: background 0.3s, color 0.3s;
+}
+.user-pill:hover .pill-go {
+    background: var(--brand-red);
+    color: #fff;
+}
+.pill-arrow { width: 21px; height: 21px; }
+
+/* On hover the arrow nudges toward the exit it's about to take. */
+@keyframes arrowNudge {
+    0%, 100% { transform: translateX(0); }
+    50%      { transform: translateX(-5px); }
+}
+.user-pill:hover .pill-arrow,
+.user-pill:focus-visible .pill-arrow {
+    animation: arrowNudge 0.72s ease-in-out infinite;
+}
+
+/* ── Launch: the arrow bolts out of the pill's left edge ───────────────────── */
+/* Anticipation (pulls back RIGHT + squashes), then rockets left and stretches.
+   The pill's overflow:hidden is what makes it vanish rather than fly across
+   the card. */
+@keyframes arrowEscape {
+    0%   { transform: translateX(0)      scale(1,    1);    }
+    26%  { transform: translateX(13px)   scale(0.80, 1.20); }
+    38%  { transform: translateX(6px)    scale(1.05, 0.95); }
+    100% { transform: translateX(-230px) scale(1.60, 0.55); }
+}
+@keyframes pillPunch {
+    0%   { transform: scale(1,    1);    }
+    28%  { transform: scale(0.95, 1.06); }
+    58%  { transform: scale(1.05, 0.94); }
+    100% { transform: scale(1,    1);    }
+}
+.user-pill.launching {
+    pointer-events: none;
+    animation: pillPunch 0.55s var(--bounce);
+}
+.user-pill.launching .pill-go {
+    animation: arrowEscape 0.62s cubic-bezier(0.45, -0.55, 0.25, 1) forwards;
+    background: var(--brand-red);
+    color: #fff;
+}
+/* Kill the idle nudge so it can't fight the escape transform. */
+.user-pill.launching .pill-arrow { animation: none; }
+
+/* ── Secondary actions ─────────────────────────────────────────────────────── */
+.menu-logout {
+    display: none;
+    margin-top: 2px;
+    padding: 7px 16px;
+    background: transparent;
+    color: rgba(255,255,255,0.34);
+    border: none;
+    border-radius: 50px;
+    font-size: 0.84rem;
+    font-family: var(--font-main);
+    font-weight: 500;
+    cursor: pointer;
+    transition: color 0.2s, transform 0.25s var(--bounce);
+}
+.menu-logout.ready { display: block; }
+.menu-logout:hover { color: rgba(255,255,255,0.78); transform: scale(1.05); }
+.menu-logout:active { transform: scale(0.95); }
+
+/* ── Footer brush icons ────────────────────────────────────────────────────── */
+.menu-foot {
+    margin-top: 26px;
+    padding-top: 20px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    width: 100%;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 22px;
+}
+@keyframes footIcoBob {
+    0%, 100% { transform: translateY(0) rotate(0deg); }
+    50%      { transform: translateY(-4px) rotate(4deg); }
+}
+.foot-ico {
+    width: 22px; height: 22px;
+    display: block;
+    opacity: 0.5;
+    background-color: currentColor;
+    mask: center / contain no-repeat;
+    -webkit-mask: center / contain no-repeat;
+    animation: footIcoBob 3.4s ease-in-out infinite;
+    transition: opacity 0.25s;
+}
+.menu-foot:hover .foot-ico { opacity: 0.85; }
+.foot-ico[data-ico="0"] { mask-image: var(--ico-0); -webkit-mask-image: var(--ico-0); color: var(--brand-red);    animation-delay: 0s;    }
+.foot-ico[data-ico="2"] { mask-image: var(--ico-2); -webkit-mask-image: var(--ico-2); color: var(--brand-blue);   animation-delay: 0.9s;  }
+.foot-ico[data-ico="3"] { mask-image: var(--ico-3); -webkit-mask-image: var(--ico-3); color: var(--brand-yellow); animation-delay: 0.3s;  }
+.foot-ico[data-ico="5"] { mask-image: var(--ico-5); -webkit-mask-image: var(--ico-5); color: var(--brand-teal);   animation-delay: 0.6s;  }
+
+/* ── PWA install button, now a normal child of the menu card ───────────────── */
+#pwa-install-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    margin-top: 4px;
+    padding: 9px 18px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.11);
+    border-radius: 50px;
+    color: rgba(255,255,255,0.50);
+    font-family: var(--font-main);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, border-color 0.2s, transform 0.28s var(--bounce);
+}
+#pwa-install-btn:hover {
+    background: rgba(8,111,180,0.18);
+    border-color: rgba(8,111,180,0.45);
+    color: rgba(255,255,255,0.90);
+    transform: translateY(-2px) scale(1.03);
+}
+#pwa-install-btn:active { transform: scale(0.96); }
+/* Last two rows of the card's staggered entrance (after .menu-actions at 0.26s).
+   Deliberately NOT named in _JUICE_IN_ANIMS — the menu's entrance is silent.
+   `backwards`, NOT `both`: `both` keeps the 100% keyframe's transform applied
+   forever, and an animated transform always beats a hover transition — the hover
+   lift below would silently do nothing. `backwards` only holds the 0% frame
+   before the delay elapses, then hands the element back to its normal styles. */
+#pwa-install-btn { animation: menuCardIn 0.6s var(--bounce-hi) 0.33s backwards; }
+.menu-foot       { animation: menuCardIn 0.6s var(--bounce-hi) 0.39s backwards; }
+#pwa-install-btn .pwa-icon-badge {
+    display: grid;
+    place-items: center;
+    width: 18px; height: 18px;
+    color: var(--brand-blue);
+}
+#pwa-install-btn svg { width: 15px; height: 15px; }
+
+/* ── Menu on phones ───────────────────────────────────────────────────────── */
+body.is-mobile .menu-card { padding: 34px 22px 22px; border-radius: 26px; }
+body.is-mobile .menu-actions { margin-top: 24px; }
+body.is-mobile .menu-foot { margin-top: 18px; padding-top: 14px; gap: 18px; }
+body.is-mobile .user-pill { width: 100%; }
+body.is-mobile .pill-content { width: 100%; }
+/* Push the arrow chip to the pill's far edge instead of hugging the name. */
+body.is-mobile .pill-text { flex: 1; }
+body.is-mobile .pill-name { max-width: 100%; }
+body.is-mobile .btn-discord { width: 100%; }
+
+/* No hover on touch — the white sweep would stick after a tap. Only the launch
+   state (a real class, not :hover) may fill the pill. */
+@media (hover: none) {
+    .user-pill:hover .pill-sweep { transform: translateX(101%); }
+    .user-pill:hover .pill-name  { color: rgba(255,255,255,0.94); }
+    .user-pill:hover .pill-tag   { color: var(--brand-teal); background: rgba(59,185,171,0.14); border-color: rgba(59,185,171,0.30); }
+    .user-pill:hover .pill-go    { background: rgba(255,255,255,0.10); color: rgba(255,255,255,0.85); }
+    .user-pill:hover .pill-avatar { border-color: rgba(255,255,255,0.18); }
+    .user-pill:hover { transform: none; box-shadow: none; }
+    .user-pill:hover .pill-arrow { animation: arrowNudge 0.72s ease-in-out infinite; }
+    /* Re-assert the launch look here: these :hover resets sit later in the file
+       than the .launching rules and match at the same specificity, so without
+       this the tap animation would come out half-dressed. */
+    .user-pill.launching .pill-sweep { transform: translateX(0); }
+    .user-pill.launching .pill-go    { background: var(--brand-red); color: #fff; }
+    .user-pill.launching .pill-name  { color: var(--clr-raisin); }
+    .user-pill.launching .pill-tag   { color: #fff; background: var(--brand-teal); border-color: var(--brand-teal); }
+    .user-pill.launching .pill-arrow { animation: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .boot-logo, .menu-logo img, .foot-ico, .deco-ico,
+    .boot-stripes, .user-pill:hover .pill-arrow { animation: none !important; }
+}
+
+/* ── Fallback first-lobby chooser (only when Firebase has no lobby yet) ────── */
 /* Buttons row – flex so adding more lobbies just widens the row */
 .lobby-buttons {
     display: flex;
@@ -1448,156 +2016,6 @@ body {
     font-weight: 700;
     color: rgba(255,255,255,0.85);
 }
-
-/* ===== Discord OAuth: separator + login button on lobby screen ===== */
-
-.lobby-divider {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    width: 100%;
-    margin-top: 32px;
-}
-
-.lobby-divider .divider-line {
-    flex: 1;
-    height: 1px;
-    background: rgba(255,255,255,0.12);
-}
-
-.lobby-divider .divider-text {
-    font-size: 0.92rem;
-    color: rgba(255,255,255,0.42);
-    font-weight: 500;
-    padding: 0 6px;
-    letter-spacing: 0.02em;
-}
-
-.discord-login-btn {
-    margin-top: 20px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    padding: 14px 28px;
-    background: #5865F2;
-    color: #fff;
-    border: 1px solid rgba(255,255,255,0.08);
-    border-radius: 50px;
-    font-size: 1.02rem;
-    font-weight: 600;
-    font-family: var(--font-main);
-    cursor: pointer;
-    transition: background 0.2s, transform 0.28s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.2s;
-    box-shadow: 0 4px 20px rgba(88,101,242,0.32);
-}
-
-.discord-login-btn:hover {
-    background: #4752C4;
-    transform: translateY(-2px) scale(1.02);
-    box-shadow: 0 8px 28px rgba(88,101,242,0.45);
-}
-
-.discord-login-btn:active { transform: scale(0.97); }
-
-.discord-login-btn .discord-logo {
-    width: 22px;
-    height: 22px;
-    flex-shrink: 0;
-}
-
-.discord-login-btn.loading {
-    pointer-events: none;
-    opacity: 0.6;
-}
-
-/* ===== Discord welcome-back screen (returning OAuth user) ===== */
-
-.discord-welcome-card {
-    margin: 24px 0 4px;
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 18px 22px;
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.11);
-    border-radius: 20px;
-    width: 100%;
-}
-
-.discord-welcome-avatar {
-    width: 56px;
-    height: 56px;
-    border-radius: 50%;
-    object-fit: cover;
-    border: 1px solid rgba(255,255,255,0.18);
-    flex-shrink: 0;
-}
-
-.discord-welcome-details {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 6px;
-    min-width: 0;
-}
-
-.discord-welcome-name {
-    font-size: 1.1rem;
-    font-weight: 700;
-    color: rgba(255,255,255,0.92);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 100%;
-}
-
-.discord-welcome-lobby {
-    font-size: 0.82rem;
-    color: rgba(255,255,255,0.62);
-    padding: 3px 12px;
-    background: rgba(255,255,255,0.07);
-    border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 50px;
-    font-weight: 500;
-}
-
-.btn-enter-game {
-    margin-top: 26px;
-    padding: 16px 56px;
-    background: rgba(255,255,255,0.95);
-    color: #1a1a1a;
-    border: none;
-    border-radius: 50px;
-    font-size: 1.1rem;
-    font-weight: 700;
-    font-family: var(--font-main);
-    cursor: pointer;
-    transition: background 0.2s, transform 0.28s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.2s;
-    box-shadow: 0 4px 24px rgba(255,255,255,0.12);
-}
-
-.btn-enter-game:hover {
-    background: #fff;
-    transform: translateY(-3px) scale(1.03);
-    box-shadow: 0 10px 32px rgba(255,255,255,0.20);
-}
-
-.btn-enter-game:active { transform: scale(0.97); }
-
-.btn-switch-account {
-    margin-top: 14px;
-    padding: 8px 18px;
-    background: transparent;
-    color: rgba(255,255,255,0.42);
-    border: none;
-    font-size: 0.88rem;
-    font-family: var(--font-main);
-    cursor: pointer;
-    transition: color 0.2s;
-}
-
-.btn-switch-account:hover { color: rgba(255,255,255,0.75); }
 
 /* First-time lobby chooser modal uses .lobby-btn from earlier — just tighten spacing */
 #discord-first-lobby-modal .lobby-buttons {
@@ -3983,7 +4401,7 @@ body.is-mobile .sp-invite-toast,       body.reduced-gfx .sp-invite-toast,
 body.is-mobile .modal-overlay,         body.reduced-gfx .modal-overlay,
 body.is-mobile .modal-content,         body.reduced-gfx .modal-content,
 body.is-mobile .login-container,       body.reduced-gfx .login-container,
-body.is-mobile .lobby-container,       body.reduced-gfx .lobby-container,
+body.is-mobile .menu-card,             body.reduced-gfx .menu-card,
 body.is-mobile .prayer-blur-overlay,   body.reduced-gfx .prayer-blur-overlay,
 body.is-mobile .edge-bokeh,            body.reduced-gfx .edge-bokeh,
 body.is-mobile #edge-bokeh,            body.reduced-gfx #edge-bokeh {
@@ -4035,13 +4453,29 @@ body.reduced-gfx .prayer-overlay-bg {
     animation: none;
 }
 
-/* Login/lobby aurora background — stop on mobile + desktop reduced tiers */
-body.is-mobile .login-bg,
-body.is-mobile .lobby-bg,
-body.reduced-gfx .login-bg,
-body.reduced-gfx .lobby-bg {
+/* Login/menu aurora + the drifting decorative icons — stop on mobile + reduced
+   tiers. The menu card loses its backdrop-filter there (rule above), so give it a
+   solid background instead of a see-through one. */
+body.is-mobile #login-screen::before,
+body.is-mobile #menu-screen::before,
+body.reduced-gfx #login-screen::before,
+body.reduced-gfx #menu-screen::before {
     animation: none;
 }
+
+body.is-mobile .deco-ico,
+body.reduced-gfx .deco-ico {
+    animation: none;
+}
+
+body.is-mobile .menu-card,
+body.reduced-gfx .menu-card {
+    background-color: rgba(12,12,18,0.94);
+}
+
+/* Potato: drop the decorative layer entirely rather than paying to composite
+   seven large masked images behind the card. */
+body.potato-gfx .menu-deco { display: none; }
 
 /* ── وضع التجربة (siraj test link) ─────────────────────────────── */
 .siraj-test-link {
@@ -4107,18 +4541,8 @@ body.game-ready .build-number { display: none; }
     min-height: 16px;
 }
 
-/* siraj loading overlay */
-.siraj-loading-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0,0,0,0.72);
-    backdrop-filter: blur(14px);
-    display: none;
-    justify-content: center;
-    align-items: center;
-    z-index: 9999;
-}
-.siraj-loading-overlay.active { display: flex; }
+/* (The old .siraj-loading-overlay spinner is gone — وضع التجربة now shows the
+   same boot screen as a normal login.) */
 
 /* ── Mode select panel ──────────────────────────────────────────── */
 .mode-select-wrapper {
@@ -6266,52 +6690,10 @@ body.is-mobile .inv-peep { width: 150px; }
 body.is-mobile .dash-stage.side-main .inv-peep { transform: translate(calc(-50% - 165px), -50%) rotate(-5deg); }
 body.is-mobile .dash-stage.side-todo .inv-peep { transform: translate(calc(-50% - 330px), -50%) rotate(-5deg); }
 
-/* ─── PWA Install Button ─────────────────────────────────────────────────── */
-#pwa-install-btn {
-    display: none; /* shown by JS; JS also sets top/left to sit just under the active login panel */
-    position: fixed;
-    top: 50%;
-    left: 50%;
-    align-items: center;
-    gap: 9px;
-    padding: 12px 24px;
-    background: linear-gradient(135deg, #ffffff 0%, #f2f4f8 100%);
-    border: none;
-    border-radius: 50px;
-    color: var(--clr-blue);
-    font-family: var(--font-main);
-    font-size: 0.92rem;
-    font-weight: 700;
-    cursor: pointer;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.45), 0 0 0 2px rgba(8,111,182,0.18);
-    transition: transform 0.2s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.2s;
-    z-index: 9999;
-    white-space: nowrap;
-    direction: rtl;
-}
-#pwa-install-btn:hover {
-    transform: translateX(-50%) translateY(-2px) scale(1.03);
-    box-shadow: 0 12px 30px rgba(0,0,0,0.5), 0 0 0 2px rgba(8,111,182,0.28);
-}
-#pwa-install-btn:active { transform: translateX(-50%) scale(0.96); }
-#pwa-install-btn .pwa-icon-badge {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    background: linear-gradient(135deg, var(--clr-verdigris), var(--clr-blue));
-}
-#pwa-install-btn svg {
-    width: 13px;
-    height: 13px;
-    flex-shrink: 0;
-    stroke: #ffffff;
-}
+/* (#pwa-install-btn is styled with the rest of the menu — it's a plain child of
+   the menu card now, not a JS-positioned floating pill.) */
 
-/* PWA Install Toast (manual instructions for iOS / macOS Safari / Android / others) */
+/* PWA Install Toast (manual instructions for iOS / Android / others) */
 #pwa-toast {
     position: fixed;
     top: 50%;
@@ -6339,3 +6721,679 @@ body.is-mobile .dash-stage.side-todo .inv-peep { transform: translate(calc(-50% 
     opacity: 1;
     transform: translateX(-50%) translateY(0);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   Reading Session Feature
+
+   Black glass throughout (the house design language) — the old blue treatment is
+   gone. The only colour in here is `--rd-accent`, a warm parchment cream that
+   stands in for "book" without fighting the dark theme.
+   ═══════════════════════════════════════════════════════════════════════════════ */
+:root {
+    --rd-accent: 240, 226, 200;   /* warm parchment — used as rgba(var(--rd-accent), a) */
+}
+
+/* ─── The drawn book covers (bookCoverSVG) ─── */
+.book-svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+    overflow: visible;
+}
+
+/* ─── Setup modal ("يتم قراءة؟") ───────────────────────────────────────────────
+   Anchored above the library desk instead of a centred full-screen dialog — the
+   overlay itself stays transparent (click-through look, click-outside-to-close is
+   wired in JS) and the card is positioned via inline left/top set from world coords
+   (see openReadingPopup / worldToScreen in game.js). */
+#reading-modal {
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+#reading-modal .reading-content {
+    position: fixed;
+    margin: 0;
+    width: 400px;
+    max-width: calc(100vw - 24px);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
+    /* Tighter than the default 44px — this card is much taller than the other
+       modals now, and the shelf's edge-bleed is measured against this value. */
+    padding: 28px;
+    text-align: right;
+}
+
+.reading-title {
+    font-size: 30px;
+    font-weight: 800;
+    color: white;
+    text-align: center;
+    margin-bottom: 14px;
+    letter-spacing: -0.01em;
+}
+
+/* ─── Book shelf carousel ─────────────────────────────────────────────────────
+   One big book centred, the rest shrunk back beside it. Newest sits leftmost with
+   older books trailing to the right, and "كتاب جديد" caps the left end — so the
+   track is laid out LTR regardless of the page's RTL direction. Selection = the
+   card nearest the track's centre (_readingSyncShelfSelection). */
+.reading-shelf {
+    margin: 0 -28px 4px;   /* bleed out to the card's edges (matches its padding) so
+                              books can scroll off-frame instead of stopping short */
+    position: relative;
+}
+/* Fade the books out at both ends instead of letting them hit a hard edge. Colour
+   matches .modal-content's background. */
+.reading-shelf::before,
+.reading-shelf::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 44px;
+    pointer-events: none;
+    z-index: 3;
+}
+.reading-shelf::before { left: 0;  background: linear-gradient(to right, rgba(12,12,18,0.92), rgba(12,12,18,0)); }
+.reading-shelf::after  { right: 0; background: linear-gradient(to left,  rgba(12,12,18,0.92), rgba(12,12,18,0)); }
+
+.reading-shelf-track {
+    direction: ltr;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 208px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scroll-snap-type: x mandatory;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    padding: 0 calc(50% - 68px);   /* half the track minus half a card — lets the
+                                      first/last card reach dead centre */
+}
+.reading-shelf-track::-webkit-scrollbar { display: none; }
+
+.reading-book-card {
+    position: relative;
+    flex: 0 0 136px;
+    height: 178px;
+    scroll-snap-align: center;
+    cursor: pointer;
+    border: none;
+    background: none;
+    padding: 0;
+    transform: scale(0.62);
+    opacity: 0.4;
+    filter: saturate(0.55);
+    transition: transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1),
+                opacity 0.32s ease, filter 0.32s ease;
+}
+.reading-book-card.is-selected {
+    transform: scale(1);
+    opacity: 1;
+    filter: none;
+}
+.reading-book-art {
+    width: 100%;
+    height: 100%;
+}
+
+/* Delete ✕ — only reachable on the centred book, so a mis-tap while scrolling
+   can't wipe a book. */
+.reading-book-del {
+    position: absolute;
+    top: 2px;
+    right: -2px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: rgba(20, 20, 22, 0.9);
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease, color 0.2s ease, background 0.2s ease;
+    z-index: 4;
+}
+.reading-book-card.is-selected .reading-book-del { opacity: 1; pointer-events: auto; }
+.reading-book-del:hover { background: rgba(255, 80, 80, 0.18); color: #ff8888; }
+
+/* "كتاب جديد" card — a dashed slot the same size as a book. */
+.reading-book-add .reading-add-inner {
+    width: 100%;
+    height: 100%;
+    border: 2px dashed rgba(255, 255, 255, 0.18);
+    border-radius: 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    background: rgba(255, 255, 255, 0.03);
+    transition: border-color 0.25s ease, background 0.25s ease;
+}
+.reading-book-add.is-selected .reading-add-inner {
+    border-color: rgba(var(--rd-accent), 0.45);
+    background: rgba(var(--rd-accent), 0.06);
+}
+.reading-add-plus {
+    font-size: 34px;
+    font-weight: 300;
+    color: rgba(255, 255, 255, 0.5);
+    line-height: 1;
+}
+.reading-add-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.45);
+}
+.reading-book-add.is-selected .reading-add-plus,
+.reading-book-add.is-selected .reading-add-label { color: rgba(var(--rd-accent), 0.9); }
+
+/* Selected book's name + lifetime total, under the shelf. */
+.reading-shelf-label {
+    text-align: center;
+    min-height: 42px;
+    margin-bottom: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    justify-content: center;
+}
+.reading-shelf-name {
+    font-size: 17px;
+    font-weight: 700;
+    color: white;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.reading-shelf-time {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.42);
+}
+
+.reading-launch-row {
+    margin-top: 22px;
+    display: flex;
+    gap: 10px;
+    align-items: stretch;
+}
+.reading-confirm-btn { font-size: 20px; padding: 15px; }
+.reading-confirm-btn.is-disabled {
+    opacity: 0.35;
+    pointer-events: none;
+}
+
+#reading-time-options .opt-btn {
+    border-radius: 50px;
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 16px;
+}
+#reading-time-options .opt-btn.active {
+    background: rgba(var(--rd-accent), 0.16);
+    border-color: rgba(var(--rd-accent), 0.38);
+    color: white;
+}
+
+/* ─── New-book modal ─── */
+.reading-newbook-content {
+    max-width: 420px;
+    text-align: right;
+}
+.reading-newbook-preview {
+    width: 172px;
+    height: 228px;
+    margin: 2px auto 20px;
+    transition: opacity 0.25s ease;
+}
+.reading-newbook-preview.is-placeholder { opacity: 0.62; }
+
+.reading-newbook-name {
+    width: 100%;
+    padding: 12px 15px;
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    color: white;
+    font-family: inherit;
+    font-size: 16px;
+}
+.reading-newbook-name:focus {
+    outline: none;
+    border-color: rgba(var(--rd-accent), 0.4);
+}
+
+.reading-style-grid {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 8px;
+}
+.reading-style-swatch {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 8px 4px 6px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 5px;
+    transition: border-color 0.2s ease, background 0.2s ease, transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.reading-style-swatch:hover { transform: translateY(-2px); }
+.reading-style-swatch.is-active {
+    border-color: rgba(var(--rd-accent), 0.5);
+    background: rgba(var(--rd-accent), 0.08);
+}
+.reading-style-art { width: 100%; height: 46px; }
+.reading-style-label {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.5);
+    white-space: nowrap;
+}
+.reading-style-swatch.is-active .reading-style-label { color: rgba(var(--rd-accent), 0.95); }
+
+/* ─── Active session panel (desktop) ──────────────────────────────────────────
+   Sits in the left third of the screen (rule of thirds: the vertical line at ~33%
+   of viewport width — the camera slides the reader right to make room) and slides
+   in from the left. */
+.reading-panel {
+    position: fixed;
+    left: calc(33.33vw - 176px);
+    top: 50%;
+    transform: translateY(-50%) translateX(0);
+    width: 352px;
+    z-index: 1100;
+    padding: 22px;
+    border-radius: 26px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    background: rgba(18, 18, 18, 0.68);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30), 0 24px 64px rgba(0, 0, 0, 0.4);
+    transition: transform 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 0.6s ease;
+}
+/* A single hairline of warmth across the top — the only "extra" the panel gets. */
+.reading-panel::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 24px;
+    right: 24px;
+    height: 1px;
+    background: linear-gradient(to right, transparent, rgba(var(--rd-accent), 0.35), transparent);
+}
+
+body.is-mobile .reading-panel, body.reduced-gfx .reading-panel {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(16, 16, 18, 0.96);
+}
+
+.reading-panel.hidden {
+    display: flex !important;
+    transform: translateY(-50%) translateX(-120%);
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* Cover + name row */
+.reading-panel-top {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    direction: rtl;
+}
+.reading-panel-cover {
+    flex: 0 0 74px;
+    height: 98px;
+    filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.5));
+}
+.reading-panel-meta {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.reading-panel-header {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: rgba(var(--rd-accent), 0.55);
+}
+.reading-panel-book {
+    font-size: 21px;
+    font-weight: 800;
+    color: white;
+    line-height: 1.2;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+}
+.reading-panel-totals {
+    display: flex;
+    flex-direction: column;
+    margin-top: 3px;
+}
+.reading-total-label {
+    font-size: 10px;
+    color: rgba(255, 255, 255, 0.32);
+}
+.reading-panel-total {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.62);
+    font-weight: 600;
+}
+
+/* Timer */
+.reading-timer-card {
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 18px;
+    padding: 14px 16px 12px;
+    text-align: center;
+    direction: rtl;
+}
+.reading-panel-timer {
+    font-size: 44px;
+    font-weight: 800;
+    color: rgba(255, 255, 255, 0.96);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
+    line-height: 1.05;
+}
+.reading-timer-sub {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin: 4px 2px 9px;
+}
+.reading-timer-label { font-size: 11px; color: rgba(255, 255, 255, 0.34); }
+.reading-timer-duration { font-size: 11px; color: rgba(var(--rd-accent), 0.6); font-weight: 600; }
+
+.reading-progress {
+    height: 3px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+}
+.reading-progress-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 3px;
+    background: linear-gradient(to right, rgba(var(--rd-accent), 0.5), rgba(var(--rd-accent), 0.92));
+    transition: width 0.9s linear;
+}
+
+/* Leaderboard */
+.reading-leaderboard-section {
+    background: rgba(0, 0, 0, 0.22);
+    border: 1px solid rgba(255, 255, 255, 0.05);
+    border-radius: 18px;
+    padding: 13px 12px 11px;
+    direction: rtl;
+}
+.reading-lb-title {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: rgba(255, 255, 255, 0.38);
+    margin: 0 4px 9px;
+}
+.reading-leaderboard {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-height: 196px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+}
+.reading-leaderboard::-webkit-scrollbar { width: 3px; }
+.reading-leaderboard::-webkit-scrollbar-track { background: transparent; }
+.reading-leaderboard::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); border-radius: 3px; }
+.reading-lb-empty {
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 12px;
+    text-align: center;
+    padding: 14px 6px;
+    line-height: 1.6;
+}
+
+.reading-lb-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 8px;
+    border-radius: 12px;
+    transition: background 0.2s ease;
+}
+.reading-lb-row.highlight {
+    background: rgba(var(--rd-accent), 0.09);
+    box-shadow: inset 0 0 0 1px rgba(var(--rd-accent), 0.16);
+}
+
+.reading-lb-rank {
+    flex: 0 0 16px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.3);
+    font-variant-numeric: tabular-nums;
+}
+.reading-lb-row.rank-1 .reading-lb-rank { color: #e5c158; }
+.reading-lb-row.rank-2 .reading-lb-rank { color: #c8c8ce; }
+.reading-lb-row.rank-3 .reading-lb-rank { color: #c68a4e; }
+
+.reading-lb-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background-size: cover;
+    background-position: center;
+    background-color: rgba(255, 255, 255, 0.06);
+    flex-shrink: 0;
+    border: 1.5px solid rgba(255, 255, 255, 0.1);
+}
+.reading-lb-row.rank-1 .reading-lb-avatar { border-color: #e5c158; }
+.reading-lb-row.rank-2 .reading-lb-avatar { border-color: #c8c8ce; }
+.reading-lb-row.rank-3 .reading-lb-avatar { border-color: #c68a4e; }
+
+.reading-lb-info {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    flex: 1;
+    min-width: 0;
+}
+.reading-lb-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.88);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.reading-lb-time {
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.42);
+    flex-shrink: 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.reading-exit-btn {
+    border-radius: 50px;
+    padding: 12px;
+    background: rgba(255, 80, 80, 0.12);
+    border: 1px solid rgba(255, 80, 80, 0.26);
+    color: rgba(255, 120, 120, 0.95);
+    font-family: var(--font-main);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    width: 100%;
+}
+.reading-exit-btn:hover { background: rgba(255, 80, 80, 0.22); }
+
+/* ─── Active session UI (mobile) ─── */
+.reading-mobile-header {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(0);
+    z-index: 1100;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: min(360px, calc(100vw - 28px));
+    background: rgba(18, 18, 18, 0.7);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    padding: 13px 16px;
+    border-radius: 22px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    direction: rtl;
+    transition: transform 0.6s cubic-bezier(0.25, 0.46, 0.45, 0.94), opacity 0.6s ease;
+}
+
+body.is-mobile .reading-mobile-header, body.reduced-gfx .reading-mobile-header {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(16, 16, 18, 0.96);
+}
+
+.reading-mobile-header.hidden {
+    display: flex !important;
+    transform: translateX(-50%) translateY(-150%);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.reading-mobile-cover {
+    flex: 0 0 50px;
+    height: 66px;
+    filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.5));
+}
+.reading-mobile-meta {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+.reading-mobile-timer {
+    font-size: 30px;
+    font-weight: 800;
+    color: rgba(255, 255, 255, 0.96);
+    font-variant-numeric: tabular-nums;
+    line-height: 1.05;
+}
+.reading-mobile-book {
+    font-size: 14px;
+    color: rgba(255, 255, 255, 0.85);
+    font-weight: 600;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.reading-mobile-totals {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+    margin: 2px 0 7px;
+}
+.reading-mobile-total { font-size: 11px; color: rgba(255, 255, 255, 0.45); }
+.reading-mobile-dot { font-size: 11px; color: rgba(255, 255, 255, 0.25); }
+.reading-mobile-duration { font-size: 11px; color: rgba(var(--rd-accent), 0.6); font-weight: 600; }
+
+.reading-drawer {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    border-radius: 25px 25px 0 0;
+    background: rgba(18, 18, 18, 0.72);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-bottom: none;
+    z-index: 1100;
+    padding-bottom: env(safe-area-inset-bottom, 20px);
+    transform: translateY(calc(100% - 48px));
+    transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+body.is-mobile .reading-drawer, body.reduced-gfx .reading-drawer {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(16, 16, 18, 0.98);
+}
+
+.reading-drawer.hidden { display: none; }
+.reading-drawer.drawer-open { transform: translateY(0); }
+
+.reading-drawer-content { padding: 0 20px 20px; }
+.reading-drawer .reading-leaderboard { max-height: 40dvh; }
+.reading-exit-btn.mobile-exit {
+    margin: 0 20px 10px;
+    width: calc(100% - 40px);
+}
+
+/* Phones: bigger shelf + a 5-across style grid is too tight, drop to a scroll row */
+body.is-mobile #reading-modal .reading-content { width: min(400px, calc(100vw - 20px)); }
+body.is-mobile .reading-shelf-track { height: 190px; padding: 0 calc(50% - 62px); }
+body.is-mobile .reading-book-card { flex: 0 0 124px; height: 162px; }
+body.is-mobile .reading-style-grid { grid-template-columns: repeat(5, 1fr); gap: 6px; }
+body.is-mobile .reading-style-art { height: 38px; }
+body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
+
+/* ─── Animations ─── */
+@keyframes readingRowIn {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+/* Setup + new-book modals get the same sequenced cascade + pitch-blip sound as the
+   settings panel (readingRowIn is registered in _JUICE_IN_ANIMS in game.js). */
+#reading-modal.active .logo-container,
+#reading-modal.active .title,
+#reading-modal.active .reading-shelf,
+#reading-modal.active .reading-shelf-label,
+#reading-modal.active .setting-group,
+#reading-modal.active .pomo-launch-row,
+#reading-newbook-modal.active .title,
+#reading-newbook-modal.active .reading-newbook-preview,
+#reading-newbook-modal.active .setting-group,
+#reading-newbook-modal.active .pomo-launch-row {
+    opacity: 0;
+    animation: readingRowIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+}
+#reading-modal.active .logo-container { animation-delay: 0.05s; }
+#reading-modal.active .title { animation-delay: 0.12s; }
+#reading-modal.active .reading-shelf { animation-delay: 0.19s; }
+#reading-modal.active .reading-shelf-label { animation-delay: 0.26s; }
+#reading-modal.active .setting-group { animation-delay: 0.33s; }
+#reading-modal.active .pomo-launch-row { animation-delay: 0.40s; }
+
+#reading-newbook-modal.active .title { animation-delay: 0.05s; }
+#reading-newbook-modal.active .reading-newbook-preview { animation-delay: 0.12s; }
+#reading-newbook-modal.active .setting-group:nth-of-type(1) { animation-delay: 0.19s; }
+#reading-newbook-modal.active .setting-group:nth-of-type(2) { animation-delay: 0.26s; }
+#reading-newbook-modal.active .pomo-launch-row { animation-delay: 0.33s; }

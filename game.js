@@ -1,4 +1,4 @@
-import { database, ref, onValue, update, get, onDisconnect, set, remove, authReady } from './firebase-config.js';
+import { database, ref, onValue, update, get, onDisconnect, set, remove, authReady, runTransaction } from './firebase-config.js';
 
 // ─── Mobile detection ────────────────────────────────────────────────────────
 const MOBILE_BREAKPOINT = 1024;
@@ -354,6 +354,190 @@ async function resolveUserLobby(discordId) {
     return null;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  BOOT SCREEN (شاشة التحميل) — logo + striped bar + rotating messages
+//
+//  Two jobs, one element:
+//   1. On page load, while we check the Discord token — plain fade, no slide.
+//   2. After الدخول — slides DOWN over the menu, tracks the world art decode,
+//      then slides UP to reveal the game, which is when the entrance plays.
+//
+//  The bar is driven by REAL progress (how many of the 16 world-art layers have
+//  decoded), but is smoothed by _bootTick so it never sits frozen on one number
+//  while a 5 MB background downloads — a stalled bar reads as a hang.
+// ═══════════════════════════════════════════════════════════════════════════
+const BOOT_MESSAGES = [
+    'نُجهّز لك مقعدًا…',
+    'نُشعل المدفأة…',
+    'نرتّب الكتب على الرفوف…',
+    'نمسح الغبار عن الطاولات…',
+    'نُسخّن القهوة…',
+    'نفتح النوافذ لبعض الهواء…',
+    'نضبط ساعة البومودورو…',
+    'نُنزل الستائر قليلًا…',
+    'نُلمّع شاشات الحواسيب…',
+    'نُرتّب الأوراق في الأعلى…',
+    'ننفض الوسائد على الأريكة…',
+    'نُهيّئ الطابق الثاني…',
+    'نُعدّ الأقلام والدفاتر…',
+    'نضع لافتة "ممنوع الإزعاج"…',
+];
+
+const _boot = {
+    el: null, fill: null, msg: null,
+    shown: 0,           // the % currently painted on the bar
+    msgTimer: null, rafId: null, menuHideTimer: null,
+    msgPool: [],        // shuffled queue, so messages don't repeat back-to-back
+    gateOpen: false,    // true once the boot screen has slid away
+    pendingEntrance: null,
+    startedAt: 0,
+};
+
+function _bootEls() {
+    if (!_boot.el) {
+        _boot.el   = document.getElementById('loading-screen');
+        _boot.fill = _boot.el?.querySelector('.boot-fill');
+        _boot.msg  = document.getElementById('boot-msg');
+    }
+    return _boot.el;
+}
+
+function _bootNextMessage() {
+    if (!_boot.msgPool.length) {
+        _boot.msgPool = _shuffledCopy(BOOT_MESSAGES);
+    }
+    return _boot.msgPool.pop();
+}
+
+// Fade the current message out, swap the text, fade the new one in. Every 2s.
+function _bootCycleMessage(immediate) {
+    const el = _boot.msg;
+    if (!el) return;
+    const swap = () => {
+        el.textContent = _bootNextMessage();
+        el.classList.remove('swap');
+        el.classList.remove('in');
+        void el.offsetWidth;        // restart the entrance animation
+        el.classList.add('in');
+    };
+    if (immediate) { swap(); return; }
+    el.classList.add('swap');
+    setTimeout(swap, 450);          // matches the .boot-msg opacity transition
+}
+
+// How far along the world art actually is, 0..1. The two day overlays are drawn
+// per-frame and the ~12 ground/second-floor layers get freed once worldCache is
+// built — so `.complete` alone is not a reliable "done" signal after the fact.
+// worldCache.ground being present IS: buildWorldCache only runs once every layer
+// has decoded.
+function _bootRealProgress() {
+    if (worldCache.ground && worldCache.second) return 1;
+    const A = gameState.assets;
+    const layers = [A.wBackground, A.wWalls, A.wFireplace, A.wBooksSofas,
+        A.wBooksLibrary, A.wSofa, A.wLaptops, A.wLaptopLights, A.wStairs, A.wGames,
+        A.wSecondBg, A.wSecondLaptops, A.wSecondLaptopLights, A.wSecondPapers,
+        A.wOverlayDay2, A.wOverlayDay];
+    let done = 0;
+    for (const im of layers) if (im && im.complete && im.naturalWidth) done++;
+    // Cap at 0.96 — the last 4% belongs to the collision-mask + cache build, which
+    // only finishes when worldCache exists (the branch above).
+    return Math.min(0.96, done / layers.length);
+}
+
+// The bar's ONLY driver. `.boot-fill` deliberately has no `transition: width` —
+// a transition plus a per-frame width write means every frame retargets the
+// transition, which lags the bar behind reality by the transition's duration and
+// makes the finish mushy. The lerp here IS the smoothing.
+function _bootTick() {
+    if (!_boot.el) return;
+    // Target = the real number, but always creeping: even a stalled download
+    // inches the bar forward (asymptotically, never past the real value + 8%)
+    // so it always looks alive.
+    const real = _boot.forceFull ? 100 : _bootRealProgress() * 100;
+    const creep = Math.min(real + 8, 97);
+    const target = Math.max(real, Math.min(creep, _boot.shown + 0.35));
+    _boot.shown += (target - _boot.shown) * (real >= 100 ? 0.22 : 0.08);
+    if (_boot.fill) _boot.fill.style.width = Math.min(100, _boot.shown).toFixed(1) + '%';
+    _boot.rafId = requestAnimationFrame(_bootTick);
+}
+
+// mode: 'instant' (page-load session check) | 'slide' (pressed الدخول)
+function showBootScreen(mode) {
+    const el = _bootEls();
+    if (!el) return;
+    _boot.startedAt = performance.now();
+    el.classList.remove('slide-out');
+    el.classList.add('active');
+    if (mode === 'slide') {
+        el.classList.remove('slide-in');
+        void el.offsetWidth;
+        el.classList.add('slide-in');
+        // The boot screen OWNS hiding the menu, and only once it has fully covered
+        // it. `display` can't transition, so dropping .active on the menu any
+        // earlier makes it vanish instantly — and the strip of screen the boot
+        // hasn't reached yet would flash the near-white body background.
+        clearTimeout(_boot.menuHideTimer);
+        _boot.menuHideTimer = setTimeout(() => {
+            document.getElementById('menu-screen')?.classList.remove('active');
+        }, 640);   // bootSlideIn is 620ms
+    }
+    _bootCycleMessage(true);
+    clearInterval(_boot.msgTimer);
+    _boot.msgTimer = setInterval(() => _bootCycleMessage(false), 2000);
+    if (!_boot.rafId) _bootTick();
+}
+
+function hideBootScreenInstant() {
+    const el = _bootEls();
+    if (!el) return;
+    el.classList.remove('active', 'slide-in', 'slide-out');
+    clearInterval(_boot.msgTimer); _boot.msgTimer = null;
+    // Must die with the boot screen, or it fires later and hides the very menu
+    // we're about to show.
+    clearTimeout(_boot.menuHideTimer); _boot.menuHideTimer = null;
+    if (_boot.rafId) { cancelAnimationFrame(_boot.rafId); _boot.rafId = null; }
+}
+
+// Fill the bar, hold a beat so 100% is actually seen, then slide up and let the
+// entrance play. Idempotent — the world-ready event and the failsafe both call it.
+function finishBootScreen() {
+    const el = _bootEls();
+    if (!el || !el.classList.contains('active') || _boot._finishing) return;
+    _boot._finishing = true;
+
+    // Drive the bar home. _bootTick keeps running so it EASES to 100 rather than
+    // snapping — and so the 15s failsafe path (where real progress may be stuck
+    // at, say, 40%) still completes the bar instead of sliding away mid-fill.
+    _boot.forceFull = true;
+    clearInterval(_boot.msgTimer); _boot.msgTimer = null;
+
+    setTimeout(() => {
+        el.classList.remove('slide-in');
+        el.classList.add('slide-out');
+        setTimeout(() => {
+            el.classList.remove('active', 'slide-out');
+            if (_boot.rafId) { cancelAnimationFrame(_boot.rafId); _boot.rafId = null; }
+            _boot._finishing = false;
+            _openEntranceGate();
+        }, 720);   // matches bootSlideOut
+    }, 480);       // long enough for the ease-to-100 to land and be seen
+}
+
+// ── Entrance gate ──────────────────────────────────────────────────────────
+// beginEntrance() is called from the async Firebase restore, which can resolve
+// while the boot screen is still up — the drop animation would play behind it and
+// be over before the reveal. So the gate holds the entrance until the boot screen
+// has actually slid away.
+function _openEntranceGate() {
+    if (_boot.gateOpen) return;
+    _boot.gateOpen = true;
+    if (_boot.pendingEntrance !== null) {
+        const arg = _boot.pendingEntrance;
+        _boot.pendingEntrance = null;
+        _reallyBeginEntrance(arg);
+    }
+}
+
 async function enterGameAsDiscordUser(user, lobby) {
     // Wake the shared audio context NOW — we're still inside the "Enter" button
     // click that called us, and that gesture is the browser's permission to start
@@ -387,9 +571,9 @@ async function enterGameAsDiscordUser(user, lobby) {
     // server ack here just delayed the spawn by a round-trip.
     update(ref(database), updates).catch(() => {});
 
-    document.getElementById('lobby-screen')?.classList.remove('active');
+    // NB: #menu-screen is deliberately NOT hidden here — showBootScreen('slide')
+    // drops it once the loader has fully covered it (see the comment there).
     document.getElementById('login-screen')?.classList.remove('active');
-    document.getElementById('discord-welcome-screen')?.classList.remove('active');
     document.getElementById('discord-first-lobby-modal')?.classList.remove('active');
 
     startGame({
@@ -400,27 +584,71 @@ async function enterGameAsDiscordUser(user, lobby) {
     });
 }
 
-function showDiscordWelcomeScreen(user, lobby) {
-    const screen = document.getElementById('discord-welcome-screen');
-    const lobbyScreen = document.getElementById('lobby-screen');
-    if (!screen) return;
+// Swap the Discord login button for the signed-in avatar pill.
+function showUserPill(user, lobby) {
+    const pill   = document.getElementById('user-pill');
+    const login  = document.getElementById('discord-login-btn');
+    const logout = document.getElementById('menu-logout');
+    if (!pill) return;
 
-    document.getElementById('discord-welcome-avatar').src = user.avatar;
-    document.getElementById('discord-welcome-name').textContent = user.username;
-    document.getElementById('discord-welcome-lobby').textContent = LOBBY_CONFIG[lobby]?.label || lobby;
+    document.getElementById('pill-avatar').src = user.avatar;
+    document.getElementById('pill-name').textContent = user.username;
+    document.getElementById('pill-tag').textContent  = LOBBY_CONFIG[lobby]?.label || lobby;
 
-    if (lobbyScreen) lobbyScreen.classList.remove('active');
-    screen.classList.add('active');
+    login?.classList.remove('ready');
+    pill.classList.add('ready');
+    logout?.classList.add('ready');
+    showMenuScreen();
 
-    document.getElementById('discord-welcome-enter').onclick = () => {
+    // Guard against double-arming: the pill is re-shown on every logout/login
+    // bounce, and a second listener would fire enterGame twice.
+    if (pill._wired) pill._launch = () => launchIntoGame(user, lobby);
+    else {
+        pill._wired = true;
+        pill._launch = () => launchIntoGame(user, lobby);
+        const go = () => pill._launch();
+        pill.addEventListener('click', go);
+        pill.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
+        });
+    }
+
+    if (logout && !logout._wired) {
+        logout._wired = true;
+        logout.addEventListener('click', () => {
+            clearDiscordSession();
+            try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
+            pill.classList.remove('ready', 'launching');
+            logout.classList.remove('ready');
+            login?.classList.add('ready');
+        });
+    }
+}
+
+// The pill press: arrow bolts out of the pill, boot screen slides down over the
+// menu, and only then do we start the game underneath it.
+let _launching = false;
+function launchIntoGame(user, lobby) {
+    if (_launching) return;
+    _launching = true;
+
+    const pill = document.getElementById('user-pill');
+    pill?.classList.add('launching');
+    // Same reason as the old الدخول button: this click is the browser's permission
+    // to start audio, and the awaits inside enterGameAsDiscordUser close that
+    // window. Prime the shared context NOW so the entrance whoosh can fire.
+    _primeFocusAudio();
+
+    // Let the arrow get most of the way out before the boot screen covers it.
+    setTimeout(() => {
+        showBootScreen('slide');
         enterGameAsDiscordUser(user, lobby);
-    };
-    document.getElementById('discord-welcome-logout').onclick = () => {
-        clearDiscordSession();
-        try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
-        screen.classList.remove('active');
-        if (lobbyScreen) lobbyScreen.classList.add('active');
-    };
+    }, 380);
+}
+
+function showMenuScreen() {
+    hideBootScreenInstant();
+    document.getElementById('menu-screen')?.classList.add('active');
 }
 
 function showDiscordFirstLobbyChooser(user) {
@@ -440,6 +668,8 @@ function showDiscordFirstLobbyChooser(user) {
         `;
         btn.addEventListener('click', () => {
             modal.classList.remove('active');
+            _primeFocusAudio();               // this click is our audio permission
+            showBootScreen('slide');
             enterGameAsDiscordUser(user, lobbyId);
         });
         buttonsWrap.appendChild(btn);
@@ -456,21 +686,67 @@ function setupDiscordLoginButton() {
     });
 }
 
+// Show the menu with the Discord login button (no session / signed out).
+function showMenuSignedOut() {
+    document.getElementById('discord-login-btn')?.classList.add('ready');
+    document.getElementById('user-pill')?.classList.remove('ready');
+    document.getElementById('menu-logout')?.classList.remove('ready');
+    showMenuScreen();
+}
+
+// Scatters the decorative brush icons across the menu backdrop: large, low
+// opacity, tinted with the four brand colours. Purely visual — `aria-hidden`
+// container, pointer-events none, and skipped on the potato tier via CSS.
+const MENU_DECOR = [
+    // ico, size(px), left%, top%,  colour,           rot,   dur(s)
+    [0, 300,  -4,  58, 'var(--brand-red)',    -14,  19],
+    [4, 250,  78,   6, 'var(--brand-teal)',    11,  23],
+    [3, 200,  84,  66, 'var(--brand-yellow)',  -8,  17],
+    [6, 230,   6,  -6, 'var(--brand-blue)',    17,  21],
+    [1, 165,  62,  86, 'var(--brand-red)',      6,  25],
+    [5, 185,  22,  84, 'var(--brand-teal)',   -20,  20],
+    [2, 145,  46,  -8, 'var(--brand-yellow)',  13,  27],
+];
+function buildMenuDecor() {
+    const wrap = document.querySelector('.menu-deco');
+    if (!wrap || wrap.childElementCount) return;
+    // On phones the card covers most of the viewport — half the icons would sit
+    // behind it, so thin them out rather than pay to composite the hidden ones.
+    const defs = isMobile() ? MENU_DECOR.slice(0, 4) : MENU_DECOR;
+    const frag = document.createDocumentFragment();
+    defs.forEach(([ico, size, left, top, color, rot, dur], i) => {
+        const el = document.createElement('span');
+        el.className = 'deco-ico';
+        const px = isMobile() ? Math.round(size * 0.62) : size;
+        el.style.cssText =
+            `--ico: var(--ico-${ico});` +
+            `--r: ${rot}deg;` +
+            `--dx: ${(i % 2 ? 1 : -1) * (14 + i * 3)}px;` +
+            `--dy: ${(i % 3 ? -1 : 1) * (16 + i * 2)}px;` +
+            `--dur: ${dur}s;` +
+            `--delay: ${(i * 1.4).toFixed(1)}s;` +
+            `width:${px}px; height:${px}px;` +
+            `left:${left}%; top:${top}%;` +
+            `color:${color};` +
+            `opacity:${(0.10 - i * 0.006).toFixed(3)};`;
+        frag.appendChild(el);
+    });
+    wrap.appendChild(frag);
+}
+
 // Main OAuth entry — called once on init.
 async function initDiscordOAuth() {
     setupDiscordLoginButton();
+    buildMenuDecor();
+    showBootScreen('instant');   // the boot screen is `active` in the markup; wire it up
     parseDiscordOauthHash();
-
-    const loading = document.getElementById('loading-screen');
-    const lobby   = document.getElementById('lobby-screen');
 
     const session = loadDiscordSession();
     if (!session) {
         // Token missing/expired but we know who they were — try a silent
         // re-auth before giving up and showing the manual login button.
         if (_loadCachedDiscordUser() && attemptSilentDiscordReauth()) return;
-        loading?.classList.remove('active');
-        lobby?.classList.add('active');
+        showMenuSignedOut();
         return;
     }
 
@@ -493,8 +769,7 @@ async function initDiscordOAuth() {
         // login button if Discord itself won't auto-approve any more.
         clearDiscordSession();
         if (cachedUser && attemptSilentDiscordReauth()) return;
-        loading?.classList.remove('active');
-        lobby?.classList.add('active');
+        showMenuSignedOut();
         return;
     } else if (fetchResult === null) {
         // Network failure / Discord API down — don't kill the session.
@@ -502,8 +777,7 @@ async function initDiscordOAuth() {
         user = cachedUser;
         if (!user) {
             // No cache at all (e.g. first ever load with no network) — can't proceed.
-            loading?.classList.remove('active');
-            lobby?.classList.add('active');
+            showMenuSignedOut();
             return;
         }
     } else {
@@ -516,14 +790,17 @@ async function initDiscordOAuth() {
     const resolvedLobby = (earlyLobbyPromise && cachedUser.id === user.id)
         ? await earlyLobbyPromise
         : await resolveUserLobby(user.id);
-    loading?.classList.remove('active');
     if (resolvedLobby) {
         // Auto-login (auto-resume straight into the game on refresh) is DISABLED on
         // purpose: a gesture-less reload can't start audio (browser autoplay block),
-        // so the entrance sound never played. We always show the welcome screen now,
-        // so pressing الدخول provides the gesture that unlocks the entrance sound.
-        showDiscordWelcomeScreen(user, resolvedLobby);
+        // so the entrance sound never played. We always show the menu, so pressing
+        // the pill provides the gesture that unlocks the entrance sound.
+        showUserPill(user, resolvedLobby);
     } else {
+        // No lobby on the account yet — the gender chooser is GONE from the menu,
+        // but a brand-new Discord account that has never been seen by the bot still
+        // has to land somewhere. This modal is the rare fallback for exactly that.
+        showMenuSignedOut();
         showDiscordFirstLobbyChooser(user);
     }
 }
@@ -579,6 +856,9 @@ class FocusAudioEngine {
             paperInvoiceExit: null,
             paperInvoiceFlip: null,
             invoiceCardSave: null,
+            // Sofa relax seating
+            sofaSit: null,
+            sofaStand: null,
             // Laptop boss fight
             bossAnticipate: null,
             bossAttackInitiate: null,
@@ -635,9 +915,7 @@ class FocusAudioEngine {
             if (this.ctx && this.ctx.state === 'suspended') {
                 this.ctx.resume().then(() => {
                     // Start any active sounds that couldn't launch while context was suspended
-                    for (const [name, sound] of Object.entries(this.sounds)) {
-                        if (sound.active && !sound.nodes) this.startSound(name);
-                    }
+                    staggerStartActiveSounds(this);
                 }).catch(e => {});
             }
         };
@@ -653,10 +931,12 @@ class FocusAudioEngine {
             // If it's already running, sounds are still playing — restarting would reset the loop.
             if (this.ctx.state === 'suspended') {
                 this.ctx.resume().then(() => {
+                    let i = 0;
                     for (const [name, sound] of Object.entries(this.sounds)) {
                         if (!sound.active) continue;
                         this._teardownNodes(sound);
-                        this.startSound(name);
+                        setTimeout(() => this.startSound(name), i * 150);
+                        i++;
                     }
                 }).catch(e => {});
             }
@@ -700,6 +980,8 @@ class FocusAudioEngine {
             this.buffers.paperInvoiceExit  = await loadBuffer('Sound/Paper_Invoice_Exit.mp3');
             this.buffers.paperInvoiceFlip  = await loadBuffer('Sound/Paper_Invoice_Flip.mp3');
             this.buffers.invoiceCardSave   = await loadBuffer('Sound/Invoice_Card_Sounds.mp3');
+            this.buffers.sofaSit           = await loadBuffer('Sound/Sofa_Sit.mp3');
+            this.buffers.sofaStand         = await loadBuffer('Sound/Sofa_Stand.mp3');
         } catch(e) {
             console.log("Failed to load Web Audio sound effects:", e);
         }
@@ -956,6 +1238,63 @@ class FocusAudioEngine {
         } catch (_) { return false; }
     }
 
+    // ── Fireplace proximity ambience ────────────────────────────────────────────
+    // A looping fire crackle whose volume fades in as the LOCAL player nears the
+    // fireplace. The buffer is made SEAMLESS once (its tail is crossfaded into its
+    // head) so `loop = true` gives a perfect, click-free loop with a crossfade.
+    _makeSeamless(buf, crossSec = 0.5) {
+        const cross = Math.min(Math.floor(buf.sampleRate * crossSec), Math.floor(buf.length / 3));
+        const newLen = buf.length - cross;
+        if (newLen <= cross) return buf;
+        const out = this.ctx.createBuffer(buf.numberOfChannels, newLen, buf.sampleRate);
+        for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+            const src = buf.getChannelData(ch);
+            const dst = out.getChannelData(ch);
+            for (let i = 0; i < newLen; i++) dst[i] = src[i];
+            // blend the dropped tail (src[newLen..]) into the head so the seam is smooth
+            for (let i = 0; i < cross; i++) {
+                const w = i / cross;                 // 0→1
+                dst[i] = dst[i] * w + src[newLen + i] * (1 - w);
+            }
+        }
+        return out;
+    }
+    ensureFireplace() {
+        if (this._fireStarted || !this.ctx) return;
+        this._fireStarted = true;   // guard so we only build/start once
+        fetch('Sound/Fireplace%20sound.mp3')
+            .then(r => r.arrayBuffer())
+            .then(ab => this.ctx.decodeAudioData(ab))
+            .then(buf => {
+                const seamless = this._makeSeamless(buf, 0.6);
+                const src = this.ctx.createBufferSource();
+                src.buffer = seamless;
+                src.loop = true;
+                const g = this.ctx.createGain();
+                g.gain.setValueAtTime(0.0001, this.ctx.currentTime);
+                src.connect(g);
+                // Straight to destination, NOT masterGain — masterGain is the focus-sounds
+                // mixer gate and sits at 0 whenever no work session is active (fadeToMaster),
+                // which silenced the fireplace entirely outside a pomodoro/free-mode session.
+                // The fireplace is a world ambient tied to proximity, not a focus sound.
+                g.connect(this.ctx.destination);
+                src.start();
+                this._fireSrc = src;
+                this._fireGain = g;
+            })
+            .catch(() => { this._fireStarted = false; });
+    }
+    // vol 0..1 — smooth ramp (fade in/out). Kicks off the loop on first use.
+    setFireplaceVolume(vol) {
+        if (!this.ctx || this.ctx.state !== 'running') return;
+        if (!this._fireGain) { if (vol > 0.001) this.ensureFireplace(); return; }
+        const t = this.ctx.currentTime;
+        const g = this._fireGain.gain;
+        g.cancelScheduledValues(t);
+        g.setValueAtTime(Math.max(0.0001, g.value), t);
+        g.linearRampToValueAtTime(Math.max(0.0001, vol), t + 0.25);
+    }
+
     createWhiteNoiseNode() {
         const bufferSize = 2 * this.sampleRate;
         const noiseBuffer = this.ctx.createBuffer(1, bufferSize, this.sampleRate);
@@ -1131,7 +1470,8 @@ class FocusAudioEngine {
         this.overallVolume = parseFloat(val);
         const inWorkPhase = (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
             || (gameState.freeMode.active && gameState.freeMode.phase === 'work')
-            || (gameState.azkar && gameState.azkar.active);
+            || (gameState.azkar && gameState.azkar.active)
+            || sofaFocusActive();
         if (this.masterGain && inWorkPhase) {
             this.masterGain.gain.setValueAtTime(this.overallVolume, this.ctx.currentTime);
         }
@@ -1659,6 +1999,23 @@ function _lazyAudio(src) {
 
 // Game State
 const gameState = {
+    reading: {
+        active: false,
+        bookName: null,
+        bookStyle: null,       // id into BOOK_STYLES — drives the drawn cover art
+        durationMs: 0,
+        startTime: 0,
+        endTime: 0,
+        sofaIdx: null,
+        totalBookMs: 0,
+        leaderboardData: [],
+        _cameraPhase: null,
+        _cameraStartTime: 0,
+        // Captured start of the current camera tween + the zoom to restore on exit.
+        _fromX: 0, _fromY: 0, _fromZoom: 1, _zoomBefore: 1,
+        _panelVisible: false,
+        _exitConfirmOpen: false,
+    },
     currentUser: null,
     userId: null,
     selectedLobby: null,   // 'male' | 'female' | ... – set on lobby screen
@@ -1668,6 +2025,28 @@ const gameState = {
         bg: new Image(),
         shadow: new Image(),
         tables: new Image(),
+        // ─── NEW WORLD ART (single combined 2210×3160 scene, layered) ───────────
+        // Ground-floor stack (painted bottom → top):
+        wBackground:  new Image(),   // Workspace_0014 — the one shared floor for both rooms
+        wWalls:       new Image(),   // Workspace_0013 — outer walls (collision boundary)
+        wFireplace:   new Image(),   // Workspace_0012 — fireplace (+ a soft light that must NOT collide)
+        wBooksSofas:  new Image(),   // Workspace_0011 — two blue sofas
+        wBooksLibrary:new Image(),   // Workspace_0010 — book library desk
+        wSofa:        new Image(),   // Workspace_0009 — big L sofa
+        wLaptops:     new Image(),   // Workspace_0008 — ground laptop desk (4 laptops)
+        wLaptopLights:new Image(),   // Workspace_0008_..._Laptop_Lights — per-laptop screen glow overlay
+        wStairs:      new Image(),   // Workspace_0007 — stairs (no collision, drives floor/scale)
+        wGames:       new Image(),   // Workspace_0006 — games/bar counter
+        // Second-floor stack (fades out when a ground player walks under it):
+        wSecondBg:    new Image(),   // Workspace_0005 — raised platform + railings
+        wSecondLaptops:new Image(),  // Workspace_0004 — second-floor laptop desk (3 laptops)
+        wSecondLaptopLights: new Image(), // Workspace_0004_..._Laptop_Lights — per-laptop screen glow overlay
+        wSecondPapers:new Image(),   // Workspace_0003 — papers desk = dashboard entry
+        // Top overlays (painted over everything):
+        wOverlayDay2: new Image(),   // Workspace_0002 — normal-blend day overlay
+        wOverlayDay:  new Image(),   // Workspace_0001 — "overlay"-blend day overlay
+        // The reading prop — slides out from under a seated reader (see drawBookProp).
+        book:         new Image(),
         race: new Image(),
         coffeeZone:     new Image(),
         coffeeMug:      new Image(),
@@ -1719,6 +2098,8 @@ const gameState = {
         bossApplause:       _lazyAudio('Sound/Minigame_Aplause.mp3'),
         crowdCheer:         _lazyAudio('Sound/LaptopMinigame/Crowd_Cheer.mp3'),
         crowdShock:         _lazyAudio('Sound/LaptopMinigame/Crowd_Shock.mp3'),
+        sofaSit:                 _lazyAudio('Sound/Sofa_Sit.mp3'),
+        sofaStand:               _lazyAudio('Sound/Sofa_Stand.mp3'),
         prayerCall:              _lazyAudio('Sound/Prayer_CallToPrayer.mp3'),
         inviteSent:              _lazyAudio('Sound/Invite_Sent.mp3'),
         inviteAccepted:          _lazyAudio('Sound/Invite_Accepted.mp3'),
@@ -1745,6 +2126,15 @@ const gameState = {
     laptops: [],
     activeLaptop: null,
     isLockedIn: false,
+    // Sofa seating (see "Seating" block below). isSitting = local player only;
+    // sitAnim drives the playful hop-in/hop-out animation (anticipate → jump → land).
+    // The actual seat id lives on the player object (players[uid].sitSeatId), synced.
+    isSitting: false,
+    sitAnim: {
+        active: false, dir: 'in', stage: 'anticipate', stageT: 0,
+        startPos: null, targetX: 0, targetY: 0,
+        scaleX: 1, scaleY: 1, hopY: 0,
+    },
     focusAlpha: 0,
     // Animated "انقر للبدء" prompt — fades out from the old laptop then pops/fades
     // in for the next one as you walk past a row.
@@ -1854,6 +2244,10 @@ const gameState = {
         intermediatePos: { x: 0, y: 0 },
         targetPos: { x: 0, y: 0 }
     },
+    // Black fade + spinner shown between a hosted minigame lobby's ابدأ press and the
+    // game actually becoming visible — waits for every participant to load in (min 1s).
+    // See startMinigameLoadFade / updateMinigameLoadFade / drawMinigameLoadFade.
+    minigameLoadFade: null,
     // Pomodoro State
     pomodoro: {
         active: false,
@@ -1866,7 +2260,9 @@ const gameState = {
         totalSessions: 1,
         createdAt: 0,
         _workStartMs: 0,   // Date.now() when the current WORK block began (dashboard time-tracking)
-        _workedMs: 0       // accumulated WORK ms across completed blocks this session (excludes breaks)
+        _workedMs: 0,      // accumulated WORK ms across completed blocks this session (excludes breaks)
+        breakOvertimeSince: null,   // timestamp break hit 0 while stuck in a minigame (drives "+MM:SS")
+        _breakOvertimeExitAt: null, // timestamp the minigame was actually left (1s hold before kidnap)
     },
     // Shared Pomodoro State
     sharedPomo: {
@@ -1913,6 +2309,8 @@ const gameState = {
         _lastSavedAt: 0,         // last time we wrote totalWorkMs to Firebase
         _createdAt: 0,           // session start timestamp, preserved across periodic saves
         needsResume: false,      // set on login restore; _startFreeModeWork fires on first tick
+        breakOvertimeSince: null,   // timestamp break hit 0 while stuck in a minigame (drives "+MM:SS")
+        _breakOvertimeExitAt: null, // timestamp the minigame was actually left (1s hold before kidnap)
     },
     prayer: {
         location: null,            // { lat, lon, city, country }
@@ -2002,7 +2400,7 @@ function warmGameSounds() {
     };
     // Priority 1 — needed moments after spawn.
     ['kidnap', 'timeBreak', 'timeReturn', 'yipee', 'breakAdded', 'prayerCall',
-     'minigameReady', 'inviteSent', 'inviteAccepted'].forEach(warm);
+     'minigameReady', 'inviteSent', 'inviteAccepted', 'sofaSit', 'sofaStand'].forEach(warm);
     // Priority 2 — everything else, on idle (minigames + dashboard papers live
     // behind explicit user actions, so a few seconds of delay is invisible).
     const warmRest = () => {
@@ -2143,6 +2541,136 @@ const MAX_ZOOM = 2.0;
 const WIND_PARTICLE_COUNT = 30;      // desktop
 const WIND_PARTICLE_COUNT_MOBILE = 10; // mobile (performance)
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  NEW WORLD (2210×3160 combined scene — single image for both rooms)
+//  Source art is authored at IMG_W×IMG_H. World units = source px × WORLD_SCALE.
+//  World origin (0,0) = centre of the source image, so a source pixel (px,py) maps
+//  to world (worldX,worldY) = ((px - IMG_W/2)·S, (py - IMG_H/2)·S).
+//  WORLD_SCALE is picked so the world width ≈ the OLD world (~1195px) → the 70px
+//  player keeps the same on-screen footprint (not too small / too large).
+// ═══════════════════════════════════════════════════════════════════════════════
+const IMG_W = 2210, IMG_H = 3160;
+const WORLD_SCALE = 0.54;                       // 2210·0.54 ≈ 1193 wide, 3160·0.54 ≈ 1706 tall
+const WORLD_W = IMG_W * WORLD_SCALE;
+const WORLD_H = IMG_H * WORLD_SCALE;
+// source-px → world helpers
+const sx2w = (px) => (px - IMG_W / 2) * WORLD_SCALE;
+const sy2w = (py) => (py - IMG_H / 2) * WORLD_SCALE;
+// New outer bounds (a loose clamp; the walls layer does the real collision).
+const WORLD_BOUNDS = {
+    minX: -WORLD_W / 2 + PLAYER_SIZE * 0.4,
+    maxX:  WORLD_W / 2 - PLAYER_SIZE * 0.4,
+    minY: -WORLD_H / 2 + PLAYER_SIZE * 0.4,
+    maxY:  WORLD_H / 2 - PLAYER_SIZE * 0.4,
+};
+
+// Collision mask resolution: half of source (1105×1580). One Uint8 per pixel per
+// floor. world → mask-px:  mx = (worldX/S + IMG_W/2)/MASK_DIV.
+const MASK_DIV = 2;
+const MASK_W = Math.round(IMG_W / MASK_DIV);
+const MASK_H = Math.round(IMG_H / MASK_DIV);
+
+// Stairs: the actual painted steps span source x≈[59,948]. The RIGHT end is the
+// ground (scale 1.0), the LEFT end is the second floor (scale 1.20). `isOnStairs`
+// samples the real stair alpha mask (a tight diagonal band) — NOT a big bbox — so
+// you can't "phase through" from beside/above the steps. Scale interpolates by x.
+const STAIR_PX0 = 59,  STAIR_PX1 = 948;         // source-px x span of the steps
+const STAIR_X0 = sx2w(STAIR_PX0), STAIR_X1 = sx2w(STAIR_PX1);
+const FLOOR2_SCALE = 1.20;                      // 20% larger on the second floor
+
+// Ghost collider (floor 1 only, no sprite): a dead zone beside/behind the stairs a
+// player could otherwise walk into from the wrong angle and clip onto the stair mask
+// from an unintended side. Baked straight into the floor1 collision mask so normal
+// front-on stair use (checked first via isOnStairs) is completely unaffected.
+const STAIR_GHOST_PX0 = 73, STAIR_GHOST_PY0 = 960, STAIR_GHOST_PX1 = 907, STAIR_GHOST_PY1 = 1123;
+
+// Ground laptop desk (Workspace_0008) collider — replaces the auto alpha-rasterized
+// shape (which didn't match the desk) with a manual rect matched to an art reference.
+const GROUND_TABLE_GHOST_PX0 = 1797, GROUND_TABLE_GHOST_PY0 = 139, GROUND_TABLE_GHOST_PX1 = 2120, GROUND_TABLE_GHOST_PY1 = 786;
+
+// Second-floor platform footprint (source bbox 27,46 → 1228,1081). Used by the
+// proximity-fade: a FLOOR-1 player walking under it from the east/south fades it out.
+const PLAT_X0 = sx2w(27),  PLAT_X1 = sx2w(1228);
+const PLAT_Y0 = sy2w(46),  PLAT_Y1 = sy2w(1081);
+const PLAT_FADE_RANGE = 230;                    // world px of penetration → fully hidden
+// The proximity-fade trigger band is shorter (top-heavy) than the full platform
+// footprint — it stops around source y≈820, not all the way down to PLAT_Y1=1081.
+const PLAT_FADE_Y1 = sy2w(820);
+
+// Laptops. Ground desk (Workspace_0008): 3 laptops whose seat is to the LEFT
+// (drag left) + 1 at the bottom whose seat is BELOW (drag down). Second-floor desk
+// (Workspace_0004): 3 laptops whose seat is to the RIGHT (drag right). Coords are
+// the detected screen centres in source px; dir = which way the kidnap pulls you.
+// lightBox = [x0,y0,x1,y1] source-px bbox of THIS laptop's individual glow shape
+// inside the matching *_Laptop_Lights.png overlay (measured directly off the art via
+// a connected-components scan, one blob per laptop, +8px pad) — cropped and drawn
+// per-laptop so only the one actually in use lights up (see drawLaptopLights).
+const LAPTOP_DEFS = [
+    // ground floor (floor 1)
+    { px: 1885, py: 250, dir: 'left',  floor: 1, lightBox: [1896, 175, 1932, 324] },
+    { px: 1885, py: 440, dir: 'left',  floor: 1, lightBox: [1896, 365, 1932, 514] },
+    { px: 1885, py: 627, dir: 'left',  floor: 1, lightBox: [1896, 553, 1932, 702] },
+    { px: 2018, py: 690, dir: 'down',  floor: 1, lightBox: [1942, 643, 2092, 680] },
+    // second floor (floor 2). Same orientation as the ground desk (keyboard on the
+    // left, screen tilts right) → the seat is on the LEFT, on open platform floor.
+    { px: 910,  py: 175, dir: 'left',  floor: 2, lightBox: [924, 92, 962, 258] },
+    { px: 910,  py: 390, dir: 'left',  floor: 2, lightBox: [924, 307, 962, 473] },
+    { px: 910,  py: 603, dir: 'left',  floor: 2, lightBox: [924, 520, 962, 686] },
+];
+const LAPTOP_SIT_GAP = 78;   // world px the seat sits away from the laptop, along `dir`
+const LAPTOP_SELECT_R = 120; // interaction radius (world px)
+
+// Dashboard papers desk (Workspace_0003) — the second-floor dashboard entry.
+// Centre of the papers cluster in source px.
+const PAPERS_PX = 150, PAPERS_PY = 560;
+const PAPERS_X = sx2w(PAPERS_PX), PAPERS_Y = sy2w(PAPERS_PY);
+const PAPERS_SELECT_R = 120;
+
+// Fireplace (solid body centre, source ~1110,3040) — drives a proximity ambient.
+const FIRE_X = sx2w(1110), FIRE_Y = sy2w(3010);
+const FIRE_NEAR = 130;   // full volume within this radius (world px)
+const FIRE_FAR  = 380;   // silent beyond this radius
+const FIRE_MAX_VOL = 0.7;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  SEATING — sofas (floor 1 only)
+// ═══════════════════════════════════════════════════════════════════════════════
+// Sofa 1 (Workspace_0009, the big L sofa): a continuous vertical seating strip.
+// X is FIXED (the seat's depth on the cushion); Y is wherever the player clicked,
+// clamped to the strip. Art-reference bbox in source px.
+const SOFA1_PX0 = 1816, SOFA1_PY0 = 1781, SOFA1_PX1 = 2002, SOFA1_PY1 = 2747;
+const SOFA1_X  = sx2w((SOFA1_PX0 + SOFA1_PX1) / 2);
+const SOFA1_Y0 = sy2w(SOFA1_PY0), SOFA1_Y1 = sy2w(SOFA1_PY1);
+const SOFA1_SELECT_R = 150;          // proximity to show the sit prompt / accept a click
+const SOFA_MIN_GAP = PLAYER_SIZE * 0.85;  // min spacing between two seated players
+
+// Sofa 2 (Workspace_0011, the two blue sofas): 8 fixed seat slots, source px centres.
+const SOFA2_SPOTS_PX = [
+    [411, 176], [617, 176], [847, 176], [1073, 176],
+    [398, 844], [604, 844], [834, 844], [1060, 844],
+];
+const SOFA2_SPOTS = SOFA2_SPOTS_PX.map(([px, py], i) => ({ id: `sofa2_${i}`, x: sx2w(px), y: sy2w(py), dir: (py < 500) ? 'down' : 'up' }));
+const SOFA2_SELECT_R = 110;
+
+// Books Library Desk
+const BOOKS_LIBRARY_POS = { x: sx2w(730), y: sy2w(510) };
+const BOOKS_LIBRARY_SELECT_R = 250;  // proximity: how close to show the prompt / count as "near"
+const BOOKS_LIBRARY_CLICK_R = 90;    // click/tap must land on the desk itself, not just anywhere
+                                      // nearby — SOFA2_SPOTS sit inside SELECT_R, so a loose click
+                                      // radius here would swallow "sit on the sofa" taps too.
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  MINIGAME ENTRY — games table (Workspace_0006), floor 1, break-time only.
+//  Race + coffee use the host/ready lobby panel (#race-panel — a generic minigame
+//  lobby UI, see showCoffeeLobby); laptop-boss is solo (confirm modal → straight in).
+// ═══════════════════════════════════════════════════════════════════════════════
+function _zoneCenter(px0, py0, px1, py1) { return { x: sx2w((px0 + px1) / 2), y: sy2w((py0 + py1) / 2) }; }
+const GAME_RACE_ZONE   = _zoneCenter(366, 1585, 481, 1661);
+const GAME_BOSS_ZONE   = _zoneCenter(109, 2217, 188, 2330);
+const GAME_COFFEE_ZONE = _zoneCenter(108, 2439, 186, 2552);
+const GAME_ZONE_SELECT_R = 130;   // proximity to show the prompt / accept a join click
+const GAME_QUEUE_LEAVE_R = 300;   // walking this far from the zone while still in the LOBBY phase drops you out
+
 // Easing Functions
 const easeOutExpo = (x) => x === 1 ? 1 : 1 - Math.pow(2, -10 * x);
 const easeOutBack = (x) => {
@@ -2160,6 +2688,23 @@ const easeOutBounce = (x) => {
     else                   return n1 * (x -= 2.625 / d1) * x + 0.984375;
 };
 
+// Starts every currently-active focus sound, but spread a beat apart instead of
+// all in the same tick. Each cold start (buffer not yet cached) fires a fetch +
+// decodeAudioData — a multi-sound saved mix firing all of those concurrently is a
+// real memory/CPU spike right at work-session-start, and Safari's audio decoder is
+// notably less tolerant of that burst than Chrome's (this was flagged as a Safari
+// crash specifically when starting a session). Already-buffered/looping sounds are
+// unaffected — startSound() itself no-ops once sound.nodes exists.
+function staggerStartActiveSounds(engine) {
+    if (!engine) return;
+    let i = 0;
+    for (const [name, config] of Object.entries(engine.sounds)) {
+        if (!config.active) continue;
+        setTimeout(() => engine.startSound(name), i * 150);
+        i++;
+    }
+}
+
 function isBreakActive() {
     return (gameState.pomodoro.active && gameState.pomodoro.phase === 'break')
         || (gameState.freeMode.active && gameState.freeMode.phase === 'break');
@@ -2173,10 +2718,27 @@ function localInWorkPhase() {
         || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
 }
 
+// True while a session is active in any NON-break phase (work/wait/end). Unlike
+// checking `pomodoro.active`/`freeMode.active` alone, this correctly allows
+// sitting/playing/dashboard during a break — those checks used to block them
+// because the session doc stays "active" through the whole break too.
+function sessionBlocksInteraction() {
+    return (gameState.pomodoro.active && gameState.pomodoro.phase !== 'break')
+        || (gameState.freeMode.active && gameState.freeMode.phase !== 'break');
+}
+
 // True while any break minigame (race / coffee / laptop-boss) is running, including
 // its lobby/teleport phases.
 function isMinigameActive() {
     return !!(gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active);
+}
+
+// True from the moment a minigame's overlay/UI is on screen (queue lobby, boss confirm
+// modal, or the game itself) until the player explicitly closes it — used to freeze
+// world movement so you can't walk your avatar around behind the overlay.
+function isMinigameOverlayOpen() {
+    return isMinigameActive() || !!_activeLobbyType()
+        || !!document.getElementById('boss-confirm-modal')?.classList.contains('active');
 }
 
 // Force-exit whatever minigame is running (used when prayer time arrives — the athan
@@ -3025,7 +3587,7 @@ function _relocateActiveSession(laptop) {
         trackSessionForReclaim();       // fresh live snapshot (abandonedAt:null) + arm
     }
     const p = gameState.players[gameState.userId];
-    if (p) { teleportEntity(p, laptop.sitX, laptop.sitY); updatePlayerPosition(laptop.sitX, laptop.sitY); }
+    if (p) { forcePlayerFloor(p, laptop.floor || 1); if (p.renderScale === undefined) p.renderScale = desiredPlayerScale(p); p.renderScale = desiredPlayerScale(p); teleportEntity(p, laptop.sitX, laptop.sitY); updatePlayerPosition(laptop.sitX, laptop.sitY); }
 }
 
 // After the Firebase socket silently reconnects, undo any session-freeing
@@ -3093,6 +3655,18 @@ function screenToWorld(clientX, clientY) {
         y: (canvasY - H / 2) / gameState.zoom - gameState.camera.y
     };
 }
+// Inverse of screenToWorld — world coords → page (clientX/clientY) coords, for
+// anchoring DOM UI (popups, prompts) to a point in the world.
+function worldToScreen(wx, wy) {
+    const rect = gameState.canvas.getBoundingClientRect();
+    const dpr = gameState.dpr || 1;
+    const W = gameState.canvas.width / dpr;
+    const H = gameState.canvas.height / dpr;
+    return {
+        x: rect.left + (wx + gameState.camera.x) * gameState.zoom + W / 2,
+        y: rect.top + (wy + gameState.camera.y) * gameState.zoom + H / 2
+    };
+}
 
 // The entrance whoosh, prefetched over the network the moment the page loads (the
 // slow part is the download). We can't DECODE it yet — there's no AudioContext
@@ -3114,8 +3688,9 @@ function init() {
     loadAssets();
     // Race track (6 MB PNG + pixel classification) is deliberately NOT loaded
     // here — startGame() loads it on idle, race entry ensures it. See loadRaceTrackAsset.
-    setupLobbySelection();   // ← shows lobby screen first; calls setupUserSelection internally
+    setupMenuScreen();       // ← وضع التجربة entry; the menu itself is driven by initDiscordOAuth
     setupModal();
+    setupBossConfirmUI();
     initWindParticles();
     initAmbientMotes();
     initLaptops();
@@ -3125,9 +3700,42 @@ function init() {
 }
 
 function loadAssets() {
-    gameState.assets.bg.src = 'Art/Bg.png';
-    gameState.assets.shadow.src = 'Art/Shadow.png';
-    gameState.assets.tables.src = 'Art/Tables.png';
+    // ─── NEW WORLD ART ──────────────────────────────────────────────────────────
+    // One combined scene (2210×3160). Order below = paint order. The huge
+    // background + overlays are a few MB each; render() guards on .complete so the
+    // login screen never waits on them, and the service worker caches Art/ after
+    // the first load. onload on the walls kicks the collision-mask build.
+    const WS = 'Art/Workspace/';
+    // ~15 MB across 16 layers, all kicked off at page parse. Left at default
+    // priority the browser races them against the things that decide how fast the
+    // MENU appears — the Discord token check, the Firebase lobby read, the fonts,
+    // the logo. Marking them low tells the connection scheduler to yield to those
+    // first; the art still lands well before the user finishes reading the menu,
+    // and the boot screen covers whatever's left. `decoding:async` keeps the
+    // 2210×3160 decodes off the main thread so they can't jank the menu's
+    // animations. Both are ignored by browsers that don't support them.
+    for (const im of Object.values(gameState.assets)) {
+        if (im instanceof Image) { try { im.fetchPriority = 'low'; im.decoding = 'async'; } catch (_) {} }
+    }
+    gameState.assets.wBackground.src   = WS + 'Workspace_0014_Background.png';
+    gameState.assets.wWalls.src        = WS + 'Workspace_0013_Walls.png';
+    gameState.assets.wFireplace.src    = WS + 'Workspace_0012_Fireplace.png';
+    gameState.assets.wBooksSofas.src   = WS + 'Workspace_0011_Books_Sofas.png';
+    gameState.assets.wBooksLibrary.src = WS + 'Workspace_0010_Books_Library.png';
+    gameState.assets.wSofa.src         = WS + 'Workspace_0009_Sofa.png';
+    gameState.assets.wLaptops.src      = WS + 'Workspace_0008_Laptops_Table.png';
+    gameState.assets.wLaptopLights.src = WS + 'Workspace_0008_Laptops_Table_Laptop_Lights.png';
+    gameState.assets.wStairs.src       = WS + 'Workspace_0007_Stairs.png';
+    gameState.assets.wGames.src        = WS + 'Workspace_0006_Games_Table.png';
+    gameState.assets.wSecondBg.src     = WS + 'Workspace_0005_Second_Floor_Background.png';
+    gameState.assets.wSecondLaptops.src= WS + 'Workspace_0004_Second_Floor_Laptops_Table.png';
+    gameState.assets.wSecondLaptopLights.src = WS + 'Workspace_0004_Second_Floor_Laptops_Table_Laptop_Lights.png';
+    gameState.assets.wSecondPapers.src = WS + 'Workspace_0003_Second_Floor_Papers_Table.png';
+    gameState.assets.wOverlayDay2.src  = WS + 'Workspace_0002_(Normal)Day-Overlay-2.png';
+    gameState.assets.wOverlayDay.src   = WS + 'Workspace_0001_(Overlay)Day-Overlay.png';
+    buildWorldCollision();   // idempotent; re-runs itself once each layer decodes
+
+    gameState.assets.book.src = 'Art/Book.png';
     gameState.assets.race.src = 'Art/race.png';
     gameState.assets.coffeeZone.src     = 'Art/Coffee.png';
     gameState.assets.coffeeMug.src      = 'Art/Coffee mug.png';
@@ -3221,61 +3829,581 @@ function drawAmbientMotes() {
     ctx.restore();
 }
 
+// Laptops now live at hand-placed spots on the two laptop desks. Each has a `dir`
+// telling the kidnap which way to drag the player into the seat, and a `floor`
+// (interaction is floor-gated so a ground player can't sit a second-floor laptop
+// that visually overlaps them). Kept the same {id, sit/intermediate} shape the
+// kidnap animation already reads.
+const _DIR_VEC = { left: [-1, 0], right: [1, 0], up: [0, -1], down: [0, 1] };
 function initLaptops() {
-    const rows = [0.25, 0.75];
-    const cols = [0.12, 0.31, 0.5, 0.69, 0.88];
-    let index = 1;
-    rows.forEach((ry, rIdx) => {
-        cols.forEach((cx) => {
-            const worldX = TABLE_BOX.minX + (TABLE_WIDTH * cx);
-            const worldY = TABLE_BOX.minY + (TABLE_HEIGHT * ry);
-            const sitY = (rIdx === 0) ? TABLE_BOX.minY - 40 : TABLE_BOX.maxY + 40;
-            const intermediateY = (rIdx === 0) ? sitY - 180 : sitY + 180;
-
-            gameState.laptops.push({
-                id: index++,
-                x: worldX,
-                y: worldY,
-                sitX: worldX,
-                sitY: sitY,
-                intermediateX: worldX,
-                intermediateY: intermediateY,
-                claimedBy: null,
-                endTime: 0,
-                phase: 'none'
-            });
+    const EXTRA = 175;  // how far PAST the seat the grab yanks you before dragging back
+    LAPTOP_DEFS.forEach((d, i) => {
+        const lx = sx2w(d.px), ly = sy2w(d.py);
+        const [vx, vy] = _DIR_VEC[d.dir] || _DIR_VEC.down;
+        const sitX = lx + vx * LAPTOP_SIT_GAP;
+        const sitY = ly + vy * LAPTOP_SIT_GAP;
+        gameState.laptops.push({
+            id: i + 1,
+            x: lx, y: ly,
+            dir: d.dir,
+            floor: d.floor,
+            sitX, sitY,
+            // Grab point: FURTHER along `dir`, well past the seat (away from the
+            // laptop). The kidnap yanks you out to here, then quickly drags you back
+            // IN to the seat — like the old animation (grab far, snap to rest).
+            intermediateX: sitX + vx * EXTRA,
+            intermediateY: sitY + vy * EXTRA,
+            claimedBy: null,
+            endTime: 0,
+            phase: 'none',
+            lightBox: d.lightBox || null,
+            lightAlpha: 0,   // lerped toward claimedBy-ness each frame, see updateLaptopLights
         });
     });
 }
 
-// ─── Lobby Selection Screen ───────────────────────────────────────────────────
-// Shows before the user list.  Renders one button per LOBBY_CONFIG entry so
-// adding a lobby only requires touching LOBBY_CONFIG at the top of this file.
-function setupLobbySelection() {
-    const lobbyScreen  = document.getElementById('lobby-screen');
-    const loginScreen  = document.getElementById('login-screen');
-    const buttonsWrap  = document.getElementById('lobby-buttons');
+// ═══════════════════════════════════════════════════════════════════════════════
+//  WORLD ENGINE — alpha collision masks, floors, dynamic scale, second-floor fade
+// ═══════════════════════════════════════════════════════════════════════════════
+const worldCollision = { floor1: null, floor2desks: null, stairs: null, built: false, _tries: 0 };
 
-    // Dynamically render one button per configured lobby
-    buttonsWrap.innerHTML = '';
-    for (const [lobbyId, cfg] of Object.entries(LOBBY_CONFIG)) {
-        const btn = document.createElement('button');
-        btn.className = `lobby-btn ${cfg.iconClass || ''}`;
-        btn.dataset.lobby = lobbyId;
-        btn.innerHTML = `
-            <div class="lobby-icon" aria-hidden="true"></div>
-            <div class="lobby-label">${cfg.label}</div>
-        `;
-        btn.addEventListener('click', () => {
-            gameState.selectedLobby = lobbyId;
-            lobbyScreen.classList.remove('active');
-            loginScreen.classList.add('active');
-            setupUserSelection();   // now that a lobby is chosen, build the user list
-        });
+// Rasterise an image into a MASK_W×MASK_H alpha bitmap (1 = solid). `threshold`
+// ignores near-transparent pixels (empty art never collides).
+function _rasterMask(img, threshold) {
+    const c = document.createElement('canvas'); c.width = MASK_W; c.height = MASK_H;
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.clearRect(0, 0, MASK_W, MASK_H);
+    g.drawImage(img, 0, 0, MASK_W, MASK_H);
+    const d = g.getImageData(0, 0, MASK_W, MASK_H).data;
+    const out = new Uint8Array(MASK_W * MASK_H);
+    for (let i = 0, p = 0; i < out.length; i++, p += 4) {
+        if (d[p + 3] >= threshold) out[i] = 1;
+    }
+    return out;
+}
+function _orMask(dst, src) { for (let i = 0; i < dst.length; i++) if (src[i]) dst[i] = 1; }
 
-        buttonsWrap.appendChild(btn);
+// Fills a rectangle (given in SOURCE-image px, matching art-reference coords 1:1)
+// solid into a mask. Used for invisible ghost colliders with no backing sprite.
+function _fillMaskRectSrc(mask, sx0, sy0, sx1, sy1) {
+    const mx0 = Math.max(0, Math.floor(sx0 / MASK_DIV));
+    const mx1 = Math.min(MASK_W - 1, Math.ceil(sx1 / MASK_DIV));
+    const my0 = Math.max(0, Math.floor(sy0 / MASK_DIV));
+    const my1 = Math.min(MASK_H - 1, Math.ceil(sy1 / MASK_DIV));
+    for (let y = my0; y <= my1; y++) {
+        const row = y * MASK_W;
+        for (let x = mx0; x <= mx1; x++) mask[row + x] = 1;
+    }
+}
+
+// One-pass morphology (4-neighbour). dilate = grow solid by 1px (thickens thin
+// walls so a sprinting player can't tunnel through the thin room divider).
+// erode = shrink solid by 1px (peels the thin furniture legs / feet that poke out,
+// so only the actual table body collides — repeated N× for N px).
+function _morph(src, grow) {
+    const W = MASK_W, H = MASK_H;
+    const out = new Uint8Array(W * H);
+    for (let y = 0; y < H; y++) {
+        for (let x = 0; x < W; x++) {
+            const i = y * W + x;
+            const s = src[i];
+            if (grow) {
+                out[i] = (s || (x > 0 && src[i - 1]) || (x < W - 1 && src[i + 1]) ||
+                          (y > 0 && src[i - W]) || (y < H - 1 && src[i + W])) ? 1 : 0;
+            } else {
+                out[i] = (s && (x === 0 || src[i - 1]) && (x === W - 1 || src[i + 1]) &&
+                          (y === 0 || src[i - W]) && (y === H - 1 || src[i + W])) ? 1 : 0;
+            }
+        }
+    }
+    return out;
+}
+function _dilate(m, n) { for (let i = 0; i < n; i++) m = _morph(m, true);  return m; }
+function _erode(m, n)  { for (let i = 0; i < n; i++) m = _morph(m, false); return m; }
+
+// Build the floor-1 collision (walls + ground furniture + SOLID fireplace), the
+// floor-2 desk collision, and the tight stair mask. Idempotent + self-retrying
+// until every layer has decoded. Walls are DILATED (thin divider won't be tunneled)
+// and furniture is ERODED (thin legs/feet don't collide — only the real body).
+function buildWorldCollision() {
+    const A = gameState.assets;
+    // wLaptops (ground desk, Workspace_0008) is deliberately NOT alpha-rasterized here —
+    // its collider is a manual rect (GROUND_TABLE_GHOST_*) matched to an art reference
+    // instead, since the auto alpha shape didn't match the desk well.
+    const furniture = [A.wBooksSofas, A.wBooksLibrary, A.wSofa, A.wGames];
+    const desks  = [A.wSecondLaptops, A.wSecondPapers];
+    const need = [...furniture, A.wWalls, A.wStairs, A.wFireplace, ...desks];
+    if (!need.every(im => im.complete && im.naturalWidth > 0)) {
+        if (worldCollision._tries++ < 250) setTimeout(buildWorldCollision, 120);
+        return;
+    }
+    // Threshold 130 catches solid bodies + firm edges but drops the soft drop-shadows
+    // these layers carry (alpha < ~60), so shadows never inflate the hitbox.
+    let walls = _rasterMask(A.wWalls, 130);
+    walls = _dilate(walls, 3);                             // thicken thin walls (divider)
+    let furn = new Uint8Array(MASK_W * MASK_H);
+    for (const im of furniture) _orMask(furn, _rasterMask(im, 130));
+    furn = _erode(furn, 3);                                // peel thin legs/feet
+    const f1 = new Uint8Array(MASK_W * MASK_H);
+    _orMask(f1, walls);
+    _orMask(f1, furn);
+    _orMask(f1, _rasterMask(A.wFireplace, 205));           // fireplace: solid body only, not the soft light
+    _fillMaskRectSrc(f1, STAIR_GHOST_PX0, STAIR_GHOST_PY0, STAIR_GHOST_PX1, STAIR_GHOST_PY1); // stair dead-zone ghost collider
+    _fillMaskRectSrc(f1, GROUND_TABLE_GHOST_PX0, GROUND_TABLE_GHOST_PY0, GROUND_TABLE_GHOST_PX1, GROUND_TABLE_GHOST_PY1); // ground laptop desk collider
+    let fd = new Uint8Array(MASK_W * MASK_H);
+    for (const im of desks) _orMask(fd, _rasterMask(im, 130));
+    fd = _erode(fd, 3);
+    worldCollision.floor1 = f1;
+    worldCollision.floor2desks = fd;
+    // Stair footprint, DILATED generously so the walkable ramp is wide + forgiving
+    // (a tight mask made you stick/oscillate on the edges while climbing).
+    worldCollision.stairs = _dilate(_rasterMask(A.wStairs, 40), 8);
+    worldCollision.built = true;
+    buildWorldCache();
+}
+
+// ── Pre-composited world layers (perf) ──────────────────────────────────────────
+// The scene is ~9 ground layers + 3 second-floor layers. Compositing them into two
+// cached canvases ONCE (built after decode) turns ~12 large per-frame drawImages
+// into 2 — important on the owner's phone. Resolution is capped on reduced tiers so
+// the offscreen canvases don't blow the mobile canvas-memory budget.
+const worldCache = { ground: null, second: null };
+// Set by buildWorldCache once the whole world is decoded + composited. startGame
+// checks it so a user who idled on the menu long enough for the art to finish
+// isn't held on the boot screen for no reason.
+let _worldReady = false;
+function buildWorldCache() {
+    const A = gameState.assets;
+    // native width on desktop; smaller on mobile/reduced tiers to save GPU memory
+    const cw = isReducedGraphics() ? Math.round(IMG_W * 0.7) : IMG_W;
+    const ch = Math.round(cw * (IMG_H / IMG_W));
+    const mk = (layers) => {
+        const c = document.createElement('canvas'); c.width = cw; c.height = ch;
+        const g = c.getContext('2d');
+        for (const im of layers) if (im && im.complete && im.naturalWidth) g.drawImage(im, 0, 0, cw, ch);
+        return c;
+    };
+    const groundLayers = [A.wBackground, A.wWalls, A.wFireplace, A.wBooksSofas,
+        A.wBooksLibrary, A.wSofa, A.wLaptops, A.wStairs, A.wGames];
+    const secondLayers = [A.wSecondBg, A.wSecondLaptops, A.wSecondPapers];
+    worldCache.ground = mk(groundLayers);
+    worldCache.second = mk(secondLayers);
+    // Free the source layer images now that both the collision masks AND the two
+    // cache canvases are built — keeping ~12 decoded 2210×3160 images alive (~340 MB)
+    // is what was crashing Safari. The day overlays are drawn per-frame so they stay.
+    for (const im of [...groundLayers, ...secondLayers]) {
+        try { im.src = ''; } catch (_) {}
     }
 
+    // The world is fully decoded, masked and composited — this is the real
+    // "loaded" moment, so let the boot screen finish and hand off to the
+    // entrance. No-op if the boot screen isn't up (e.g. this ran while the
+    // user is still sitting on the menu).
+    _worldReady = true;
+    if (gameState.userId) finishBootScreen();
+}
+
+// Sample one mask pixel at a world point. Off-image = solid (blocked).
+function _maskAt(mask, worldX, worldY) {
+    if (!mask) return false;
+    const mx = (((worldX / WORLD_SCALE) + IMG_W / 2) / MASK_DIV) | 0;
+    const my = (((worldY / WORLD_SCALE) + IMG_H / 2) / MASK_DIV) | 0;
+    if (mx < 0 || my < 0 || mx >= MASK_W || my >= MASK_H) return true;
+    return mask[my * MASK_W + mx] === 1;
+}
+// Solid if the player's BODY (a ring around the feet point, not just the centre)
+// overlaps the mask — so the avatar stops when its EDGE meets furniture instead of
+// burying its centre in it, and thin walls can't slip between sample points.
+const _BODY_R = PLAYER_SIZE * 0.40;   // world-px collision radius (~28)
+const _BODY_PTS = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1],
+                   [0.7, 0.7], [-0.7, 0.7], [0.7, -0.7], [-0.7, -0.7]];
+function _maskSolid(mask, worldX, worldY) {
+    for (const [dx, dy] of _BODY_PTS) {
+        if (_maskAt(mask, worldX + dx * _BODY_R, worldY + dy * _BODY_R)) return true;
+    }
+    return false;
+}
+
+// Stairs bridge the two floors: freely walkable (no collision), but standing on them
+// drives the dynamic scale. `isOnStairs` samples the REAL painted stair footprint
+// (a tight diagonal band) — not a big bbox — so you can't phase through from beside
+// or above the steps.
+function isOnStairs(x, y) {
+    return _maskAt(worldCollision.stairs, x, y);
+}
+function stairScaleAt(x) {
+    const t = Math.max(0, Math.min(1, (STAIR_X1 - x) / (STAIR_X1 - STAIR_X0)));
+    return 1 + (FLOOR2_SCALE - 1) * t;
+}
+// The laptop the local player is locked into (or animating toward), if any.
+function _activeLaptopForFloor() {
+    const id = gameState.freeMode.active ? gameState.freeMode.laptopId
+             : gameState.pomodoro.active ? gameState.pomodoro.laptopId
+             : (gameState.anim.active && gameState.anim.laptop) ? gameState.anim.laptop.id : null;
+    return id != null ? gameState.laptops.find(l => l.id === id) : null;
+}
+function desiredPlayerScale(player) {
+    if (isOnStairs(player.x, player.y)) return stairScaleAt(player.x);
+    return (player.floor === 2) ? FLOOR2_SCALE : 1.0;
+}
+
+// ── Seating (sofas) ──────────────────────────────────────────────────────────
+// Occupancy is derived live from every synced player's sitSeatId — no dedicated
+// Firebase node, it rides the existing users/{uid} sync (updatePlayerPosition /
+// listenToPlayers) that every client already listens to (Firebase Cost Rules:
+// reuse an already-broadcast doc over adding a new listener).
+function canSit() {
+    return !sessionBlocksInteraction()
+        && !gameState.isLockedIn && !gameState.anim.active
+        && !gameState.isSitting && !gameState.sitAnim.active;
+}
+// True while sitting on the BIG sofa specifically (Workspace_0009) — this is the
+// one that gets the work-session-style relax ambience (dark vignette, slowed wind/
+// fog, focus sounds + YouTube + prayer panels). The Books_Sofas (sofa2) spots don't.
+function sofaFocusActive() {
+    const p = gameState.players[gameState.userId];
+    return !!(gameState.isSitting && p && p.sitSeatId === 'sofa1');
+}
+// Shows/hides the same ambience bundle a work session shows, minus anything
+// timer/task related (no current-task-panel, no pomodoro/free-mode state touched).
+function applySofaFocusUI(active) {
+    document.getElementById('focus-sounds-panel')?.classList.toggle('active', active);
+    setMobileFocusMode(active);
+    // The master gain gets faded to 0 whenever a work session ends (or azkar closes
+    // outside one) and nothing ever ramped it back up for sofa relaxing — so toggling
+    // a sound here looked fine in the UI (item still gets `.active`) but played
+    // silently. Restore it on sit, fade it back out on stand (mirrors pomodoro/free
+    // mode's own fadeToMaster(1.0)/fadeToMaster(0) around a work session).
+    if (gameState.focusAudioEngine) {
+        gameState.focusAudioEngine.fadeToMaster(active ? 1.0 : 0, active ? 1.2 : 0.8);
+    }
+}
+// Finds a free Y on sofa1 near `wantY`, nudging away from anyone already seated
+// within SOFA_MIN_GAP. Returns null if the whole strip is full near that point.
+function _findFreeSofa1Y(wantY, excludeUid) {
+    const clamped = Math.max(SOFA1_Y0, Math.min(SOFA1_Y1, wantY));
+    const occupied = Object.values(gameState.players)
+        .filter(p => p.userId !== excludeUid && p.sitSeatId === 'sofa1' && p.sitY != null)
+        .map(p => p.sitY);
+    const fits = (y) => occupied.every(oy => Math.abs(oy - y) >= SOFA_MIN_GAP);
+    if (fits(clamped)) return clamped;
+    for (let step = 1; step <= 12; step++) {
+        const d = step * (SOFA_MIN_GAP / 2);
+        const up = clamped - d, down = clamped + d;
+        if (up >= SOFA1_Y0 && fits(up)) return up;
+        if (down <= SOFA1_Y1 && fits(down)) return down;
+    }
+    return null;
+}
+function _sofa2SpotFree(spotId, excludeUid) {
+    return !Object.values(gameState.players).some(p => p.userId !== excludeUid && p.sitSeatId === spotId);
+}
+
+// Smooth slide-in tween into a seat — direct x/y override each frame, eased, the
+// same technique the laptop kidnap animation uses (see updateSitAnimation).
+// Sit/stand hop durations (seconds) — anticipate (crouch+squash) → jump (arc, mid-air
+// stretch) → land (overshoot squash, springs back to normal).
+const SIT_ANTICIPATE_DUR = 0.12, SIT_JUMP_DUR = 0.30, SIT_LAND_DUR = 0.22;
+function startSitAnimation(seatId, targetX, targetY) {
+    const player = gameState.players[gameState.userId];
+    if (!player) return;
+    gameState.sitReturnPos = { x: player.x, y: player.y };
+    gameState.sitAnim = {
+        active: true, dir: 'in', stage: 'anticipate', stageT: 0,
+        startPos: { x: player.x, y: player.y },
+        targetX, targetY,
+        scaleX: 1, scaleY: 1, hopY: 0,
+    };
+    gameState.isSitting = true;
+    player.sitSeatId = seatId;
+    player.sitX = targetX;
+    player.sitY = targetY;
+    // Kill the walk/run animation immediately — clicking a sofa mid-sprint used to
+    // keep the running bounce/footsteps playing on a stationary, seated avatar.
+    if (player.isMoving) {
+        player.isMoving = false;
+        player.isSprinting = false;
+        sendPositionWS(player.x, player.y, true);
+    }
+    updatePlayerPosition(player.x, player.y);   // pushes sitSeatId/sitX/sitY right away
+    if (seatId === 'sofa1') applySofaFocusUI(true);
+    if (gameState.focusAudioEngine) gameState.focusAudioEngine.playEffect('sofaSit');
+    else playSoundRobust(gameState.sounds.sofaSit);
+}
+// `instant` skips the animated hop-out (used when there's no time to animate, e.g.
+// the kidnap safety net) and clears the seated state on the spot.
+function standUp(instant) {
+    const player = gameState.players[gameState.userId];
+    if (!player || !gameState.isSitting) return;
+    const wasSofa1 = player.sitSeatId === 'sofa1';
+    if (!instant) {
+        if (gameState.focusAudioEngine) gameState.focusAudioEngine.playEffect('sofaStand');
+        else playSoundRobust(gameState.sounds.sofaStand);
+    }
+    if (instant) {
+        gameState.sitAnim.active = false;
+        gameState.isSitting = false;
+        player.sitSeatId = null;
+        player.sitX = null;
+        player.sitY = null;
+        updatePlayerPosition(player.x, player.y);
+        if (wasSofa1) applySofaFocusUI(false);
+        return;
+    }
+    const back = gameState.sitReturnPos || { x: player.x, y: player.y };
+    gameState.sitAnim = {
+        active: true, dir: 'out', stage: 'anticipate', stageT: 0,
+        startPos: { x: player.x, y: player.y },
+        targetX: back.x, targetY: back.y,
+        scaleX: 1, scaleY: 1, hopY: 0,
+    };
+    player.sitSeatId = null;
+    player.sitX = null;
+    player.sitY = null;
+    updatePlayerPosition(player.x, player.y);   // clears sitSeatId for everyone else right away
+    if (wasSofa1) applySofaFocusUI(false);
+}
+// Per-frame hop animation — mirrors updateAnimation's direct x/y override, but adds a
+// squash/stretch scale (read by drawPlayers for the local player) and a vertical arc
+// instead of a plain slide. Same three stages whether sitting down or standing up.
+function updateSitAnimation() {
+    const sa = gameState.sitAnim;
+    if (!sa.active) return;
+    const player = gameState.players[gameState.userId];
+    if (!player) { sa.active = false; gameState.isSitting = false; return; }
+
+    sa.stageT += gameState.dtFactor / 60;
+
+    if (sa.stage === 'anticipate') {
+        const t = Math.min(1, sa.stageT / SIT_ANTICIPATE_DUR);
+        const e = 1 - (1 - t) * (1 - t);   // easeOutQuad
+        sa.scaleX = 1 + 0.12 * e;
+        sa.scaleY = 1 - 0.12 * e;
+        sa.hopY = 0;
+        player.x = sa.startPos.x;
+        player.y = sa.startPos.y;
+        if (t >= 1) { sa.stage = 'jump'; sa.stageT = 0; }
+    } else if (sa.stage === 'jump') {
+        const t = Math.min(1, sa.stageT / SIT_JUMP_DUR);
+        const moveT = t * t * (3 - 2 * t);   // smoothstep — eases in and out of the arc
+        player.x = sa.startPos.x + (sa.targetX - sa.startPos.x) * moveT;
+        player.y = sa.startPos.y + (sa.targetY - sa.startPos.y) * moveT;
+        const arc = Math.sin(t * Math.PI);   // 0 → 1 → 0 across the flight
+        sa.hopY = -arc * 26;                 // hop upward, peaks mid-flight
+        sa.scaleX = 1 - 0.12 * arc;           // thin...
+        sa.scaleY = 1 + 0.16 * arc;           // ...and tall while airborne
+        if (t >= 1) { sa.stage = 'land'; sa.stageT = 0; }
+    } else if (sa.stage === 'land') {
+        const t = Math.min(1, sa.stageT / SIT_LAND_DUR);
+        const settle = easeOutBack(t);       // overshoots past 1 then settles
+        player.x = sa.targetX;
+        player.y = sa.targetY;
+        sa.hopY = 0;
+        // Squash flat on impact, springs back to normal (with a tiny reverse wobble
+        // as `settle` overshoots past 1) rather than snapping still.
+        sa.scaleX = 1 + 0.18 * (1 - settle);
+        sa.scaleY = 1 - 0.18 * (1 - settle);
+        if (t >= 1) {
+            sa.scaleX = 1; sa.scaleY = 1; sa.hopY = 0;
+            sa.active = false;
+            if (sa.dir === 'in') {
+                updatePlayerPosition(player.x, player.y);
+            } else {
+                gameState.isSitting = false;
+                updatePlayerPosition(player.x, player.y);
+            }
+        }
+    }
+}
+
+// ── Minigame entry (games table) ─────────────────────────────────────────────
+// Race + coffee route through a shared host/ready lobby (phase:'lobby' on the
+// session — the panel + start-button UI already existed for race, unused; see
+// showRaceLobby/showCoffeeLobby/setupRaceUI). First presser near a zone creates
+// the lobby and becomes host; later pressers join it. Host presses ابدأ to launch.
+function joinOrCreateMinigameLobby(type) {
+    if (!gameState.userId || !isBreakActive()) return;
+    const st = gameState[type];
+    if (st.active || st.teleportAnim) return;
+    const alreadyIn = Object.values(st.activeSessions || {}).some(s => s?.participants?.[gameState.userId]);
+    if (alreadyIn) return;
+    const player = gameState.players[gameState.userId];
+    if (!player) return;
+    playSoundRobust(gameState.sounds.minigameReady);
+
+    const openEntry = Object.entries(st.activeSessions || {}).find(([, s]) => s.phase === 'lobby');
+    const base = { username: player.username || 'لاعب', avatar: player.avatar || '', returnPoint: { x: player.x, y: player.y } };
+    const extra = type === 'coffee' ? { mugX: 0.5, score: 0, alive: true } : {};
+    if (openEntry) {
+        const [key, session] = openEntry;
+        const index = Object.keys(session.participants || {}).length;
+        update(ref(database), {
+            [lobbyPath(`minigames/${type}/sessions/${key}/participants/${gameState.userId}`)]: { ...base, index, ...extra }
+        });
+    } else {
+        const sessionId = `${gameState.userId}_${Date.now()}`;
+        if (gameState.isSirajGhost) onDisconnect(ref(database, lobbyPath(`minigames/${type}/sessions/${sessionId}`))).remove();
+        update(ref(database), {
+            [lobbyPath(`minigames/${type}/sessions/${sessionId}`)]: {
+                id: sessionId, hostId: gameState.userId, phase: 'lobby', createdAt: Date.now(),
+                participants: { [gameState.userId]: { ...base, index: 0, ...extra } }
+            }
+        });
+    }
+}
+function startHostedCoffee() {
+    const session = gameState.coffee.session;
+    if (!session || session.hostId !== gameState.userId || session.phase !== 'lobby') return;
+    update(ref(database), {
+        [coffeeSessionPath('phase')]: 'active',
+        [coffeeSessionPath('startTime')]: 0,
+        [coffeeSessionPath('sugars')]: null,
+        [coffeeSessionPath('results')]: null
+    });
+}
+function showCoffeeLobby(session) {
+    const panel = document.getElementById('race-panel');
+    const title = document.getElementById('race-title');
+    const status = document.getElementById('race-status');
+    const startBtn = document.getElementById('race-start');
+    const returnBtn = document.getElementById('race-return');
+    if (!panel || !title || !status || !startBtn || !returnBtn) return;
+    title.textContent = 'لعبة القهوة';
+    status.textContent = session.hostId === gameState.userId ? 'أنت المضيف' : 'بانتظار المضيف';
+    startBtn.textContent = 'ابدأ';
+    startBtn.style.display = session.hostId === gameState.userId ? 'block' : 'none';
+    returnBtn.textContent = session.hostId === gameState.userId ? 'إلغاء' : 'خروج';
+    returnBtn.style.display = 'block';
+    renderRacePlayerList(session);   // generic enough (avatar/name/host-or-ready) — reused as-is
+    panel.classList.remove('hidden');
+}
+// Which type (if any) currently has a lobby-phase session the local player is in —
+// drives the shared panel's ابدأ/عودة buttons (see setupRaceUI).
+function _activeLobbyType() {
+    if (gameState.race.session?.phase === 'lobby') return 'race';
+    if (gameState.coffee.session?.phase === 'lobby') return 'coffee';
+    return null;
+}
+// Walking far from the zone while still waiting in the LOBBY phase (not yet
+// racing/playing) drops you out — host leaving cancels the whole lobby.
+function updateMinigameLobbyProximity() {
+    const player = gameState.players[gameState.userId];
+    if (!player) return;
+    const zones = { race: GAME_RACE_ZONE, coffee: GAME_COFFEE_ZONE };
+    for (const type of ['race', 'coffee']) {
+        const session = gameState[type].session;
+        if (!session || session.phase !== 'lobby' || !session.participants?.[gameState.userId]) continue;
+        const z = zones[type];
+        if (Math.hypot(player.x - z.x, player.y - z.y) <= GAME_QUEUE_LEAVE_R) continue;
+        const pathFn = type === 'race' ? raceSessionPath : coffeeSessionPath;
+        if (session.hostId === gameState.userId) update(ref(database), { [pathFn()]: null });
+        else update(ref(database), { [pathFn(`participants/${gameState.userId}`)]: null });
+    }
+}
+// Laptop-boss: solo, no lobby — just a confirm modal then straight in.
+function openBossConfirm() {
+    if (!isBreakActive()) return;
+    const alreadyIn = Object.values(gameState.laptopBoss.activeSessions || {}).some(s => s?.participants?.[gameState.userId]);
+    if (alreadyIn || gameState.laptopBoss.active || gameState.laptopBoss.teleportAnim) return;
+    document.getElementById('boss-confirm-modal')?.classList.add('active');
+}
+
+// Per-frame: keep the LOCAL player's floor correct (pinned to the laptop's floor
+// while locked/animating; else flipped as they climb the stairs), then lerp every
+// player's renderScale toward its target (≈0.5 s for a forced snap; continuously
+// tracks position while on the stairs). Remote floors arrive via sync.
+function updateFloorsAndScales() {
+    const localId = gameState.userId;
+    const k = 1 - Math.pow(1 - 0.12, gameState.dtFactor);
+    const local = gameState.players[localId];
+    if (local) {
+        if (local.floor === undefined) local.floor = 1;
+        // Pin to the seated laptop's floor while locked in / being kidnapped — this
+        // is what keeps a second-floor work session from wrongly reading floor 1
+        // (which faded the whole mezzanine and hid the player from others). During
+        // the 'reach'/'align' phases of an active kidnap, the flip is deferred to
+        // the 'pull' phase's start (see updateAnimation) so a cross-floor grab
+        // transitions scale/opacity at the animation's midpoint, not instantly.
+        const deferringFlip = gameState.anim.active
+            && (gameState.anim.phase === 'reach' || gameState.anim.phase === 'align');
+        if (!deferringFlip && (gameState.isLockedIn || gameState.anim.active)) {
+            const lap = _activeLaptopForFloor();
+            if (lap) local.floor = lap.floor || 1;
+        } else if (!gameState.anim.active && isOnStairs(local.x, local.y)) {
+            // Reliable commit: once you've climbed up into the platform zone you're on
+            // floor 2; otherwise decide by how far up the ramp you are (hysteresis).
+            if (local.y < PLAT_Y1 - 10) {
+                local.floor = 2;
+            } else {
+                const t = Math.max(0, Math.min(1, (STAIR_X1 - local.x) / (STAIR_X1 - STAIR_X0)));
+                if (t > 0.5) local.floor = 2;
+                else if (t < 0.4) local.floor = 1;
+            }
+        }
+    }
+    for (const player of Object.values(gameState.players)) {
+        if (player.floor === undefined) player.floor = 1;
+        if (player.renderScale === undefined) player.renderScale = desiredPlayerScale(player);
+        player.renderScale += (desiredPlayerScale(player) - player.renderScale) * k;
+    }
+}
+
+// Force a floor (kidnap/teleport/session restore). The lerp in updateFloorsAndScales
+// does the actual scale transition; we just set the target floor.
+function forcePlayerFloor(player, floor) {
+    if (!player) return;
+    player.floor = floor;
+}
+
+// Second-floor proximity fade (client-side only). When the LOCAL player is on the
+// ground floor and walks UNDER the platform from the exposed EAST edge only, the
+// whole second floor (+ any players standing on it) fades out so the ground content
+// underneath is visible. Approaching from the south (the stair-entry side) never
+// fades it at all — south used to barely-fade too, now it's fully excluded.
+function updateSecondFloorFade() {
+    if (gameState.secondFloorVis === undefined) gameState.secondFloorVis = 1;
+    // Sitting (e.g. the lower book sofas) FREEZES the fade exactly where it is — a
+    // seat outside the trigger band used to snap the mezzanine back visible the
+    // instant you sat down mid-fade. Resume normal tracking only on stand-up (a
+    // kidnap still forces fully visible via the check below regardless of sitting).
+    if (gameState.isSitting && !gameState.anim.active) return;
+
+    const local = gameState.players[gameState.userId];
+    let rawTarget = 1;
+    // Never run the low-opacity effect during ANY kidnap animation (same-floor or
+    // cross-floor) — fading mid-animation, before the player has visually arrived,
+    // reads as a glitch. Keep the mezzanine fully visible for the whole kidnap.
+    if (!gameState.anim.active && local && (local.floor || 1) === 1
+        && local.y > PLAT_Y0 && local.y < PLAT_FADE_Y1) {
+        if (local.x <= PLAT_X1) {
+            rawTarget = 0;   // already under the platform — stays hidden regardless of direction
+        } else if (local.x < PLAT_X1 + PLAT_FADE_RANGE) {
+            // Transition band on the exposed east edge. Only track position while the
+            // player is actually moving LEFT/RIGHT through it — grazing it while
+            // walking vertically (or standing still) leaves the fade exactly where it
+            // was; the instant they turn to walk left/right this switches to the
+            // position-correct value and the lerp below eases smoothly toward it
+            // (never snaps), so it never triggers for someone who never meant to walk
+            // under the mezzanine.
+            if (local._moveDX) {
+                // Right side (PLAT_X1+RANGE) = fully visible, left side (PLAT_X1, the
+                // platform's own edge) = fully faded.
+                rawTarget = 1 - (PLAT_X1 + PLAT_FADE_RANGE - local.x) / PLAT_FADE_RANGE;
+            } else {
+                rawTarget = gameState.secondFloorVis;   // frozen — no horizontal intent yet
+            }
+        }
+    }
+    // Faster fade (was 0.14 — felt sluggish).
+    gameState.secondFloorVis += (rawTarget - gameState.secondFloorVis)
+        * (1 - Math.pow(1 - 0.26, gameState.dtFactor));
+}
+
+// ─── Menu screen ──────────────────────────────────────────────────────────────
+// The male/female chooser is GONE — entry is Discord-OAuth only, and the lobby
+// comes from the account (resolveUserLobby). This wires the one remaining
+// non-Discord entry point: وضع التجربة.
+function setupMenuScreen() {
     // وضع التجربة — password-gated siraj ghost entry
     const sirajLink = document.getElementById('siraj-test-link');
     const sirajPwModal = document.getElementById('siraj-pw-modal');
@@ -3310,8 +4438,9 @@ function setupLobbySelection() {
 }
 
 async function spawnSirajGhost() {
-    const loadingOverlay = document.getElementById('siraj-loading-overlay');
-    if (loadingOverlay) loadingOverlay.classList.add('active');
+    // Same boot screen a normal login gets — the ghost's own spinner overlay is gone.
+    _primeFocusAudio();               // still inside the دخول click; unlock audio now
+    showBootScreen('slide');
 
     const hue = Math.floor(Math.random() * 360);
     const sirajId = `siraj_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
@@ -3358,13 +4487,7 @@ async function spawnSirajGhost() {
 
     gameState.isSirajGhost = true;
     gameState.selectedLobby = 'male';
-    const _ls = document.getElementById('lobby-screen');
-    const _li = document.getElementById('login-screen');
-    const _dw = document.getElementById('discord-welcome-screen');
-    if (_ls) _ls.classList.remove('active');
-    if (_li) _li.classList.remove('active');
-    if (_dw) _dw.classList.remove('active');
-    if (loadingOverlay) loadingOverlay.classList.remove('active');
+    document.getElementById('login-screen')?.classList.remove('active');
     startGame({
         userId: sirajId,
         username: 'سراج',
@@ -3481,6 +4604,18 @@ function setupModal() {
         } else {
             startGame(user);
         }
+    });
+}
+
+function setupBossConfirmUI() {
+    const modal = document.getElementById('boss-confirm-modal');
+    const yesBtn = document.getElementById('boss-confirm-yes');
+    const noBtn = document.getElementById('boss-confirm-no');
+    if (!modal || !yesBtn || !noBtn) return;
+    noBtn.addEventListener('click', () => modal.classList.remove('active'));
+    yesBtn.addEventListener('click', () => {
+        modal.classList.remove('active');
+        triggerLaptopBossTeleport();
     });
 }
 
@@ -3619,6 +4754,7 @@ function startGame(userData) {
     gameState.focusAudioEngine = gameState.focusAudioEngine || new FocusAudioEngine();
     gameState.focusYTPlayer = new FocusYouTubePlayer();
     setupFocusPanelUI();
+    setupReadingUI();
 
     // Set active presence in game and set up disconnect presence cleanup
     const activeRef = ref(database, `users/${gameState.userId}/activeInGame`);
@@ -3801,6 +4937,7 @@ function startGame(userData) {
             const _defaultSpawn = getRandomSpawnPosition();
             let spawnX = _defaultSpawn.x, spawnY = _defaultSpawn.y;
             let locked = false;
+            let restoreFloor = 1;   // which floor to seat the restored player on
 
             // One-time migration: private state used to live under users/{uid}
             // (focusMix / focusPlayer / lastPomoSession), where every write fanned
@@ -3928,11 +5065,13 @@ function startGame(userData) {
                 if (laptop) {
                     spawnX = laptop.sitX;
                     spawnY = laptop.sitY;
+                    restoreFloor = laptop.floor || 1;   // second-floor laptop → seat on floor 2
                     if (!restoringFreeMode && (gameState.pomodoro.phase === 'work' || gameState.pomodoro.phase === 'wait')) locked = true;
                 }
-            } else if (data && (data.x !== undefined && data.y !== undefined) && data.x !== 0 && !checkCollision(data.x, data.y) && !isInBreakRoom(data.y)) {
+            } else if (data && (data.x !== undefined && data.y !== undefined) && data.x !== 0 && !checkCollision(data.x, data.y)) {
                 spawnX = data.x;
                 spawnY = data.y;
+                if (data.floor === 2) restoreFloor = 2;
             }
 
             if (!gameState.players[gameState.userId]) {
@@ -3942,10 +5081,14 @@ function startGame(userData) {
                     x: spawnX,
                     y: spawnY,
                     renderX: spawnX,
-                    renderY: spawnY
+                    renderY: spawnY,
+                    floor: restoreFloor,
+                    renderScale: restoreFloor === 2 ? FLOOR2_SCALE : 1
                 };
                 gameState.players[gameState.userId] = localPlayer;
             } else {
+                gameState.players[gameState.userId].floor = restoreFloor;
+                gameState.players[gameState.userId].renderScale = restoreFloor === 2 ? FLOOR2_SCALE : 1;
                 teleportEntity(gameState.players[gameState.userId], spawnX, spawnY);
             }
             updatePlayerPosition(spawnX, spawnY);
@@ -4007,6 +5150,16 @@ function startGame(userData) {
     // drop + screenshake + pitched entrance sound). No-op when JUICE_ENTRANCE is off
     // or for ephemeral Siraj ghosts. See the JUICE block below startGame().
     playEntranceSequence();
+
+    // Hand the boot screen off. Normally buildWorldCache() calls finishBootScreen()
+    // when the last art layer decodes; these cover the edges:
+    //  • the art already finished while the user sat on the menu (no event coming),
+    //  • the boot screen isn't up at all — nothing will ever open the gate, so the
+    //    entrance would be queued forever and the player never drops in, and
+    //  • a layer 404s / never decodes — the loader must not become a dead end.
+    if (_worldReady) finishBootScreen();
+    if (!document.getElementById('loading-screen')?.classList.contains('active')) _openEntranceGate();
+    setTimeout(() => { finishBootScreen(); _openEntranceGate(); }, 15000);
 
     gameLoop();
 }
@@ -4142,10 +5295,20 @@ function playEntranceSequence() {
 // inSession = true → seamless plain black fade (no zoom/drop/sound). This is what
 // a mid-session refresh gets. Not in a session → full cinematic entrance, even on
 // a refresh.
+//
+// The Firebase restore that calls this can resolve while the boot screen is still
+// covering the world, so the entrance is QUEUED behind the boot gate and replayed
+// by _openEntranceGate() the moment the loading screen finishes sliding away.
+// Without this the drop happened behind the loader and the user saw nothing.
 function beginEntrance(inSession) {
     if (!_entrance.pending) return;
     _entrance.pending = false;
     if (_entrance._failsafe) { clearTimeout(_entrance._failsafe); _entrance._failsafe = null; }
+    if (!_boot.gateOpen) { _boot.pendingEntrance = !!inSession; return; }
+    _reallyBeginEntrance(inSession);
+}
+
+function _reallyBeginEntrance(inSession) {
     const el = _entrance.el;
 
     if (inSession) {
@@ -4524,6 +5687,14 @@ function setupControls() {
         if (gameState.azkar && gameState.azkar.active) return;
         // Disable scroll zoom while the dashboard overlay is open
         if (dashboardIsOpen()) return;
+        // Disable scroll zoom during a reading session — it owns the camera zoom
+        // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
+        // stick and never recover once the cinematic camera hands control back.
+        if (gameState.reading && gameState.reading.active) return;
+        // A scroll DURING the exit tween wins: hand the camera straight back to
+        // updateCamera(). Without this the exit tween keeps yanking zoom toward its
+        // own target every frame and the camera rubber-bands away from the gesture.
+        abortReadingCamera();
         const zoomSpeed = 0.001;
         gameState.zoom -= e.deltaY * zoomSpeed;
         gameState.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, gameState.zoom));
@@ -4547,13 +5718,56 @@ function setupControls() {
             gameState.activeLaptopBossZone &&
             Math.hypot(clickWorld.x - LAPTOP_BOSS_BTN_CX, clickWorld.y - LAPTOP_BOSS_BTN_CY) < LAPTOP_BOSS_BTN_R + 24;
         if (clickedBossBtn) { triggerLaptopBossTeleport(); return; }
-        if (gameState.pomodoro.active || gameState.freeMode.active) return;
-        // Dashboard entry circle — opens the dashboard (work memories live inside it now).
+        // وقوف (stand up) button — floats above the local player while seated.
+        // Checked before the work-session early-return since sitting isn't one.
+        if (gameState.isSitting && !gameState.sitAnim.active && player) {
+            const btnY = player.y - 90;
+            if (Math.hypot(clickWorld.x - player.x, clickWorld.y - btnY) < 34) {
+                if (gameState.reading.active) {
+                    if (isMobile()) document.getElementById('reading-exit-modal')?.classList.add('active');
+                } else {
+                    standUp();
+                }
+                return;
+            }
+        }
+        // Dashboard entry = second-floor papers desk — opens the dashboard (work
+        // memories live inside it now).
         if (gameState.activeDashboardZone && !gameState.isLockedIn && !gameState.anim.active &&
-            Math.hypot(clickWorld.x - DASH_ZONE_X, clickWorld.y - DASH_ZONE_Y) < DASH_ZONE_R + 30) {
+            Math.hypot(clickWorld.x - PAPERS_X, clickWorld.y - PAPERS_Y) < PAPERS_SELECT_R + 20) {
             openDashboard();
             return;
         }
+        // Books Library (Floor 1 only)
+        if (gameState.nearBooksLibrary && !gameState.reading.active &&
+            Math.hypot(clickWorld.x - BOOKS_LIBRARY_POS.x, clickWorld.y - BOOKS_LIBRARY_POS.y) < BOOKS_LIBRARY_CLICK_R) {
+            openReadingPopup();
+            return;
+        }
+        // Sofa seating: sofa1 uses the CLICKED y (clamped to the strip + nudged off
+        // any neighbour); sofa2 always seats at its fixed spot.
+        if (gameState.activeSofa1 && canSit()) {
+            const freeY = _findFreeSofa1Y(clickWorld.y, gameState.userId);
+            if (freeY != null) startSitAnimation('sofa1', SOFA1_X, freeY);
+            return;
+        }
+        if (gameState.activeSofa2Spot && canSit()) {
+            const spot = gameState.activeSofa2Spot;
+            if (_sofa2SpotFree(spot.id, gameState.userId)) startSitAnimation(spot.id, spot.x, spot.y);
+            return;
+        }
+        // Games table: locked outside break (prompt-only, no action).
+        if (gameState.activeGameZone && !gameState.activeGameZone.locked) {
+            const z = gameState.activeGameZone;
+            if (z.type === 'boss') openBossConfirm();
+            else joinOrCreateMinigameLobby(z.type);
+            return;
+        }
+        // Laptops only: blocked while a pomodoro/free-mode session is active — including
+        // break — so you can't hop to a different laptop mid-session. This used to be a
+        // blanket early-return above that also (wrongly) blocked the dashboard/sofa/games
+        // checks during break.
+        if (gameState.pomodoro.active || gameState.freeMode.active) return;
         if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
             if (gameState.activeLaptop.claimedBy) return;
             showLaptopModeSelect();
@@ -4598,11 +5812,7 @@ function setupControls() {
             if (gameState.focusAudioEngine.ctx && gameState.focusAudioEngine.ctx.state === 'suspended') {
                 gameState.focusAudioEngine.ctx.resume().then(() => {
                     if (gameState.pomodoro.active && gameState.pomodoro.phase === 'work') {
-                        for (const [name, config] of Object.entries(gameState.focusAudioEngine.sounds)) {
-                            if (config.active) {
-                                gameState.focusAudioEngine.startSound(name);
-                            }
-                        }
+                        staggerStartActiveSounds(gameState.focusAudioEngine);
                     }
                 }).catch(e=>{});
             }
@@ -4615,6 +5825,20 @@ function setupControls() {
 function startKidnapAnimation(laptop) {
     const player = gameState.players[gameState.userId];
     if (!player) return;
+
+    // Safety net: the natural break-end paths already stand the player up 2s ahead
+    // of this call (see updatePomodoro / endFreeModeBreak), but some kidnaps fire
+    // with no warning (coop invite accepted while relaxing, etc.) — if still seated
+    // here there's no time to animate, so clear it instantly rather than let the
+    // sit animation and this kidnap animation fight over player.x/y every frame.
+    if (gameState.isSitting) standUp(true);
+
+    // Stash the floor crossing (if any) — the animated path flips floor mid-animation
+    // (see updateAnimation's 'pull' phase start), not instantly here, so the scale/
+    // mezzanine-opacity transition feels synced with the drag instead of snapping the
+    // instant the laptop grabs you.
+    gameState.anim.fromFloor = player.floor || 1;
+    gameState.anim.toFloor = laptop.floor || 1;
 
     // Stop the walk/run the instant the kidnap begins. handleMovement early-returns while
     // gameState.anim.active, so a player who clicked a laptop mid-run kept isMoving=true —
@@ -4631,6 +5855,8 @@ function startKidnapAnimation(laptop) {
 
     if (document.hidden) {
         // Skip animation in background, teleport player, lock in, and start work immediately!
+        // No animation to sync the floor flip with, so set it immediately.
+        forcePlayerFloor(player, gameState.anim.toFloor);
         teleportEntity(player, laptop.sitX, laptop.sitY);
         updatePlayerPosition(laptop.sitX, laptop.sitY);
         gameState.isLockedIn = true;
@@ -4816,12 +6042,31 @@ function setupFocusPanelUI() {
 
 }
 
+// Shared with the coffee lobby (showCoffeeLobby reuses the same #race-panel DOM —
+// only one minigame lobby can be relevant to the local player at a time).
 function setupRaceUI() {
     const startBtn = document.getElementById('race-start');
     const returnBtn = document.getElementById('race-return');
-    if (startBtn) startBtn.addEventListener('click', startHostedRace);
+    if (startBtn) {
+        startBtn.addEventListener('click', () => {
+            const t = _activeLobbyType();
+            if (!t) return;
+            playSoundRobust(gameState.sounds.minigameButtonPressed);
+            if (t === 'race') startHostedRace();
+            else if (t === 'coffee') startHostedCoffee();
+        });
+    }
     if (returnBtn) {
         returnBtn.addEventListener('click', () => {
+            const t = _activeLobbyType();
+            if (t === 'coffee') {
+                const session = gameState.coffee.session;
+                if (!session) { hideRacePanel(); return; }
+                if (session.hostId === gameState.userId) update(ref(database), { [coffeeSessionPath()]: null });
+                else update(ref(database), { [coffeeSessionPath(`participants/${gameState.userId}`)]: null });
+                hideRacePanel();
+                return;
+            }
             const session = gameState.race.session;
             if (!session) {
                 hideRacePanel();
@@ -5056,6 +6301,10 @@ function initMobileControls() {
             if (e.touches.length !== 2) return;
             // Disable pinch during active race
             if (gameState.race && gameState.race.active) return;
+            // Disable pinch-zoom during a reading session — same reason as the
+            // wheel-zoom guard above.
+            if (gameState.reading && gameState.reading.active) return;
+            abortReadingCamera();   // a pinch during the exit tween wins (see the wheel handler)
 
             const newDist = Math.hypot(
                 e.touches[0].clientX - e.touches[1].clientX,
@@ -5110,6 +6359,19 @@ function initMobileControls() {
                 Math.hypot(clickWorld.x - LAPTOP_BOSS_BTN_CX, clickWorld.y - LAPTOP_BOSS_BTN_CY) < LAPTOP_BOSS_BTN_R + 24;
             if (clickedBossBtn) { triggerLaptopBossTeleport(); return; }
 
+            // وقوف (stand up) button — floats above the local player while seated.
+            if (gameState.isSitting && !gameState.sitAnim.active && player) {
+                const btnY = player.y - 90;
+                if (Math.hypot(clickWorld.x - player.x, clickWorld.y - btnY) < 34) {
+                    if (gameState.reading.active) {
+                        if (isMobile()) document.getElementById('reading-exit-modal')?.classList.add('active');
+                    } else {
+                        standUp();
+                    }
+                    return;
+                }
+            }
+
             // Boss results overlay return button
             if (gameState.laptopBoss && gameState.laptopBoss.showResultsInGame) {
                 const rect = canvas.getBoundingClientRect();
@@ -5138,13 +6400,40 @@ function initMobileControls() {
                 }
             }
 
-            // Open laptop / mode select
-            if (gameState.pomodoro.active || gameState.freeMode.active) return;
             // Dashboard entry circle (proximity-based tap — the player is already standing on it)
             if (gameState.activeDashboardZone && !gameState.isLockedIn && !gameState.anim.active) {
                 openDashboard();
                 return;
             }
+            // Books Library — like desktop, must tap the desk itself, not just be nearby
+            // (SOFA2_SPOTS sit inside the proximity radius, so a loose check here would
+            // eat "sit on the sofa" taps too).
+            if (gameState.nearBooksLibrary && !gameState.reading.active &&
+                Math.hypot(clickWorld.x - BOOKS_LIBRARY_POS.x, clickWorld.y - BOOKS_LIBRARY_POS.y) < BOOKS_LIBRARY_CLICK_R) {
+                openReadingPopup();
+                return;
+            }
+            // Sofa seating (proximity-based tap, same as the dashboard/laptop zones above)
+            if (gameState.activeSofa1 && canSit()) {
+                const freeY = _findFreeSofa1Y(clickWorld.y, gameState.userId);
+                if (freeY != null) startSitAnimation('sofa1', SOFA1_X, freeY);
+                return;
+            }
+            if (gameState.activeSofa2Spot && canSit()) {
+                const spot = gameState.activeSofa2Spot;
+                if (_sofa2SpotFree(spot.id, gameState.userId)) startSitAnimation(spot.id, spot.x, spot.y);
+                return;
+            }
+            // Games table: locked outside break (prompt-only, no action).
+            if (gameState.activeGameZone && !gameState.activeGameZone.locked) {
+                const z = gameState.activeGameZone;
+                if (z.type === 'boss') openBossConfirm();
+                else joinOrCreateMinigameLobby(z.type);
+                return;
+            }
+            // Laptops only: blocked while a pomodoro/free-mode session is active (including
+            // break) so you can't hop to a different laptop mid-session.
+            if (gameState.pomodoro.active || gameState.freeMode.active) return;
             if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
                 if (gameState.activeLaptop.claimedBy) return;
                 showLaptopModeSelect();
@@ -5356,10 +6645,28 @@ function listenToRace() {
                     gameState.race.readyFallbackTimer = null;
                 }
             }
+            // Host: a departing racer (مغادرة اللعبة) removes themselves from
+            // `participants`, but the remaining racers' own finish-check
+            // (`participants.every(id => results[id])` in updateRaceProgress) only
+            // runs once, at the moment THEY cross the line — if it ran before the
+            // departure's snapshot arrived, nobody ever re-checks and the race hangs
+            // forever. Re-evaluate against the CURRENT participant list on every
+            // update so a late departure still lets an already-finished race close out.
+            if (mySession.hostId === gameState.userId && mySession.startTime > 0) {
+                const ids = Object.keys(mySession.participants || {});
+                const results = mySession.results || {};
+                if (ids.length > 0 && ids.every(id => results[id])) {
+                    update(ref(database), {
+                        [raceSessionPath('phase')]: 'finished',
+                        [raceSessionPath('finishedAt')]: Date.now()
+                    });
+                }
+            }
             hideRacePanel();
             if (gameState.race.teleportAnim) {
                 gameState.race.teleportAnim.pendingSession = gameState.race.teleportAnim.pendingSession || mySession;
-            } else {
+            } else if (!gameState.race.active) {
+                startMinigameLoadFade('race', myKey);
                 startLocalRace(mySession);
             }
         } else if (mySession.phase === 'finished') {
@@ -5385,6 +6692,7 @@ function showRaceLobby(session) {
 
     title.textContent = 'سباق السيارات';
     status.textContent = session.hostId === gameState.userId ? 'أنت المضيف' : 'بانتظار المضيف';
+    startBtn.textContent = 'ابدأ السباق';
     startBtn.style.display = session.hostId === gameState.userId ? 'block' : 'none';
     returnBtn.textContent = session.hostId === gameState.userId ? 'إلغاء' : 'خروج';
     returnBtn.style.display = 'block';
@@ -5511,11 +6819,15 @@ function startLocalRace(session) {
     // Mobile: init camera angle to match car's starting heading so camera doesn't spin on race start
     gameState.race.camera.angle = isMobile() ? -(car.angle + Math.PI / 2) : 0;
     gameState.race.countdownSoundPlayed = false;
-    // Mark this user as working so others see avatar bobbing while racing
-    update(ref(database), {
-        [raceSessionPath(`participants/${gameState.userId}/ready`)]: serverNow(),
-        [`users/${gameState.userId}/isWorking`]: true
-    });
+    // Mark this user as working so others see avatar bobbing while racing. The lobby
+    // flow (gameState.minigameLoadFade set) defers the `ready` write until the track
+    // asset actually finishes loading (see updateMinigameLoadFade) — the old
+    // teleport-zone flow has no such gate, so it still signals ready immediately.
+    const _readyUpdates = { [`users/${gameState.userId}/isWorking`]: true };
+    if (!gameState.minigameLoadFade) {
+        _readyUpdates[raceSessionPath(`participants/${gameState.userId}/ready`)] = serverNow();
+    }
+    update(ref(database), _readyUpdates);
 }
 
 function createRaceCar(index, username) {
@@ -6127,11 +7439,7 @@ function startPomodoroPhase(phase) {
 
         if (gameState.focusAudioEngine) {
             gameState.focusAudioEngine.fadeToMaster(1.0, 2.0);
-            for (const [name, config] of Object.entries(gameState.focusAudioEngine.sounds)) {
-                if (config.active) {
-                    gameState.focusAudioEngine.startSound(name);
-                }
-            }
+            staggerStartActiveSounds(gameState.focusAudioEngine);
             if (gameState.focusYTPlayer) {
                 // Use the player's own saved volume (from Firebase), not the mixer's overallVolume
                 const targetPct = gameState.focusYTPlayer.volume ?? 80;
@@ -6257,20 +7565,30 @@ function setupLogout() {
     });
 }
 
-// Returns a spawn position in the shaded left area of the work room that
-// doesn't overlap any already-loaded player. Falls back gracefully.
-function getRandomSpawnPosition() {
-    const SPAWN_MIN_X = -450;
-    const SPAWN_MAX_X = -100;
-    const SPAWN_MIN_Y = 100;
-    const SPAWN_MAX_Y = 370;
-    const MIN_DIST = PLAYER_SIZE + 15;
+// Three open-floor rectangles (source-px, Art/Workspace scene) traced from the
+// owner's spawn-zone reference overlay: one in the work-room gap beside the ground
+// desk, one further down the same side, one in the open break-room floor. Converted
+// to world units via sx2w/sy2w so they stay correct if WORLD_SCALE ever changes.
+const SPAWN_ZONES_PX = [
+    { x0: 1392, y0: 164,  x1: 1713, y1: 800  },
+    { x0: 1624, y0: 980,  x1: 2111, y1: 1469 },
+    { x0: 718,  y0: 2007, x1: 1492, y1: 2702 },
+];
+const SPAWN_ZONES = SPAWN_ZONES_PX.map(z => ({
+    x0: sx2w(z.x0), x1: sx2w(z.x1),
+    y0: sy2w(z.y0), y1: sy2w(z.y1),
+}));
 
+// Returns a random spawn position inside one of SPAWN_ZONES that doesn't land on
+// furniture (checkCollision) or overlap an already-loaded player. Falls back gracefully.
+function getRandomSpawnPosition() {
+    const MIN_DIST = PLAYER_SIZE + 15;
     const others = Object.values(gameState.players).filter(p => p.userId !== gameState.userId);
 
-    for (let attempt = 0; attempt < 40; attempt++) {
-        const x = SPAWN_MIN_X + Math.random() * (SPAWN_MAX_X - SPAWN_MIN_X);
-        const y = SPAWN_MIN_Y + Math.random() * (SPAWN_MAX_Y - SPAWN_MIN_Y);
+    for (let attempt = 0; attempt < 60; attempt++) {
+        const zone = SPAWN_ZONES[Math.floor(Math.random() * SPAWN_ZONES.length)];
+        const x = zone.x0 + Math.random() * (zone.x1 - zone.x0);
+        const y = zone.y0 + Math.random() * (zone.y1 - zone.y0);
         if (checkCollision(x, y)) continue;
         const blocked = others.some(p => {
             const dx = (p.renderX ?? p.x) - x;
@@ -6279,7 +7597,8 @@ function getRandomSpawnPosition() {
         });
         if (!blocked) return { x, y };
     }
-    return { x: -250, y: BG_HEIGHT / 4 };
+    const zone = SPAWN_ZONES[0];
+    return { x: (zone.x0 + zone.x1) / 2, y: (zone.y0 + zone.y1) / 2 };
 }
 
 function initializePlayerPosition() {
@@ -6291,7 +7610,9 @@ function initializePlayerPosition() {
             x: spawnX,
             y: spawnY,
             renderX: spawnX,
-            renderY: spawnY
+            renderY: spawnY,
+            floor: 1,
+            renderScale: 1
         };
     } else {
         teleportEntity(gameState.players[gameState.userId], spawnX, spawnY);
@@ -6355,6 +7676,11 @@ function listenToPlayers() {
                             avatarColorAlpha: userData.activeInGame === true ? 1 : 0,
                             isMoving: userData.isMoving || false,
                             isSprinting: userData.isSprinting || false,
+                            floor:              (userData.floor === 2) ? 2 : 1,
+                            renderScale:        (userData.floor === 2) ? FLOOR2_SCALE : 1,
+                            sitSeatId:          userData.sitSeatId || null,
+                            sitX:               userData.sitX ?? null,
+                            sitY:               userData.sitY ?? null,
                             isLockedIn: userData.isLockedIn || false,
                             isWorking:          userData.isWorking  || false,
                             isOnBreak:          userData.isOnBreak  || false,
@@ -6362,6 +7688,10 @@ function listenToPlayers() {
                             freeWorkStartTime:  userData.freeWorkStartTime || 0,
                             freeTotalWorkMs:    userData.freeTotalWorkMs   || 0,
                             coopHostId:         userData.coopHostId || null,
+                            isReading:          userData.isReading || false,
+                            readingBook:        userData.readingBook || null,
+                            readingEnd:         userData.readingEnd || null,
+                            booksSofa:          userData.booksSofa || null,
                             // Hold a new remote player invisible until their position settles,
                             // then pop them in (see SPAWN_SETTLE_MS) — no "snap on join". The
                             // pop-in `_entryT` is set at promotion time, not here.
@@ -6412,6 +7742,15 @@ function listenToPlayers() {
                             }
                             player.isMoving          = userData.isMoving || false;
                             player.isSprinting       = userData.isSprinting || false;
+                            player.sitSeatId         = userData.sitSeatId || null;
+                            player.sitX              = userData.sitX ?? null;
+                            player.sitY              = userData.sitY ?? null;
+                            // Only trust Firebase floor when the WebSocket isn't the live
+                            // source (WS carries floor too, and is fresher).
+                            if ((userData.floor === 1 || userData.floor === 2)
+                                && (performance.now() - (player._lastWsSampleAt || 0) > 1000)) {
+                                player.floor = userData.floor;
+                            }
                             player.isLockedIn        = userData.isLockedIn || false;
                             player.isWorking         = userData.isWorking  || false;
                             player.isOnBreak         = userData.isOnBreak  || false;
@@ -6419,6 +7758,10 @@ function listenToPlayers() {
                             player.freeWorkStartTime = userData.freeWorkStartTime || 0;
                             player.freeTotalWorkMs   = userData.freeTotalWorkMs   || 0;
                             player.coopHostId        = userData.coopHostId || null;
+                            player.isReading          = userData.isReading || false;
+                            player.readingBook        = userData.readingBook || null;
+                            player.readingEnd         = userData.readingEnd || null;
+                            player.booksSofa          = userData.booksSofa || null;
                         }
                     }
                     if (userData.avatar && !gameState.avatarCache[userId]) {
@@ -6530,6 +7873,7 @@ function sendPositionWS(x, y, force) {
         y: Math.round(y),
         m: (p && p.isMoving) ? 1 : 0,
         s: (p && p.isSprinting) ? 1 : 0,
+        fl: (p && p.floor) || 1,    // which floor I'm on → others scale me correctly
     });
     try { ws.send(payload); return true; } catch (_) { return false; }
 }
@@ -6556,6 +7900,7 @@ function onPresenceMessage(data) {
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
     player.isSprinting = msg.s === 1;
+    if (msg.fl === 1 || msg.fl === 2) player.floor = msg.fl;
     if (typeof msg.x === 'number' && typeof msg.y === 'number') {
         // Mark that the WebSocket is the live source for this player so the
         // Firebase listener won't interleave its laggy (stale-position) writes
@@ -6584,6 +7929,10 @@ function updatePlayerPosition(x, y) {
     // no "أعمل على" label or timer for everyone else.
     updates[`users/${gameState.userId}/activeInGame`] = true;
     if (player) {
+        updates[`users/${gameState.userId}/floor`] = player.floor || 1;
+        updates[`users/${gameState.userId}/sitSeatId`] = player.sitSeatId || null;
+        updates[`users/${gameState.userId}/sitX`] = player.sitSeatId ? player.sitX : null;
+        updates[`users/${gameState.userId}/sitY`] = player.sitSeatId ? player.sitY : null;
         updates[`users/${gameState.userId}/isMoving`] = player.isMoving || false;
         updates[`users/${gameState.userId}/isSprinting`] = player.isSprinting || false;
         updates[`users/${gameState.userId}/isLockedIn`] = gameState.isLockedIn || false;
@@ -6600,26 +7949,49 @@ function updatePlayerPosition(x, y) {
         const _inRegularCoop = !fm.active && gameState.sharedPomo.phase === 'active' && gameState.sharedPomo.sessionId;
         const _inFreeWorkCoop = fm.active && fm.isShared && fm.phase === 'work' && gameState.sharedPomo.sessionId;
         updates[`users/${gameState.userId}/coopHostId`] = (_inRegularCoop || _inFreeWorkCoop) ? gameState.sharedPomo.sessionId : null;
+        
+        // Reading Feature
+        const reading = gameState.reading;
+        updates[`users/${gameState.userId}/isReading`] = reading?.active || false;
+        updates[`users/${gameState.userId}/readingBook`] = reading?.active ? reading.bookName : null;
+        updates[`users/${gameState.userId}/readingEnd`] = reading?.active ? reading.endTime : null;
+        updates[`users/${gameState.userId}/booksSofa`] = reading?.active ? reading.sofaIdx : null;
     }
     update(ref(database), updates);
 }
 
 function checkCollision(x, y) {
-    if (x < BOUNDS.minX || x > BOUNDS.maxX || y < BOUNDS.minY || y > BOUNDS.maxY) return true;
-    // Door is passable if break is active, OR if the player is already inside the break room
-    // (allows exit even after session ends while player is inside)
+    // Outer clamp to the image (both rooms are one open world now — no door/seam).
+    if (x < WORLD_BOUNDS.minX || x > WORLD_BOUNDS.maxX || y < WORLD_BOUNDS.minY || y > WORLD_BOUNDS.maxY) return true;
+    // Stairs bridge the floors — always walkable (their x drives the scale instead).
+    if (isOnStairs(x, y)) return false;
     const local = gameState.players[gameState.userId];
-    const playerInBreakRoom = local && local.y > ROOM_SEAM_Y + DOOR_HALF_HEIGHT;
-    const inBreakDoor = (isBreakActive() || playerInBreakRoom) && isInDoorOpening(x);
-    if (Math.abs(y - ROOM_SEAM_Y) < DOOR_HALF_HEIGHT && !inBreakDoor) return true;
-    const buffer = PLAYER_SIZE / 2;
-    if (x > TABLE_BOX.minX - buffer && x < TABLE_BOX.maxX + buffer && y > TABLE_BOX.minY - buffer && y < TABLE_BOX.maxY + buffer) return true;
-    return false;
+    const floor = (local && local.floor) || 1;
+    // Sample the avatar's base ("feet"), so its body — not its head — bumps furniture.
+    const fy = y + PLAYER_SIZE * 0.22;
+    if (floor === 2) {
+        // Second floor: geometric platform bounds (railing) + desk alpha. The wood
+        // floor itself is walkable; you leave only through the stair opening. Small
+        // inset so the entry from the stairs isn't a tight squeeze.
+        const inset = 4;
+        if (x < PLAT_X0 + inset || x > PLAT_X1 - inset || fy < PLAT_Y0 + inset || fy > PLAT_Y1 - inset) return true;
+        return _maskSolid(worldCollision.floor2desks, x, fy);
+    }
+    if (!worldCollision.built) return false;   // don't trap the player before masks decode
+    return _maskSolid(worldCollision.floor1, x, fy);
 }
 
 function updateCamera() {
     const player = gameState.players[gameState.userId];
     if (!player) return;
+    
+    // Reading cinematic camera override — also covers the 'exiting' zoom-out tail
+    // after reading.active flips false, otherwise this normal camera fights it.
+    if (gameState.reading && (gameState.reading.active || gameState.reading._cameraPhase === 'exiting')) {
+        // Handled entirely by updateReadingCamera in game loop
+        return;
+    }
+    
     const { x: px, y: py } = getPlayerRenderPos(player);
     const targetX = -px;
     const targetY = -py;
@@ -6631,7 +8003,9 @@ function updateCamera() {
 function handleMovement() {
     if (JUICE_ENTRANCE && _entrance.active) return;   // JUICE: lock controls during the login entrance
     if (dashboardIsOpen()) return;                    // dashboard overlay locks movement
-    if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive) return;
+    if (isMinigameOverlayOpen()) return;               // minigame lobby/confirm/gameplay locks movement
+    if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
+        || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)) return;
     const player = gameState.players[gameState.userId];
     if (!player) return;
     let dx = 0, dy = 0;
@@ -6650,6 +8024,11 @@ function handleMovement() {
         dy += gameState.joystick.dy * jSpeed;
         if (jSprint) isSprinting = true;
     }
+    // Remembered for updateSecondFloorFade: the mezzanine's proximity fade should
+    // only track a player moving LEFT/RIGHT through its trigger band — someone just
+    // passing under it vertically (or standing still) shouldn't flip it.
+    player._moveDX = dx;
+
     if (dx !== 0 || dy !== 0) {
         // Modal check only when there IS movement input — the full-document
         // querySelector ran on every idle frame before and was measurable on
@@ -6685,10 +8064,10 @@ function handleMovement() {
 
 function updateWindParticles() {
     // Lerp wind speed and focus fog opacity
-    const isFocused = gameState.isLockedIn && (
+    const isFocused = sofaFocusActive() || gameState.reading.active || (gameState.isLockedIn && (
         (gameState.pomodoro.active && gameState.pomodoro.phase === 'work') ||
         (gameState.freeMode.active && gameState.freeMode.phase === 'work')
-    );
+    ));
     const targetWindSpeed = isFocused ? 0.15 : 1.0;
     const targetFogAlpha = isFocused ? 1.0 : 0.0;
 
@@ -6713,11 +8092,15 @@ function updateInteractions() {
 
     gameState.activeLaptop = null;
     gameState.activeRaceButton = false;
-    let closestDist = 120;          // selection range (click to start) — unchanged
+    let closestDist = LAPTOP_SELECT_R;   // selection range (click to start)
     let minDist = Infinity;
     let nearestDist = Infinity;     // distance to closest laptop regardless of range (mask only)
+    const pFloor = player.floor || 1;
 
     gameState.laptops.forEach(laptop => {
+        // Floor-gate: a ground player can't sit a second-floor laptop that visually
+        // overlaps them (and vice-versa).
+        if ((laptop.floor || 1) !== pFloor) return;
         const dist = Math.sqrt(Math.pow(player.x - laptop.x, 2) + Math.pow(player.y - laptop.y, 2));
         if (dist < nearestDist) nearestDist = dist;
         if (dist < closestDist) {
@@ -6727,10 +8110,57 @@ function updateInteractions() {
         }
     });
 
-    // Dashboard entry-circle proximity (restricted feature — only for allowed users)
+    // Dashboard entry = the second-floor papers desk. Only reachable on floor 2 and
+    // when not already in a session.
     gameState.activeDashboardZone = dashboardAllowed()
-        && Math.hypot(player.x - DASH_ZONE_X, player.y - DASH_ZONE_Y) < DASH_ZONE_SELECT_R
-        && !gameState.pomodoro.active && !gameState.freeMode.active;
+        && pFloor === 2
+        && Math.hypot(player.x - PAPERS_X, player.y - PAPERS_Y) < PAPERS_SELECT_R
+        && !sessionBlocksInteraction();
+
+    // Sofa 1 (continuous strip) — floor 1 only. Active when within range of the
+    // strip's nearest point (clamped Y), and not already sitting/working.
+    gameState.activeSofa1 = null;
+    if (pFloor === 1 && canSit()) {
+        const nearY = Math.max(SOFA1_Y0, Math.min(SOFA1_Y1, player.y));
+        if (Math.hypot(player.x - SOFA1_X, player.y - nearY) < SOFA1_SELECT_R) {
+            gameState.activeSofa1 = { x: SOFA1_X, y: nearY };
+        }
+    }
+    // Sofa 2 (8 fixed spots) — nearest free spot within range.
+    gameState.activeSofa2Spot = null;
+    if (pFloor === 1 && canSit()) {
+        let best = null, bestDist = SOFA2_SELECT_R;
+        for (const spot of SOFA2_SPOTS) {
+            if (!_sofa2SpotFree(spot.id, gameState.userId)) continue;
+            const d = Math.hypot(player.x - spot.x, player.y - spot.y);
+            if (d < bestDist) { bestDist = d; best = spot; }
+        }
+        gameState.activeSofa2Spot = best;
+    }
+
+    // Books library — floor 1 only, reachable when free to sit (not working/locked/
+    // sitting/already reading). This flag drives both the "ابدأ القراءة" prompt and
+    // the click-to-open gate in the click handlers.
+    gameState.nearBooksLibrary = pFloor === 1 && canSit() && !gameState.reading.active
+        && Math.hypot(player.x - BOOKS_LIBRARY_POS.x, player.y - BOOKS_LIBRARY_POS.y) < BOOKS_LIBRARY_SELECT_R;
+
+    // Games table (race / boss / coffee triggers) — floor 1 only, one big room now
+    // (no more separate break room), so proximity alone shows the prompt; whether
+    // it's actually usable depends on isBreakActive() (locked otherwise).
+    gameState.activeGameZone = null;
+    if (pFloor === 1 && canSit()) {
+        const zones = [
+            { type: 'race',   x: GAME_RACE_ZONE.x,   y: GAME_RACE_ZONE.y },
+            { type: 'coffee', x: GAME_COFFEE_ZONE.x, y: GAME_COFFEE_ZONE.y },
+            { type: 'boss',   x: GAME_BOSS_ZONE.x,   y: GAME_BOSS_ZONE.y },
+        ];
+        let best = null, bestDist = GAME_ZONE_SELECT_R;
+        for (const z of zones) {
+            const d = Math.hypot(player.x - z.x, player.y - z.y);
+            if (d < bestDist) { bestDist = d; best = z; }
+        }
+        if (best) gameState.activeGameZone = { ...best, locked: !isBreakActive() };
+    }
 
     const prevZonePlayers = gameState.raceZonePlayers || [];
     gameState.raceZonePlayers = isBreakActive() ? Object.values(gameState.players).filter(p => {
@@ -6811,10 +8241,12 @@ function updateInteractions() {
         gameState.activeLaptopBossZone = false;
     }
 
-    const baseAlpha = gameState.isLockedIn ? 0.475 : 0.4;
+    const _sofaFocus = sofaFocusActive() || gameState.reading.active;
+    const baseAlpha = (gameState.isLockedIn || _sofaFocus) ? 0.475 : 0.4;
     let targetAlpha = 0;
-    if (gameState.isLockedIn) {
-        // Always full darkening when locked in — don't rely on proximity
+    if (gameState.isLockedIn || _sofaFocus) {
+        // Always full darkening when locked in (or relaxing on the big sofa, or
+        // reading) — don't rely on proximity.
         targetAlpha = baseAlpha;
     } else {
         // Proximity fade toward the nearest laptop. Selection range is untouched
@@ -6832,8 +8264,10 @@ function updateInteractions() {
         targetAlpha = (gameState.maskHoldT < LAPTOP_MASK_HOLD_FRAMES) ? (gameState.maskLast || 0) : 0;
     }
 
-    // Disable the dark laptop focus mask if we are currently on a break!
-    if (gameState.pomodoro.active && gameState.pomodoro.phase === 'break') {
+    // Disable the dark laptop focus mask if we are currently on a break — but not
+    // when relaxing on the big sofa, which wants its own full darkening regardless
+    // of break/idle state (this used to zero it out the instant break started).
+    if (!_sofaFocus && gameState.pomodoro.active && gameState.pomodoro.phase === 'break') {
         targetAlpha = 0;
     }
 
@@ -6863,18 +8297,26 @@ function updateAnimation() {
         gameState.anim.progress += 0.025 * gameState.dtFactor;
         const t = easeOutBack(Math.min(1, gameState.anim.progress));
 
-        player.x = gameState.anim.startPos.x + (laptop.sitX - gameState.anim.startPos.x) * t;
+        // Slide to the approach point (offset from the seat opposite the drag dir),
+        // moving BOTH axes so a left/right laptop aligns horizontally too.
+        player.x = gameState.anim.startPos.x + (laptop.intermediateX - gameState.anim.startPos.x) * t;
         player.y = gameState.anim.startPos.y + (laptop.intermediateY - gameState.anim.startPos.y) * t;
 
         if (gameState.anim.progress >= 1) {
             gameState.anim.phase = 'pull';
             gameState.anim.progress = 0;
             gameState.anim.startPos = { x: player.x, y: player.y };
+            // Flip floor (and thus scale/mezzanine-fade) right at the pull's start —
+            // the animation's midpoint — instead of instantly at grab.
+            if (gameState.anim.toFloor !== undefined) forcePlayerFloor(player, gameState.anim.toFloor);
         }
     } else if (gameState.anim.phase === 'pull') {
         gameState.anim.progress += 0.045 * gameState.dtFactor;
         const t = easeOutBack(Math.pow(Math.min(1, gameState.anim.progress), 2.5));
 
+        // Final drag into the seat along `dir` (both axes so `down` still pulls down
+        // and `left`/`right` pull sideways).
+        player.x = gameState.anim.startPos.x + (laptop.sitX - gameState.anim.startPos.x) * t;
         player.y = gameState.anim.startPos.y + (laptop.sitY - gameState.anim.startPos.y) * t;
 
         if (gameState.anim.progress >= 1) {
@@ -6969,9 +8411,12 @@ function updatePlayerBobbing() {
         }
 
         if (player.isMoving && !lockedIn && (!gameState.anim.active || gameState.anim.phase !== 'pull')) {
-            const speed = player.isSprinting ? 0.3 : 0.15;
+            // Climbing the stairs = a slightly bigger, springier step (a gentle pop).
+            const onStairs = isOnStairs(player.x, player.y);
+            const speed = (player.isSprinting ? 0.3 : 0.15) * (onStairs ? 1.12 : 1);
             player.bobTime += speed * gameState.dtFactor;
-            const targetBounce = Math.abs(Math.sin(player.bobTime)) * (player.isSprinting ? 12 : 6);
+            const amp = (player.isSprinting ? 12 : 6) * (onStairs ? 1.5 : 1);
+            const targetBounce = Math.abs(Math.sin(player.bobTime)) * amp;
             player.bobOffset += (targetBounce - player.bobOffset) * 0.5 * gameState.dtFactor;
 
             if (isLocal) {
@@ -7067,7 +8512,7 @@ function gameLoop(timestamp) {
     // updatePlayerPosition isn't being called — re-assert the authoritative position
     // every few seconds so observers always converge to it even if an earlier write
     // was missed or raced.
-    if (gameState.userId && (gameState.isLockedIn || gameState.pomodoro.active || gameState.freeMode.active)) {
+    if (gameState.userId && (gameState.isLockedIn || gameState.pomodoro.active || gameState.freeMode.active || gameState.isSitting)) {
         const _now = Date.now();
         if (!gameState._lastPosHeartbeat || _now - gameState._lastPosHeartbeat > 4000) {
             gameState._lastPosHeartbeat = _now;
@@ -7124,11 +8569,14 @@ function gameLoop(timestamp) {
             }
         }
 
+        updateReadingSession();
+        updateReadingCamera();
         updatePomodoro();
         updatePiPLifecycle();
         updateTeleportAnim();
         updateCoffeeTeleportAnim();
         updateLaptopBossTeleportAnim();
+        updateMinigameLoadFade();
         cleanupStaleRaceSession(gameState.race.session);
         if (gameState.laptopBoss.active && gameState.laptopBoss.session &&
             (gameState.laptopBoss.session.phase === 'active' || gameState.laptopBoss.session.phase === 'finished')) {
@@ -7162,6 +8610,14 @@ function gameLoop(timestamp) {
 
         handleMovement();
         updateAnimation();
+        updateSitAnimation();        // sofa sit-in / stand-up tween
+        updateMinigameLobbyProximity(); // auto-leave a race/coffee lobby if you wander off
+        updateFloorsAndScales();     // per-player floor + dynamic stair scale
+        updateSecondFloorFade();     // fade the second floor when a ground player is under it
+        updateSecondFloorFog();      // height fog while on the second floor
+        updateFireplaceAmbient();    // fireplace crackle by proximity
+        updateCloudShadows();        // drifting cloud overlay
+        updateLaptopLights();        // per-laptop screen glow fade (claimed ↔ free)
         updatePlayerRenderPositions();
         updateCamera();
         updateEntrance(timestamp);   // JUICE: login entrance (no-op once finished)
@@ -7214,41 +8670,54 @@ function render() {
     ctx.scale(gameState.zoom, gameState.zoom);
     ctx.translate(gameState.camera.x, gameState.camera.y);
 
-    drawRooms();
-    if (gameState.assets.tables.complete) {
-        ctx.drawImage(gameState.assets.tables, TABLE_BOX.minX, TABLE_BOX.minY, TABLE_WIDTH, TABLE_HEIGHT);
-    }
-    drawBreakDoor();
-    drawRaceMachine();
-    drawCoffeeMachine();
-    drawLaptopBossMachine();
-    drawDashboardZone();
+    // ── Ground floor (both rooms are one open world now) ────────────────────────
+    drawWorldGround();
+    drawLaptopLights(1);
 
     drawConnections();
 
-    if (gameState.anim.active && (gameState.anim.phase === 'reach' || gameState.anim.phase === 'align' || gameState.anim.phase === 'pull')) {
-        drawKidnapLine();
-    }
-
     drawAmbientMotes();
     drawDustParticles();
-    drawPlayers(false);
+
+    // Kidnap line: drawn right BEFORE the players of whichever floor the target
+    // laptop is on, so it always sits under the player (and everyone else on that
+    // floor) but above that floor's art — never flips to draw on top of the player
+    // mid-animation, and still isn't hidden by the mezzanine art on floor 2.
+    const _kidnapLineActive = gameState.anim.active
+        && (gameState.anim.phase === 'reach' || gameState.anim.phase === 'align' || gameState.anim.phase === 'pull');
+    if (_kidnapLineActive && (gameState.anim.laptop.floor || 1) === 1) drawKidnapLine();
+    drawPlayers(false, 1);      // ground-floor players (under the mezzanine)
+    drawTimers(1);
+
+    // Height fog sits BETWEEN the floors — over the ground, UNDER the mezzanine — so
+    // the second floor stays above it and isn't fogged. Only shows on floor 2.
+    drawSecondFloorFog();
+
+    // ── Second floor (fades out when a ground player is under it) ────────────────
+    drawSecondFloor();          // platform + its laptops + papers desk, at secondFloorVis
+    drawLaptopLights(2, gameState.secondFloorVis ?? 1);
+    if (_kidnapLineActive && (gameState.anim.laptop.floor || 1) === 2) drawKidnapLine();
+    drawPlayers(false, 2);      // players standing on the platform
+    drawTimers(2);
+
     drawCoopEmojiFloats();
     drawCoopGroupLabels();
-    drawTimers();
 
-    drawRoomShadows();
-    drawBreakDoor();
-    drawBreakDoorPrompt();
-    drawRaceHint();
-    drawCoffeeHint();
-    drawLaptopBossHint();
-    drawDashboardPrompt();
+    // (The laptop "انقر للبدء" prompt is drawn by drawFocusMask when near a laptop.)
+    drawDashboardPrompt();      // "انقر لفتح الأوراق" over the papers desk
+    drawBooksLibraryPrompt();    // "ابدأ القراءة" near books library
+    drawSeatPrompt();            // "اضغط للجلوس" near a sofa
+    drawStandUpButton();         // وقوف — floats above the local player while seated
+    drawGameZonePrompt();        // games-table trigger prompt / locked notice
 
     // Blue locked-in circle: solo pomo only, not coop (coop has its own ring)
     if (gameState.isLockedIn && gameState.sharedPomo.phase !== 'active') {
         drawLockedInOverlay();
     }
+
+    // ── Top overlays (day lighting) — inside the world transform, above everything ─
+    drawDayOverlays();
+    drawCloudShadows();         // world-anchored cloud overlay, on top of everything
 
     ctx.restore();  // undo world translate/zoom
 
@@ -7261,12 +8730,13 @@ function render() {
     if (!gameState._potato) drawSunRays(W, H);
     drawVignette(W, H);
     drawTeleportOverlay(W, H);
+    drawMinigameLoadFade(W, H);
 
     ctx.restore();  // undo DPR scale
 
     const ytBlock = document.getElementById('yt-focus-block');
     if (ytBlock) {
-        const shouldShow = (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
+        const shouldShow = sofaFocusActive() || (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
             || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
         ytBlock.classList.toggle('visible', shouldShow);
     }
@@ -7275,7 +8745,7 @@ function render() {
         // Only reveal once the kidnap animation has finished (anim inactive), so prayer
         // appears together with focus sounds / task box / YouTube — not the moment the
         // session is selected.
-        const showPrayer = (gameState.pomodoro.active || gameState.freeMode.active) && !gameState.anim.active;
+        const showPrayer = (sofaFocusActive() || gameState.pomodoro.active || gameState.freeMode.active) && !gameState.anim.active;
         prayerPanel.classList.toggle('visible', !!showPrayer);
         const isBreak = (gameState.pomodoro.active && gameState.pomodoro.phase === 'break')
             || (gameState.freeMode.active && gameState.freeMode.phase === 'break');
@@ -7283,85 +8753,271 @@ function render() {
     }
 }
 
-function drawRooms() {
+// Draw one world-layer image centred on the origin at world scale. Guards on
+// decode so a not-yet-loaded layer just skips (login never waits on the art).
+function _drawWorldLayer(img) {
+    if (!img) return;
+    // <img> exposes .complete/.naturalWidth; a cached <canvas> doesn't (always ready).
+    if (img.tagName === 'IMG' && (!img.complete || !img.naturalWidth)) return;
+    gameState.ctx.drawImage(img, -WORLD_W / 2, -WORLD_H / 2, WORLD_W, WORLD_H);
+}
+
+// Per-laptop screen "on" light — cropped from the matching *_Laptop_Lights.png overlay
+// using that laptop's exact lightBox (see LAPTOP_DEFS), so only the ONE laptop actually
+// claimed lights up, never the whole desk at once. Drawn as a live per-frame call (NOT
+// baked into worldCache) since laptop.lightAlpha changes continuously — claimedBy is
+// synced via syncLaptopsFromPomodoro, so every client sees the same laptop light up.
+function drawLaptopLights(floorFilter, groupAlpha) {
+    groupAlpha = groupAlpha ?? 1;
+    if (groupAlpha < 0.01) return;
+    const img = floorFilter === 1 ? gameState.assets.wLaptopLights : gameState.assets.wSecondLaptopLights;
+    if (!img || !img.complete || !img.naturalWidth) return;
     const ctx = gameState.ctx;
-    if (!gameState.assets.bg.complete) return;
-    for (let i = 0; i < ROOM_COUNT; i++) {
-        ctx.drawImage(gameState.assets.bg, -BG_WIDTH / 2, -BG_HEIGHT / 2 + (i * BG_HEIGHT), BG_WIDTH, BG_HEIGHT);
+    for (const laptop of gameState.laptops) {
+        if (laptop.floor !== floorFilter || !laptop.lightBox || laptop.lightAlpha <= 0.01) continue;
+        const [sx0, sy0, sx1, sy1] = laptop.lightBox;
+        const dx = sx2w(sx0), dy = sy2w(sy0);
+        const dw = (sx1 - sx0) * WORLD_SCALE, dh = (sy1 - sy0) * WORLD_SCALE;
+        ctx.save();
+        ctx.globalAlpha = laptop.lightAlpha * groupAlpha;
+        ctx.drawImage(img, sx0, sy0, sx1 - sx0, sy1 - sy0, dx, dy, dw, dh);
+        ctx.restore();
     }
 }
 
-function drawRoomShadows() {
-    const ctx = gameState.ctx;
-    if (!gameState.assets.shadow.complete) return;
-    for (let i = 0; i < ROOM_COUNT; i++) {
-        ctx.drawImage(gameState.assets.shadow, -BG_WIDTH / 2, -BG_HEIGHT / 2 + (i * BG_HEIGHT), BG_WIDTH, BG_HEIGHT);
-    }
+// Ground floor: the single shared background + walls + all ground furniture, in
+// paint order (bottom → top). Stairs sit above the floor but below furniture edges.
+function drawWorldGround() {
+    if (worldCache.ground) { _drawWorldLayer(worldCache.ground); return; }
+    // Fallback (cache not built yet): draw each layer directly.
+    const A = gameState.assets;
+    _drawWorldLayer(A.wBackground);
+    _drawWorldLayer(A.wWalls);
+    _drawWorldLayer(A.wFireplace);
+    _drawWorldLayer(A.wBooksSofas);
+    _drawWorldLayer(A.wBooksLibrary);
+    _drawWorldLayer(A.wSofa);
+    _drawWorldLayer(A.wLaptops);
+    _drawWorldLayer(A.wStairs);
+    _drawWorldLayer(A.wGames);
 }
 
-function drawBreakDoor() {
+// Second floor: the raised platform + its laptop desk + the papers (dashboard)
+// desk. All three fade together via gameState.secondFloorVis when a ground player
+// walks under the mezzanine (client-side only — see updateSecondFloorFade).
+function drawSecondFloor() {
+    const vis = gameState.secondFloorVis ?? 1;
+    if (vis < 0.01) return;
     const ctx = gameState.ctx;
-    const y = ROOM_SEAM_Y;
-    const open = isBreakActive();
-
+    const A = gameState.assets;
     ctx.save();
-    ctx.imageSmoothingEnabled = false;
-    if (open) {
-        ctx.fillStyle = 'rgba(49, 178, 255, 0.22)';
-        ctx.fillRect(-DOOR_HALF_WIDTH, y - 8, DOOR_WIDTH, 16);
-        ctx.fillStyle = 'rgba(132, 218, 255, 0.38)';
-        for (let x = -DOOR_HALF_WIDTH; x < DOOR_HALF_WIDTH; x += 24) {
-            ctx.fillRect(x, y - 2, 14, 4);
-        }
+    ctx.globalAlpha = vis;
+    if (worldCache.second) {
+        _drawWorldLayer(worldCache.second);
     } else {
-        ctx.fillStyle = '#111111';
-        ctx.fillRect(-DOOR_HALF_WIDTH, y - 6, DOOR_WIDTH, 12);
-        for (let x = -DOOR_HALF_WIDTH; x < DOOR_HALF_WIDTH; x += 28) {
-            ctx.fillStyle = '#f4c82b';
-            ctx.fillRect(x, y - 6, 14, 12);
-            ctx.fillStyle = '#111111';
-            ctx.fillRect(x + 14, y - 6, 14, 12);
-        }
+        _drawWorldLayer(A.wSecondBg);
+        _drawWorldLayer(A.wSecondLaptops);
+        _drawWorldLayer(A.wSecondPapers);
     }
-
     ctx.restore();
 }
 
-// Animated break-door label (called once per frame, after players, so it sits on
-// top). Same playful fade-out / pop-in as the laptop prompt.
-function drawBreakDoorPrompt() {
-    const ctx = gameState.ctx;
-    const y = ROOM_SEAM_Y;
-    const player = gameState.players[gameState.userId];
-    const near = player && Math.hypot(player.x, player.y - y) < 190;
-    const wantText = isBreakActive() ? 'باب الاستراحة مفتوح' : 'باب الاستراحة مغلق';
-
-    const bp = gameState.breakDoorPrompt;
-    const bLerp = 1 - Math.pow(1 - 0.22, gameState.dtFactor);
-    if (!near || wantText !== bp.shownText) {
-        // Fade out the current label; adopt the new one once it's faint enough.
-        bp.alpha += (0 - bp.alpha) * bLerp;
-        if (bp.alpha < 0.06 && near) { bp.shownText = wantText; bp.pop = 0; }
-    } else {
-        bp.shownText = wantText;
-        bp.alpha += (1 - bp.alpha) * bLerp;
-        bp.pop   += (1 - bp.pop)   * bLerp;
+// Top day-lighting overlays, drawn over the whole world. Day-Overlay-2 is a normal
+// blend; Day-Overlay uses the "overlay" blend mode (authored that way). Both are
+// static single drawImages (cheap). The multiply Night overlay is intentionally
+// skipped for now. Overlay-blend layer is dropped on بطاطس (potato).
+function drawDayOverlays() {
+    const A = gameState.assets;
+    _drawWorldLayer(A.wOverlayDay2);
+    if (!gameState._potato && A.wOverlayDay.complete && A.wOverlayDay.naturalWidth) {
+        const ctx = gameState.ctx;
+        ctx.save();
+        ctx.globalCompositeOperation = 'overlay';
+        _drawWorldLayer(A.wOverlayDay);
+        ctx.restore();
     }
+}
 
-    if (!bp.shownText || bp.alpha < 0.02) return;
-    const a = bp.alpha;
-    const bob = Math.sin(Date.now() * 0.004) * 2.5;
-    const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, bp.pop));
+// ─── Passing clouds (WORLD-space overlay) ────────────────────────────────────────
+// Soft BLACK, slightly-blurred, low-opacity cloud silhouettes that live in the WORLD
+// (drawn inside the camera transform, on top of everything) and drift slowly LEFT on
+// an infinite loop. Being world-anchored, they sit over the scene like an overlay
+// instead of floating across the screen. Cached blurred sprite (cheap). Off بطاطس.
+let _cloudSprite = null;
+function _getCloudSprite() {
+    if (_cloudSprite) return _cloudSprite;
+    const S = 256;
+    // The lowest/widest bumps (feather = r*1.45) reach past the S×S frame — with no
+    // padding those blobs got clipped by the canvas edge, giving every cloud a
+    // flat-cut bottom. PAD adds transparent margin on all sides so the full soft
+    // silhouette fits; the cloud is still drawn/positioned as if the frame were S×S.
+    const PAD = 64;
+    const c = document.createElement('canvas'); c.width = S + PAD * 2; c.height = S + PAD * 2;
+    const g = c.getContext('2d');
+    // Soft edge via layered radial gradients instead of ctx.filter='blur()' — Safari's
+    // canvas 2D filter blur support is unreliable, which left the clouds hard-edged
+    // there. Same technique the fog sprite (_getFogSprite) already uses, so it's
+    // guaranteed to render identically on every browser.
+    const drawSoftBlob = (cx, cy, r) => {
+        cx += PAD; cy += PAD;
+        const feather = r * 1.45;
+        const grad = g.createRadialGradient(cx, cy, 0, cx, cy, feather);
+        grad.addColorStop(0, 'rgba(0,0,0,1)');
+        grad.addColorStop(r / feather, 'rgba(0,0,0,1)');
+        grad.addColorStop(1, 'rgba(0,0,0,0)');
+        g.fillStyle = grad;
+        g.beginPath(); g.arc(cx, cy, feather, 0, Math.PI * 2); g.fill();
+    };
+    // Classic cloud = overlapping bumps on a flat base.
+    const bumps = [
+        [0.30, 0.58, 0.18], [0.48, 0.46, 0.24], [0.66, 0.54, 0.20],
+        [0.80, 0.60, 0.15], [0.22, 0.62, 0.14], [0.52, 0.64, 0.26],
+    ];
+    for (const [bx, by, br] of bumps) drawSoftBlob(bx * S, by * S, br * S);
+    drawSoftBlob(0.51 * S, 0.64 * S, 0.30 * S);   // fills in the flat base between bumps
+    _cloudSprite = c;
+    return c;
+}
+const _CLOUD_MARGIN = 400;   // world px of spawn margin beyond the world edges
+function _spawnCloud(offRight) {
+    const w = 260 + Math.random() * 320;       // world-px width
+    const spanX = WORLD_W + _CLOUD_MARGIN * 2;
+    return {
+        x: offRight ? (WORLD_W / 2 + _CLOUD_MARGIN + Math.random() * 300)
+                    : (-WORLD_W / 2 - _CLOUD_MARGIN + Math.random() * spanX),
+        // vary up/down across the whole scene (not just the middle)
+        y: -WORLD_H / 2 - 100 + Math.random() * (WORLD_H + 200),
+        w,
+        a: 0.08 + Math.random() * 0.07,        // low opacity
+        vx: 12 + Math.random() * 16,           // slow leftward drift (world px/sec)
+    };
+}
+function _initClouds() {
+    const n = isReducedGraphics() ? 3 : 5;
+    gameState.clouds = [];
+    for (let i = 0; i < n; i++) gameState.clouds.push(_spawnCloud(false));
+}
+// Fades each laptop's screen light toward "on" the moment it's claimed — which happens
+// right as the break-end kidnap sequence starts pulling someone into the seat — and
+// back off once it's freed. claimedBy is synced (syncLaptopsFromPomodoro), so this
+// plays out identically for every client watching, not just the person sitting down.
+function updateLaptopLights() {
+    const dt = gameState.dtFactor || 1;
+    for (const laptop of gameState.laptops) {
+        if (!laptop.lightBox) continue;
+        const target = laptop.claimedBy ? 1 : 0;
+        const rate = target > laptop.lightAlpha ? 0.05 : 0.08;
+        const lerp = 1 - Math.pow(1 - rate, dt);
+        laptop.lightAlpha += (target - laptop.lightAlpha) * lerp;
+        if (Math.abs(target - laptop.lightAlpha) < 0.003) laptop.lightAlpha = target;
+    }
+}
+function updateCloudShadows() {
+    if (gameState._potato) return;
+    if (!gameState.clouds) _initClouds();
+    const dt = gameState.dtFactor / 60;   // ~seconds
+    for (const c of gameState.clouds) {
+        c.x -= c.vx * dt;                 // drift LEFT (world units)
+        if (c.x + c.w < -WORLD_W / 2 - _CLOUD_MARGIN) Object.assign(c, _spawnCloud(true));
+    }
+}
+// Drawn INSIDE the world transform (world-space), so clouds move 1:1 with the world.
+function drawCloudShadows() {
+    if (gameState._potato || !gameState.clouds) return;
+    const ctx = gameState.ctx;
+    const spr = _getCloudSprite();
     ctx.save();
-    ctx.translate(0, (y - 72) - (1 - a) * 10 + bob);
-    ctx.scale(pop, pop);
-    ctx.font = 'bold 15px Rubik';
-    ctx.textAlign = 'center';
-    ctx.fillStyle = `rgba(255, 255, 255, ${a})`;
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = `rgba(0, 0, 0, ${a})`;
-    ctx.fillText(bp.shownText, 0, 0);
-    ctx.shadowBlur = 0;
+    for (const c of gameState.clouds) {
+        const h = c.w * 0.66;
+        ctx.globalAlpha = c.a;
+        ctx.drawImage(spr, c.x, c.y, c.w, h);
+    }
+    ctx.restore();
+}
+
+// ─── Second-floor height fog ─────────────────────────────────────────────────────
+// When the LOCAL player is on the SECOND floor, soft fog drifts over the view so the
+// ground floor below feels far down (a sense of height). Screen-space, drifting left
+// on a loop (no snap), client-side. Fades in ONLY on floor 2, out on floor 1.
+let _fogSprite = null;
+function _getFogSprite() {
+    if (_fogSprite) return _fogSprite;
+    const S = 256;
+    const c = document.createElement('canvas'); c.width = S; c.height = S;
+    const g = c.getContext('2d');
+    const grad = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    grad.addColorStop(0, 'rgba(226, 232, 240, 0.9)');
+    grad.addColorStop(0.6, 'rgba(214, 222, 235, 0.5)');
+    grad.addColorStop(1, 'rgba(214, 222, 235, 0)');
+    g.fillStyle = grad;
+    g.fillRect(0, 0, S, S);
+    _fogSprite = c;
+    return c;
+}
+const _FOG_MARGIN = 400;
+function _spawnFog(offRight) {
+    const w = 520 + Math.random() * 520;   // world-px
+    const spanX = WORLD_W + _FOG_MARGIN * 2;
+    return {
+        x: offRight ? (WORLD_W / 2 + _FOG_MARGIN + Math.random() * 300)
+                    : (-WORLD_W / 2 - _FOG_MARGIN + Math.random() * spanX),
+        y: -WORLD_H / 2 + Math.random() * WORLD_H,
+        w,
+        a: 0.45 + Math.random() * 0.4,
+        vx: 10 + Math.random() * 14,        // gentle leftward drift (world px/sec)
+    };
+}
+function _initFog() {
+    gameState.fogPuffs = [];
+    const n = isReducedGraphics() ? 5 : 8;
+    for (let i = 0; i < n; i++) gameState.fogPuffs.push(_spawnFog(false));
+}
+// Fade the fireplace crackle in/out by how close the LOCAL player is (floor 1 only).
+function updateFireplaceAmbient() {
+    const eng = gameState.focusAudioEngine;
+    if (!eng || !eng.ctx || eng.ctx.state !== 'running') return;
+    const local = gameState.players[gameState.userId];
+    let vol = 0;
+    if (local && (local.floor || 1) === 1) {
+        const d = Math.hypot(local.x - FIRE_X, local.y - FIRE_Y);
+        const t = 1 - Math.max(0, Math.min(1, (d - FIRE_NEAR) / (FIRE_FAR - FIRE_NEAR)));
+        vol = t * t * FIRE_MAX_VOL;   // ease so it only really swells up close
+    }
+    eng.setFireplaceVolume(vol);
+}
+
+function updateSecondFloorFog() {
+    if (gameState.secondFloorFogA === undefined) gameState.secondFloorFogA = 0;
+    if (!gameState.fogPuffs) _initFog();
+    const local = gameState.players[gameState.userId];
+    // ALWAYS on when on floor 2, ALWAYS off on floor 1 — smoothly (no snap).
+    const target = (local && (local.floor || 1) === 2) ? 1 : 0;
+    gameState.secondFloorFogA += (target - gameState.secondFloorFogA)
+        * (1 - Math.pow(1 - 0.06, gameState.dtFactor));
+    const dt = gameState.dtFactor / 60;
+    for (const f of gameState.fogPuffs) {
+        f.x -= f.vx * dt;                   // drift LEFT, looping (world units)
+        if (f.x + f.w < -WORLD_W / 2 - _FOG_MARGIN) Object.assign(f, _spawnFog(true));
+    }
+}
+// World-space (drawn between the floors, so the mezzanine sits above it). Low opacity.
+function drawSecondFloorFog() {
+    const A = gameState.secondFloorFogA || 0;
+    if (A < 0.01 || !gameState.fogPuffs) return;
+    const ctx = gameState.ctx;
+    const spr = _getFogSprite();
+    ctx.save();
+    // Puffs spawn/drift past the world edges for a seamless wraparound loop (like the
+    // clouds), which otherwise let fog paint over the plain black canvas beyond the
+    // art — clip to the actual world rect so it only ever sits on top of the world.
+    ctx.beginPath();
+    ctx.rect(-WORLD_W / 2, -WORLD_H / 2, WORLD_W, WORLD_H);
+    ctx.clip();
+    for (const f of gameState.fogPuffs) {
+        const h = f.w * 0.7;
+        ctx.globalAlpha = f.a * A * 0.28;   // lower opacity soft haze
+        ctx.drawImage(spr, f.x, f.y, f.w, h);
+    }
     ctx.restore();
 }
 
@@ -7407,7 +9063,11 @@ function listenToCoffee() {
         gameState.coffee.session = mySession;
         gameState.coffee.sessionKey = myKey;
 
-        if (mySession.phase === 'teleporting') {
+        if (mySession.phase === 'lobby') {
+            gameState.coffee.active = false;
+            showCoffeeLobby(mySession);
+        } else if (mySession.phase === 'teleporting') {
+            hideRacePanel();
             if (!gameState.coffee.teleportAnim) {
                 const elapsed = Math.max(0, (serverNow() - (mySession.teleportAt || serverNow())) / 1000);
                 gameState.coffee.teleportAnim = {
@@ -7421,9 +9081,11 @@ function listenToCoffee() {
                 };
             }
         } else if (mySession.phase === 'active') {
+            hideRacePanel();
             if (gameState.coffee.teleportAnim) {
                 gameState.coffee.teleportAnim.pendingSession = gameState.coffee.teleportAnim.pendingSession || mySession;
-            } else {
+            } else if (!gameState.coffee.active) {
+                startMinigameLoadFade('coffee', myKey);
                 startLocalCoffee(mySession);
             }
             // Host: watch for all-ready → set startTime
@@ -7456,6 +9118,7 @@ function listenToCoffee() {
                 }
             }
         } else if (mySession.phase === 'finished') {
+            hideRacePanel();
             gameState.coffee.active = true;
             gameState.coffee.session = mySession;
             gameState.coffee.showResultsInGame = true;
@@ -8164,6 +9827,7 @@ function renderCoffee() {
         ctx.fillRect(0, 0, W, H);
         ctx.restore();
     }
+    drawMinigameLoadFade(W, H);
 
     ctx.restore(); // undo DPR scale
 }
@@ -8644,6 +10308,73 @@ function createRaceFromParticipants() {
     });
 }
 
+// ─── Hosted-lobby start transition (black fade + spinner, waits for everyone) ────
+// Triggered when the games-table lobby's ابدأ press flips a race/coffee session out
+// of 'lobby' (see listenToRace/listenToCoffee) — a plain black fade-out, a spinner
+// held until every participant's `ready` flag is in (min 1s, ~8s safety fallback so
+// one stuck client can't soft-lock everyone), then a fade back in.
+const MINIGAME_LOAD_FADE_OUT = 0.25, MINIGAME_LOAD_FADE_IN = 0.35;
+const MINIGAME_LOAD_MIN_WAIT_MS = 1000, MINIGAME_LOAD_MAX_WAIT_MS = 8000;
+function startMinigameLoadFade(type, sessionKey) {
+    if (gameState.minigameLoadFade && gameState.minigameLoadFade.sessionKey === sessionKey) return;
+    gameState.minigameLoadFade = { type, sessionKey, t: 0, phase: 'out', alpha: 0, readyWritten: false, waitStart: 0 };
+}
+function updateMinigameLoadFade() {
+    const lf = gameState.minigameLoadFade;
+    if (!lf) return;
+    lf.t += gameState.dtFactor / 60;
+    if (lf.phase === 'out') {
+        lf.alpha = Math.min(1, lf.t / MINIGAME_LOAD_FADE_OUT);
+        if (lf.t >= MINIGAME_LOAD_FADE_OUT) { lf.phase = 'wait'; lf.waitStart = Date.now(); }
+    } else if (lf.phase === 'wait') {
+        lf.alpha = 1;
+        if (!lf.readyWritten) {
+            const localReady = lf.type === 'race' ? isRaceTrackReady() : true;
+            if (localReady) {
+                lf.readyWritten = true;
+                const path = lf.type === 'race'
+                    ? raceSessionPath(`participants/${gameState.userId}/ready`)
+                    : coffeeSessionPath(`participants/${gameState.userId}/ready`);
+                update(ref(database), { [path]: serverNow() });
+            } else if (lf.type === 'race') {
+                loadRaceTrackAsset();
+            }
+        }
+        const session = lf.type === 'race' ? gameState.race.session : gameState.coffee.session;
+        const parts = session ? Object.values(session.participants || {}) : [];
+        const allReady = parts.length > 0 && parts.every(p => p.ready);
+        const waited = Date.now() - lf.waitStart;
+        if ((allReady && waited >= MINIGAME_LOAD_MIN_WAIT_MS) || waited >= MINIGAME_LOAD_MAX_WAIT_MS) {
+            lf.phase = 'in'; lf.t = 0;
+        }
+    } else if (lf.phase === 'in') {
+        lf.alpha = Math.max(0, 1 - lf.t / MINIGAME_LOAD_FADE_IN);
+        if (lf.t >= MINIGAME_LOAD_FADE_IN) gameState.minigameLoadFade = null;
+    }
+}
+function drawMinigameLoadFade(W, H) {
+    const lf = gameState.minigameLoadFade;
+    if (!lf || lf.alpha < 0.01) return;
+    const ctx = gameState.ctx;
+    ctx.save();
+    ctx.globalAlpha = lf.alpha;
+    ctx.fillStyle = 'black';
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+    if (lf.phase === 'wait') {
+        const cx = W / 2, cy = H / 2, r = 22;
+        const t = Date.now() * 0.004;
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+        ctx.lineWidth = 4;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, t, t + Math.PI * 1.2);
+        ctx.stroke();
+        ctx.restore();
+    }
+}
+
 function updateTeleportAnim() {
     const anim = gameState.race.teleportAnim;
     if (!anim) return;
@@ -8929,6 +10660,7 @@ function renderRace() {
 
     // Draw teleport overlay on top (still inside DPR scale)
     drawTeleportOverlay(W, H);
+    drawMinigameLoadFade(W, H);
 
     ctx.restore();  // undo DPR scale
 }
@@ -9152,7 +10884,7 @@ function drawFocusMask(W, H) {
     const maskKey = player ? [
         (gameState.focusAlpha * 500 | 0), (pPos.x * 10 | 0), (pPos.y * 10 | 0),
         (gameState.camera.x * 10 | 0), (gameState.camera.y * 10 | 0),
-        (gameState.zoom * 1000 | 0), gameState.isLockedIn ? 1 : 0,
+        (gameState.zoom * 1000 | 0), gameState.isLockedIn ? 1 : 0, sofaFocusActive() ? 1 : 0,
         mls.id ?? 'n', (mls.alpha * 500 | 0), (mls.x | 0), (mls.y | 0),
     ].join(',') : `nop,${(gameState.focusAlpha * 500 | 0)}`;
 
@@ -9172,7 +10904,10 @@ function drawFocusMask(W, H) {
             const pScreenX = centerX + (playerX + gameState.camera.x) * zoom * mDpr;
             const pScreenY = centerY + (playerY + gameState.camera.y) * zoom * mDpr;
 
-            const pRadius = (gameState.isLockedIn ? 85 : 75) * zoom * mDpr;
+            // Sitting gets a bigger punch-out than the default 75 — the وقوف button
+            // floats 90px above the player (plus its own height), which sat just
+            // outside the old radius and read as darkened/tinted by the mask.
+            const pRadius = (gameState.isLockedIn ? 85 : (sofaFocusActive() ? 120 : 75)) * zoom * mDpr;
             // Soft radial fade on every tier — the sharp-edged version looked
             // harsh + felt too dim in-session.
             const pGrad = mCtx.createRadialGradient(pScreenX, pScreenY, pRadius * 0.4, pScreenX, pScreenY, pRadius);
@@ -9279,7 +11014,10 @@ function drawPrompt(laptop) {
 
 function enforceAudioFailsafe() {
     // Azkar shows the focus panel as a live mixer — don't fade master down then.
-    if (gameState.isLockedIn || gameState.azkar.active) return;
+    // Sitting on the big sofa also runs its own work-session-style ambience
+    // (applySofaFocusUI) — without this exemption this watchdog fought that ramp
+    // every single frame and muted the sofa's focus sounds right back to silent.
+    if (gameState.isLockedIn || gameState.azkar.active || sofaFocusActive()) return;
     const yt = gameState.focusYTPlayer;
     if (yt && yt.player && yt.ready && yt.videoId && !yt._fading) {
         try {
@@ -9448,6 +11186,30 @@ function updatePomodoro() {
     } else if (gameState.pomodoro.phase === 'break') {
         largeTimer.classList.add('hidden');
         smallTimer.classList.remove('hidden');
+
+        // Stuck in a minigame when break time is up — the kidnap sequence can't run
+        // (the game loop isn't even rendering the world). Count up with a "+" until
+        // the player leaves the game on their own, then hold 1s before falling
+        // through to the normal end-of-break transition below.
+        if (remaining === 0 && isMinigameActive()) {
+            if (!gameState.pomodoro.breakOvertimeSince) gameState.pomodoro.breakOvertimeSince = Date.now();
+            gameState.pomodoro._breakOvertimeExitAt = null;
+            const overMs = Date.now() - gameState.pomodoro.breakOvertimeSince;
+            const om = Math.floor(overMs / 60000), os = Math.floor((overMs % 60000) / 1000);
+            document.getElementById('small-timer-text').textContent =
+                `+${om.toString().padStart(2, '0')}:${os.toString().padStart(2, '0')}`;
+            return;
+        }
+        if (gameState.pomodoro.breakOvertimeSince) {
+            if (!gameState.pomodoro._breakOvertimeExitAt) {
+                gameState.pomodoro._breakOvertimeExitAt = Date.now();
+                return;
+            }
+            if (Date.now() - gameState.pomodoro._breakOvertimeExitAt < 1000) return;
+            gameState.pomodoro.breakOvertimeSince = null;
+            gameState.pomodoro._breakOvertimeExitAt = null;
+        }
+
         document.getElementById('small-timer-text').textContent = timeStr;
 
         if (remaining === 0 && !gameState.pomodoro.transitioning) {
@@ -9491,6 +11253,11 @@ function updatePomodoro() {
                     playSoundRobust(gameState.sounds.timeReturn);
                 }
                 try { if (Notification.permission === "granted") new Notification("مدونة ستوديو", { body: "انتهى وقت الراحة. هيا للعمل!" }); } catch(e) {}
+
+                // Stand up NOW (2s before the kidnap grab below) if seated on the sofa —
+                // the sit animation and the kidnap animation both drive player.x/y every
+                // frame, and getting grabbed mid-sit corrupted the player's state entirely.
+                if (gameState.isSitting) standUp();
 
                 // Set state briefly to wait so that kidnap starts next work cycle timer
                 gameState.pomodoro.phase = 'wait';
@@ -9607,12 +11374,17 @@ function drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText, c
     ctx.textBaseline = 'alphabetic';
 }
 
-function drawTimers() {
+function drawTimers(floorFilter = null) {
     const ctx = gameState.ctx;
     const now = Date.now();
     const sp  = gameState.sharedPomo;
+    // Second-floor laptop badges track the mezzanine (drop out with the fade).
+    const f2vis = gameState.secondFloorVis ?? 1;
 
     gameState.laptops.forEach(laptop => {
+        const lf = laptop.floor || 1;
+        if (floorFilter && lf !== floorFilter) return;
+        if (lf === 2 && f2vis < 0.5) return;   // hidden with the second floor
         if (!laptop.claimedBy || laptop.claimedBy === gameState.userId) return;
         // Hide badge if local player is IN this coop session
         if (sp.phase === 'active' && sp.sessionId === laptop.claimedBy) return;
@@ -9658,6 +11430,24 @@ function drawTimers() {
         } else {
             const taskText = (hostPlayer?.currentTask) ? `أعمل على ${hostPlayer.currentTask}` : '';
             drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText: timeStr, color: phaseColor });
+        }
+    });
+
+    // Reading session badges
+    Object.values(gameState.players).forEach(player => {
+        const pFloor = player.floor || 1;
+        if (floorFilter && pFloor !== floorFilter) return;
+        if (pFloor === 2 && f2vis < 0.5) return;
+        if (player.userId === gameState.userId) return; // Hide for self
+
+        if (player.isReading && player.readingEnd) {
+            const renderX = player.x;
+            const renderY = player.y - PLAYER_SIZE * 0.5 - 20; // Hover above head
+            const remaining = Math.max(0, player.readingEnd - now);
+            const timeStr = `${String(Math.floor(remaining / 60000)).padStart(2,'0')}:${String(Math.floor((remaining % 60000) / 1000)).padStart(2,'0')}`;
+            const taskText = player.readingBook ? `يتم قراءة ${player.readingBook}` : 'يتم قراءة';
+            
+            drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText: timeStr, color: '#3b82f6', textColor: 'white' });
         }
     });
 }
@@ -9779,6 +11569,9 @@ function drawWindParticles(W, H) {
     const h = H || canvas.height / (gameState.dpr || 1);
     const twinkleClock = Date.now() * 0.002;
     ctx.save();
+    // New smooth look to match the non-pixel art: each particle is a soft round
+    // dot with a faint trailing streak (a couple of fading dots), instead of the
+    // old hard `fillRect` pixel squares.
     gameState.windParticles.forEach(p => {
         const offsetX = gameState.camera.x * (p.parallax - 1.0) * gameState.zoom;
         const offsetY = gameState.camera.y * (p.parallax - 1.0) * gameState.zoom;
@@ -9788,9 +11581,17 @@ function drawWindParticles(W, H) {
         if (drawY < 0) drawY += h;
         // Gentle twinkle so the ambient motes shimmer instead of sitting flat
         const tw = 0.65 + 0.35 * Math.sin(twinkleClock * p.twinkleSpeed + p.twinklePhase);
-        ctx.fillStyle = `rgba(255, 255, 255, ${p.opacity * tw})`;
-        for (let i = 0; i < p.length; i++) {
-            ctx.fillRect(drawX + (i * p.size), drawY, p.size, p.size);
+        const baseA = p.opacity * tw;
+        const rad = Math.max(1.1, p.size * 1.35);
+        // Soft trailing streak (older = fainter/smaller), reads as motion blur.
+        for (let i = p.length - 1; i >= 0; i--) {
+            const fade = 1 - (i / Math.max(1, p.length)) * 0.72;
+            const rr = rad * (1 - i * 0.12);
+            if (rr <= 0.2) continue;
+            ctx.fillStyle = `rgba(255, 255, 255, ${baseA * fade * 0.9})`;
+            ctx.beginPath();
+            ctx.arc(drawX + i * p.size * 1.4, drawY, rr, 0, Math.PI * 2);
+            ctx.fill();
         }
     });
     ctx.restore();
@@ -9932,37 +11733,53 @@ function drawFocusFog(W, H) {
         ctx.fillStyle = grad;
         ctx.fillRect(0, 0, w, h);
     } else {
+        // High tier used to rebuild 3 full-screen radial gradients FROM SCRATCH every
+        // frame (createRadialGradient + 6 addColorStops each) to animate their drift —
+        // the priciest per-frame canvas op there is, and it ran for the entire duration
+        // of every work/focus session (Mac Safari defaults to this tier, never the
+        // cached "reduced" branch above). Fix: build each gradient ONCE per canvas size
+        // at a fixed base position, cache it, and animate the drift with ctx.translate
+        // instead — same trick as the atmosphere/sun caches (ctx._atmoCache/_sunCache).
+        let fc = ctx._fogAnimCache;
+        if (!fc || fc.w !== w || fc.h !== h) {
+            const grad1 = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.3, w / 2, h / 2, Math.max(w, h) * 0.95);
+            grad1.addColorStop(0, 'rgba(10, 15, 30, 0)');
+            grad1.addColorStop(0.6, 'rgba(10, 15, 30, 0.2)');
+            grad1.addColorStop(1, 'rgba(13, 27, 42, 0.6)');
+
+            const grad2 = ctx.createRadialGradient(w * 0.3, h * 0.4, Math.min(w, h) * 0.25, w * 0.3, h * 0.4, Math.max(w, h) * 0.75);
+            grad2.addColorStop(0, 'rgba(16, 185, 129, 0)');
+            grad2.addColorStop(0.5, 'rgba(16, 185, 129, 0.04)');
+            grad2.addColorStop(1, 'rgba(16, 185, 129, 0.12)');
+
+            const grad3 = ctx.createRadialGradient(w * 0.8, h * 0.8, Math.min(w, h) * 0.25, w * 0.8, h * 0.8, Math.max(w, h) * 0.7);
+            grad3.addColorStop(0, 'rgba(99, 102, 241, 0)');
+            grad3.addColorStop(0.5, 'rgba(99, 102, 241, 0.03)');
+            grad3.addColorStop(1, 'rgba(99, 102, 241, 0.15)');
+
+            fc = ctx._fogAnimCache = { w, h, grad1, grad2, grad3 };
+        }
+
         const t = Date.now() * 0.0004;
+        const margin = Math.max(w, h) * 0.2;   // covers the max drift amplitude below
 
-        const grad1 = ctx.createRadialGradient(
-            w / 2 + Math.sin(t) * (w * 0.15), h / 2 + Math.cos(t * 0.7) * (h * 0.15), Math.min(w, h) * 0.3,
-            w / 2, h / 2, Math.max(w, h) * 0.95
-        );
-        grad1.addColorStop(0, 'rgba(10, 15, 30, 0)');
-        grad1.addColorStop(0.6, 'rgba(10, 15, 30, 0.2)');
-        grad1.addColorStop(1, 'rgba(13, 27, 42, 0.6)');
-        ctx.fillStyle = grad1;
-        ctx.fillRect(0, 0, w, h);
+        ctx.save();
+        ctx.translate(Math.sin(t) * (w * 0.15), Math.cos(t * 0.7) * (h * 0.15));
+        ctx.fillStyle = fc.grad1;
+        ctx.fillRect(-margin, -margin, w + margin * 2, h + margin * 2);
+        ctx.restore();
 
-        const grad2 = ctx.createRadialGradient(
-            w * 0.3 + Math.cos(t * 0.8) * (w * 0.1), h * 0.4 + Math.sin(t * 1.1) * (h * 0.1), Math.min(w, h) * 0.25,
-            w * 0.3, h * 0.4, Math.max(w, h) * 0.75
-        );
-        grad2.addColorStop(0, 'rgba(16, 185, 129, 0)');
-        grad2.addColorStop(0.5, 'rgba(16, 185, 129, 0.04)');
-        grad2.addColorStop(1, 'rgba(16, 185, 129, 0.12)');
-        ctx.fillStyle = grad2;
-        ctx.fillRect(0, 0, w, h);
+        ctx.save();
+        ctx.translate(Math.cos(t * 0.8) * (w * 0.1), Math.sin(t * 1.1) * (h * 0.1));
+        ctx.fillStyle = fc.grad2;
+        ctx.fillRect(-margin, -margin, w + margin * 2, h + margin * 2);
+        ctx.restore();
 
-        const grad3 = ctx.createRadialGradient(
-            w * 0.8 + Math.sin(t * 1.3) * (w * 0.08), h * 0.8 + Math.cos(t * 0.9) * (h * 0.08), Math.min(w, h) * 0.25,
-            w * 0.8, h * 0.8, Math.max(w, h) * 0.7
-        );
-        grad3.addColorStop(0, 'rgba(99, 102, 241, 0)');
-        grad3.addColorStop(0.5, 'rgba(99, 102, 241, 0.03)');
-        grad3.addColorStop(1, 'rgba(99, 102, 241, 0.15)');
-        ctx.fillStyle = grad3;
-        ctx.fillRect(0, 0, w, h);
+        ctx.save();
+        ctx.translate(Math.sin(t * 1.3) * (w * 0.08), Math.cos(t * 0.9) * (h * 0.08));
+        ctx.fillStyle = fc.grad3;
+        ctx.fillRect(-margin, -margin, w + margin * 2, h + margin * 2);
+        ctx.restore();
     }
 
     ctx.restore();
@@ -10053,13 +11870,20 @@ function _tintedAvatar(userId, img, kind) {   // kind: 'gray' (working) | 'ghost
     return c || img;
 }
 
-function drawPlayers(onlyLocal = false) {
+function drawPlayers(onlyLocal = false, floorFilter = null) {
     const ctx = gameState.ctx;
     const teleportAnim = gameState.race.teleportAnim || gameState.coffee.teleportAnim;
 
     for (const player of Object.values(gameState.players)) {
         const isCurrentUser = player.userId === gameState.userId;
         if (onlyLocal && !isCurrentUser) continue;
+        // Floor split: draw ground players below the mezzanine, platform players above
+        // it. Platform players fade together with the second-floor art.
+        const pFloor = player.floor || 1;
+        if (floorFilter && pFloor !== floorFilter) continue;
+        const floorVis = (pFloor === 2) ? (gameState.secondFloorVis ?? 1) : 1;
+        if (floorVis < 0.02) continue;
+        const rScale = player.renderScale || 1;   // second-floor / stair scale (1.0 → 1.25)
         // Held invisible until their join position settles (see SPAWN_SETTLE_MS).
         if (player._pendingSpawn != null) continue;
 
@@ -10109,6 +11933,16 @@ function drawPlayers(onlyLocal = false) {
             const breathe = Math.sin(breatheT);
             workScaleY = 1.0 + breathe * 0.018;
             workScaleX = 1.0 - breathe * 0.012;
+        }
+
+        // Playful sit/stand hop (local player only — mirrors the JUICE entrance
+        // treatment below) — overrides the idle/work scale for the animation's brief
+        // duration; normal breathing resumes once it finishes.
+        if (isCurrentUser && gameState.sitAnim.active) {
+            const sa = gameState.sitAnim;
+            workScaleX = sa.scaleX;
+            workScaleY = sa.scaleY;
+            workBob = sa.hopY;
         }
 
         // Coop animation: read lerped blend values computed in updateCoopAnimation
@@ -10165,11 +11999,11 @@ function drawPlayers(onlyLocal = false) {
             const lift = (player.bobOffset || 0) + Math.abs(workBob) + tpFly * 110
                 + Math.abs(_juiceScale - 1) * 40;
             const liftN = Math.min(1, lift / 24);
-            const shW = (PLAYER_SIZE * 0.46) * (1 - liftN * 0.32);
+            const shW = (PLAYER_SIZE * 0.46) * (1 - liftN * 0.32) * rScale;
             const shH = shW * 0.32;
-            const shGroundY = renderY + PLAYER_SIZE / 2 - 2;
+            const shGroundY = renderY + (PLAYER_SIZE / 2) * rScale - 2;
             ctx.save();
-            ctx.globalAlpha = (0.28 - liftN * 0.14) * (tpData ? (1 - tpFadeOut) : 1);
+            ctx.globalAlpha = (0.28 - liftN * 0.14) * (tpData ? (1 - tpFadeOut) : 1) * floorVis;
             ctx.fillStyle = '#000';
             ctx.beginPath();
             ctx.ellipse(screenX + coopDX, shGroundY, shW, shH, 0, 0, Math.PI * 2);
@@ -10177,11 +12011,17 @@ function drawPlayers(onlyLocal = false) {
             ctx.restore();
         }
 
+        // The reading book — drawn BEFORE the avatar so the sprite covers it while
+        // it slides out from underneath (that's the whole trick: no fade, the player
+        // is the mask). Cheap no-op for everyone who isn't reading.
+        drawBookProp(player, isCurrentUser, screenX + coopDX, renderY, rScale,
+            floorVis * (tpFadeOut > 0.01 ? (1 - tpFadeOut) : 1));
+
         ctx.save();
-        if (tpFadeOut > 0.01) ctx.globalAlpha = 1 - tpFadeOut;
+        ctx.globalAlpha = floorVis * (tpFadeOut > 0.01 ? (1 - tpFadeOut) : 1);
         ctx.translate(screenX + coopDX, screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY);
         ctx.rotate(workAngle);
-        ctx.scale(workScaleX * _juiceScale * _juiceSquashX, workScaleY * _juiceScale * _juiceSquashY);
+        ctx.scale(workScaleX * _juiceScale * _juiceSquashX * rScale, workScaleY * _juiceScale * _juiceSquashY * rScale);
 
         if (grayMix > 0.01) {
             // Reduced tiers replace the live filter with pre-tinted avatar copies
@@ -10189,7 +12029,7 @@ function drawPlayers(onlyLocal = false) {
             if (!gameState._lowGfx) {
                 ctx.filter = `saturate(${colorAlpha}) brightness(${0.72 + 0.28 * colorAlpha})`;
             }
-            ctx.globalAlpha = 0.55 + 0.45 * colorAlpha;
+            ctx.globalAlpha = (0.55 + 0.45 * colorAlpha) * floorVis;
         }
 
         // Local-player ambient glow — a gentle breathing halo so "you" stand out.
@@ -10285,19 +12125,21 @@ function drawPlayers(onlyLocal = false) {
         ctx.restore(); // restores translate, rotate, scale
 
         if (player.nameAlpha > 0.01 && !tpData && !gameState._hideNames) {
-            ctx.fillStyle = `rgba(255, 255, 255, ${player.nameAlpha})`;
+            const nA = player.nameAlpha * floorVis;
+            const nY = renderY + (PLAYER_SIZE / 2) * rScale + 25;
+            ctx.fillStyle = `rgba(255, 255, 255, ${nA})`;
             ctx.font = '500 14px Rubik';
             ctx.textAlign = 'center';
-            ctx.fillText(player.username, screenX, renderY + PLAYER_SIZE / 2 + 25);
+            ctx.fillText(player.username, screenX, nY);
 
             // Free mode: show elapsed time + task in teal below the name
             if (!isCurrentUser && player.inFreeMode && player.freeWorkStartTime > 0) {
                 const freeElapsedMs = (player.freeTotalWorkMs || 0) + (Date.now() - player.freeWorkStartTime);
                 const freeTimeStr = formatTime(freeElapsedMs / 1000);
                 const taskStr = player.currentTask ? ` · ${player.currentTask.slice(0, 14)}` : '';
-                ctx.fillStyle = `rgba(59, 185, 171, ${player.nameAlpha * 0.9})`;
+                ctx.fillStyle = `rgba(59, 185, 171, ${nA * 0.9})`;
                 ctx.font = '500 12px Rubik';
-                ctx.fillText(`🌿 ${freeTimeStr}${taskStr}`, screenX, renderY + PLAYER_SIZE / 2 + 41);
+                ctx.fillText(`🌿 ${freeTimeStr}${taskStr}`, screenX, nY + 16);
             }
         }
     }
@@ -10646,18 +12488,21 @@ function renderPiPInto(ctx, canvas, dpr) {
         ctx.scale(s.zoom, s.zoom);
         ctx.translate(s.camera.x, s.camera.y);
 
-        drawRooms();
-        if (s.assets.tables.complete) {
-            ctx.drawImage(s.assets.tables, TABLE_BOX.minX, TABLE_BOX.minY, TABLE_WIDTH, TABLE_HEIGHT);
-        }
-        drawBreakDoor();
+        drawWorldGround();
+        drawLaptopLights(1);
         drawAmbientMotes();
         drawDustParticles();
-        drawPlayers(false);
+        drawPlayers(false, 1);
+        drawTimers(1);
+        drawSecondFloorFog();
+        drawSecondFloor();
+        drawLaptopLights(2, gameState.secondFloorVis ?? 1);
+        drawPlayers(false, 2);
+        drawTimers(2);
         drawCoopEmojiFloats();
         drawCoopGroupLabels();
-        drawTimers();
-        drawRoomShadows();
+        drawDayOverlays();
+        drawCloudShadows();       // world-space overlay
         ctx.restore();  // world transform
 
         drawWindParticles(W, H);
@@ -11601,8 +13446,8 @@ function initSharedPomo() {
     sp.unsubInvite = onValue(inviteRef, snap => {
         const invite = snap.val();
         if (!invite) { if (sp.phase === 'idle' || sp.phase === 'gathering') hideSpToast(); return; }
-        // Free mode users can't accept invites — they must end their session first
-        if (gameState.freeMode.active) {
+        // Free mode / reading users can't accept invites — they must end their session first
+        if (gameState.freeMode.active || gameState.reading.active) {
             update(ref(database), { [spPath(`invites/${gameState.userId}`)]: null });
             return;
         }
@@ -11646,9 +13491,9 @@ function updateSharedPomoProximity() {
     const sp = gameState.sharedPomo;
     // When hosting a gathering, keep showing nearby players so more can be invited
     const hostIsGathering = sp.phase === 'gathering' && sp.isHost;
-    if ((!hostIsGathering && sp.phase !== 'idle') || gameState.pomodoro.active || gameState.freeMode.active) {
+    if ((!hostIsGathering && sp.phase !== 'idle') || gameState.pomodoro.active || gameState.freeMode.active || gameState.reading.active) {
         renderSpNearbyPanel([]);
-        if (!gameState.pomodoro.active && !gameState.freeMode.active) {
+        if (!gameState.pomodoro.active && !gameState.freeMode.active && !gameState.reading.active) {
             // Still detect nearby coop sessions even when not idle for join flow
             checkNearbyCoopSession();
         } else {
@@ -11662,13 +13507,15 @@ function updateSharedPomoProximity() {
     }
     const local = gameState.players[gameState.userId];
     if (!local) { renderSpNearbyPanel([]); return; }
+    const localFloor = local.floor || 1;
 
     // Free players → invite panel (skip free-mode users — they can't be invited)
     const nearby = [];
     for (const p of Object.values(gameState.players)) {
         if (p.userId === gameState.userId) continue;
         if (!p.activeInGame) continue;
-        if (p.isWorking || p.isOnBreak || p.inFreeMode) continue;
+        if ((p.floor || 1) !== localFloor) continue;   // can't invite across floors
+        if (p.isWorking || p.isOnBreak || p.inFreeMode || p.isReading) continue;
         if (sp.session?.participants?.[p.userId]) continue;
         const dx = p.x - local.x, dy = p.y - local.y;
         if (dx*dx + dy*dy < SP_PROXIMITY_SQ) nearby.push({ p, d: dx*dx + dy*dy });
@@ -11689,18 +13536,20 @@ function updateSharedPomoProximity() {
 
 function checkNearbyCoopSession() {
     const sp = gameState.sharedPomo;
-    if (sp.phase !== 'idle' || gameState.pomodoro.active || gameState.freeMode.active) {
+    if (sp.phase !== 'idle' || gameState.pomodoro.active || gameState.freeMode.active || gameState.reading.active) {
         if (sp.nearbyCoopId)  { sp.nearbyCoopId  = ''; document.getElementById('sp-join-panel')?.classList.add('hidden'); }
         if (sp.nearbySoloId)  { sp.nearbySoloId  = ''; }
         return;
     }
     const local = gameState.players[gameState.userId];
     if (!local) return;
+    const localFloor = local.floor || 1;
 
     // ── Active coop sessions (highest priority) ──────────────────────────────
     let bestCoopHostId = null, bestDist = Infinity;
     for (const p of Object.values(gameState.players)) {
         if (p.userId === gameState.userId) continue;
+        if ((p.floor || 1) !== localFloor) continue;   // can't join across floors
         if (!p.isWorking || !p.coopHostId) continue;
         const dx = p.x - local.x, dy = p.y - local.y;
         const d = dx*dx + dy*dy;
@@ -11724,6 +13573,7 @@ function checkNearbyCoopSession() {
     let bestSoloId = null; bestDist = Infinity;
     for (const p of Object.values(gameState.players)) {
         if (p.userId === gameState.userId) continue;
+        if ((p.floor || 1) !== localFloor) continue;   // can't join across floors
         // Free mode workers are excluded — shared free mode join is not supported
         if (!p.isWorking || p.coopHostId || p.inFreeMode) continue;
         const dx = p.x - local.x, dy = p.y - local.y;
@@ -11850,7 +13700,7 @@ function confirmJoinCoopSession() {
     const data = sp.joinDetails;
     if (!data) return;
     // Never join while already in a session (the panel may have lingered).
-    if (gameState.pomodoro.active || gameState.freeMode.active || sp.phase !== 'idle') {
+    if (gameState.pomodoro.active || gameState.freeMode.active || gameState.reading.active || sp.phase !== 'idle') {
         document.getElementById('sp-join-panel')?.classList.add('hidden');
         return;
     }
@@ -11990,7 +13840,7 @@ function confirmJoinSoloSession() {
     const data = sp.joinDetails;
     if (!data?.isSolo) return;
     // Never join while already in a session (the panel may have lingered).
-    if (gameState.pomodoro.active || gameState.freeMode.active || sp.phase !== 'idle') {
+    if (gameState.pomodoro.active || gameState.freeMode.active || gameState.reading.active || sp.phase !== 'idle') {
         document.getElementById('sp-join-panel')?.classList.add('hidden');
         return;
     }
@@ -12062,9 +13912,7 @@ function confirmJoinSoloSession() {
     // Start audio if joining mid-work
     if (laptop.phase !== 'break' && gameState.focusAudioEngine) {
         gameState.focusAudioEngine.fadeToMaster(1.0, 1.5);
-        for (const [name, cfg] of Object.entries(gameState.focusAudioEngine.sounds)) {
-            if (cfg.active) gameState.focusAudioEngine.startSound(name);
-        }
+        staggerStartActiveSounds(gameState.focusAudioEngine);
     }
 
     setupSpLiveListener(hostId);
@@ -12944,9 +14792,17 @@ function updateFreeMode() {
         }
     } else if (fm.phase === 'break') {
         const remaining = Math.max(0, fm.breakEndTime - Date.now());
-        const smallText = document.getElementById('small-timer-text');
-        if (smallText) smallText.textContent = formatTime(remaining / 1000);
         if (remaining <= 0) endFreeModeBreak();
+        const smallText = document.getElementById('small-timer-text');
+        if (smallText && fm.phase === 'break') {
+            if (fm.breakOvertimeSince) {
+                const overMs = Date.now() - fm.breakOvertimeSince;
+                const om = Math.floor(overMs / 60000), os = Math.floor((overMs % 60000) / 1000);
+                smallText.textContent = `+${om.toString().padStart(2, '0')}:${os.toString().padStart(2, '0')}`;
+            } else {
+                smallText.textContent = formatTime(remaining / 1000);
+            }
+        }
     }
 }
 
@@ -13048,14 +14904,25 @@ function endFreeModeBreak() {
     const fm = gameState.freeMode;
     if (fm.phase !== 'break') return;
 
+    // Stuck in a minigame when the break timer hit zero — don't force an exit
+    // (used to be jarring). Count up with a "+" instead (see updateFreeMode's
+    // display) until the player leaves the game on their own, then hold 1s before
+    // continuing the normal back-to-work sequence below.
+    if (isMinigameActive()) {
+        if (!fm.breakOvertimeSince) fm.breakOvertimeSince = Date.now();
+        fm._breakOvertimeExitAt = null;
+        return;
+    }
+    if (fm.breakOvertimeSince) {
+        if (!fm._breakOvertimeExitAt) { fm._breakOvertimeExitAt = Date.now(); return; }
+        if (Date.now() - fm._breakOvertimeExitAt < 1000) return;
+        fm.breakOvertimeSince = null;
+        fm._breakOvertimeExitAt = null;
+    }
+
     // Set phase to idle — _startFreeModeWork() fires at kidnap animation end
     fm.phase        = 'idle';
     fm.breakEndTime = 0;
-
-    // Exit any active minigame first
-    if (gameState.race?.active)   returnFromRace(true);
-    if (gameState.coffee?.active) returnFromCoffee(true);
-    if (gameState.laptopBoss?.active) returnFromLaptopBoss(true);
 
     // Hide the small break timer
     document.getElementById('pomodoro-small-timer')?.classList.add('hidden');
@@ -13066,6 +14933,10 @@ function endFreeModeBreak() {
     } else {
         playSoundRobust(gameState.sounds.timeReturn);
     }
+
+    // Stand up NOW (2s before the kidnap grab below) if seated on the sofa — see
+    // the matching comment in updatePomodoro's break-end transition.
+    if (gameState.isSitting) standUp();
 
     const doKidnap = () => {
         fm._breakEndTimer = null;
@@ -15548,9 +17419,12 @@ function closeAzkarOverlay(markDone) {
     if (az._lockInterval) { clearInterval(az._lockInterval); az._lockInterval = null; }
 
     // If the panel was used as a live mixer outside a work phase, fade master back
-    // down so ambient sounds don't keep playing after azkar closes.
+    // down so ambient sounds don't keep playing after azkar closes. Skip this while
+    // still sitting on the big sofa — that has its own ambience session running
+    // (applySofaFocusUI) that should keep playing after azkar closes, not get killed.
     const inWork = (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
-        || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
+        || (gameState.freeMode.active && gameState.freeMode.phase === 'work')
+        || sofaFocusActive();
     if (gameState.focusAudioEngine && !inWork) gameState.focusAudioEngine.fadeToMaster(0, 0.6);
 
     // Reset the collapsed state so the panel is expanded next time
@@ -17003,6 +18877,7 @@ function renderLaptopBoss() {
         ctx.save();
         ctx.scale(dpr, dpr);
         drawTeleportOverlay(W, H);
+        drawMinigameLoadFade(W, H);
         ctx.restore();
         return;
     }
@@ -17260,6 +19135,7 @@ function renderLaptopBoss() {
 
     // Teleport overlay (fade in/out)
     drawTeleportOverlay(W, H);
+    drawMinigameLoadFade(W, H);
 
     ctx.restore(); // dpr
 }
@@ -17659,7 +19535,7 @@ function drawDashboardPrompt() {
     if (!dashboardAllowed()) return;
     const ctx = gameState.ctx;
     const show = !!gameState.activeDashboardZone && !gameState.isLockedIn && !gameState.anim.active
-                 && !gameState.pomodoro.active && !gameState.freeMode.active;
+                 && !sessionBlocksInteraction();
     const lerp = 1 - Math.pow(1 - 0.22, gameState.dtFactor);
     _dashPrompt.alpha += ((show ? 1 : 0) - _dashPrompt.alpha) * lerp;
     _dashPrompt.pop   += ((show ? 1 : 0) - _dashPrompt.pop)   * lerp;
@@ -17668,13 +19544,132 @@ function drawDashboardPrompt() {
     const bob = Math.sin(Date.now() * 0.004) * 2.5;
     const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _dashPrompt.pop));
     ctx.save();
-    ctx.translate(DASH_ZONE_X, DASH_ZONE_Y - DASH_ZONE_R - 28 - (1 - a) * 10 + bob);
+    // Float above the second-floor papers desk (scaled up like everything on the
+    // mezzanine so it doesn't look tiny).
+    ctx.translate(PAPERS_X, PAPERS_Y - 70 - (1 - a) * 10 + bob);
+    ctx.scale(pop * FLOOR2_SCALE, pop * FLOOR2_SCALE);
+    ctx.textAlign = 'center';
+    ctx.shadowBlur = 4; ctx.shadowColor = `rgba(0,0,0,${0.65 * a})`;
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.font = 'bold 16px Rubik';
+    ctx.fillText('انقر لفتح الأوراق', 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+// "اضغط للجلوس" — floats above whichever sofa spot is currently in range (sofa1's
+// nearest point on the strip, or sofa2's nearest free fixed spot). Same fade/pop
+// pattern as the dashboard prompt.
+const _seatPrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null };
+
+// Cross-fades a floating world-space prompt between different targets by KEY — fades
+// the old one out, then pops the new one in at its position — instead of snapping
+// text/position the instant the target identity changes. Mirrors the laptop prompt
+// (drawPrompt / gameState.promptState). `data` (any extra fields the caller needs,
+// e.g. locked/type) is only adopted into `state.shown` once the new key is adopted —
+// never mid fade-out, or the old prompt would render with the new target's data.
+// Returns true once something should be drawn.
+function _updatePromptCrossfade(state, key, x, y, data) {
+    const lerp = 1 - Math.pow(1 - 0.22, gameState.dtFactor);
+    if (key !== state.shownKey) {
+        state.alpha += (0 - state.alpha) * lerp;
+        if (state.alpha < 0.06 || state.shownKey === null) {
+            state.shownKey = key;
+            if (key !== null) { state.x = x; state.y = y; state.shown = data; }
+            state.alpha = 0;
+            state.pop = 0;
+        }
+    } else if (state.shownKey !== null) {
+        state.x = x; state.y = y;
+        state.alpha += (1 - state.alpha) * lerp;
+        state.pop  += (1 - state.pop)  * lerp;
+    }
+    return state.shownKey !== null && state.alpha >= 0.02;
+}
+function drawSeatPrompt() {
+    const target = gameState.activeSofa1 || gameState.activeSofa2Spot;
+    const ctx = gameState.ctx;
+    // Sofa1 is one continuous strip (no id) — key it as a single seat so sliding along
+    // it doesn't re-fade; each sofa2 spot gets its own id so switching couches fades.
+    const key = target ? (target.id || 'sofa1') : null;
+    if (!_updatePromptCrossfade(_seatPrompt, key, target && target.x, target && target.y)) return;
+    const a = _seatPrompt.alpha;
+    const bob = Math.sin(Date.now() * 0.004) * 2.5;
+    const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _seatPrompt.pop));
+    ctx.save();
+    ctx.translate(_seatPrompt.x, _seatPrompt.y - 60 - (1 - a) * 10 + bob);
     ctx.scale(pop, pop);
     ctx.textAlign = 'center';
     ctx.shadowBlur = 4; ctx.shadowColor = `rgba(0,0,0,${0.65 * a})`;
     ctx.fillStyle = `rgba(255,255,255,${a})`;
     ctx.font = 'bold 16px Rubik';
-    ctx.fillText('انقر للاستعمال', 0, 0);
+    ctx.fillText('اضغط للجلوس', 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+// وقوف (stand up) — a small pill button that floats above the LOCAL player's head
+// while seated. Its hit-test lives in the mousedown handler (setupControls). Same
+// fade/pop crossfade pattern as the seat/game-zone prompts, for a bouncy fade in/out
+// instead of snapping into existence.
+const _standUpBtn = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null };
+function drawStandUpButton() {
+    const local = gameState.players[gameState.userId];
+    // While reading, desktop already has the exit button on the reading panel — hide
+    // وقوف there. On mobile it stays, but acts as إنهاء القراءة (see click handlers).
+    const readingBlocksIt = gameState.reading.active && !isMobile();
+    const target = (gameState.isSitting && !gameState.sitAnim.active && local && !readingBlocksIt) ? local : null;
+    const key = target ? 'stand' : null;
+    if (!_updatePromptCrossfade(_standUpBtn, key, target && target.x, target && target.y)) return;
+    const ctx = gameState.ctx;
+    const a = _standUpBtn.alpha;
+    const bob = Math.sin(Date.now() * 0.004) * 2.5;
+    const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _standUpBtn.pop));
+    ctx.save();
+    ctx.translate(_standUpBtn.x, _standUpBtn.y - 90 - (1 - a) * 10 + bob);
+    ctx.scale(pop, pop);
+    ctx.shadowBlur = 6; ctx.shadowColor = `rgba(0,0,0,${0.4 * a})`;
+    ctx.fillStyle = `rgba(18,18,18,${0.82 * a})`;
+    ctx.beginPath();
+    ctx.roundRect ? ctx.roundRect(-34, -16, 68, 32, 16) : ctx.rect(-34, -16, 68, 32);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = `rgba(255,255,255,${0.92 * a})`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = 'bold 14px Rubik';
+    ctx.fillText('وقوف', 0, 1);
+    ctx.restore();
+}
+
+// Games-table trigger prompt: "press to join" when it's break time, or a locked
+// "closed — opens on break" notice (with a 🔒) otherwise. Same fade/pop pattern.
+const _GAME_ZONE_LABEL = { race: 'اضغط للانضمام لسباق السيارات', coffee: 'اضغط للانضمام للعبة القهوة', boss: 'اضغط لتحدي الحاسوب' };
+const _gameZonePrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null, shown: null };
+function drawGameZonePrompt() {
+    const target = gameState.activeGameZone;
+    const ctx = gameState.ctx;
+    // Key includes locked state + type so the locked notice / a different game's
+    // prompt properly fades out/in instead of snapping in place.
+    const key = target ? `${target.type}|${target.locked}` : null;
+    if (!_updatePromptCrossfade(_gameZonePrompt, key, target && target.x, target && target.y, target)) return;
+    const a = _gameZonePrompt.alpha;
+    const bob = Math.sin(Date.now() * 0.004) * 2.5;
+    const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _gameZonePrompt.pop));
+    ctx.save();
+    ctx.translate(_gameZonePrompt.x, _gameZonePrompt.y - 60 - (1 - a) * 10 + bob);
+    ctx.scale(pop, pop);
+    ctx.textAlign = 'center';
+    ctx.shadowBlur = 4; ctx.shadowColor = `rgba(0,0,0,${0.65 * a})`;
+    if (_gameZonePrompt.shown.locked) {
+        ctx.fillStyle = `rgba(255,190,90,${a})`;
+        ctx.font = 'bold 16px Rubik';
+        ctx.fillText('🔒 مغلق - يفتح في الاستراحة', 0, 0);
+    } else {
+        ctx.fillStyle = `rgba(255,255,255,${a})`;
+        ctx.font = 'bold 16px Rubik';
+        ctx.fillText(_GAME_ZONE_LABEL[_gameZonePrompt.shown.type] || 'اضغط للدخول', 0, 0);
+    }
     ctx.shadowBlur = 0;
     ctx.restore();
 }
@@ -18849,6 +20844,7 @@ function dashCloseInvoices(instant) {
     const grid = document.getElementById('dash-invoice-grid');
     if (!ov || !_invOpen) return;
     _invOpen = false;
+    if (_invPhotoObserver) { _invPhotoObserver.disconnect(); _invPhotoObserver = null; }
     _invResetPeep();
     if (instant) { ov.classList.remove('invoices-open'); if (view) { view.classList.remove('show'); view.style.display = 'none'; } if (grid) grid.innerHTML = ''; _invBusy = false; return; }
     _invBusy = true;
@@ -18903,6 +20899,7 @@ function dashSlidePeepOut() {
 function dashResetInvoices() {
     _invOpen = false; _invBusy = false;
     clearTimeout(_invAnimTimer);
+    if (_invPhotoObserver) { _invPhotoObserver.disconnect(); _invPhotoObserver = null; }
     const ov = document.getElementById('dashboard-overlay');
     const view = document.getElementById('dash-invoice-view');
     const grid = document.getElementById('dash-invoice-grid');
@@ -18995,6 +20992,11 @@ function dashRenderInvoicePeep() {
 }
 
 // Lazy-load each card's photo only when it scrolls into view (keeps downloads minimal).
+// One observer is kept alive across opens (`_invPhotoObserver`) — cards below the fold
+// never scroll into view and were never unobserved/disconnected, so every open/close of
+// the memories view (a normal, frequent action) leaked a whole new IntersectionObserver
+// still pinned to the previous grid's (by-then-detached) nodes.
+let _invPhotoObserver = null;
 function _lazyLoadInvoicePhotos() {
     const root = document.getElementById('dash-invoice-grid');
     const slots = document.querySelectorAll('#dash-invoice-grid .inv-r-photo[data-fm]');
@@ -19007,11 +21009,13 @@ function _lazyLoadInvoicePhotos() {
             else { slot.classList.add('inv-r-photo-blank'); slot.innerHTML = '<span class="inv-r-photo-ico">📋</span>'; }
         }).catch(() => { slot.classList.add('inv-r-photo-blank'); slot.innerHTML = '<span class="inv-r-photo-ico">📋</span>'; });
     };
+    if (_invPhotoObserver) { _invPhotoObserver.disconnect(); _invPhotoObserver = null; }
     if ('IntersectionObserver' in window) {
         const io = new IntersectionObserver((entries, obs) => {
             entries.forEach(en => { if (en.isIntersecting) { load(en.target); obs.unobserve(en.target); } });
         }, { root, rootMargin: '200px' });
         slots.forEach(s => io.observe(s));
+        _invPhotoObserver = io;
     } else {
         slots.forEach(load);
     }
@@ -19047,6 +21051,1086 @@ function dashSeedMockInvoices() {
         if (hasPhoto) { const ph = _mockInvoicePhoto(i); if (ph) updates[`dashboards/${uid}/invoicePhotos/${fm}`] = ph; }
     }
     update(ref(database), updates).catch(_dashErr('mock-invoices'));
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  BOOK COVERS — procedurally drawn 3D book art (inline SVG)
+//
+//  Every book the user adds is drawn, never uploaded: a style id + the book's name
+//  are all we store. `bookCoverSVG(styleId, name)` returns a self-contained <svg>
+//  string — one two-point-perspective book (spine face on the left, front cover
+//  facing the viewer) with a gradient cover, a per-style decoration, a hinge
+//  groove, a diagonal sheen and the title typed on top.
+//
+//  It must be injected as INLINE svg (innerHTML), never as an <img src="data:…">:
+//  an <img>-hosted SVG can't reach the page's fonts, so the Arabic title would
+//  fall back to a system font (or not shape at all).
+//
+//  Geometry lives in a single helper: _bkP(u, t) maps a cover-relative coordinate
+//  (u = 0 spine edge → 1 fore edge, t = 0 top → 1 bottom) to the perspective-
+//  projected point. Every decoration is built from it, so nothing has to hand-
+//  compute the slanted edges.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function _bkP(u, t) {
+    return [74 + 140 * u, (22 + 30 * u) + t * (282 - 60 * u)];
+}
+function _bkPts(list) {
+    return list.map(([u, t]) => _bkP(u, t).map(n => n.toFixed(1)).join(',')).join(' ');
+}
+const _BK_SPINE_U = -30 / 140;   // spine face depth, in cover-width units
+
+function _bkEsc(s) {
+    return String(s).replace(/[&<>"']/g, c => (
+        { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+    ));
+}
+
+// `text` is checked against `cover` for contrast; `halo` is the paint-order stroke
+// behind the title, always the opposite lightness of `text`, so the name stays
+// readable no matter what the decoration paints underneath it.
+const BOOK_STYLES = [
+    { id: 'emerald',  label: 'زمرد',    cover: '#125c3d', cover2: '#0a3524', spine: '#082a1c', accent: '#d4af58', text: '#f6e3a8', halo: '#06251a', deco: 'leaves' },
+    { id: 'crimson',  label: 'قرمزي',   cover: '#8e1c26', cover2: '#5a0f16', spine: '#4a0c12', accent: '#e0b45c', text: '#f8e6c4', halo: '#3c080d', deco: 'bands' },
+    { id: 'midnight', label: 'ليل',     cover: '#16234d', cover2: '#0a1130', spine: '#080d24', accent: '#c9bd6e', text: '#e8dfa6', halo: '#050a1c', deco: 'stars' },
+    { id: 'sand',     label: 'رمل',     cover: '#e2cfa6', cover2: '#c9ac74', spine: '#a98b55', accent: '#8a6a34', text: '#4a3417', halo: '#f6ecd5', deco: 'arabesque' },
+    { id: 'plum',     label: 'بنفسج',   cover: '#4a2160', cover2: '#2b0f3c', spine: '#240c33', accent: '#b98ad6', text: '#f0dcff', halo: '#1c0828', deco: 'diagonals' },
+    { id: 'ocean',    label: 'محيط',    cover: '#126b78', cover2: '#083c46', spine: '#06303a', accent: '#7fd8e4', text: '#e6fbff', halo: '#04252c', deco: 'waves' },
+    { id: 'charcoal', label: 'فحم',     cover: '#26262b', cover2: '#131317', spine: '#0d0d10', accent: '#8f8f9c', text: '#e6e6ea', halo: '#0a0a0d', deco: 'grid' },
+    { id: 'amber',    label: 'كهرمان',  cover: '#d99521', cover2: '#a86a10', spine: '#8a540b', accent: '#5c3a08', text: '#3a2405', halo: '#f6d99a', deco: 'dots' },
+    { id: 'rose',     label: 'ورد',     cover: '#c98a9a', cover2: '#a45f74', spine: '#8b4a5e', accent: '#f4dfe6', text: '#3d1220', halo: '#f6e4ea', deco: 'floral' },
+    { id: 'forest',   label: 'زيتون',   cover: '#4a5a24', cover2: '#2e3a13', spine: '#242e0e', accent: '#cfd8a0', text: '#f4f0dc', halo: '#1a2109', deco: 'stripes' },
+];
+
+function bookStyleById(id) {
+    return BOOK_STYLES.find(s => s.id === id) || BOOK_STYLES[0];
+}
+// Books saved before covers existed have no style — give them a stable one derived
+// from the name so the same book always looks the same.
+function bookStyleForName(name) {
+    let h = 0;
+    const s = String(name || '');
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return BOOK_STYLES[h % BOOK_STYLES.length].id;
+}
+
+function _bkDeco(kind, s, id) {
+    const A = s.accent;
+    if (kind === 'leaves') {
+        const stem = (u0, t0, u1, t1, u2, t2) => {
+            const a = _bkP(u0, t0), b = _bkP(u1, t1), c = _bkP(u2, t2);
+            return `<path d="M${a[0].toFixed(1)},${a[1].toFixed(1)} Q${b[0].toFixed(1)},${b[1].toFixed(1)} ${c[0].toFixed(1)},${c[1].toFixed(1)}" fill="none" stroke="${A}" stroke-width="1.4" opacity="0.6"/>`;
+        };
+        const leaf = (u, t, r, rot) => {
+            const [x, y] = _bkP(u, t), X = x.toFixed(1), Y = y.toFixed(1);
+            return `<ellipse cx="${X}" cy="${Y}" rx="${r}" ry="${(r * 0.4).toFixed(1)}" fill="${A}" opacity="0.55" transform="rotate(${rot} ${X} ${Y})"/>`;
+        };
+        return `<polygon points="${_bkPts([[0.08, 0.04], [0.92, 0.04], [0.92, 0.96], [0.08, 0.96]])}" fill="none" stroke="${A}" stroke-width="1.5" opacity="0.5"/>`
+            + stem(0.16, 0.94, 0.34, 0.72, 0.28, 0.52) + leaf(0.22, 0.86, 8, -30) + leaf(0.32, 0.76, 7, 20) + leaf(0.26, 0.62, 6, -45)
+            + stem(0.84, 0.06, 0.66, 0.28, 0.72, 0.48) + leaf(0.78, 0.14, 8, 150) + leaf(0.68, 0.24, 7, 200) + leaf(0.74, 0.38, 6, 135);
+    }
+    if (kind === 'bands') {
+        const band = (t0, t1, o) => `<polygon points="${_bkPts([[0, t0], [1, t0], [1, t1], [0, t1]])}" fill="${A}" opacity="${o}"/>`;
+        return band(0.10, 0.145, 0.85) + band(0.162, 0.177, 0.5)
+             + band(0.823, 0.838, 0.5) + band(0.855, 0.9, 0.85);
+    }
+    if (kind === 'stars') {
+        const star = (u, t, r, o) => {
+            const [x, y] = _bkP(u, t), q = r * 0.18;
+            return `<path d="M${x.toFixed(1)} ${(y - r).toFixed(1)} Q${(x + q).toFixed(1)} ${(y - q).toFixed(1)} ${(x + r).toFixed(1)} ${y.toFixed(1)} Q${(x + q).toFixed(1)} ${(y + q).toFixed(1)} ${x.toFixed(1)} ${(y + r).toFixed(1)} Q${(x - q).toFixed(1)} ${(y + q).toFixed(1)} ${(x - r).toFixed(1)} ${y.toFixed(1)} Q${(x - q).toFixed(1)} ${(y - q).toFixed(1)} ${x.toFixed(1)} ${(y - r).toFixed(1)}Z" fill="${A}" opacity="${o}"/>`;
+        };
+        const [cx, cy] = _bkP(0.5, 0.17);
+        // Crescent = a disc with an offset disc punched out of it. Done with a mask
+        // rather than two arcs in one path: an arc whose radius is smaller than half
+        // its chord gets silently scaled UP to fit by the SVG spec, which turned the
+        // obvious two-arc version into a plain filled circle.
+        const cres = `<mask id="${id}m">`
+            + `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="12" fill="#ffffff"/>`
+            + `<circle cx="${(cx + 5.5).toFixed(1)}" cy="${(cy - 1.5).toFixed(1)}" r="10" fill="#000000"/></mask>`
+            + `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="12" fill="${A}" opacity="0.8" mask="url(#${id}m)"/>`;
+        return cres + star(0.20, 0.10, 5, 0.7) + star(0.80, 0.20, 4, 0.55) + star(0.30, 0.86, 4.5, 0.6)
+             + star(0.72, 0.92, 3.5, 0.5) + star(0.14, 0.44, 3, 0.4) + star(0.88, 0.62, 4, 0.5) + star(0.5, 0.66, 2.5, 0.3);
+    }
+    if (kind === 'arabesque') {
+        return `<polygon points="${_bkPts([[0.08, 0.04], [0.92, 0.04], [0.92, 0.96], [0.08, 0.96]])}" fill="none" stroke="${A}" stroke-width="1.8" opacity="0.5"/>`
+             + `<polygon points="${_bkPts([[0.12, 0.07], [0.88, 0.07], [0.88, 0.93], [0.12, 0.93]])}" fill="none" stroke="${A}" stroke-width="0.8" opacity="0.4"/>`
+             + `<polygon points="${_bkPts([[0.5, 0.13], [0.86, 0.5], [0.5, 0.87], [0.14, 0.5]])}" fill="none" stroke="${A}" stroke-width="1.2" opacity="0.32"/>`
+             + `<polygon points="${_bkPts([[0.5, 0.23], [0.74, 0.5], [0.5, 0.77], [0.26, 0.5]])}" fill="none" stroke="${A}" stroke-width="1" opacity="0.24"/>`;
+    }
+    if (kind === 'diagonals') {
+        let out = '';
+        for (let i = -6; i <= 12; i++) {
+            const u0 = i * 0.14, u1 = u0 + 0.07;
+            out += `<polygon points="${_bkPts([[u0, 0], [u1, 0], [u1 + 0.5, 1], [u0 + 0.5, 1]])}" fill="${A}" opacity="0.16"/>`;
+        }
+        return out;
+    }
+    if (kind === 'waves') {
+        let out = '';
+        for (let i = 0; i < 5; i++) {
+            const t = 0.14 + i * 0.18, p = [];
+            for (let k = 0; k <= 8; k++) {
+                const [x, y] = _bkP(k / 8, t + Math.sin(k * 0.9 + i) * 0.022);
+                p.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+            }
+            out += `<polyline points="${p.join(' ')}" fill="none" stroke="${A}" stroke-width="2" opacity="0.38" stroke-linecap="round"/>`;
+        }
+        return out;
+    }
+    if (kind === 'grid') {
+        let out = '';
+        for (let i = 1; i < 5; i++) out += `<polygon points="${_bkPts([[i / 5, 0], [i / 5 + 0.006, 0], [i / 5 + 0.006, 1], [i / 5, 1]])}" fill="${A}" opacity="0.18"/>`;
+        for (let j = 1; j < 7; j++) out += `<polygon points="${_bkPts([[0, j / 7], [1, j / 7], [1, j / 7 + 0.005], [0, j / 7 + 0.005]])}" fill="${A}" opacity="0.18"/>`;
+        out += `<polyline points="${_bkPts([[0.08, 0.14], [0.08, 0.04], [0.24, 0.04]])}" fill="none" stroke="${A}" stroke-width="2" opacity="0.7"/>`;
+        out += `<polyline points="${_bkPts([[0.92, 0.86], [0.92, 0.96], [0.76, 0.96]])}" fill="none" stroke="${A}" stroke-width="2" opacity="0.7"/>`;
+        return out;
+    }
+    if (kind === 'dots') {
+        // Deterministic LCG — the same book must scatter its dots identically on
+        // every render (the carousel rebuilds these constantly).
+        let seed = 7, out = '';
+        const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff; };
+        for (let i = 0; i < 34; i++) {
+            const [x, y] = _bkP(rnd(), rnd()), r = 1 + rnd() * 3.2;
+            out += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="${A}" opacity="${(0.18 + rnd() * 0.3).toFixed(2)}"/>`;
+        }
+        return out;
+    }
+    if (kind === 'floral') {
+        const flower = (u, t, r, o) => {
+            const [x, y] = _bkP(u, t);
+            let g = '';
+            for (let k = 0; k < 5; k++) {
+                const a = k * Math.PI * 2 / 5;
+                g += `<circle cx="${(x + Math.cos(a) * r).toFixed(1)}" cy="${(y + Math.sin(a) * r).toFixed(1)}" r="${(r * 0.62).toFixed(1)}" fill="${A}" opacity="${o}"/>`;
+            }
+            return g + `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(r * 0.42).toFixed(1)}" fill="${A}" opacity="${Math.min(1, o + 0.2)}"/>`;
+        };
+        return flower(0.20, 0.12, 6, 0.4) + flower(0.82, 0.28, 5, 0.32) + flower(0.28, 0.88, 5.5, 0.36)
+             + flower(0.76, 0.80, 4.5, 0.3) + flower(0.12, 0.60, 4, 0.26) + flower(0.9, 0.94, 3.5, 0.24);
+    }
+    if (kind === 'stripes') {
+        let out = '';
+        for (let i = 0; i < 6; i++) {
+            const u0 = 0.06 + i * 0.16;
+            out += `<polygon points="${_bkPts([[u0, 0], [u0 + 0.055, 0], [u0 + 0.055, 1], [u0, 1]])}" fill="${A}" opacity="0.14"/>`;
+        }
+        // Dark title band across the middle — the stripes would otherwise run
+        // straight through the name.
+        out += `<polygon points="${_bkPts([[0, 0.34], [1, 0.34], [1, 0.66], [0, 0.66]])}" fill="${s.cover2}" opacity="0.9"/>`;
+        return out;
+    }
+    return '';
+}
+
+// Greedy word wrap for the cover title. Long single words are hard-cut rather than
+// allowed to overflow the cover.
+function _bkWrap(name, maxChars, maxLines) {
+    const words = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!words.length) return ['كتاب'];
+    const lines = [];
+    let cur = '';
+    for (let w of words) {
+        while (w.length > maxChars) {
+            if (cur) { lines.push(cur); cur = ''; }
+            lines.push(w.slice(0, maxChars));
+            w = w.slice(maxChars);
+        }
+        const next = cur ? cur + ' ' + w : w;
+        if (next.length > maxChars && cur) { lines.push(cur); cur = w; }
+        else cur = next;
+    }
+    if (cur) lines.push(cur);
+    if (lines.length > maxLines) {
+        lines.length = maxLines;
+        lines[maxLines - 1] = lines[maxLines - 1].slice(0, maxChars - 1) + '…';
+    }
+    return lines;
+}
+
+let _bkUid = 0;
+// opts.noText — cover art only (used for the style swatches, where the label sits
+// under the book rather than on it).
+function bookCoverSVG(styleId, name, opts) {
+    const s = bookStyleById(styleId);
+    const o = opts || {};
+    const id = 'bk' + (++_bkUid);
+    const coverPts = _bkPts([[0, 0], [1, 0], [1, 1], [0, 1]]);
+    const spinePts = _bkPts([[_BK_SPINE_U, 0], [0, 0], [0, 1], [_BK_SPINE_U, 1]]);
+    const [cx, cy] = _bkP(0.5, 0.5);
+
+    let title = '';
+    if (!o.noText) {
+        const lines = _bkWrap(name, 13, 3);
+        const fs = lines.length >= 3 ? 17 : (lines.length === 2 ? 20 : 23);
+        const lh = fs * 1.28;
+        const y0 = cy - ((lines.length - 1) * lh) / 2 + fs * 0.34;   // manual baseline centring:
+        //   dominant-baseline on <tspan> is unreliable in Safari, so nudge by hand.
+        const tspans = lines.map((ln, i) =>
+            `<tspan x="${cx.toFixed(1)}" y="${(y0 + i * lh).toFixed(1)}">${_bkEsc(ln)}</tspan>`).join('');
+        title = `<text text-anchor="middle" direction="rtl" font-family="Rubik, sans-serif" font-weight="800"`
+              + ` font-size="${fs}" fill="${s.text}" stroke="${s.halo}" stroke-width="3.4" stroke-linejoin="round"`
+              + ` paint-order="stroke" transform="rotate(12.1 ${cx.toFixed(1)} ${cy.toFixed(1)})">${tspans}</text>`;
+    }
+
+    return `<svg viewBox="0 0 250 332" xmlns="http://www.w3.org/2000/svg" class="book-svg" role="img" aria-label="${_bkEsc(name || 'كتاب')}">
+  <defs>
+    <linearGradient id="${id}c" x1="0" y1="0" x2="1" y2="0.35">
+      <stop offset="0" stop-color="${s.cover}"/><stop offset="0.6" stop-color="${s.cover}"/><stop offset="1" stop-color="${s.cover2}"/>
+    </linearGradient>
+    <linearGradient id="${id}s" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="${s.cover2}"/><stop offset="1" stop-color="${s.spine}"/>
+    </linearGradient>
+    <linearGradient id="${id}g" x1="0.05" y1="0" x2="0.95" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.20"/>
+      <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.18"/>
+    </linearGradient>
+    <clipPath id="${id}k"><polygon points="${coverPts}"/></clipPath>
+  </defs>
+  <ellipse cx="129" cy="318" rx="86" ry="11" fill="#000000" opacity="0.30"/>
+  <polygon points="${spinePts}" fill="url(#${id}s)"/>
+  <polygon points="${coverPts}" fill="url(#${id}c)"/>
+  <g clip-path="url(#${id}k)">
+    ${_bkDeco(s.deco, s, id)}
+    <polygon points="${_bkPts([[0, 0], [0.05, 0], [0.05, 1], [0, 1]])}" fill="#000000" opacity="0.3"/>
+    <polygon points="${coverPts}" fill="url(#${id}g)"/>
+  </g>
+  <polygon points="${coverPts}" fill="none" stroke="#000000" stroke-opacity="0.35" stroke-width="1"/>
+  ${title}
+</svg>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  READING SESSION FEATURE
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const READING_BOOK_LIMIT = 24;   // shelf cap — also what we prune to on add
+
+function setupReadingUI() {
+    const timeOptions = document.getElementById('reading-time-options');
+    const customTimeInput = document.getElementById('reading-custom-time');
+
+    // Time preset buttons
+    if (timeOptions) {
+        timeOptions.querySelectorAll('.opt-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                timeOptions.querySelectorAll('.opt-btn').forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                if (customTimeInput) customTimeInput.value = '';
+            });
+        });
+    }
+
+    if (customTimeInput) {
+        customTimeInput.addEventListener('input', () => {
+            if (customTimeInput.value) {
+                timeOptions.querySelectorAll('.opt-btn').forEach(b => b.classList.remove('active'));
+            } else {
+                timeOptions.querySelector('.opt-btn[data-val="30"]')?.classList.add('active');
+            }
+        });
+    }
+
+    document.getElementById('reading-confirm')?.addEventListener('click', () => {
+        let mins = 30;
+        const activeBtn = timeOptions?.querySelector('.opt-btn.active');
+        if (customTimeInput && customTimeInput.value) {
+            mins = parseInt(customTimeInput.value, 10);
+            if (isNaN(mins) || mins < 5) mins = 5;
+            if (mins > 120) mins = 120;
+        } else if (activeBtn) {
+            mins = parseInt(activeBtn.getAttribute('data-val'), 10);
+        }
+
+        const book = gameState._readingSelectedBook;
+        if (!book) { openNewBookModal(); return; }   // nothing on the shelf yet
+        startReadingSession(mins, book.name, book.style);
+    });
+
+    document.getElementById('reading-cancel')?.addEventListener('click', closeReadingPopup);
+
+    // Anchored popup, transparent backdrop — click the backdrop itself (not the
+    // card) to dismiss, same pattern as the other click-outside-closes modals.
+    document.getElementById('reading-modal')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeReadingPopup();
+    });
+    window.addEventListener('resize', () => {
+        if (document.getElementById('reading-modal')?.classList.contains('active')) {
+            _positionReadingModalAboveLibrary();
+        }
+    });
+
+    // Shelf: the card nearest the track's centre is the selection. Recompute on
+    // scroll (rAF-coalesced — the scroll event fires far faster than we can care).
+    const track = document.getElementById('reading-shelf-track');
+    if (track) {
+        let raf = 0;
+        track.addEventListener('scroll', () => {
+            if (raf) return;
+            raf = requestAnimationFrame(() => { raf = 0; _readingSyncShelfSelection(); });
+        }, { passive: true });
+    }
+
+    // ── New-book modal ──
+    document.getElementById('reading-newbook-cancel')?.addEventListener('click', closeNewBookModal);
+    document.getElementById('reading-newbook-modal')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) closeNewBookModal();
+    });
+    const nbName = document.getElementById('reading-newbook-name');
+    nbName?.addEventListener('input', _renderNewBookPreview);
+    nbName?.addEventListener('keydown', (e) => { if (e.key === 'Enter') confirmNewBook(); });
+    document.getElementById('reading-newbook-add')?.addEventListener('click', confirmNewBook);
+
+    // ── Delete confirm ──
+    document.getElementById('reading-delete-yes')?.addEventListener('click', () => {
+        document.getElementById('reading-delete-modal')?.classList.remove('active');
+        const slug = gameState._readingDeleteSlug;
+        if (!slug) return;
+        remove(ref(database, `dashboards/${gameState.userId}/reading/books/${slug}`)).catch(() => {});
+        if (gameState._readingBooks) delete gameState._readingBooks[slug];
+        gameState._readingDeleteSlug = null;
+        renderReadingShelf();
+    });
+    document.getElementById('reading-delete-no')?.addEventListener('click', () => {
+        document.getElementById('reading-delete-modal')?.classList.remove('active');
+        gameState._readingDeleteSlug = null;
+    });
+
+    // ── Exit bindings ──
+    const attemptExit = () => document.getElementById('reading-exit-modal')?.classList.add('active');
+    document.getElementById('reading-exit-btn')?.addEventListener('click', attemptExit);
+    document.getElementById('reading-mobile-exit-btn')?.addEventListener('click', attemptExit);
+
+    document.getElementById('reading-exit-no')?.addEventListener('click', () => {
+        document.getElementById('reading-exit-modal')?.classList.remove('active');
+    });
+    document.getElementById('reading-exit-yes')?.addEventListener('click', () => {
+        document.getElementById('reading-exit-modal')?.classList.remove('active');
+        endReadingSession(true);
+    });
+
+    // Mobile drawer handle
+    const drawer = document.getElementById('reading-drawer');
+    const handle = drawer?.querySelector('.mobile-drawer-handle');
+    if (handle && drawer) {
+        let startY = 0, currentY = 0, isDragging = false;
+        handle.addEventListener('pointerdown', e => {
+            isDragging = true;
+            startY = e.clientY;
+            currentY = 0;   // reset — a stale value from the last drag made a plain tap snap wrong
+            drawer.style.transition = 'none';
+        });
+        window.addEventListener('pointermove', e => {
+            if (!isDragging) return;
+            currentY = Math.max(0, e.clientY - startY);
+            drawer.style.transform = `translateY(${currentY}px)`;
+        });
+        window.addEventListener('pointerup', () => {
+            if (!isDragging) return;
+            isDragging = false;
+            drawer.style.transition = 'transform 0.35s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+            if (currentY > 50) {
+                drawer.classList.remove('drawer-open');
+                drawer.style.transform = '';
+            } else {
+                drawer.classList.add('drawer-open');
+                drawer.style.transform = '';
+            }
+        });
+        handle.addEventListener('click', () => {
+            if (!isDragging || currentY < 10) drawer.classList.toggle('drawer-open');
+        });
+    }
+
+    // Register animation for sequence cascade
+    _JUICE_IN_ANIMS.add('readingRowIn');
+}
+
+// Anchors the setup card above the library desk in screen space instead of
+// centring it — clamped so it never goes off-screen (library can be near an edge).
+function _positionReadingModalAboveLibrary() {
+    const content = document.querySelector('#reading-modal .reading-content');
+    if (!content) return;
+    const pt = worldToScreen(BOOKS_LIBRARY_POS.x, BOOKS_LIBRARY_POS.y);
+    const w = content.offsetWidth || 420, h = content.offsetHeight || 560;
+    const margin = 12;
+    let left = pt.x - w / 2;
+    let top = pt.y - 90 - h; // float above the desk, clear of the "اضغط لبدء القراءة" prompt
+    left = Math.max(margin, Math.min(window.innerWidth - w - margin, left));
+    top = Math.max(margin, Math.min(window.innerHeight - h - margin, top));
+    content.style.left = `${left}px`;
+    content.style.top = `${top}px`;
+}
+
+function openReadingPopup() {
+    if (gameState.reading.active || gameState.isLockedIn) return;
+    const modal = document.getElementById('reading-modal');
+    if (!modal) return;
+    // Lock movement while the popup is open — it's anchored to the library's
+    // screen position (worldToScreen at open time, re-run only on resize), so
+    // letting the player walk away drags the camera and leaves the card behind.
+    gameState.isLockedIn = true;
+    modal.classList.add('active');
+    _uiSeqReset();   // start the row cascade's pitch sweep fresh (deep → high)
+
+    // Reset defaults
+    document.getElementById('reading-custom-time').value = '';
+    const timeOptions = document.getElementById('reading-time-options');
+    timeOptions.querySelectorAll('.opt-btn').forEach(b => b.classList.remove('active'));
+    timeOptions.querySelector('.opt-btn[data-val="30"]')?.classList.add('active');
+
+    // Render whatever we already have (instant shelf on a re-open), then refresh.
+    renderReadingShelf();
+    _positionReadingModalAboveLibrary();
+    requestAnimationFrame(_positionReadingModalAboveLibrary);
+
+    get(ref(database, `dashboards/${gameState.userId}/reading`)).then(snap => {
+        const data = snap.exists() ? (snap.val() || {}) : {};
+        gameState._readingBooks = data.books || {};
+        gameState._readingLastBook = data.lastBook || null;
+        renderReadingShelf();
+        _positionReadingModalAboveLibrary();
+    }).catch(() => {});
+}
+
+// Formats a duration in ms as "X ساعة و Y دقيقة" (drops the hours part when zero).
+function _formatReadingDuration(ms) {
+    const hrs = Math.floor(ms / 3600000);
+    const mins = Math.floor((ms % 3600000) / 60000);
+    return hrs > 0 ? `${hrs} ساعة و ${mins} دقيقة` : `${mins} دقيقة`;
+}
+
+// Shelf order = newest first (leftmost), oldest to the right. Books saved before
+// `addedAt` existed fall back to their reading time so they still sort stably.
+function _readingBookList() {
+    const books = gameState._readingBooks || {};
+    return Object.entries(books)
+        .filter(([, b]) => b && b.name)
+        .map(([slug, b]) => ({
+            slug,
+            name: b.name,
+            style: b.style || bookStyleForName(b.name),
+            totalMs: b.totalMs || 0,
+            addedAt: b.addedAt || 0,
+        }))
+        .sort((a, b) => (b.addedAt - a.addedAt) || (b.totalMs - a.totalMs));
+}
+
+function renderReadingShelf() {
+    const track = document.getElementById('reading-shelf-track');
+    if (!track) return;
+    const list = _readingBookList();
+    track.innerHTML = '';
+
+    // "Add a new book" always sits at the left end, before the newest book.
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.className = 'reading-book-card reading-book-add';
+    add.innerHTML = `<div class="reading-add-inner"><span class="reading-add-plus">+</span><span class="reading-add-label">كتاب جديد</span></div>`;
+    add.addEventListener('click', () => {
+        // A click on an off-centre card centres it first; only the centred add-card
+        // opens the modal (otherwise a scroll-tap would fire it by accident).
+        if (add.classList.contains('is-selected')) openNewBookModal();
+        else _readingScrollToCard(add);
+    });
+    track.appendChild(add);
+
+    list.forEach(b => {
+        const card = document.createElement('div');
+        card.className = 'reading-book-card';
+        card.dataset.slug = b.slug;
+        card.innerHTML = `<div class="reading-book-art">${bookCoverSVG(b.style, b.name)}</div>
+            <button type="button" class="reading-book-del" aria-label="حذف">✕</button>`;
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('.reading-book-del')) return;
+            _readingScrollToCard(card);
+        });
+        card.querySelector('.reading-book-del').addEventListener('click', (e) => {
+            e.stopPropagation();
+            gameState._readingDeleteSlug = b.slug;
+            document.getElementById('reading-delete-modal')?.classList.add('active');
+        });
+        track.appendChild(card);
+    });
+
+    // Land on the last-read book if it's still on the shelf, else the newest one.
+    let target = null;
+    if (gameState._readingLastBook) {
+        const i = list.findIndex(b => b.name === gameState._readingLastBook);
+        if (i >= 0) target = track.children[i + 1];
+    }
+    if (!target) target = track.children[list.length ? 1 : 0];
+    requestAnimationFrame(() => {
+        _readingScrollToCard(target, true);
+        _readingSyncShelfSelection();
+    });
+}
+
+function _readingScrollToCard(card, instant) {
+    const track = document.getElementById('reading-shelf-track');
+    if (!track || !card) return;
+    const left = card.offsetLeft - (track.clientWidth - card.offsetWidth) / 2;
+    track.scrollTo({ left, behavior: instant ? 'auto' : 'smooth' });
+}
+
+// Marks the card nearest the track centre as selected and mirrors it into
+// gameState._readingSelectedBook (what "أنا لها" actually starts).
+function _readingSyncShelfSelection() {
+    const track = document.getElementById('reading-shelf-track');
+    if (!track) return;
+    const mid = track.scrollLeft + track.clientWidth / 2;
+    let best = null, bestD = Infinity;
+    for (const card of track.children) {
+        const c = card.offsetLeft + card.offsetWidth / 2;
+        const d = Math.abs(c - mid);
+        if (d < bestD) { bestD = d; best = card; }
+    }
+    for (const card of track.children) card.classList.toggle('is-selected', card === best);
+
+    const label = document.getElementById('reading-shelf-label');
+    const confirm = document.getElementById('reading-confirm');
+    // Lock "أنا لها" with a CLASS, never the `disabled` attribute — on iOS a
+    // disabled button leaks its touches through to whatever sits underneath (see
+    // CLAUDE.md / the azkar انتهيت lock).
+    if (!best || best.classList.contains('reading-book-add')) {
+        gameState._readingSelectedBook = null;
+        if (label) label.innerHTML = `<span class="reading-shelf-name">أضف كتابًا جديدًا</span>`;
+        if (confirm) confirm.classList.add('is-disabled');
+        return;
+    }
+    const b = _readingBookList().find(x => x.slug === best.dataset.slug);
+    gameState._readingSelectedBook = b || null;
+    if (label && b) {
+        label.innerHTML = `<span class="reading-shelf-name">${_bkEsc(b.name)}</span>`
+            + `<span class="reading-shelf-time">${_formatReadingDuration(b.totalMs)}</span>`;
+    }
+    if (confirm) confirm.classList.remove('is-disabled');
+}
+
+// ── Add-a-new-book modal (name + one of the 10 premade covers, live preview) ──
+
+function openNewBookModal() {
+    const modal = document.getElementById('reading-newbook-modal');
+    if (!modal) return;
+    gameState._newBookStyle = BOOK_STYLES[Math.floor(Math.random() * BOOK_STYLES.length)].id;
+    const nameEl = document.getElementById('reading-newbook-name');
+    if (nameEl) nameEl.value = '';
+    _renderNewBookStyles();
+    _renderNewBookPreview();
+    modal.classList.add('active');
+    _uiSeqReset();
+    setTimeout(() => nameEl?.focus(), 260);
+}
+
+function closeNewBookModal() {
+    document.getElementById('reading-newbook-modal')?.classList.remove('active');
+}
+
+function _renderNewBookStyles() {
+    const box = document.getElementById('reading-newbook-styles');
+    if (!box) return;
+    box.innerHTML = '';
+    BOOK_STYLES.forEach(s => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'reading-style-swatch' + (s.id === gameState._newBookStyle ? ' is-active' : '');
+        b.dataset.style = s.id;
+        b.innerHTML = `<div class="reading-style-art">${bookCoverSVG(s.id, '', { noText: true })}</div>`
+            + `<span class="reading-style-label">${_bkEsc(s.label)}</span>`;
+        b.addEventListener('click', () => {
+            gameState._newBookStyle = s.id;
+            box.querySelectorAll('.reading-style-swatch').forEach(el =>
+                el.classList.toggle('is-active', el.dataset.style === s.id));
+            _renderNewBookPreview();
+        });
+        box.appendChild(b);
+    });
+}
+
+function _renderNewBookPreview() {
+    const prev = document.getElementById('reading-newbook-preview');
+    if (!prev) return;
+    const name = (document.getElementById('reading-newbook-name')?.value || '').trim();
+    prev.innerHTML = bookCoverSVG(gameState._newBookStyle, name || 'اسم الكتاب');
+    prev.classList.toggle('is-placeholder', !name);
+}
+
+function _readingSlug(name) {
+    return String(name).replace(/[.#$[\]/]/g, '_');
+}
+
+function confirmNewBook() {
+    const nameEl = document.getElementById('reading-newbook-name');
+    const name = (nameEl?.value || '').trim();
+    if (!name) { nameEl?.focus(); return; }
+    const style = gameState._newBookStyle || BOOK_STYLES[0].id;
+    const slug = _readingSlug(name);
+
+    if (!gameState._readingBooks) gameState._readingBooks = {};
+    const existing = gameState._readingBooks[slug];
+    const entry = {
+        name,
+        style,
+        totalMs: existing ? (existing.totalMs || 0) : 0,
+        // Re-adding an existing book bumps it back to the front of the shelf.
+        addedAt: Date.now(),
+    };
+    gameState._readingBooks[slug] = entry;
+    update(ref(database), {
+        [`dashboards/${gameState.userId}/reading/books/${slug}/name`]: name,
+        [`dashboards/${gameState.userId}/reading/books/${slug}/style`]: style,
+        [`dashboards/${gameState.userId}/reading/books/${slug}/addedAt`]: entry.addedAt,
+    }).catch(() => {});
+
+    // Keep the shelf bounded — drop the oldest beyond the cap.
+    const list = _readingBookList();
+    if (list.length > READING_BOOK_LIMIT) {
+        list.slice(READING_BOOK_LIMIT).forEach(b => {
+            delete gameState._readingBooks[b.slug];
+            remove(ref(database, `dashboards/${gameState.userId}/reading/books/${b.slug}`)).catch(() => {});
+        });
+    }
+
+    closeNewBookModal();
+    gameState._readingLastBook = name;
+    renderReadingShelf();
+    _positionReadingModalAboveLibrary();
+}
+
+function closeReadingPopup() {
+    document.getElementById('reading-modal')?.classList.remove('active');
+    closeNewBookModal();
+    // Only release the lock if we're not proceeding straight into a session —
+    // startReadingSession calls this first, then re-locks for the session itself.
+    if (!gameState.reading.active) gameState.isLockedIn = false;
+}
+
+function startReadingSession(durationMin, bookName, bookStyle) {
+    closeReadingPopup();
+
+    // Pick a RANDOM free sofa spot, not the closest — the walk over is part of the
+    // ritual, and always landing on the same seat made the room feel static.
+    const free = SOFA2_SPOTS.filter(spot => _sofa2SpotFree(spot.id, gameState.userId));
+    const best = free.length ? free[Math.floor(Math.random() * free.length)] : null;
+    const sofaIdx = best ? best.id : null;
+
+    const now = serverNow();
+    const style = bookStyle || bookStyleForName(bookName);
+    gameState.reading = {
+        active: true,
+        bookName,
+        bookStyle: style,
+        durationMs: durationMin * 60000,
+        startTime: now,
+        endTime: now + (durationMin * 60000),
+        sofaIdx,
+        totalBookMs: 0,
+        leaderboardData: [],
+        _cameraPhase: 'intro',
+        _cameraStartTime: Date.now(),
+        // The camera tween interpolates from a captured start, and the exit tween
+        // restores exactly the zoom the player had before the session.
+        _fromX: gameState.camera.x,
+        _fromY: gameState.camera.y,
+        _fromZoom: gameState.zoom,
+        _zoomBefore: gameState.zoom,
+        _panelVisible: false,
+        _exitConfirmOpen: false,
+    };
+
+    // Lock player input, set sitting
+    gameState.isLockedIn = true;
+    if (sofaIdx) startSitAnimation(sofaIdx, best.x, best.y);
+
+    // Save to Firebase (dashboards + users presence)
+    const slug = _readingSlug(bookName);
+    const updates = {};
+    updates[`dashboards/${gameState.userId}/reading/lastBook`] = bookName;
+    updates[`users/${gameState.userId}/isReading`] = true;
+    updates[`users/${gameState.userId}/readingBook`] = bookName;
+    updates[`users/${gameState.userId}/readingEnd`] = gameState.reading.endTime;
+    updates[`users/${gameState.userId}/booksSofa`] = sofaIdx;
+
+    // Load existing total for this book
+    get(ref(database, `dashboards/${gameState.userId}/reading/books/${slug}/totalMs`)).then(snap => {
+        if (snap.exists() && gameState.reading.active) {
+            gameState.reading.totalBookMs = snap.val() || 0;
+        }
+    }).catch(() => {});
+
+    fetchReadingLeaderboard();
+
+    update(ref(database), updates).catch(() => {});
+
+    // Ghost-cleanup: never leave a "يتم قراءة" badge floating for others if the tab
+    // closes mid-session (same rule as every other session type — see CLAUDE.md
+    // "ghost laptop" lesson). Siraj ghosts already wipe their whole user node.
+    if (!gameState.isSirajGhost) {
+        onDisconnect(ref(database, `users/${gameState.userId}`)).update({
+            isReading: false, readingBook: null, readingEnd: null, booksSofa: null
+        });
+    }
+
+    // Stop player
+    const me = gameState.players[gameState.userId];
+    if (me) {
+        me.isMoving = false;
+        me.isSprinting = false;
+        sendPositionWS(me.x, me.y, true);
+    }
+
+    // Mobile: hide the joystick + user-card (name/photo), same as any other focus session.
+    setMobileFocusMode(true);
+}
+
+const _easeInOutCubic = (x) => x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+
+const READING_ZOOM = 2.2;
+const READING_INTRO_MS = 1900;     // zoom-in + slide-left, ONE continuous tween
+const READING_PANEL_AT = 0.62;     // fraction of the intro at which the panel flies in
+const READING_EXIT_MS = 900;
+const READING_EXIT_MAX_MS = 1600;  // hard stop — never let the exit tween own the camera
+
+// How far left of centre the player sits during a session, so the panel has the
+// left third to itself. In world units at READING_ZOOM.
+const READING_SLIDE_PX = 250;
+
+function updateReadingCamera() {
+    const r = gameState.reading;
+    // Keep running through the 'exiting' phase even after r.active flips false —
+    // otherwise the zoom-out/camera-return on session end never plays a single frame.
+    if (!r.active && r._cameraPhase !== 'exiting') return;
+    const player = gameState.players[gameState.userId];
+    if (!player) return;
+
+    const { x: px, y: py } = getPlayerRenderPos(player);
+    const elapsed = Date.now() - r._cameraStartTime;
+
+    if (r._cameraPhase === 'intro') {
+        // ONE eased tween for the whole cinematic. The old code ran a raw
+        // exponential lerp to zoom in, then handed over to a separate eased slide —
+        // and because the lerp still had speed when the slide's ease-in-out started
+        // from zero velocity, the hand-off read as a stutter. A single
+        // progress-based easeInOutCubic across zoom AND pan has no seam.
+        const targetX = -px + (isMobile() ? 0 : READING_SLIDE_PX / READING_ZOOM);
+        const targetY = -py;
+        const t = Math.min(1, elapsed / READING_INTRO_MS);
+        const e = _easeInOutCubic(t);
+        gameState.camera.x = r._fromX + (targetX - r._fromX) * e;
+        gameState.camera.y = r._fromY + (targetY - r._fromY) * e;
+        gameState.zoom = r._fromZoom + (READING_ZOOM - r._fromZoom) * e;
+
+        if (!r._panelVisible && t >= READING_PANEL_AT) showReadingPanel();
+        if (t >= 1) r._cameraPhase = 'active';
+    } else if (r._cameraPhase === 'active') {
+        // Hold. Re-asserts the zoom every frame in case anything else nudges it.
+        const targetX = -px + (isMobile() ? 0 : READING_SLIDE_PX / READING_ZOOM);
+        const targetY = -py;
+        const ease = 1 - Math.pow(0.9, gameState.dtFactor);
+        gameState.camera.x += (targetX - gameState.camera.x) * ease;
+        gameState.camera.y += (targetY - gameState.camera.y) * ease;
+        gameState.zoom += (READING_ZOOM - gameState.zoom) * ease;
+    } else if (r._cameraPhase === 'exiting') {
+        // Eased return to the pre-session framing. Progress-based with a hard
+        // deadline: the old version lerped until zoom converged on a target the
+        // user could still fight with the scroll wheel, so a stray scroll here
+        // left the phase stuck 'exiting' forever — updateCamera() early-returns
+        // while that's set, so the camera rubber-banded back every frame for the
+        // rest of the session. Bounded time + abortReadingCamera() kill both.
+        const t = Math.min(1, elapsed / READING_EXIT_MS);
+        const e = _easeInOutCubic(t);
+        gameState.camera.x = r._fromX + (-px - r._fromX) * e;
+        gameState.camera.y = r._fromY + (-py - r._fromY) * e;
+        gameState.zoom = r._fromZoom + (r._zoomBefore - r._fromZoom) * e;
+        if (t >= 1 || elapsed > READING_EXIT_MAX_MS) abortReadingCamera();
+    }
+}
+
+// Hands the camera straight back to updateCamera(). Safe to call at any time —
+// this is what the zoom handlers call so a user gesture always wins.
+function abortReadingCamera() {
+    if (gameState.reading) gameState.reading._cameraPhase = null;
+}
+
+function updateReadingSession() {
+    if (!gameState.reading.active) return;
+    const r = gameState.reading;
+    const now = serverNow();
+
+    if (now >= r.endTime) {
+        endReadingSession(false);
+        return;
+    }
+
+    if (r._panelVisible) {
+        const remaining = Math.max(0, r.endTime - now);
+        const mins = String(Math.floor(remaining / 60000)).padStart(2, '0');
+        const secs = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
+        const timeStr = `${mins}:${secs}`;
+
+        const sessionMs = now - r.startTime;
+        const totalStr = _formatReadingDuration(r.totalBookMs + sessionMs);
+        const pct = Math.max(0, Math.min(100, (sessionMs / r.durationMs) * 100));
+
+        const pre = isMobile() ? 'reading-mobile' : 'reading-panel';
+        const tm = document.getElementById(`${pre}-timer`);
+        const tot = document.getElementById(`${pre}-total`);
+        const fill = document.getElementById(`${pre}-progress-fill`);
+        if (tm) tm.innerText = timeStr;
+        if (tot) tot.innerText = totalStr;
+        if (fill) fill.style.width = `${pct.toFixed(2)}%`;
+    }
+}
+
+function showReadingPanel() {
+    const r = gameState.reading;
+    r._panelVisible = true;
+    const cover = bookCoverSVG(r.bookStyle, r.bookName);
+    const durStr = _formatReadingDuration(r.durationMs);
+
+    if (isMobile()) {
+        const header = document.getElementById('reading-mobile-header');
+        const drawer = document.getElementById('reading-drawer');
+        if (header) {
+            header.classList.remove('hidden');
+            document.getElementById('reading-mobile-book').innerText = r.bookName;
+            const c = document.getElementById('reading-mobile-cover');
+            if (c) c.innerHTML = cover;
+            const d = document.getElementById('reading-mobile-duration');
+            if (d) d.innerText = durStr;
+        }
+        if (drawer) drawer.classList.remove('hidden');
+        renderReadingLeaderboard();
+        return;
+    }
+
+    const panel = document.getElementById('reading-panel');
+    if (!panel) return;
+    panel.classList.remove('hidden');
+    document.getElementById('reading-panel-book').innerText = r.bookName;
+    const c = document.getElementById('reading-panel-cover');
+    if (c) c.innerHTML = cover;
+    const d = document.getElementById('reading-panel-duration');
+    if (d) d.innerText = durStr;
+    renderReadingLeaderboard();
+
+    // Cascade the rows in with the house pitch-sweep blip (deep → high).
+    const kids = Array.from(panel.children);
+    _uiSeqReset();
+    kids.forEach((el, i) => {
+        el.style.opacity = '0';
+        el.style.animation = `readingRowIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards`;
+        el.style.animationDelay = `${0.1 + i * 0.08}s`;
+    });
+}
+
+function endReadingSession(manual) {
+    if (!gameState.reading.active) return;
+
+    const r = gameState.reading;
+    const sessionMs = serverNow() - r.startTime;
+
+    // Save to Firebase
+    const slug = _readingSlug(r.bookName);
+
+    // 1. Clear active state for others
+    const updates = {};
+    updates[`users/${gameState.userId}/isReading`] = null;
+    updates[`users/${gameState.userId}/readingBook`] = null;
+    updates[`users/${gameState.userId}/readingEnd`] = null;
+    updates[`users/${gameState.userId}/booksSofa`] = null;
+
+    // 2. Increment the user's private book time + keep its display name/cover current
+    //    (the slug alone isn't guaranteed to render back as the exact book name).
+    const bookTotalRef = ref(database, `dashboards/${gameState.userId}/reading/books/${slug}/totalMs`);
+    runTransaction(bookTotalRef, (curr) => (curr || 0) + sessionMs).catch(() => {});
+    update(ref(database), {
+        [`dashboards/${gameState.userId}/reading/books/${slug}/name`]: r.bookName,
+        [`dashboards/${gameState.userId}/reading/books/${slug}/style`]: r.bookStyle,
+    }).catch(() => {});
+
+    // Disarm the disconnect ghost-cleanup — we're clearing these fields right now.
+    if (!gameState.isSirajGhost) {
+        onDisconnect(ref(database, `users/${gameState.userId}`)).cancel();
+    }
+
+    // 3. Increment the user's global reading time (for the leaderboard). Siraj test
+    //    ghosts are ephemeral and must never appear in المتصدرين, so they skip this
+    //    write entirely — their reading sessions are for testing, not competing.
+    if (!gameState.isSirajGhost) {
+        const lbRef = ref(database, `${lobbyPath('readingLeaderboard')}/${gameState.userId}/totalMs`);
+        runTransaction(lbRef, (curr) => (curr || 0) + sessionMs).catch(() => {});
+        // Refresh name/avatar in case this is their first entry. (gameState.currentUser
+        // is just the username STRING, not an object — pull name/avatar from the
+        // player entity like everywhere else in the codebase.)
+        const meP = gameState.players[gameState.userId] || {};
+        updates[`${lobbyPath('readingLeaderboard')}/${gameState.userId}/name`] = meP.username || 'قارئ';
+        updates[`${lobbyPath('readingLeaderboard')}/${gameState.userId}/avatar`] = meP.avatar || '';
+    }
+    update(ref(database), updates).catch(() => {});
+
+    // Keep the local shelf in sync so re-opening the popup shows the new total
+    // without waiting on a round trip.
+    if (gameState._readingBooks && gameState._readingBooks[slug]) {
+        gameState._readingBooks[slug].totalMs = (gameState._readingBooks[slug].totalMs || 0) + sessionMs;
+    }
+
+    // UI Cleanup
+    r.active = false;
+    r._cameraPhase = 'exiting';
+    r._cameraStartTime = Date.now();
+    r._fromX = gameState.camera.x;
+    r._fromY = gameState.camera.y;
+    r._fromZoom = gameState.zoom;
+    gameState.isLockedIn = false;
+    setMobileFocusMode(false);
+
+    if (isMobile()) {
+        document.getElementById('reading-mobile-header')?.classList.add('hidden');
+        document.getElementById('reading-drawer')?.classList.add('hidden');
+        document.getElementById('reading-drawer')?.classList.remove('drawer-open');
+    } else {
+        document.getElementById('reading-panel')?.classList.add('hidden');
+    }
+
+    // Stand up
+    setTimeout(() => {
+        standUp();
+    }, 800);
+}
+
+// ─── The book prop (Art/Book.png) ────────────────────────────────────────────
+// Slides out from UNDER the seated reader to in front of them — no fade, pure
+// position, so the player sprite itself is what hides it on the way out. Which way
+// it travels comes from the sofa spot's `dir`: the upper Books_Sofas face down (the
+// book slides down, toward the viewer), the lower ones face up.
+// Sized so the book's half-diagonal (~38px) tucks just inside the avatar's ring
+// radius (~39px) — that's what keeps it invisible at slide 0.
+const BOOK_PROP_W = PLAYER_SIZE * 0.80;                 // "slightly less" than the player
+const BOOK_PROP_H = BOOK_PROP_W * (933 / 1004);         // Art/Book.png content aspect
+// Travel leaves a small deliberate overlap with the avatar at full extension — it
+// should read as a book held in the lap, not one floating away from them.
+const BOOK_PROP_TRAVEL = PLAYER_SIZE * 0.85;
+const BOOK_PROP_SPEED = 2.6;                            // slide units/sec (0→1)
+// Art/Book.png is a 2048² canvas with the book floating in the middle — draw only
+// the painted region so the sprite isn't 75% empty space.
+const BOOK_SRC = { x: 515, y: 423, w: 1004, h: 933 };
+
+function _bookSlideDir(seatId) {
+    const spot = SOFA2_SPOTS.find(s => s.id === seatId);
+    return spot ? spot.dir : 'down';
+}
+
+// Per-player 0→1 slide, eased and reversible: it retracts under the player on
+// session end exactly the way it came out.
+function _updateBookProp(player, isLocal) {
+    const seated = isLocal
+        ? (gameState.reading.active && gameState.isSitting && !gameState.sitAnim.active)
+        : !!(player.isReading && player.sitSeatId);
+    const target = seated ? 1 : 0;
+    const cur = player._bookSlide || 0;
+    const step = BOOK_PROP_SPEED * (gameState.dtFactor / 60);
+    player._bookSlide = target > cur ? Math.min(target, cur + step) : Math.max(target, cur - step);
+    return player._bookSlide;
+}
+
+function drawBookProp(player, isLocal, screenX, groundY, rScale, alpha) {
+    const img = gameState.assets.book;
+    const t = _updateBookProp(player, isLocal);
+    if (t <= 0.001 || !img || !img.complete || !img.naturalWidth) return;
+
+    const seatId = isLocal ? (player.sitSeatId || gameState.reading.sofaIdx) : player.sitSeatId;
+    const sign = _bookSlideDir(seatId) === 'down' ? 1 : -1;
+    const e = _easeInOutCubic(t);
+    const w = BOOK_PROP_W * rScale, h = BOOK_PROP_H * rScale;
+    const y = groundY + sign * BOOK_PROP_TRAVEL * rScale * e;
+
+    const ctx = gameState.ctx;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.drawImage(img, BOOK_SRC.x, BOOK_SRC.y, BOOK_SRC.w, BOOK_SRC.h,
+        screenX - w / 2, y - h / 2, w, h);
+    ctx.restore();
+}
+
+// Same plain-text bobbing style as drawSeatPrompt/drawGameZonePrompt — no pill/
+// button background. It's a proximity hint, not a clickable widget on its own;
+// pressing anywhere near the library (like walking up to a laptop) opens the popup.
+const _booksLibraryPrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null };
+function drawBooksLibraryPrompt() {
+    const key = gameState.nearBooksLibrary ? 'books' : null;
+    if (!_updatePromptCrossfade(_booksLibraryPrompt, key, BOOKS_LIBRARY_POS.x, BOOKS_LIBRARY_POS.y)) return;
+    const ctx = gameState.ctx;
+    const a = _booksLibraryPrompt.alpha;
+    const bob = Math.sin(Date.now() * 0.004) * 2.5;
+    const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _booksLibraryPrompt.pop));
+    ctx.save();
+    ctx.translate(_booksLibraryPrompt.x, _booksLibraryPrompt.y - 70 - (1 - a) * 10 + bob);
+    ctx.scale(pop, pop);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowBlur = 4; ctx.shadowColor = `rgba(0,0,0,${0.65 * a})`;
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.font = 'bold 16px Rubik';
+    ctx.fillText('اضغط لبدء القراءة', 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+function fetchReadingLeaderboard() {
+    const lbRef = ref(database, lobbyPath('readingLeaderboard'));
+    get(lbRef).then(snap => {
+        if (!snap.exists()) return;
+        const data = snap.val();
+        const arr = [];
+        for (const [uid, p] of Object.entries(data)) {
+            // Siraj test ghosts never compete — they don't write here any more, but
+            // filter on read too so any row left over from before stays hidden.
+            if (uid.startsWith('siraj_')) continue;
+            if (p.totalMs > 0) arr.push({ uid, name: p.name, avatar: p.avatar, totalMs: p.totalMs });
+        }
+        arr.sort((a, b) => b.totalMs - a.totalMs);
+        gameState.reading.leaderboardData = arr;
+        renderReadingLeaderboard();
+    }).catch(() => {});
+}
+
+function renderReadingLeaderboard() {
+    const data = gameState.reading.leaderboardData || [];
+    const containerId = isMobile() ? 'reading-drawer-leaderboard' : 'reading-leaderboard';
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (data.length === 0) {
+        container.innerHTML = '<div class="reading-lb-empty">لا يوجد قرّاء بعد. كن أول من يتصدّر!</div>';
+        return;
+    }
+
+    data.forEach((entry, i) => {
+        const row = document.createElement('div');
+        row.className = `reading-lb-row rank-${i + 1}`;
+        if (entry.uid === gameState.userId) row.classList.add('highlight');
+
+        const totalHrs = Math.floor(entry.totalMs / 3600000);
+        const totalMins = Math.floor((entry.totalMs % 3600000) / 60000);
+        let timeStr = '';
+        if (totalHrs > 0) timeStr += `${totalHrs} س `;
+        if (totalMins > 0 || totalHrs === 0) timeStr += `${totalMins} د`;
+
+        row.innerHTML = `
+            <div class="reading-lb-rank">${i + 1}</div>
+            <div class="reading-lb-avatar" style="background-image: url('${entry.avatar || 'placeholder.png'}')"></div>
+            <div class="reading-lb-info">
+                <div class="reading-lb-name">${_bkEsc(entry.name || 'قارئ')}</div>
+                <div class="reading-lb-time">${timeStr}</div>
+            </div>
+        `;
+        container.appendChild(row);
+    });
 }
 
 // EOF

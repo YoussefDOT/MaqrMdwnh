@@ -38,8 +38,11 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **YouTube focus player** | Paste a YouTube link, it plays embedded with loop support |
 | **Prayer times** | Live Adhan scheduling with overlay + rain effect |
 | **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock; optional shuffled order; **after-prayer azkar** reachable from the prayer overlay |
-| **Minigames** | Racing (canvas-based) and Coffee-catching game; triggered by walking into zones |
+| **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
+| **Minigames** | Racing / Coffee / laptop-boss. **Entry is TEMPORARILY OFF** — the old break-room zones were removed with the old art; they'll be re-wired to the new **games table** later (all the minigame code still works, it's just unreachable for now). |
+| **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
 | **Mobile mode** | Full touch support — virtual joystick, pull-up sounds drawer, focus-mode UI |
+| **Menu** | Discord-OAuth-only entry + boot/loading screen. See "The Menu" below. |
 
 **Language**: All UI text is Arabic. Keep it that way.
 
@@ -48,6 +51,8 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 ## File Map
 
 ```
+Icon Elements/               — 7 decorative brush icons (masked + brand-tinted in the menu)
+Maqr logo.png                — the brand logo: menu + boot screen
 game.js        ~19000 lines — all game logic, classes, Firebase, rendering
 index.html      ~1400 lines — single page; all panels/overlays live here
 style.css       ~6300 lines — all styling; mobile rules under body.is-mobile
@@ -55,9 +60,18 @@ firebase-config.js           — exports { database, ref, onValue, update, get, 
 sw.js                        — service worker: cache-first for Sound/Art/Fonts (see Loading strategy)
 Sound/                       — UI/minigame sound effects (.mp3)
 Sound/Focus Sounds/          — ambient focus audio files (.mp3)
-Art/                         — sprite sheets, background image, assets
-pomo9.json                   — background tilemap/layout (don't edit)
+Art/                         — minigame art (race track, coffee, boss fight, siraj)
+Art/Workspace/               — THE WORLD: one combined scene split into stacked layers
+                               (Workspace_00NN_*.png, all 2210×3160). See "The World".
+Art/Old/                     — the retired pixel-art world (no longer used)
+pomo9.json                   — legacy tilemap (no longer used by the new world; don't edit)
 ```
+
+> **The art is no longer pixel art.** The whole world was redrawn as smooth,
+> hand-painted art in `Art/Workspace/`. The old pixel sprites (`Bg.png`, `Tables.png`,
+> `Shadow.png`, the fake break-room door, the dashboard placeholder circle) are GONE.
+> Do not reintroduce `imageSmoothingEnabled = false` for the world or pixel-styled
+> particles — everything is meant to look smooth now.
 
 ---
 
@@ -80,14 +94,28 @@ before the game is playable.** The current model:
   still instant — `startSound` streams via a media element and hands off to the
   seamless buffer loop when it arrives. Never restore the old "download all 7 on init"
   behaviour (~21 MB + a huge decode on weak phones).
+- **World art layers** (`Art/Workspace/`, ~15 MB total — the 5 MB background + two
+  ~2 MB day overlays are the big ones): loaded in `loadAssets()`. `render()` guards
+  every layer on decode (`_drawWorldLayer` skips a not-yet-loaded `<img>`), so the
+  login screen never waits on them. Once every layer decodes, `buildWorldCollision()`
+  builds the alpha collision masks AND `buildWorldCache()` pre-composites the ~9
+  ground layers + 3 second-floor layers into **two cached canvases** — so the per-frame
+  cost is ~2 `drawImage`s, not ~14 (matters on the owner's phone). Both are idempotent
+  and self-retry until the images decode.
 - **Race track** (`Art/RaceTrack Var1.png`, 6 MB + CPU-heavy pixel classification):
   `loadRaceTrackAsset()` is idempotent and lazy — kicked on idle after spawn and
   ensured by every race entry path. Never call it in `init()`.
-- **Service worker (`sw.js`)**: cache-first for `Sound/ Art/ Fonts/` + image/audio/font
+- **Service worker (`sw.js`)**: covers `Sound/ Art/ Fonts/` + image/audio/font
   extensions; skips Range requests (Safari audio streaming) and everything else passes
-  through (code is never served stale). **If you replace a media file, bump its `?v=`
-  query in the code or bump `CACHE_VERSION` in sw.js**, or returning visitors keep the
-  old file.
+  through (code is never served stale). Two modes:
+  - **Production: stale-while-revalidate.** The cached copy is served instantly AND
+    re-fetched in the background, so a replaced media file appears on the *next*
+    reload by itself. `?v=` bumps / `CACHE_VERSION` are now only for forcing it to
+    land on the *same* load.
+  - **localhost / LAN IP: network-first**, cache untouched (`IS_LOCAL`). The dev loop
+    must always show the file on disk — the cache is a production load-time
+    optimisation, not a dev one. This is what fixed "new art needs a hard refresh
+    every time": pure cache-first pinned every art file until its URL changed.
 - **Login/spawn network path is parallel**: `initDiscordOAuth` resolves the lobby
   concurrently with the Discord token check (cached user id); `startGame` fetches
   `pomodoro` + `users/{uid}` + `dashboards/{uid}/profile` in one `Promise.all`;
@@ -95,6 +123,130 @@ before the game is playable.** The current model:
   profile write. Don't add serial `await get(...)` chains to this path.
 - **Exit**: `doLogout` reloads after max 2s even if writes haven't acked (armed
   `onDisconnect` ops cover the cleanup server-side).
+
+---
+
+## The World (new smooth-art scene, two floors)
+
+The world is **one combined painting** (`Art/Workspace/`, `IMG_W×IMG_H = 2210×3160`)
+split into stacked layers that are all drawn on top of each other, aligned. Both
+"rooms" (work room on top, break room on bottom) live in that single image — there is
+**no room tiling, no seam, no break-room door** any more. The break room is always
+open; players cross through the wall opening baked into the art.
+
+### Coordinate system
+World units = source px × `WORLD_SCALE` (0.54, chosen so the world is ~1193 px wide —
+same as the old world, so the 70 px player still feels right). World origin (0,0) =
+the **centre of the image**. Helpers: `sx2w(px)` / `sy2w(py)` map a source pixel to a
+world coordinate. The whole scene is drawn centred on the origin at
+`(-WORLD_W/2, -WORLD_H/2, WORLD_W, WORLD_H)`.
+
+### Layer stack & draw order (`render()`)
+Painted bottom → top:
+1. **`drawWorldGround()`** — background, walls, fireplace, sofas, library, sofa, ground
+   laptop desk, stairs, games table. (Served from the cached `worldCache.ground`
+   canvas; per-layer fallback until it builds.)
+2. ground-floor players + their timers (`drawPlayers(false, 1)` / `drawTimers(1)`)
+3. **`drawSecondFloor()`** — the mezzanine platform + its laptop desk + papers desk,
+   drawn at `gameState.secondFloorVis` (the proximity-fade alpha). Served from
+   `worldCache.second`.
+4. second-floor players + timers (`drawPlayers(false, 2)` / `drawTimers(2)`)
+5. **`drawDayOverlays()`** — `Day-Overlay-2` (normal blend) then `Day-Overlay`
+   (**`globalCompositeOperation = 'overlay'`**, dropped on بطاطس). The multiply Night
+   overlay is intentionally NOT drawn yet.
+6. screen-space FX: focus mask, smooth wind, fog, sun rays, **cloud shadows**, vignette.
+
+### Collision — alpha masks from the actual filled pixels
+`buildWorldCollision()` rasterises the collidable layers into half-res `Uint8` bitmaps
+(`MASK_W×MASK_H`) — collision follows the **real painted shape**, not a box, and empty
+pixels never collide. Two morphology passes tune it:
+- **Walls are DILATED** ~3 px (`_dilate`) so the thin room-divider can't be tunneled
+  through at sprint speed.
+- **Furniture is ERODED** ~3 px (`_erode`) so the thin legs/feet the tables draw don't
+  collide — only the real body does. (The library was already clean.)
+- **Floor 1** (`worldCollision.floor1`): dilated walls + eroded ground furniture (alpha ≥ 130,
+  which drops the soft drop-shadows) + the fireplace at alpha ≥ 205 (**solid body only —
+  its soft light must not collide**).
+- **Floor 2**: geometric platform bounds (railing) inset from the footprint, **plus** the
+  eroded second-floor desks (`worldCollision.floor2desks`). The wood floor is walkable;
+  you leave only through the stair opening.
+- `checkCollision(x,y)` clamps to `WORLD_BOUNDS`, treats the **stairs as walkable** (via
+  the tight stair mask), then samples the floor mask with `_maskSolid` — a **ring of
+  points around the avatar's feet** (`_BODY_R`), so the sprite stops when its EDGE meets
+  furniture instead of burying its centre, and thin walls can't slip between samples.
+
+### Floors & the dynamic stair scale
+Each player has a `floor` (1 or 2) and a `renderScale`.
+- **Stairs** (`isOnStairs`): no collision. `isOnStairs` samples the **real painted stair
+  alpha** (`worldCollision.stairs`) — a tight diagonal band, NOT a bbox — so you can't
+  phase onto the mezzanine from beside/above the steps. Right end = ground (1.0), left end
+  = second floor (`FLOOR2_SCALE`); `stairScaleAt(x)` interpolates by x. Walking the stairs
+  also gives a **bigger up/down bob** (see `updatePlayerBobbing`).
+- `updateFloorsAndScales()` (per frame): the LOCAL player's `floor` is **pinned to the
+  seated laptop's floor while locked-in / being kidnapped** (this stops a second-floor
+  work session from wrongly reading floor 1 and hiding the whole mezzanine); otherwise it
+  flips as they cross the stair midpoint (hysteresis 0.45/0.55). Then it lerps **every**
+  player's `renderScale` toward `desiredPlayerScale()`. `forcePlayerFloor()` sets the floor
+  on kidnap / reclaim.
+- **Floor is synced** so others scale you correctly: `fl` in the WebSocket position
+  payload and `users/{uid}/floor` in Firebase; read back in `onPresenceMessage` / the
+  users listener / the login restore.
+- `renderScale` is applied in `drawPlayers` (avatar + contact shadow + name offset) and
+  is purely visual — collision/positions use the unscaled world coords.
+
+### Second-floor proximity fade (client-side only)
+`updateSecondFloorFade()` → `gameState.secondFloorVis` (1 = visible). When the LOCAL
+player is **on floor 1** and **approaches** the mezzanine footprint (`PLAT_X0..PLAT_X1`,
+`PLAT_Y0..PLAT_Y1`) from the exposed **east / south** edges, the whole second floor (its
+3 layers **and** any players on it) fades toward 0. The fade **starts early** — an `AP`
+(~150 px) approach margin outside the footprint — so it's gone by the time you're fully
+under. The **stair-entry side barely fades** (min of the east/south penetration), and
+being on floor 2 keeps it fully visible. Reverts on exit. Also floor-gates shared-pomo:
+you can't invite/join someone on a different floor.
+
+### Laptops (7 total) — `LAPTOP_DEFS` / `initLaptops()`
+- **Ground desk** (`Workspace_0008`): 3 laptops that **drag the player LEFT** into the
+  seat + 1 at the bottom that **drags DOWN**.
+- **Second-floor desk** (`Workspace_0004`): 3 laptops, same orientation → also **drag
+  LEFT** (seat on the open platform floor to their left). "3 to the right" in the brief
+  meant their position, not the drag direction.
+- Each laptop carries a `dir` (`left`/`right`/`down`/`up`) and a `floor`. The kidnap
+  (`updateAnimation` align→pull) moves **both axes**: it yanks you OUT past the seat
+  (`intermediate = seat + dir·EXTRA`) then drags you back IN to the seat — like the old
+  "grab far, snap to rest" feel. Laptop interaction is **floor-gated** (a ground player
+  can't sit a second-floor laptop that visually overlaps them).
+
+### Dashboard entry = the second-floor papers desk
+The dev-art placeholder circle is gone. The dashboard opens from the **papers desk**
+(`Workspace_0003`, world `PAPERS_X/PAPERS_Y`), reachable only on **floor 2**; the prompt
+reads **"انقر لفتح الأوراق"** (`drawDashboardPrompt`).
+
+### Clouds, second-floor fog, fireplace sound & smooth wind
+- `drawCloudShadows` drifts soft **black, blurred, low-opacity cloud silhouettes** slowly
+  LEFT on a loop. They are **WORLD-space** (drawn inside the camera transform, on top of
+  everything incl. players) so they sit over the scene like an overlay rather than
+  floating across the screen. Sizes/positions/speeds are in world px. Off on بطاطس.
+- **Second-floor fog** (`updateSecondFloorFog` / `drawSecondFloorFog`, `secondFloorFogA`):
+  a soft low-opacity haze, **WORLD-space, drawn BETWEEN the floors** (over the ground,
+  UNDER `drawSecondFloor`) so the mezzanine stays above it. Shows **only when the LOCAL
+  player is on floor 2** (fades in/out, no snap; loops).
+- **Fireplace ambience** (`updateFireplaceAmbient` → `FocusAudioEngine.setFireplaceVolume`):
+  `Sound/Fireplace sound.mp3` fades in as the local player nears the fireplace (`FIRE_X/Y`,
+  floor 1 only). The buffer is made **seamless once** (`_makeSeamless` crossfades its tail
+  into its head) so `loop = true` gives a perfect click-free loop. Web-Audio, so it keeps
+  playing in a background tab.
+- Wind particles are **soft round dots with a fading trail** (`drawWindParticles`). Off on بطاطس.
+
+### Perf notes (owner is on a phone — keep it cheap; Safari was OOM-crashing)
+`worldCache` collapses ~14 per-frame `drawImage`s into ~2, and **after the caches +
+collision masks are built the source layer `<img>`s are freed** (`src=''`) — keeping ~12
+decoded 2210×3160 images alive (~340 MB) is what crashed Safari. The overlay-blend layer
+and clouds are gated off on بطاطس; the world cache is rendered at a smaller resolution on
+reduced tiers.
+
+> **Cache-busting:** `game.js` is loaded with a manual `?v=N` query in `index.html`. Bump
+> it on every `game.js` change or returning visitors run stale code (this bit us: the
+> browser kept serving `?v=173` after edits).
 
 ---
 
@@ -115,7 +267,77 @@ before the game is playable.** The current model:
 | `FocusYouTubePlayer` | line ~409 | YouTube IFrame API wrapper |
 
 ### Login & auto-resume
-Discord OAuth session in localStorage. On load, `initDiscordOAuth()` validates the token and resolves the lobby. **Auto-resume**: `startGame` writes `localStorage[ACTIVE_SESSION_KEY] = userId` while in-game (cleared on explicit logout / welcome-screen logout); on load, if that flag matches the resolved user, re-enter the game directly instead of stopping on the welcome screen — `startGame` then restores the pomodoro/free-mode session from Firebase. This is what makes an unintended reload (Android discarding a backgrounded tab) seamless. Siraj ghosts never set the flag (ephemeral).
+Discord OAuth session in localStorage. On load, `initDiscordOAuth()` validates the token and resolves the lobby. **Auto-resume**: `startGame` writes `localStorage[ACTIVE_SESSION_KEY] = userId` while in-game (cleared on explicit logout / menu logout); on load, if that flag matches the resolved user, re-enter the game directly — `startGame` then restores the pomodoro/free-mode session from Firebase. This is what makes an unintended reload (Android discarding a backgrounded tab) seamless. Siraj ghosts never set the flag (ephemeral).
+
+---
+
+## The Menu (`#menu-screen`) + Boot Screen (`#loading-screen`)
+
+The site name is **مقر المدونة**. Entry is **Discord-OAuth only** — the male/female
+chooser is **gone** from the menu. The lobby comes from the account
+(`resolveUserLobby` → Firebase `users/{uid}/lobby` / `categoryName`). The only
+buttons are: Discord login, **وضع التجربة**, and the PWA install button.
+
+- **`#discord-first-lobby-modal` is a rare FALLBACK only** — it shows when
+  `resolveUserLobby` returns null (a Discord account the bot has never seen). Do
+  not surface it as a normal step.
+- **The avatar pill (`#user-pill`)** replaces the login button once signed in:
+  avatar + name + lobby tag (الإخوة / الأخوات) + an arrow chip. In RTL the arrow
+  chip is the **last child**, so it sits on the LEFT. Hover slides `.pill-sweep`
+  (a white panel parked at `translateX(101%)`) across from the right and the arrow
+  nudges. Press → `.launching`: the arrow chip bolts out the pill's left edge
+  (`arrowEscape`; the pill's `overflow: hidden` is what masks it), then the boot
+  screen slides down.
+- **`@media (hover: none)`** re-asserts the launch look and neuters `:hover` — on
+  touch the white sweep would otherwise stick after a tap.
+
+### Boot screen — one element, two jobs
+`#loading-screen` (class `.boot`) is a **fixed overlay at z-index 100000** (above
+the entrance blackout at 99999), NOT a `.screen`. Maqr logo + a **striped brand-gradient
+bar** + Arabic messages that fade every 2s (`BOOT_MESSAGES`, shuffled via
+`_shuffledCopy` so they don't repeat).
+1. `showBootScreen('instant')` — page load, while the Discord token is checked.
+2. `showBootScreen('slide')` — after the pill press; slides DOWN over the menu.
+
+Flow: pill → boot slides in → `startGame` → world art decodes → `buildWorldCache()`
+sets `_worldReady` and calls `finishBootScreen()` → bar eases to 100% → boot slides
+up → **`_openEntranceGate()`** → the intro (player falls) plays.
+
+**Gotchas — all of these were real bugs, don't undo them:**
+- **`beginEntrance` is GATED.** The async Firebase restore calls it while the boot
+  screen is still up, so it queues into `_boot.pendingEntrance` and
+  `_openEntranceGate()` replays it via `_reallyBeginEntrance` after the reveal.
+  Otherwise the drop animation plays behind the loader and is over before you see it.
+- **`showBootScreen('slide')` OWNS hiding `#menu-screen`** (on a 640ms timer, after
+  the loader has covered it). `display` can't transition — hiding the menu any
+  earlier flashes the near-white body background in the uncovered strip.
+- **`.boot-fill` has NO `transition: width`** — `_bootTick()` writes width every
+  frame and lerps itself; a transition would retarget on every write and lag.
+- **Fill-mode `backwards`, not `both`**, on `bootMsgIn` / `#pwa-install-btn` /
+  `.menu-foot`: `both` holds the 100% keyframe forever and an animated property
+  beats a transitioned one, which kills the message fade-out and the button's
+  hover lift.
+- `startGame` has a **15s failsafe** + a `_worldReady` check so a 404'd art layer
+  can never trap the user behind the loader.
+
+### Decorative brand icons (`Icon Elements/`)
+Seven black-on-transparent brush PNGs, exposed as `--ico-0`…`--ico-6` in `:root`
+(the folder name has a space — it **must** stay `Icon%20Elements`). They're tinted
+by CSS `mask-image` + `background-color: currentColor`, so `color` picks the brand
+colour. Large + low-opacity in the menu backdrop (`buildMenuDecor()` → `MENU_DECOR`,
+thinned on mobile, `display:none` on بطاطس); small in the card footer (`.foot-ico`).
+The four brand colours are `--brand-red/-yellow/-teal/-blue` in `:root`.
+
+### Loading speed
+- Google Fonts moved from a CSS `@import` (render-blocking + serialised behind
+  style.css) to `<link>` + `preconnect` in `<head>`. **Don't put the @import back.**
+- `Maqr logo.png` is `<link rel="preload">`ed at high priority — it's the first pixel.
+- `loadAssets()` marks every world-art `<img>` **`fetchPriority='low'` +
+  `decoding='async'`** so ~15 MB of art can't starve the Discord/Firebase/font
+  requests that decide how fast the menu appears.
+- The PWA button is a **plain child of the menu card** now — the old version was
+  `position: fixed` and JS-repositioned under the panel. It's removed entirely on
+  Safari (no `beforeinstallprompt`) and when already installed.
 
 ---
 
@@ -281,6 +503,106 @@ Module-level vars `_azkarFakeHour` / `_azkarFakeMin` override the real clock for
 
 ---
 
+## Reading Session (القراءة)
+
+Timed reading, started from the **books library desk** (`BOOKS_LIBRARY_POS`, floor 1).
+Lives at the end of `game.js`, after the dashboard module. Markup: `#reading-modal`,
+`#reading-newbook-modal`, `#reading-panel`, `#reading-mobile-header`,
+`#reading-drawer` in `index.html`; the `Reading Session Feature` block in `style.css`.
+
+### Book covers are DRAWN, never uploaded (`bookCoverSVG`)
+A book = a **name + a style id**. That's all that's stored; the cover art is generated.
+`bookCoverSVG(styleId, name, opts)` returns a self-contained `<svg>` string: a
+two-point-perspective book (spine face left, front cover facing the viewer), gradient
+cover, per-style decoration, hinge groove, diagonal sheen, and the title typed on top.
+
+- **It must be injected as INLINE svg** (`el.innerHTML = bookCoverSVG(...)`), never as
+  `<img src="data:...">` — an `<img>`-hosted SVG can't reach the page's fonts, so the
+  Arabic title would lose Rubik (and its shaping).
+- **All geometry comes from `_bkP(u, t)`** — `u` = 0 spine edge → 1 fore edge, `t` = 0
+  top → 1 bottom, returning the projected point. Every decoration is built from it, so
+  nothing hand-computes the slanted edges. `u` outside `[0,1]` extrapolates (that's how
+  the spine face and the diagonal stripes are drawn); the cover `clipPath` trims it.
+- **`BOOK_STYLES` — 10 premade looks**, each `{ cover, cover2, spine, accent, text,
+  halo, deco }`. `text` is picked for contrast against `cover`; `halo` is the
+  `paint-order: stroke` behind the title and is always the **opposite lightness of
+  `text`**, so the name stays readable over any decoration. Adding a style means adding
+  a `deco` branch in `_bkDeco(kind, s, id)` — `id` is the SVG's unique id prefix, needed
+  by any `<mask>`/`<defs>` the decoration adds.
+- Legacy books saved before styles existed get a stable one from `bookStyleForName()`
+  (hash of the name), so a given book always looks the same.
+- **SVG arc gotcha (bit us on the crescent):** an arc whose radius is smaller than half
+  its chord is silently scaled UP to fit by the spec — the "obvious" two-arc crescent
+  rendered as a plain filled circle. Use a `<mask>` (disc minus offset disc) instead.
+
+### The shelf (`#reading-shelf-track`)
+Horizontal scroll-snap carousel: **one big book centred, the rest shrunk beside it**.
+Order is **newest leftmost → older to the right**, with the **"كتاب جديد" card capping
+the left end** — so the track is forced `direction: ltr` regardless of the page's RTL.
+Ordering keys off `books/{slug}/addedAt` (re-adding an existing book bumps it to the
+front). Selection = the card nearest the track centre (`_readingSyncShelfSelection`, run
+rAF-coalesced on scroll) → mirrored into `gameState._readingSelectedBook`, which is what
+"أنا لها" actually starts. Clicking an off-centre card only centres it; only the
+**centred** add-card opens the new-book modal, and the delete ✕ only exists on the
+centred book — a scroll-tap must never fire either. "أنا لها" locks with the
+`.is-disabled` **class, never the `disabled` attribute** (iOS touch leak — see azkar).
+
+### New-book modal
+Name + one of the 10 covers, with a **live preview** (`_renderNewBookPreview` re-renders
+on every keystroke and swatch click). Swatches are the same generator at `{noText:true}`.
+
+### Firebase
+```
+dashboards/{uid}/reading/lastBook          = "…"                       // shelf lands here on open
+dashboards/{uid}/reading/books/{slug}      = { name, style, totalMs, addedAt }
+lobbies/{lobby}/readingLeaderboard/{uid}   = { name, avatar, totalMs }  // via lobbyPath()
+users/{uid}/{isReading, readingBook, readingEnd, booksSofa}             // presence only
+```
+Private book data lives under `dashboards` (one-shot `get()`s, zero fan-out — see the
+cost rules). `_readingSlug()` strips `. # $ [ ] /`. Session end increments `totalMs` with
+`runTransaction`. **Siraj ghosts never touch المتصدرين** — they skip the leaderboard
+write entirely, and `fetchReadingLeaderboard` also filters `uid.startsWith('siraj_')` on
+read so any pre-existing ghost row stays hidden.
+
+### Seat + camera
+`startReadingSession` picks a **RANDOM free `SOFA2_SPOTS` seat, not the closest** (always
+landing on the same sofa made the room feel static), then `startSitAnimation`.
+
+`updateReadingCamera` phases: `intro → active → exiting`.
+- **`intro` is ONE eased tween** (`READING_INTRO_MS`, `_easeInOutCubic`) covering zoom
+  AND pan together, interpolated from a captured start (`_fromX/_fromY/_fromZoom`). It
+  used to be two phases — a raw exponential lerp to zoom in, handing over to a separate
+  eased slide — and because the lerp still had velocity when the ease-in-out started
+  from zero, the hand-off read as a stutter. **Don't re-split it.**
+- **`exiting` is time-bounded** (`READING_EXIT_MS`, hard stop `READING_EXIT_MAX_MS`) and
+  restores `_zoomBefore` (the zoom the player had before the session). `updateCamera()`
+  early-returns while a reading phase is set, so a phase that never clears means the
+  camera is owned forever — that was the "camera rubber-bands after a reading session"
+  bug (see Common Bugs). `abortReadingCamera()` hands the camera straight back and is
+  called by both zoom handlers, so a user gesture always wins.
+
+### The book prop (`drawBookProp`, `Art/Book.png`)
+Slides out from **under** the seated reader to in front of them — **position only, no
+opacity change**: the player sprite itself is what hides it on the way out, which is why
+it's drawn **before the avatar** in `drawPlayers` (after the contact shadow). Direction
+comes from the sofa spot's `dir`: the **upper** Books_Sofas face down (book slides
+**down**), the **lower** ones face up (slides **up**). `_updateBookProp` lerps a per-
+player `_bookSlide` 0→1 toward "seated & reading", so it retracts the way it came on
+session end and works for **remote** readers too (`isReading` + `sitSeatId` are both
+synced). Scaled to `PLAYER_SIZE * 0.80` — slightly smaller than the player, so it stays
+hidden under them at slide start. `BOOK_SRC` crops to the painted region of the 2048²
+PNG (the book floats in the middle of a mostly-empty canvas).
+
+### Panels
+Black glass like the rest of the site (the old blue treatment is gone); the only colour
+is `--rd-accent`, a warm parchment cream. Desktop `#reading-panel` sits in the left third
+(the camera slides the reader right to make room) and shows cover + name + total, the
+timer card with a progress bar, and المتصدرين. Mobile mirrors it in a top header +
+pull-up drawer. Both are fed by `updateReadingSession` via an `isMobile()` id prefix
+(`reading-panel-*` / `reading-mobile-*`) — **keep those two id sets symmetrical**.
+
+---
+
 ## Shared Pomodoro (Coop) System
 
 State machine at `gameState.sharedPomo.phase`: `'idle' | 'gathering' | 'guest-waiting' | 'active'`
@@ -394,6 +716,13 @@ Prayer location stored in localStorage (`mdwnh_prayer_location`).
 
 ## Minigame Architecture
 
+> **ENTRY IS CURRENTLY DISABLED.** The old break-room teleport zones (race / coffee /
+> laptop-boss) lived at coordinates that don't exist in the new world, and their art +
+> hints are no longer drawn — so the zones are **unreachable**. All the minigame logic
+> below still works; when we're ready, wire the new **games table** (`Workspace_0006`,
+> break room, bottom-left) as the entry point. Nothing here was deleted, just
+> disconnected.
+
 **Gender separation**: All minigame paths go through `lobbyPath()` — male/female never share sessions.
 
 **Ready-sync protocol** (both games):
@@ -418,14 +747,18 @@ Sugar falls from top. `progress = (serverNow() - spawnTime) / fallDuration` — 
 
 ## Rendering Pipeline
 
-`render()` each frame:
-1. `drawFocusFog` — ambient fog in work room
-2. `drawPlayers` — all player avatars
-3. `drawTimers` — pomodoro badge stacks above laptops
-4. `drawCoopGroupLabels` — floating group labels (only if ≥2 members)
-5. `drawFocusMask` — dark vignette around active laptop
-6. `drawWindParticles` — decorative particles
-7. `drawConnections` — social connection lines between nearby players
+`render()` each frame (see **The World** for the full order):
+1. `drawWorldGround` — cached ground layers (bg/walls/furniture/stairs/games)
+2. `drawPlayers(false, 1)` + `drawTimers(1)` — ground-floor avatars & badges
+3. `drawSecondFloor` — mezzanine layers at `secondFloorVis`
+4. `drawPlayers(false, 2)` + `drawTimers(2)` — mezzanine avatars & badges
+5. `drawDayOverlays` — day-lighting overlays (one normal, one `overlay`-blend)
+6. `drawFocusMask` — dark vignette around the active laptop (also draws the laptop prompt)
+7. `drawWindParticles`, `drawFocusFog`, `drawCloudShadows`, `drawVignette` — screen-space FX
+
+`drawPlayers(onlyLocal, floorFilter)` and `drawTimers(floorFilter)` take a floor filter
+so ground avatars render **below** the mezzanine and floor-2 avatars **above** it (and
+fade with it). `drawConnections` / `drawCoopGroupLabels` still run in the world pass.
 
 **DPR scaling**: Canvas is `viewport * dpr` physical, `viewport` CSS. All drawing uses `ctx.scale(dpr, dpr)` so use logical pixels everywhere. `gameState.dpr` holds the ratio.
 
@@ -604,8 +937,15 @@ Firebase keys can't contain `. # $ / [ ]` → task names used as map keys go thr
 - **Free mode**: saved in `endFreeMode`. A session over **2h** (`DASH_LONG_FREE_MS`) intercepts the leave with `openFreeLongConfirmModal()` ("هل عملت لمدة x فعلًا؟") — hour/minute steppers + **save-as-shown** or **discard**; `_dashFreeHandled` stops `endFreeMode` from double-saving.
 - **Minigame high scores** (`dashRecordGameOnce`, once per session via an in-memory guard): race + laptop-boss = best **lowest** finishTime; coffee = best **highest** score.
 
-### Entry point (map circle)
-A dev-art placeholder circle (art production is paused) at world **(-380, 0)** in the freely-walkable **work room** (the break room is gated behind the break-only door, so the circle must go up top). `drawDashboardZone()` renders it; `drawDashboardPrompt()` shows **"انقر للاستعمال"** (mirrors the laptop "انقر للبدء" prompt) when near. Proximity set in `updateInteractions` (`gameState.activeDashboardZone`); click/tap → `openDashboard()`. All gated on `dashboardAllowed()`.
+### Entry point (second-floor papers desk)
+The old dev-art placeholder circle is **gone**. The dashboard now opens from the
+**papers desk** on the second floor (`Workspace_0003`, world `PAPERS_X`/`PAPERS_Y`).
+`drawDashboardPrompt()` shows **"انقر لفتح الأوراق"** when near (scaled up by
+`FLOOR2_SCALE` so it doesn't look tiny up there). Proximity is set in
+`updateInteractions` (`gameState.activeDashboardZone`, gated on **floor 2** +
+`dashboardAllowed()` + not in a session); click/tap within `PAPERS_SELECT_R` →
+`openDashboard()`. (`drawDashboardZone()` still exists but is dead code — no longer
+called.)
 
 ### UI (scattered paper stack)
 - **Font**: Methlama (`Fonts/KOMethlama-*.otf`, 6 weights via `@font-face`); headers use heavy weights (800/900), body 400–600. **Fallback**: if the OTFs fail to load the CSS stack falls back to **Rubik** and `setupDashboardUI` logs a clear warning explaining the path/case to fix.
@@ -697,6 +1037,9 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | Friend's avatar "snaps places" occasionally while walking | Two causes: (1) a laggy Firebase position write (4s heartbeat during a break, stop write) fed the interpolation buffer with a stale-but-fresh-timestamped sample → backward yank; (2) WS-over-TCP delayed bursts starved the buffer, then interpolation jumped the avatar forward to catch up when the burst landed | (1) Only `pushNetSample` from Firebase when WS quiet >1s (`player._lastWsSampleAt`); (2) flag the starve (`entity._netStarved`) so the next sample re-anchors at the current render pos. See **Player Position Sync → Anti-snap** |
 | "Disable idle animation while working" setting did nothing in free mode | The per-avatar `isWorking` flag only tracks pomodoro, so in free mode the local avatar fell into the idle-breathing branch and the suppression (gated on `isWorking`) never fired | Gate the local-avatar suppression on `localInWorkPhase()` (covers pomodoro **and** free mode) and freeze both the bounce and the breathing |
 | After-prayer azkar: tapping a count button scrolled the whole overlay down | `nextEl.scrollIntoView()` bubbles to the nearest scrollable ancestor; when the list itself couldn't scroll it scrolled the overlay/page | Scroll `listEl` only via a manual `listEl.scrollTo({top})` computed from bounding rects — never `scrollIntoView` |
+| Camera rubber-bands to a default framing on every zoom, forever, after a reading session ends | The `exiting` camera phase only cleared once zoom converged on its target — but the scroll wheel was unblocked during it, so any scroll moved zoom away and the phase **never cleared**. `updateCamera()` early-returns while a reading phase is set, so the exit lerp owned the camera for the rest of the session and fought every gesture | Time-bound the exit tween (`READING_EXIT_MS` + hard `READING_EXIT_MAX_MS`), and have both zoom handlers call `abortReadingCamera()` so a user gesture always hands the camera back |
+| New art needs a hard refresh to show up, every time | `sw.js` was pure cache-first for `Art/` — a cached file was pinned until its URL or `CACHE_VERSION` changed | Stale-while-revalidate in production (fresh copy lands for the next reload), and **network-first on localhost/LAN** (`IS_LOCAL`) so the dev loop always sees the file on disk |
+| SVG crescent renders as a plain filled circle | An arc whose radius is smaller than half its chord is silently scaled UP to fit by the SVG spec, so the two-arc crescent became two identical semicircles | Build it as a `<mask>`: a disc with an offset disc punched out |
 
 ---
 
@@ -721,12 +1064,17 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 ```
 MOVE_SPEED = 5
 PLAYER_SIZE = 70
-BG_SCALE = 0.5             → world ≈ 1195 × 875 px
-ROOM_COUNT = 2             → work room (top) + break room (bottom)
+IMG_W, IMG_H = 2210, 3160  → source art size (Art/Workspace/ layers)
+WORLD_SCALE = 0.54         → world ≈ 1193 × 1706 px (one combined scene, both rooms)
+FLOOR2_SCALE = 1.20        → player size on the second floor / top of the stairs
+MASK_DIV = 2               → collision masks are half-res (1105 × 1580)
 RACE_LAPS = 3
 MOBILE_BREAKPOINT = 1024   (window.innerWidth)
 WIND_PARTICLE_COUNT = 30   (desktop)  / 10 (mobile)
 ```
+> The old `BG_SCALE` / `ROOM_COUNT` / `BG_WIDTH` / `TABLE_BOX` / `ROOM_SEAM_Y` /
+> `DOOR_*` constants are legacy — still defined so the (unreachable) minigame code
+> compiles, but the world no longer uses them.
 
 ---
 
@@ -775,3 +1123,5 @@ drawFocusMask: uses physical mCanvas; player positions computed with * dpr
 ## Testing Policy
 
 **Do NOT use the browser preview tool to verify small changes** (bug fixes, single-line edits, minor tweaks). Only run the preview verification workflow for major new additions (new overlays, new panels, new game systems). For small changes, trust the code and push directly.
+
+**The owner tests everything himself — don't self-test each new feature in the browser as you build it.** Even for a big new addition, implement it carefully and read the code back over rather than spinning up the preview tool to click through it yourself. The owner explicitly does not want a round of "let me verify this in the browser" per feature — it's slow and he'd rather try it live himself and report back. Exceptions: a quick static/logic sanity check (e.g. a one-off Node snippet, reading the diff) is fine; what to avoid is the full login → navigate → click-through browser loop for routine work.
