@@ -4826,7 +4826,6 @@ function startGame(userData) {
     document.body.classList.add('game-ready');
     window.dispatchEvent(new CustomEvent('pwa:gameStarted'));
     document.getElementById('current-user').textContent = userData.username;
-    document.getElementById('channel-name').textContent = userData.channelName || 'قناة غير معروفة';
     gameState.canvas = document.getElementById('game-canvas');
     gameState.ctx = gameState.canvas.getContext('2d');
     gameState._lowGfx = isReducedGraphics();
