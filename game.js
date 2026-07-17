@@ -516,6 +516,7 @@ function finishBootScreen() {
     setTimeout(() => {
         el.classList.remove('slide-in');
         el.classList.add('slide-out');
+        _playMenuSfx('loadingEnd', 0.85);   // the bar hit 100% and the reveal starts
         setTimeout(() => {
             el.classList.remove('active', 'slide-out');
             if (_boot.rafId) { cancelAnimationFrame(_boot.rafId); _boot.rafId = null; }
@@ -610,6 +611,13 @@ function showUserPill(user, lobby) {
         pill.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); }
         });
+        // Hover cue only on a real pointer — on touch, `mouseenter` fires as part
+        // of the tap, so it would double up with the click sound.
+        if (window.matchMedia?.('(hover: hover)').matches) {
+            pill.addEventListener('mouseenter', () => {
+                if (!pill.classList.contains('launching')) _playMenuSfx('cardHover', 0.5);
+            });
+        }
     }
 
     if (logout && !logout._wired) {
@@ -633,6 +641,7 @@ function launchIntoGame(user, lobby) {
 
     const pill = document.getElementById('user-pill');
     pill?.classList.add('launching');
+    _playMenuSfx('cardClick', 0.85);
     // Same reason as the old الدخول button: this click is the browser's permission
     // to start audio, and the awaits inside enterGameAsDiscordUser close that
     // window. Prime the shared context NOW so the entrance whoosh can fire.
@@ -2178,7 +2187,7 @@ const gameState = {
     coffeeZonePlayers: [],
     activeLaptopBossZone: false,
     laptopBossZonePlayers: [],
-    laptopBossButtons: { left: false, right: false, jump: false, jumpPressed: false },
+    laptopBossButtons: { left: false, right: false, jump: false, jumpPressed: false, jumpBufferT: 0 },
     coffee: {
         session:            null,
         sessionKey:         null,
@@ -2536,7 +2545,7 @@ const COFFEE_GOLD_POINTS     = 3;
 // behind the wall on purpose (reads as depth).
 const COFFEE_PILE_CX = 0.50, COFFEE_PILE_CY = 0.16;
 const COFFEE_PILE_RX = 0.30, COFFEE_PILE_RY = 0.10;
-const COFFEE_PILE_FIG_W = 30;   // base width of a piled fig, before the crowding shrink
+const COFFEE_PILE_FIG_W = 60;   // base width of a piled fig, before the crowding shrink
 const COFFEE_PILE_MAX   = 26;   // only the most recent N are drawn (the rest are buried)
 
 // Laptop boss fight minigame — to the left of the race teleporter
@@ -3717,9 +3726,44 @@ function _prefetchEntranceSound() {
         .catch(() => null);
 }
 
+// ── Menu SFX ────────────────────────────────────────────────────────────────
+// The pill hover/click and the boot-screen finish all fire BEFORE the focus
+// engine's AudioContext exists (it's only created on the first gesture), so these
+// three can't ride FocusAudioEngine.buffers like every in-game sound does. They're
+// plain <audio> elements instead — and unlike gameState.sounds they ARE preloaded
+// at page parse on purpose: they're small (~290 KB total) and the earliest of them
+// can fire on a hover, i.e. before anything else would have warmed them.
+const _menuSfx = {};
+function _menuSfxLoad() {
+    const add = (key, src) => {
+        const a = new Audio();
+        a.preload = 'auto';
+        a.src = src;
+        a.load();
+        _menuSfx[key] = a;
+    };
+    add('cardHover', 'Sound/Card hover .mp3');
+    add('cardClick', 'Sound/Card Click.mp3');
+    add('loadingEnd', 'Sound/Loading_End.mp3');
+}
+// Rejections are expected and ignored: a hover isn't a gesture, so the browser
+// blocks it until the user has interacted with the page at least once. Never
+// queue it on the next gesture (playSoundRobust does) — a hover cue that fires
+// on the following click is worse than silence.
+function _playMenuSfx(key, volume = 1) {
+    const a = _menuSfx[key];
+    if (!a) return;
+    try {
+        a.volume = volume;
+        a.currentTime = 0;
+        a.play().catch(() => {});
+    } catch (_) {}
+}
+
 // Initialize game
 function init() {
     _prefetchEntranceSound();   // FIRST: warm the entrance sound so it's ready at login
+    _menuSfxLoad();             // pill hover/click + boot-finish cues
     setMobileClass(); // set body.is-mobile before anything renders
     loadAssets();
     // Race track (6 MB PNG + pixel classification) is deliberately NOT loaded
@@ -6799,28 +6843,55 @@ function initMobileControls() {
     setupDpadBtn('race-btn-bwd',  'backward');
 
     // ── Mobile boss-fight buttons ─────────────────────────────────────
-    const setupBossBtn = (id, key, isJump) => {
-        const btn = document.getElementById(id);
-        if (!btn) return;
-        const setPressed = (val) => {
-            gameState.laptopBossButtons[key] = val;
-            btn.classList.toggle('pressed', val);
-            if (isJump && val) {
-                // edge-trigger for variable jump height
-                gameState.laptopBossButtons.jumpPressed = true;
-            }
-        };
-        btn.addEventListener('touchstart', (e) => { e.preventDefault(); setPressed(true); if (navigator.vibrate) navigator.vibrate(14); }, { passive: false });
-        btn.addEventListener('touchend',   (e) => { e.preventDefault(); setPressed(false); }, { passive: false });
-        btn.addEventListener('touchcancel',()=> setPressed(false));
-        // Also mouse for desktop testing
-        btn.addEventListener('mousedown',  (e) => { e.preventDefault(); setPressed(true); });
-        btn.addEventListener('mouseup',    (e) => { e.preventDefault(); setPressed(false); });
-        btn.addEventListener('mouseleave', () => setPressed(false));
+    // Tracked on `window` and hit-tested against padded rects on every touch event,
+    // NOT with per-button touchstart/touchend. A touch belongs to the element it
+    // STARTED on for its whole life, so with per-button handlers sliding a thumb
+    // from يسار onto يمين kept holding يسار and never pressed يمين — every direction
+    // change needed a lift-and-retap, and a jump mid-slide was impossible. That is
+    // most of why the fight was unplayable on a phone.
+    const BOSS_BTN_IDS = { left: 'boss-btn-left', right: 'boss-btn-right', jump: 'boss-btn-jump' };
+    const BOSS_BTN_PAD = 16;   // px of forgiveness around each painted circle
+
+    const bossBtnHit = (touch, el) => {
+        const r = el.getBoundingClientRect();
+        return touch.clientX >= r.left - BOSS_BTN_PAD && touch.clientX <= r.right + BOSS_BTN_PAD
+            && touch.clientY >= r.top  - BOSS_BTN_PAD && touch.clientY <= r.bottom + BOSS_BTN_PAD;
     };
-    setupBossBtn('boss-btn-left',  'left');
-    setupBossBtn('boss-btn-right', 'right');
-    setupBossBtn('boss-btn-jump',  'jump', true);
+
+    const bossSyncTouches = (e) => {
+        const dpad = document.getElementById('mobile-boss-btns');
+        if (!gameState.laptopBoss.active || !dpad || dpad.classList.contains('hidden')) return;
+
+        const btns = gameState.laptopBossButtons;
+        const next = { left: false, right: false, jump: false };
+        for (const touch of e.touches) {
+            for (const [key, id] of Object.entries(BOSS_BTN_IDS)) {
+                const el = document.getElementById(id);
+                if (el && bossBtnHit(touch, el)) next[key] = true;
+            }
+        }
+
+        // Only swallow the gesture when it's actually on the pad — the results/exit
+        // buttons are drawn into the canvas and are tapped through the normal
+        // handler, which needs its synthesized click.
+        const owned = next.left || next.right || next.jump
+                   || btns.left || btns.right || btns.jump;
+        if (owned && e.cancelable) e.preventDefault();
+
+        if (next.jump && !btns.jump) {
+            btns.jumpPressed = true;                      // rising edge only
+            if (navigator.vibrate) navigator.vibrate(14);
+        }
+        for (const [key, id] of Object.entries(BOSS_BTN_IDS)) {
+            btns[key] = next[key];
+            document.getElementById(id)?.classList.toggle('pressed', next[key]);
+        }
+    };
+
+    window.addEventListener('touchstart',  bossSyncTouches, { passive: false });
+    window.addEventListener('touchmove',   bossSyncTouches, { passive: false });
+    window.addEventListener('touchend',    bossSyncTouches, { passive: false });
+    window.addEventListener('touchcancel', bossSyncTouches, { passive: false });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -6950,8 +7021,8 @@ function listenToRace() {
             if (gameState.race.teleportAnim) {
                 gameState.race.teleportAnim.pendingSession = gameState.race.teleportAnim.pendingSession || mySession;
             } else if (!gameState.race.active) {
-                startMinigameLoadFade('race', myKey);
-                startLocalRace(mySession);
+                // The race only starts once the fade is fully black — see startMinigameLoadFade.
+                startMinigameLoadFade('race', myKey, () => startLocalRace(mySession));
             }
         } else if (mySession.phase === 'finished') {
             gameState.race.active = true;
@@ -9457,8 +9528,8 @@ function listenToCoffee() {
             if (gameState.coffee.teleportAnim) {
                 gameState.coffee.teleportAnim.pendingSession = gameState.coffee.teleportAnim.pendingSession || mySession;
             } else if (!gameState.coffee.active) {
-                startMinigameLoadFade('coffee', myKey);
-                startLocalCoffee(mySession);
+                // Starts only once the fade is fully black — see startMinigameLoadFade.
+                startMinigameLoadFade('coffee', myKey, () => startLocalCoffee(mySession));
             }
             // Host: watch for all-ready → set startTime
             if (mySession.hostId === gameState.userId && mySession.startTime === 0) {
@@ -10819,9 +10890,24 @@ function createRaceFromParticipants() {
 // one stuck client can't soft-lock everyone), then a fade back in.
 const MINIGAME_LOAD_FADE_OUT = 0.25, MINIGAME_LOAD_FADE_IN = 0.35;
 const MINIGAME_LOAD_MIN_WAIT_MS = 1000, MINIGAME_LOAD_MAX_WAIT_MS = 8000;
-function startMinigameLoadFade(type, sessionKey) {
-    if (gameState.minigameLoadFade && gameState.minigameLoadFade.sessionKey === sessionKey) return;
-    gameState.minigameLoadFade = { type, sessionKey, t: 0, phase: 'out', alpha: 0, readyWritten: false, waitStart: 0 };
+// `onBlack` runs at the exact frame the screen reaches full black, and is what
+// swaps the world out for the minigame. It is NOT optional sugar: the callers used
+// to start the minigame immediately, next to this call, so the track/bowl began
+// rendering while the fade was still at alpha ~0 and you saw a flash of the
+// minigame before the black. The order must always be fade out → switch → fade in.
+function startMinigameLoadFade(type, sessionKey, onBlack) {
+    const lf = gameState.minigameLoadFade;
+    if (lf && lf.sessionKey === sessionKey) {
+        // Same transition, fresher session snapshot (the listener re-fires while we
+        // fade). Keep the newest starter — but only while one is still pending, so
+        // a callback that already ran can't run twice.
+        if (lf.phase === 'out' && lf.onBlack && onBlack) lf.onBlack = onBlack;
+        return;
+    }
+    gameState.minigameLoadFade = {
+        type, sessionKey, t: 0, phase: 'out', alpha: 0,
+        readyWritten: false, waitStart: 0, onBlack: onBlack || null,
+    };
 }
 function updateMinigameLoadFade() {
     const lf = gameState.minigameLoadFade;
@@ -10829,7 +10915,14 @@ function updateMinigameLoadFade() {
     lf.t += gameState.dtFactor / 60;
     if (lf.phase === 'out') {
         lf.alpha = Math.min(1, lf.t / MINIGAME_LOAD_FADE_OUT);
-        if (lf.t >= MINIGAME_LOAD_FADE_OUT) { lf.phase = 'wait'; lf.waitStart = Date.now(); }
+        if (lf.t >= MINIGAME_LOAD_FADE_OUT) {
+            lf.phase = 'wait';
+            lf.waitStart = Date.now();
+            // Fully black — swap into the minigame now, with nothing visible.
+            const onBlack = lf.onBlack;
+            lf.onBlack = null;
+            if (onBlack) { try { onBlack(); } catch (e) { console.log('minigame start failed:', e); } }
+        }
     } else if (lf.phase === 'wait') {
         lf.alpha = 1;
         if (!lf.readyWritten) {
@@ -18793,6 +18886,10 @@ function setupBossKeyHandlers() {
         if (!gameState.laptopBoss.active) return;
         if (e.code === 'Space' || e.code === 'ArrowUp' || e.code === 'KeyW') {
             e.preventDefault();
+            // `e.repeat` guard: held keys auto-repeat ~30×/sec, and each repeat would
+            // re-arm the jump buffer — so holding the key would re-jump the instant
+            // the player touched down, forever.
+            if (e.repeat) return;
             gameState.laptopBossButtons.jump = true;
             gameState.laptopBossButtons.jumpPressed = true;
         }
@@ -18820,6 +18917,8 @@ function showMobileBossButtons(show) {
         gameState.laptopBossButtons.right = false;
         gameState.laptopBossButtons.jump = false;
         gameState.laptopBossButtons.jumpPressed = false;
+        gameState.laptopBossButtons.jumpBufferT = 0;
+        document.querySelectorAll('.boss-btn.pressed').forEach(b => b.classList.remove('pressed'));
     }
 }
 
@@ -18867,14 +18966,28 @@ function returnFromLaptopBoss(clearState) {
 
 // ─── Boss game tick ───────────────────────────────────────────────────────────
 
-const BOSS_GRAVITY = 0.6;                 // per-frame at 60fps; multiplied by dtFactor
-const BOSS_JUMP_VEL = -15.5;             // initial jump velocity
-const BOSS_JUMP_HOLD_BOOST = -0.62;      // extra upward accel while holding jump
-const BOSS_JUMP_HOLD_MAX = 12;           // frames of hold boost
+// Jump tuning. The old numbers were floaty because the hold boost (-0.62) almost
+// exactly cancelled gravity (0.6): holding jump left a NET accel of -0.02, so the
+// player coasted upward at a near-constant 15.5px/frame for 12 frames before
+// gravity took over — a hang in mid-air, not an arc. These keep the jump's HEIGHT
+// (~365px full, ~220px short-hop — the boss's hitbox is tuned against it) but cut
+// the airtime from ~1.25s to ~0.9s: a stronger kick off the ground, real
+// deceleration during the hold, and a heavier fall than rise (the standard
+// platformer asymmetry — a floaty descent is what actually reads as "floaty").
+const BOSS_GRAVITY = 0.95;                // per-frame at 60fps; multiplied by dtFactor
+const BOSS_JUMP_VEL = -20.5;             // initial jump velocity
+const BOSS_JUMP_HOLD_BOOST = -0.55;      // extra upward accel while holding jump (net 0.40 up)
+const BOSS_JUMP_HOLD_MAX = 14;           // frames of hold boost
+const BOSS_FALL_GRAVITY_MULT = 1.3;      // descent is heavier than the rise
+const BOSS_VY_MAX = 22;                  // terminal fall speed
 const BOSS_MOVE_ACCEL = 2.2;
 const BOSS_MOVE_MAX = 7.5;
 const BOSS_MOVE_FRICTION = 0.80;
 const BOSS_COYOTE_MAX = 8;
+// Frames a jump press stays live waiting for the ground. Without it, a press
+// landing a frame or two before touchdown was silently eaten — on a phone (where
+// you can't feel the landing) that read as "the button didn't work".
+const BOSS_JUMP_BUFFER = 8;
 
 function bossSpawnParticles(local, x, y, count, opts = {}) {
     const color = opts.color || 'rgba(220,180,255,0.9)';
@@ -18952,19 +19065,24 @@ function updateLaptopBoss() {
         if (player.onGround) player.coyoteT = BOSS_COYOTE_MAX;
         else player.coyoteT = Math.max(0, player.coyoteT - dt);
 
-        // Jump
-        if (gameState.laptopBossButtons.jumpPressed && (player.onGround || player.coyoteT > 0)) {
+        // Jump. A press opens a short buffer rather than being tested against the
+        // ground on the one frame it arrived (see BOSS_JUMP_BUFFER).
+        const btns = gameState.laptopBossButtons;
+        if (btns.jumpPressed) { btns.jumpBufferT = BOSS_JUMP_BUFFER; btns.jumpPressed = false; }
+        if (btns.jumpBufferT > 0 && (player.onGround || player.coyoteT > 0)) {
             player.vy = BOSS_JUMP_VEL;
             player.onGround = false;
             player.jumping = true;
             player.jumpHoldT = BOSS_JUMP_HOLD_MAX;
             player.coyoteT = 0;
+            btns.jumpBufferT = 0;
             // Squash for jump anim
             player.squashT = 0.5;
             // Tiny dust
             bossSpawnParticles(local, player.x, player.y + player.h / 2, 4, { color: 'rgba(160,160,180,0.6)', speed: 1.5, life: 18, size: 3 });
+        } else {
+            btns.jumpBufferT = Math.max(0, (btns.jumpBufferT || 0) - dt);
         }
-        gameState.laptopBossButtons.jumpPressed = false; // consume edge
 
         // Variable jump height
         if (player.jumping && jumpHeld && player.jumpHoldT > 0 && player.vy < 0) {
@@ -18975,9 +19093,9 @@ function updateLaptopBoss() {
             player.jumpHoldT = 0;
         }
 
-        // Gravity
-        player.vy += BOSS_GRAVITY * dt;
-        player.vy = Math.min(18, player.vy);
+        // Gravity — heavier on the way down than on the way up.
+        player.vy += BOSS_GRAVITY * (player.vy > 0 ? BOSS_FALL_GRAVITY_MULT : 1) * dt;
+        player.vy = Math.min(BOSS_VY_MAX, player.vy);
 
         // Integrate
         player.x += player.vx * dt;
@@ -22623,7 +22741,13 @@ function endReadingSession(manual) {
     if (!gameState.reading.active) return;
 
     const r = gameState.reading;
-    const sessionMs = serverNow() - r.startTime;
+    // CLAMP, don't trust the wall clock. The natural end fires from
+    // updateReadingSession, which runs on rAF — a backgrounded tab throttles that to
+    // a stop, so the session ends whenever the user comes BACK, and a raw
+    // `serverNow() - startTime` banked the entire away period (start a 25-min
+    // session, background the tab for five hours, come back to +5h of reading).
+    // The session can never legitimately be worth more than its own duration.
+    const sessionMs = Math.max(0, Math.min(serverNow() - r.startTime, r.durationMs));
 
     // Save to Firebase
     const slug = _readingSlug(r.bookName);
@@ -22798,11 +22922,40 @@ function drawBooksLibraryPrompt() {
     ctx.restore();
 }
 
+// The `name`/`avatar` on a leaderboard row are a SNAPSHOT — written only when that
+// user finishes a reading session — so anyone who changes their Discord avatar keeps
+// showing the old one to everyone else until their next session ends. `users/{uid}`
+// is the live copy (every login refreshes it from Discord), so resolve from there
+// instead. One-shot `get()`s, never a listener, memoised for the session (same rule
+// as the fireplace avatars) — and skipped entirely for anyone already online, whose
+// player entity is fresher than any read.
+const _readingProfiles = {};
+function _readingProfileFor(entry) {
+    const live = gameState.players[entry.uid];
+    const cached = _readingProfiles[entry.uid];
+    return {
+        avatar: live?.avatar   || cached?.avatar   || entry.avatar || '',
+        name:   live?.username || cached?.username || entry.name   || 'قارئ',
+    };
+}
+
+function _refreshReadingProfiles(arr) {
+    const need = arr.filter(e => !gameState.players[e.uid] && !_readingProfiles[e.uid]);
+    if (!need.length) return;
+    Promise.all(need.map(e =>
+        Promise.all([
+            get(ref(database, `users/${e.uid}/avatar`)),
+            get(ref(database, `users/${e.uid}/username`)),
+        ]).then(([av, un]) => {
+            _readingProfiles[e.uid] = { avatar: av.val() || '', username: un.val() || '' };
+        }).catch(() => { _readingProfiles[e.uid] = {}; })
+    )).then(() => renderReadingLeaderboard());
+}
+
 function fetchReadingLeaderboard() {
     const lbRef = ref(database, lobbyPath('readingLeaderboard'));
     get(lbRef).then(snap => {
-        if (!snap.exists()) return;
-        const data = snap.val();
+        const data = snap.exists() ? snap.val() : {};
         const arr = [];
         for (const [uid, p] of Object.entries(data)) {
             // Siraj test ghosts never compete — they don't write here any more, but
@@ -22813,6 +22966,7 @@ function fetchReadingLeaderboard() {
         arr.sort((a, b) => b.totalMs - a.totalMs);
         gameState.reading.leaderboardData = arr;
         renderReadingLeaderboard();
+        _refreshReadingProfiles(arr);
     }).catch(() => {});
 }
 
@@ -22840,11 +22994,12 @@ function renderReadingLeaderboard() {
         if (totalHrs > 0) timeStr += `${totalHrs} س `;
         if (totalMins > 0 || totalHrs === 0) timeStr += `${totalMins} د`;
 
+        const prof = _readingProfileFor(entry);
         row.innerHTML = `
             <div class="reading-lb-rank">${i + 1}</div>
-            <div class="reading-lb-avatar" style="background-image: url('${entry.avatar || 'placeholder.png'}')"></div>
+            <div class="reading-lb-avatar" style="background-image: url('${prof.avatar || 'placeholder.png'}')"></div>
             <div class="reading-lb-info">
-                <div class="reading-lb-name">${_bkEsc(entry.name || 'قارئ')}</div>
+                <div class="reading-lb-name">${_bkEsc(prof.name)}</div>
                 <div class="reading-lb-time">${timeStr}</div>
             </div>
         `;
