@@ -23654,6 +23654,7 @@ const _lemo = {
     wakePending: false,
     idleUntil: 0,
     spot: null,
+    prevSpot: null,                // the spot he was at before `spot` — see _lemoStartWalk
     walk: null,
     face: 1,                      // 1 = facing right (the art's default), -1 = mirrored
     sheets: {},
@@ -23707,11 +23708,18 @@ function _lemoStartWalk() {
     // pocket of the room. Sort by distance, take the closest 2, then roll between
     // those — close enough to always read as "he went to the nearby spot" while
     // the coin flip keeps him from a permanent back-and-forth.
-    const cands = LEMO_SPOTS.filter(s => s !== _lemo.spot)    // never re-pick the spot he's on
-        .sort((a, b) => ((a.x - _lemo.x) ** 2 + (a.y - _lemo.y) ** 2)
-                       - ((b.x - _lemo.x) ** 2 + (b.y - _lemo.y) ** 2));
+    //
+    // That alone still allowed a tight A → B → A loop (nothing stopped B's
+    // closest-2 from including A right back), so the spot he was at immediately
+    // before the current one is excluded too, not just the current one.
+    const excl = new Set([_lemo.spot, _lemo.prevSpot].filter(Boolean));
+    let cands = LEMO_SPOTS.filter(s => !excl.has(s));
+    if (!cands.length) cands = LEMO_SPOTS.filter(s => s !== _lemo.spot);  // too few spots to exclude both
+    cands.sort((a, b) => ((a.x - _lemo.x) ** 2 + (a.y - _lemo.y) ** 2)
+                        - ((b.x - _lemo.x) ** 2 + (b.y - _lemo.y) ** 2));
     const pool = cands.slice(0, Math.min(2, cands.length));
     const spot = pool[Math.floor(Math.random() * pool.length)];
+    _lemo.prevSpot = _lemo.spot;
     _lemo.spot = spot;
     _lemo.walk = { sx: _lemo.x, sy: _lemo.y, tx: spot.x, ty: spot.y };
     // The walk art faces RIGHT, so a leftward trip mirrors him on the spot; he
