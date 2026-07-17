@@ -17,6 +17,14 @@ function isMobile() {
     return false;
 }
 
+// ─── Minigames master switch ─────────────────────────────────────────────────
+// Minigame ENTRY is temporarily off (the old break-room zones died with the old
+// art — see CLAUDE.md). While it's off, don't pay their standby costs for every
+// user: the 3 session listeners (race/coffee/laptop-boss) and the idle race-track
+// preload (6 MB download + a CPU-heavy pixel classification). Flip this back to
+// true when the games table gets wired as the new entry point.
+const MINIGAMES_ENABLED = false;
+
 // ─── Device-local settings keys (used before init() is called) ───────────────
 const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'high' | 'low' | 'potato'
 const SETTINGS_NAMES_KEY    = 'mdwnh_hide_names';        // '0' = show, '1' = hide
@@ -4126,17 +4134,30 @@ async function loadWorldArt() {
     // Walls are DILATED (the thin room-divider can't be tunneled through at sprint
     // speed); furniture and desks are ERODED (the thin legs/feet the tables draw
     // shouldn't collide — only the real body).
+    // The morphology is ~17 full passes over a 1.7M-px mask — run in one go it's a
+    // long synchronous block landing exactly when the boot hands off to the intro
+    // (a real stutter on weak phones). Yield to the event loop between steps so
+    // each frame only pays for one or two passes. Results are identical.
+    const _yield = () => new Promise(r => setTimeout(r, 0));
     const f1 = new Uint8Array(MASK_W * MASK_H);
     _orMask(f1, _dilate(M.walls, 3));
+    await _yield();
     _orMask(f1, _erode(M.furn, 3));
+    await _yield();
     _orMask(f1, M.fire);
     _fillMaskRectSrc(f1, STAIR_GHOST_PX0, STAIR_GHOST_PY0, STAIR_GHOST_PX1, STAIR_GHOST_PY1); // stair dead-zone ghost collider
     _fillMaskRectSrc(f1, GROUND_TABLE_GHOST_PX0, GROUND_TABLE_GHOST_PY0, GROUND_TABLE_GHOST_PX1, GROUND_TABLE_GHOST_PY1); // ground laptop desk collider
     worldCollision.floor1 = f1;
     worldCollision.floor2desks = _erode(M.desks, 3);
+    await _yield();
     // Stair footprint, DILATED generously so the walkable ramp is wide + forgiving
     // (a tight mask made you stick/oscillate on the edges while climbing).
-    worldCollision.stairs = _dilate(M.stairs, 8);
+    let _st = M.stairs;
+    for (let i = 0; i < 8; i++) {
+        _st = _morph(_st, true);
+        if (i % 2 === 1) await _yield();
+    }
+    worldCollision.stairs = _st;
     worldCollision.built = true;
 
     // The world is fully decoded, masked and composited — this is the real
@@ -4845,9 +4866,13 @@ function startGame(userData) {
     listenToPlayers();
     ensurePresenceSocket();   // open the live-position WebSocket relay
     listenToPomodoro();
-    listenToRace();
-    listenToCoffee();
-    listenToLaptopBoss();
+    if (MINIGAMES_ENABLED) {
+        // Entry is off → nobody can create a session → these listeners would only
+        // stream a node that never changes to every client. Skip them entirely.
+        listenToRace();
+        listenToCoffee();
+        listenToLaptopBoss();
+    }
     initSharedPomo();
     setupPomoLeaveBtn();
     setupFreeModeUI();
@@ -5137,10 +5162,16 @@ function startGame(userData) {
         // Hats are tiny, but the manifest read is a network hop — keep it off the
         // spawn path. Nothing waits on it: a hat draws the moment its asset lands.
         loadHatManifest().catch(() => {});
-        if (window.requestIdleCallback) {
-            requestIdleCallback(() => loadRaceTrackAsset(), { timeout: 15000 });
-        } else {
-            setTimeout(loadRaceTrackAsset, 6000);
+        // Race-track preload only while minigames are reachable — the 6 MB PNG +
+        // its full-image getImageData/classification is a big main-thread spike
+        // right around the intro, wasted while entry is off. The race-entry paths
+        // still call loadRaceTrackAsset() themselves, so nothing breaks on re-enable.
+        if (MINIGAMES_ENABLED) {
+            if (window.requestIdleCallback) {
+                requestIdleCallback(() => loadRaceTrackAsset(), { timeout: 15000 });
+            } else {
+                setTimeout(loadRaceTrackAsset, 6000);
+            }
         }
     });
 
@@ -8228,6 +8259,20 @@ function updateInteractions() {
         if (best) gameState.activeGameZone = { ...best, locked: !isBreakActive() };
     }
 
+    // Minigame zone scans — 3 × Object.values().filter per frame during breaks,
+    // for entry points that are currently unreachable. Skipped while disabled.
+    if (!MINIGAMES_ENABLED) {
+        gameState.raceZonePlayers = [];
+        gameState.coffeeZonePlayers = [];
+        gameState.laptopBossZonePlayers = [];
+        gameState.activeRaceZone = false;
+        gameState.activeRaceButton = false;
+        gameState.activeCoffeeZone = false;
+        gameState.activeLaptopBossZone = false;
+        _updateFocusMaskAlpha(nearestDist);
+        return;
+    }
+
     const prevZonePlayers = gameState.raceZonePlayers || [];
     gameState.raceZonePlayers = isBreakActive() ? Object.values(gameState.players).filter(p => {
         if (!(p.x >= RACE_ZONE_RECT.x && p.x <= RACE_ZONE_RECT.x + RACE_ZONE_RECT.w &&
@@ -8307,6 +8352,12 @@ function updateInteractions() {
         gameState.activeLaptopBossZone = false;
     }
 
+    _updateFocusMaskAlpha(nearestDist);
+}
+
+// Tail of updateInteractions (the focus-mask darkening lerp) — split out so the
+// minigames-disabled early return above still runs it.
+function _updateFocusMaskAlpha(nearestDist) {
     const _sofaFocus = sofaFocusActive() || gameState.reading.active;
     const baseAlpha = (gameState.isLockedIn || _sofaFocus) ? 0.475 : 0.4;
     let targetAlpha = 0;
@@ -8389,6 +8440,9 @@ function updateAnimation() {
             gameState.anim.active = false;
             gameState.anim.phase = 'none';
             gameState.isLockedIn = true;
+            // Final authoritative Firebase write at the seat (the per-frame sync
+            // below is throttled now — this pins the exact resting position).
+            updatePlayerPosition(player.x, player.y);
 
             // Reset coop offsets to center so the grid spread animates outward smoothly
             if (gameState.sharedPomo.phase === 'active') {
@@ -8409,8 +8463,19 @@ function updateAnimation() {
     }
 
     syncEntityRenderToTarget(player);
-    // Sync position continuously during animation to prevent snapping for other clients
-    updatePlayerPosition(player.x, player.y);
+    // Sync position continuously during the animation so others see the drag —
+    // but over the WebSocket relay (internally throttled to ~11/sec), NOT a
+    // Firebase write per frame. The old per-frame updatePlayerPosition() here was
+    // a ~20-field Firebase update at 60/sec for the whole kidnap (~150 writes
+    // fanning out to every client) and a main-thread spike on weak devices right
+    // as a work session opens. Firebase still gets a slow authoritative fallback
+    // (covers relay-down observers), plus the exact seat write on completion above.
+    sendPositionWS(player.x, player.y);
+    const _kn = Date.now();
+    if (!gameState.anim._lastFbSync || _kn - gameState.anim._lastFbSync > 450) {
+        gameState.anim._lastFbSync = _kn;
+        updatePlayerPosition(player.x, player.y);
+    }
 }
 
 function spawnDust(x, y, amount, isDragging = false) {
@@ -8488,7 +8553,16 @@ function updatePlayerBobbing() {
             if (isLocal) {
                 if (Math.floor(player.bobTime / Math.PI) > Math.floor(lastBobTime / Math.PI)) {
                     if (gameState.sounds.walk) {
-                        const walkSound = gameState.sounds.walk.cloneNode();
+                        // Reuse a small pool of audio elements instead of cloneNode()
+                        // per footstep — the clones were a fresh HTMLAudioElement
+                        // allocation (plus GC churn) several times a second while walking.
+                        let pool = gameState._walkPool;
+                        if (!pool) {
+                            pool = gameState._walkPool = { els: [], i: 0 };
+                            for (let k = 0; k < 3; k++) pool.els.push(gameState.sounds.walk.cloneNode());
+                        }
+                        const walkSound = pool.els[pool.i = (pool.i + 1) % pool.els.length];
+                        try { walkSound.currentTime = 0; } catch (_) {}
                         walkSound.volume = player.isSprinting ? 0.6 : 0.3;
                         walkSound.play().catch(e => {});
                     }
@@ -8559,9 +8633,10 @@ function gameLoop(timestamp) {
         gameState._hideNames = getHideNames();
         gameState._particlesOn = particlesEnabled();
         gameState._overlaysOn  = overlaysEnabled();
+        gameState._isMobile    = isMobile();   // cached for hot draw code (touches window/screen)
     }
     // On mobile, cap dtFactor more aggressively to reduce stutters from dropped frames
-    if (isMobile() && gameState.dtFactor > 2) gameState.dtFactor = 2;
+    if (gameState._isMobile && gameState.dtFactor > 2) gameState.dtFactor = 2;
 
     // Position heartbeat: while locked in / in a session the player doesn't move, so
     // updatePlayerPosition isn't being called — re-assert the authoritative position
@@ -8705,6 +8780,15 @@ function render() {
     const canvas = gameState.canvas;
     if (!ctx) return;
 
+    // The canvas is display:none under the full-screen overlays (azkar everywhere;
+    // prayer/dashboard/customization/fireplace on mobile) — drawing the whole world
+    // into a hidden canvas still costs full CPU/GPU time per frame. Skip the world
+    // pass entirely; the DOM panel toggles at the bottom still run every frame.
+    const _canvasHidden = gameState.azkar.active ||
+        (gameState._isMobile && (gameState.prayer.isOverlayActive
+            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen()));
+    if (_canvasHidden) { _renderPanelToggles(); return; }
+
     const dpr = gameState.dpr || 1;
     const W = canvas.width  / dpr;  // logical (CSS-pixel) viewport width
     const H = canvas.height / dpr;  // logical (CSS-pixel) viewport height
@@ -8790,13 +8874,19 @@ function render() {
 
     ctx.restore();  // undo DPR scale
 
-    const ytBlock = document.getElementById('yt-focus-block');
+    _renderPanelToggles();
+}
+
+// DOM panel visibility that render() drives every frame — split out so the
+// hidden-canvas early return above can keep running it without the world pass.
+function _renderPanelToggles() {
+    const ytBlock = gameState._ytBlockEl || (gameState._ytBlockEl = document.getElementById('yt-focus-block'));
     if (ytBlock) {
         const shouldShow = sofaFocusActive() || (gameState.pomodoro.active && gameState.pomodoro.phase === 'work')
             || (gameState.freeMode.active && gameState.freeMode.phase === 'work');
         ytBlock.classList.toggle('visible', shouldShow);
     }
-    const prayerPanel = document.getElementById('prayer-panel');
+    const prayerPanel = gameState._prayerPanelEl || (gameState._prayerPanelEl = document.getElementById('prayer-panel'));
     if (prayerPanel) {
         // Only reveal once the kidnap animation has finished (anim inactive), so prayer
         // appears together with focus sounds / task box / YouTube — not the moment the
@@ -12009,7 +12099,7 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
 
         // Local-player ambient glow — a gentle breathing halo so "you" stand out.
         // Desktop only (radial gradient per avatar is the costly bit); skipped on mobile.
-        if (isCurrentUser && !isMobile() && tpFadeOut < 0.5) {
+        if (isCurrentUser && !gameState._isMobile && tpFadeOut < 0.5) {
             const gt = Date.now() * 0.0018;
             const glowPulse = 0.5 + 0.5 * Math.sin(gt);
             const gr = PLAYER_SIZE / 2 + 10 + glowPulse * 6;
@@ -15754,26 +15844,45 @@ function updateCoopTaskPanel() {
     const shouldShow = sp.phase === 'active' && sp.activeGroupMembers.length > 1
         && gameState.pomodoro.active && gameState.pomodoro.phase === 'work';
 
-    if (!shouldShow) { panel.classList.add('hidden'); return; }
+    if (!shouldShow) { panel.classList.add('hidden'); sp._coopPanelKey = null; return; }
     panel.classList.remove('hidden');
 
     const remaining = Math.max(0, gameState.pomodoro.endTime - Date.now());
     const mm = String(Math.floor(remaining / 60000)).padStart(2, '0');
     const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
+    const timeStr = `${mm}:${ss}`;
 
-    let html = `<div class="sp-coop-timer">${mm}:${ss}</div>`;
+    // Rebuild the member rows only when they actually change — this used to
+    // re-assign panel.innerHTML (avatars included) EVERY frame, re-creating the
+    // <img> elements 60×/sec for the entire coop work phase.
+    let rowsKey = '';
     for (const uid of sp.activeGroupMembers) {
         const player = gameState.players[uid];
         if (!player) continue;
-        const av = player.avatar ? `<img src="${player.avatar}" alt="">` : (player.username||'?').charAt(0).toUpperCase();
-        // Only show task text for the current user — others' tasks are private
-        const taskText = uid === gameState.userId ? (player.currentTask || '…') : '…';
-        html += `<div class="sp-coop-row">
-            <div class="sp-coop-av">${av}</div>
-            <span class="sp-coop-task">${taskText}</span>
-        </div>`;
+        rowsKey += `${uid}|${player.avatar || ''}|${uid === gameState.userId ? (player.currentTask || '') : ''};`;
     }
-    panel.innerHTML = html;
+    if (rowsKey !== sp._coopPanelKey) {
+        sp._coopPanelKey = rowsKey;
+        let html = `<div class="sp-coop-timer">${timeStr}</div>`;
+        for (const uid of sp.activeGroupMembers) {
+            const player = gameState.players[uid];
+            if (!player) continue;
+            const av = player.avatar ? `<img src="${player.avatar}" alt="">` : (player.username||'?').charAt(0).toUpperCase();
+            // Only show task text for the current user — others' tasks are private
+            const taskText = uid === gameState.userId ? (player.currentTask || '…') : '…';
+            html += `<div class="sp-coop-row">
+                <div class="sp-coop-av">${av}</div>
+                <span class="sp-coop-task">${taskText}</span>
+            </div>`;
+        }
+        panel.innerHTML = html;
+        sp._coopPanelTimerEl = panel.querySelector('.sp-coop-timer');
+        sp._coopPanelTimeStr = timeStr;
+    } else if (sp._coopPanelTimeStr !== timeStr && sp._coopPanelTimerEl) {
+        // Same members → touch only the timer's text node, and only on a new second.
+        sp._coopPanelTimeStr = timeStr;
+        sp._coopPanelTimerEl.textContent = timeStr;
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -16466,6 +16575,10 @@ function showPrayerOverlayDOM(prayerKey, arabicName) {
 
     // Remove display:none, then next frame fade in
     overlay.classList.remove('hidden');
+    // Mobile: hide the game canvas under the (opaque) overlay — same rule as
+    // azkar/dashboard. The 60fps world render otherwise fights the overlay's own
+    // gradients + rain canvas for the GPU on weak phones.
+    document.body.classList.add('prayer-active');
     requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add('active')));
 
     // Icon — normalize key capitalisation (handles 'dhuhr' from test mode as well as 'Dhuhr')
@@ -16617,7 +16730,9 @@ function dismissPrayerOverlay() {
         }
     }
 
-    // Fade out overlay, then fully hide and stop rain
+    // Fade out overlay, then fully hide and stop rain. The canvas comes back
+    // right away so the world is visible through the fade.
+    document.body.classList.remove('prayer-active');
     const _ov = document.getElementById('prayer-overlay');
     if (_ov) {
         _ov.classList.remove('active');
@@ -21945,6 +22060,12 @@ function updateReadingSession() {
         const secs = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
         const timeStr = `${mins}:${secs}`;
 
+        // The displayed values only change once a second — skip the per-frame DOM
+        // writes (innerText replaces the text node and re-lays-out even when the
+        // string is identical, 60×/sec for the whole session).
+        if (timeStr === r._lastPanelTimeStr) return;
+        r._lastPanelTimeStr = timeStr;
+
         const sessionMs = now - r.startTime;
         const totalStr = _formatReadingDuration(r.totalBookMs + sessionMs);
         const pct = Math.max(0, Math.min(100, (sessionMs / r.durationMs) * 100));
@@ -21973,6 +22094,7 @@ function _rdSlideIn(el) {
 function showReadingPanel() {
     const r = gameState.reading;
     r._panelVisible = true;
+    r._lastPanelTimeStr = null;   // force the first panel write of the new session
     const cover = bookCoverSVG(r.bookStyle, r.bookName);
     const durStr = _formatReadingDuration(r.durationMs);
 
@@ -22368,15 +22490,22 @@ async function loadHatManifest(force) {
 function _cropHatImage(img) {
     const w = img.naturalWidth, h = img.naturalHeight;
     try {
+        // Find the bbox on a SMALL proxy (≤128px), not the full 1000×1000 source —
+        // the full-res alpha scan was ~4M array reads per hat, and with every hat
+        // decoding at once it was the visible freeze when the customization menu
+        // opened. The proxy bbox is scaled back up with a safety pad; the actual
+        // crop still copies from the full-res image, so quality is untouched.
+        const scale = Math.min(1, 128 / Math.max(w, h));
+        const sw = Math.max(1, Math.round(w * scale)), sh = Math.max(1, Math.round(h * scale));
         const c = document.createElement('canvas');
-        c.width = w; c.height = h;
+        c.width = sw; c.height = sh;
         const cx = c.getContext('2d', { willReadFrequently: true });
-        cx.drawImage(img, 0, 0);
-        const data = cx.getImageData(0, 0, w, h).data;
-        let x0 = w, y0 = h, x1 = -1, y1 = -1;
-        for (let y = 0; y < h; y++) {
-            for (let x = 0; x < w; x++) {
-                if (data[(y * w + x) * 4 + 3] > 8) {
+        cx.drawImage(img, 0, 0, sw, sh);
+        const data = cx.getImageData(0, 0, sw, sh).data;
+        let x0 = sw, y0 = sh, x1 = -1, y1 = -1;
+        for (let y = 0; y < sh; y++) {
+            for (let x = 0; x < sw; x++) {
+                if (data[(y * sw + x) * 4 + 3] > 8) {
                     if (x < x0) x0 = x;
                     if (x > x1) x1 = x;
                     if (y < y0) y0 = y;
@@ -22385,10 +22514,17 @@ function _cropHatImage(img) {
             }
         }
         if (x1 < x0 || y1 < y0) return null;
-        const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+        // Map proxy px → source px, padded by one proxy cell each side so soft
+        // anti-aliased edges the downscale blurred away are never cut off.
+        const inv = 1 / scale;
+        const fx0 = Math.max(0, Math.floor((x0 - 1) * inv));
+        const fy0 = Math.max(0, Math.floor((y0 - 1) * inv));
+        const fx1 = Math.min(w - 1, Math.ceil((x1 + 1) * inv));
+        const fy1 = Math.min(h - 1, Math.ceil((y1 + 1) * inv));
+        const cw = fx1 - fx0 + 1, ch = fy1 - fy0 + 1;
         const out = document.createElement('canvas');
         out.width = cw; out.height = ch;
-        out.getContext('2d').drawImage(img, x0, y0, cw, ch, 0, 0, cw, ch);
+        out.getContext('2d').drawImage(img, fx0, fy0, cw, ch, 0, 0, cw, ch);
         return out;
     } catch (e) { return null; }
 }
@@ -22405,8 +22541,19 @@ function ensureHatAsset(id) {
     img.onload = () => {
         entry.img = img;
         entry.canvas = _cropHatImage(img) || img;
-        entry.url = (entry.canvas.toDataURL ? entry.canvas.toDataURL('image/png') : hatUrl(id));
-        entry.ready = true;
+        // The preview URL used to come from a synchronous toDataURL('image/png') —
+        // a full PNG encode on the main thread, per hat, all in the same beat the
+        // picker opened. toBlob encodes off the critical path and hands back an
+        // object URL instead. `ready` only flips once the URL exists, so the
+        // picker/preview polling keeps working unchanged.
+        const done = (url) => { entry.url = url; entry.ready = true; };
+        if (entry.canvas.toBlob) {
+            entry.canvas.toBlob((blob) => {
+                done(blob ? URL.createObjectURL(blob) : hatUrl(id));
+            }, 'image/png');
+        } else {
+            done(entry.canvas.toDataURL ? entry.canvas.toDataURL('image/png') : hatUrl(id));
+        }
     };
     img.onerror = () => { entry.failed = true; };
     img.src = hatUrl(id);
@@ -23120,3 +23267,4 @@ function setupFireplaceUI() {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeFireplaceOverlay(); });
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && _fire.open) closeFireplaceOverlay(); });
 }
+

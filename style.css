@@ -3808,6 +3808,17 @@ body.game-ready #prayer-panel { display: flex !important; flex-direction: column
 /* Circle-gradient glows look stretched on portrait mobile — hide them */
 body.is-mobile .prayer-overlay-bg::after { display: none; }
 
+/* The overlay is opaque and full-screen — hide the 60fps game canvas under it on
+   mobile (same safeguard as azkar/dashboard/customization) so the world render
+   can't fight the overlay's gradients + rain canvas for the GPU. */
+body.is-mobile.prayer-active #game-canvas { display: none !important; }
+
+/* Full-screen animated filters/blurs repaint the whole viewport every frame —
+   the exact pattern that made azkar flicker on weak GPUs. On mobile the prayer
+   background + fog hold their (identical-looking) first keyframe instead. */
+body.is-mobile .prayer-overlay-bg { animation: none; }
+body.is-mobile .prayer-fog-layer { animation: none; }
+
 body.is-mobile .prayer-panel {
     position: relative !important;
     left: auto !important; bottom: auto !important;
