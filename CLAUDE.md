@@ -501,7 +501,22 @@ azkar: {
 `getRandomizeAzkar()` (off by default, `SETTINGS_AZKAR_RANDOM_KEY`) → `openAzkarOverlay` builds `az.items` via `_shuffledCopy(baseList)` (Fisher–Yates). Completion tracking is per-type (morning/evening), so shuffling never affects the done state.
 
 ### After-prayer azkar (أذكار بعد الصلاة)
-Opened from the **prayer overlay** via `#prayer-azkar-btn` → `openAzkarOverlay('morning', { afterPrayer: true })`. Uses the custom `AZKAR_AFTER_PRAYER` list, the morning (sky-blue) look (`overlay.dataset.mode = 'morning'`), and sits **on top** of the prayer overlay (`body.azkar-after-prayer .azkar-overlay { z-index: 10002 }` vs prayer's 10000). Crucially it does **not** freeze/resume the timer or fade YT/sounds itself (`afterPrayer` skips all of that in `openAzkarOverlay`) — the prayer overlay already owns that. On انتهيت, `closeAzkarOverlay` detects `afterPrayer`, fades the azkar overlay out, then calls `dismissPrayerOverlay()` which un-freezes the timer and fades focus sounds + YouTube back in → normal work session. `minLockMs = 0` for after-prayer (no forced wait).
+Opened from the **prayer overlay** via `#prayer-azkar-btn` → `openAzkarOverlay('morning', { afterPrayer: true })`. Uses the custom `AZKAR_AFTER_PRAYER` list and sits **on top** of the prayer overlay (`body.azkar-after-prayer .azkar-overlay { z-index: 10002 }` vs prayer's 10000). Crucially it does **not** freeze/resume the timer or fade YT/sounds itself (`afterPrayer` skips all of that in `openAzkarOverlay`) — the prayer overlay already owns that. On انتهيت, `closeAzkarOverlay` detects `afterPrayer`, fades the azkar overlay out, then calls `dismissPrayerOverlay()` which un-freezes the timer and fades focus sounds + YouTube back in → normal work session. `minLockMs = 0` for after-prayer (no forced wait).
+
+**It wears the salah's own sky.** `dataset.mode` stays `'morning'` (it still drives the
+layout), but `openAzkarOverlay` also copies the prayer key off `#prayer-overlay`'s
+`data-prayer` onto the azkar overlay — so Isha azkar is deep blue, Maghrib is sunset,
+and so on. It **deletes the attribute** for normal morning/evening azkar, or a stale key
+would repaint them. The CSS lives with the other azkar bg rules and every selector is
+prefixed **`body.azkar-after-prayer`** — without that prefix it ties `[data-mode="morning"]`
+on specificity and silently loses on source order. Glow strengths are dialled down from
+the prayer overlay's: this is a reading surface.
+
+**The focus-sounds panel is hidden outright during after-prayer azkar**
+(`body.azkar-after-prayer .focus-sounds-panel { display: none }`). `body.azkar-active` is
+on, so the compact-panel rules were lifting it to z-index 10001 — above the prayer overlay
+(10000) — and it flashed for the frames before the azkar overlay (10002) faded in over it.
+There's nothing to mix during salah.
 
 ### Key functions
 | Function | Purpose |
@@ -527,7 +542,8 @@ Opened from the **prayer overlay** via `#prayer-azkar-btn` → `openAzkarOverlay
 - Lock is CSS-only (`.unlocked` class) — button is **never** `disabled` attribute. On iOS, `button[disabled]` leaks touch events through to elements below. Use `classList.contains('unlocked')` check in click handler instead.
 
 ### Focus sounds during azkar
-- Desktop: panel shown in compact 2-column grid, sliders hidden, bg/border at 10% opacity, `z-index: 10001` (above overlay at 10000), `pointer-events: all`
+- Desktop: panel shown in compact 2-column grid, bg/border at 10% opacity, `z-index: 10001` (above overlay at 10000), `pointer-events: all`
+- **Per-sound volume in the compact panel**: the roomy panel's inline slider doesn't fit beside a name in a 2-column grid, so the same `<input type="range">` is re-positioned as the item's own **underline** — a hairline pinned to the item's bottom edge that fills with the level, and rendered **only on a sound that's active**. It's the same element and therefore the same handler + the same `focusMix` Firebase write; there is no second code path. Its thumb stays visible (a 3px bar has nothing to aim at otherwise), and on mobile the input's box grows to 18px for a usable touch target while `background-clip: content-box` keeps the painted bar 3px
 - Mobile: sounds panel hidden entirely (`display: none !important`)
 - Prayer overlay (z-index 10000) still covers sounds panel — azkar's elevated z-index only lifts it above the *azkar* overlay, not above prayer
 
@@ -614,6 +630,12 @@ write entirely, and `fetchReadingLeaderboard` also filters `uid.startsWith('sira
 read so any pre-existing ghost row stays hidden.
 
 ### Seat + camera
+The sit-down itself is `startSitAnimation`, so the hop is relayed and **every client
+sees the same sequence** you do (see **Player Position Sync → the sofa hop**). The book
+prop's `seated` test excludes a live `_sitAnim` on **both** sides — the seat's Firebase
+write lands as the hop starts, so without it the book slides out from under a player
+who's still mid-air.
+
 `startReadingSession` picks a **RANDOM free `SOFA2_SPOTS` seat, not the closest** (always
 landing on the same sofa made the room feel static), then `startSitAnimation`.
 
@@ -672,6 +694,32 @@ Positions are **fractions of `Fireplace.png`**, measured off the reference overl
 they hold at any screen size. **Middle = 1st place, right = 2nd, left = 3rd** (RTL
 podium). `setupFireplaceUI` builds the slot divs from `FIRE_SLOTS`, so the coordinates
 live in **one place** — tune them there, never in CSS.
+
+Under each frame sits a `.fp-slot-caption` column: name, then a `#N` rank chip
+(gold/silver/bronze via `.fp-slot-rank{1,2,3}`) and the member's `totalPoints`. It's a
+**stacked column below the slot box**, never inside it — the slot box IS the painted
+frame, so anything in flow would squash the photo out of it.
+
+### Enter / exit (fade + the slow shake)
+`display` can't transition, so the old `display:none` → `.active{display:flex;opacity:1}`
+snapped in. The overlay is now **always laid out** and enter/exit is `opacity` +
+`visibility` (visibility delayed by the fade on the way out), with `.active` applied
+after a **double rAF** — the same pattern the azkar/prayer overlays use. The art layers
+fade in **staggered back-to-front** (bg → stage → topcoat → frames) via
+`transition-delay`; the exit is deliberately un-staggered.
+
+`.fp-shake` wraps everything except the close button and runs `fpShake`, a **17s
+transform-only** drift + hair of rotation, scaled to `1.05` so the translate can't
+expose an edge. Transform-only → compositor-cheap, so it stays on at every graphics
+tier (it's off under `prefers-reduced-motion`).
+
+**No camera snap on enter/exit:** the game loop keeps running behind the overlay, so
+`_fireFreezeCamera()` pins `gameState.camera` on open and `updateCamera()` early-returns
+while `fireplaceHoldsCamera()` — the world you come back to is exactly the one you left.
+
+**Backdrop click**: `.fp-shake` now covers the whole overlay, so the old
+`e.target === overlay` test can never match. It asks
+`!e.target.closest('.fp-stage, .fp-close')` instead.
 
 ### The data join — TWO different Firebase projects
 This is the fiddly part. The two databases were never designed to line up:
@@ -790,6 +838,32 @@ and a rare detour, so it warms on idle, not at spawn.
   `shadowBlur` on reduced tiers, so it's free on mobile like every other world shadow.
 
 ---
+
+## Dismissing panels — the backdrop is a back button
+
+Every laptop/reading modal closes on a **backdrop click**, not just its رجوع button:
+`mode-select-modal`, `test-mode-modal`, `pomodoro-modal` (all in `setupModeSelectUI` /
+`setupPomodoroUI`), plus `reading-modal` and `reading-newbook-modal`, which already had
+it. The test is always `e.target === modal` — the click landed on the overlay itself,
+not the card.
+
+**The ghost-click guard has to cover the whole chain.** Every hop (world tap → mode
+select → pomo settings → back) starts as a touch whose synthesized `click` arrives
+~300ms later, and `juiceCloseThenOpen` only waits 230ms — so the *next* modal is
+already up with its backdrop sitting under that stray click. `openLaptopModal(id)`
+shows a modal **and** re-stamps `gameState._modeSelectOpenedAt`, so `modeSelectGhostClick()`
+keeps swallowing it at every hop. Use it instead of a bare `classList.add('active')`
+for anything in this chain.
+
+**Sofas: clicking anywhere off the couch stands you up** (`handleClickOffSofa`, wired
+into both the desktop click and mobile tap handlers right after the وقوف hit-test).
+وقوف is a shortcut, not the only exit. `_clickIsOnMySofa` decides what counts as "on
+the couch" — sofa1 is a vertical strip so its **X** is what matters (Y anywhere along
+the run); the sofa2 spots are discrete seats, so it's a radius around the whole row.
+It returns **true when it handled the click** so the caller stops: otherwise the same
+click falls through and instantly re-seats the player on the sofa they just left. It
+**never fires while reading** — the reading panel owns that exit and a stray click must
+not end a timed session.
 
 ## Shared Pomodoro (Coop) System
 
@@ -1045,6 +1119,7 @@ High-frequency walking used to write `x/y` to Firebase **every animation frame**
   2. **WebSocket starve → forward jump.** The relay is WS-over-TCP, so a "lost" packet is really a **delayed burst**. While starved the avatar extrapolates then clamps at the last sample; when the burst lands, interpolation places the render-time *between* the old clamp and the new sample and the avatar jumps forward to catch up. Happens **regardless of session/break**. **Fix:** the starve branch sets `entity._netStarved`; the next `pushNetSample` re-anchors at the CURRENT render position (same mechanism as resume-after-idle) so the glide continues smoothly with no jump.
 - **`handleMovement`**: per-frame walk → `sendPositionWS()` (WebSocket). On **stop** → a forced `sendPositionWS()` (instant anim stop for others) **plus** `updatePlayerPosition()` (one Firebase write to persist last-known position for late joiners / spawn / reclaim).
 - **Fallback**: if the socket is down, the periodic Firebase writes (stop + heartbeats) still drive observers via the users listener's `setEntityTarget` — nobody freezes, just less smooth until it reconnects.
+- **The sofa hop rides the relay as an EVENT** (`sendSitWS` / `startRemoteSitAnim` / `updateRemoteSitAnims`). `handleMovement` bails while seated, so no position packets go out during the ~0.64s sit/stand animation — the only thing observers ever got was the Firebase write at the end, which read as a **teleport onto the cushion**. It's one-off, not a stream, so it's a single `{t:'sit',uid,d,sx,sy,tx,ty}` message and every client replays it with **the same stepper** (`_stepSitAnim` is pure: it advances the anim struct and returns a position, touching no player and no Firebase — that's what lets local and remote share it). While a remote's `_sitAnim` is live it **owns that avatar**: `updatePlayerRenderPositions` skips them, the interpolation buffer is dropped, and `drawPlayers` reads the squash/stretch off `player._sitAnim`. Socket down → remotes fall back to the old Firebase-driven glide. The relay forwards raw bytes without parsing, so **no server change was needed**.
 - **Known limit (experiment)**: position `uid` is client-claimed (spoofable). Fine for the trusted friend group; revisit if going fully public.
 
 `updatePlayerPosition(x, y)` writes `users/{uid}/{x,y,isMoving,isWorking,…}` together (atomic). Still called on **stop**, every frame during the kidnap animation, at the end of `startPomodoroPhase`, on session restore, and via a **4s heartbeat** in the game loop while locked-in/in a session — but **no longer per-frame while walking** (that's the WebSocket's job now).
@@ -1057,7 +1132,9 @@ High-frequency walking used to write `x/y` to Firebase **every animation frame**
 2. A standalone **10s presence heartbeat** in the game loop (independent of any session — covers idle/walking users the 4s position heartbeat skips).
 3. `visibilitychange` / `window.focus` / `window.online` → `_resyncPresence()` re-asserts `activeInGame` + token and re-broadcasts position/task **immediately** on wake (don't make a woken PC wait for the heartbeat).
 
-All three bail if `gameState._dupSessionDetected` (another device took over — don't fight back). Reconnect timer/task recovery also needs the laptop doc re-written: `reassertActiveSessionAfterReconnect()` (fired by `.info/connected`) does that.
+All three bail if `gameState._dupSessionDetected` (another device took over — don't fight back).
+
+**Removal is grace-period'd (`PRESENCE_GRACE_MS`, 8s) — never immediate.** `activeInGame` going false does **not** mean someone left: Firebase fires their `onDisconnect` server-side the instant their socket blips, and their own `.info/connected` sets it back to true a moment later. Deleting on the spot is what made players **pop out and back in mid-session** for everyone else. The users listener now only stamps `_presenceLostAt`; `updatePresenceGrace()` (every frame, from `updateLeavingPlayers`) commits the exit only if they're still gone when it expires. **Any WebSocket packet cancels it** — the relay has no presence concept, so anything arriving is proof of life that outranks Firebase. The check has to be time-driven and not live in the listener: a player who drops and never returns produces no further Firebase events, so nothing would ever finish the removal. Reconnect timer/task recovery also needs the laptop doc re-written: `reassertActiveSessionAfterReconnect()` (fired by `.info/connected`) does that.
 
 ---
 
@@ -1327,6 +1404,11 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | New art needs a hard refresh to show up, every time | `sw.js` was pure cache-first for `Art/` — a cached file was pinned until its URL or `CACHE_VERSION` changed | Stale-while-revalidate in production (fresh copy lands for the next reload), and **network-first on localhost/LAN** (`IS_LOCAL`) so the dev loop always sees the file on disk |
 | Hats run at double speed / jitter while PiP is open | PiP renders the same draw code on its own rAF, so `_updateHatSpring` integrated twice per frame | `gameState._pipPass` set by `renderPiPInto` — the PiP pass draws the spring but never advances it |
 | SVG crescent renders as a plain filled circle | An arc whose radius is smaller than half its chord is silently scaled UP to fit by the SVG spec, so the two-arc crescent became two identical semicircles | Build it as a `<mask>`: a disc with an offset disc punched out |
+| Players pop out and back in mid-session for me; they never actually disconnected | `activeInGame` is flipped false server-side by `onDisconnect` the instant their socket blips (mobile data, sleeping laptop) and healed a second later by their own `.info/connected`. The users listener removed them the moment they left the snapshot, so a blip = a visible departure + rejoin | Grace period: stamp `_presenceLostAt` instead of removing; `updatePresenceGrace()` commits the exit only after `PRESENCE_GRACE_MS` (8s) still-gone, and **any WebSocket packet cancels it**. See **Presence self-heal** |
+| Others see me snap onto the sofa; no hop, and the reading sequence looks nothing like it does for me | `handleMovement` bails while seated, so nothing is broadcast during the 0.64s sit animation — observers only got the Firebase write at the end, i.e. a teleport | Relay the hop as a one-off `{t:'sit'}` event and replay it remotely through the same pure stepper (`_stepSitAnim`). See **Player Position Sync → the sofa hop** |
+| المدفئة overlay snaps in instead of fading | `display` can't transition, and `.active` set `display:flex` and `opacity:1` in the same frame | Keep it laid out always; drive enter/exit with `opacity` + `visibility` and apply `.active` after a double rAF (same as azkar/prayer) |
+| After-prayer azkar: the focus-sounds panel flashes for a few frames, then vanishes | `body.azkar-active` lifts the compact panel to z-index 10001 — above the prayer overlay (10000) — so it was visible until the azkar overlay (10002) finished fading in over it | `body.azkar-after-prayer .focus-sounds-panel { display: none }` — there's nothing to mix during salah |
+| After-prayer azkar per-prayer colours don't apply | `.azkar-overlay[data-prayer=…] .azkar-count-btn` ties `.azkar-overlay[data-mode="morning"] .azkar-count-btn` on specificity (0,2,1), and the mode rules come later in the file, so source order hands them the win | Prefix the per-prayer rules with `body.azkar-after-prayer` (0,3,1) so they win regardless of order |
 | Disconnected user never leaves — others still see their avatar forever | Ending a reading session ran `onDisconnect(ref('users/{uid}')).cancel()` to disarm its own ghost-cleanup. **`cancel()` cancels the queued ops of that location AND all its children**, so it also wiped the presence handlers armed at login (`activeInGame` → false, `activeSession` → null). That user's tab close then cleared nothing, and `listenToPlayers` (which gates purely on `activeInGame === true`) kept rendering them. Only `.info/connected` re-armed it, so it self-healed only if they later had a network blip — hence "sometimes" | Arm/cancel the reading fields **individually on their own child refs** (`armReadingDisconnect` / `cancelReadingDisconnect` + `READING_DISCONNECT_FIELDS`). **Never `onDisconnect(...).cancel()` on `users/{uid}` or any other node that has child ops armed under it** |
 
 ---

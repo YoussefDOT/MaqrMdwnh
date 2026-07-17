@@ -4680,6 +4680,83 @@ body.azkar-after-prayer .azkar-overlay { z-index: 10002; }
 }
 body.is-mobile .azkar-overlay-bg::after { display: none; }
 
+/* ── After-prayer azkar: wear the salah's own sky ──
+   These only ever apply when `data-prayer` is set, which openAzkarOverlay does for
+   after-prayer azkar alone (and deletes otherwise) — so morning/evening azkar keep
+   the modes above untouched. The `body.azkar-after-prayer` prefix is what makes them
+   BEAT the `[data-mode="morning"]` rules further down: without it the two selectors
+   tie on specificity and source order silently hands the win to whichever is last.
+   Gradients mirror `.prayer-overlay[data-prayer=…]`, at
+   the azkar overlay's calmer glow strength: this is a reading surface, and the
+   prayer overlay's full-bore horizon glow washes the text out. */
+body.azkar-after-prayer .azkar-overlay[data-prayer="fajr"] .azkar-overlay-bg {
+    background: linear-gradient(175deg, #03061a 0%, #080d22 25%, #110b18 55%, #1c1000 80%, #201500 100%);
+}
+body.azkar-after-prayer .azkar-overlay[data-prayer="fajr"] .azkar-overlay-bg::after {
+    background: radial-gradient(ellipse at 50% 95%, rgba(255,215,50,0.32) 0%, transparent 42%),
+                radial-gradient(ellipse at 50% 15%, rgba(30,55,200,0.22) 0%, transparent 55%);
+}
+body.azkar-after-prayer .azkar-overlay[data-prayer="dhuhr"] .azkar-overlay-bg {
+    background: linear-gradient(155deg, #04101e 0%, #08233f 35%, #0a2848 60%, #0b1c33 85%, #050f1f 100%);
+}
+body.azkar-after-prayer .azkar-overlay[data-prayer="dhuhr"] .azkar-overlay-bg::after {
+    background: radial-gradient(ellipse at 50% 25%, rgba(80,160,235,0.22) 0%, transparent 55%),
+                radial-gradient(ellipse at 30% 80%, rgba(160,200,255,0.10) 0%, transparent 50%);
+}
+body.azkar-after-prayer .azkar-overlay[data-prayer="asr"] .azkar-overlay-bg {
+    background: linear-gradient(155deg, #040e22 0%, #071830 35%, #0e1a20 60%, #14100a 85%, #1a1100 100%);
+}
+body.azkar-after-prayer .azkar-overlay[data-prayer="asr"] .azkar-overlay-bg::after {
+    background: radial-gradient(ellipse at 60% 85%, rgba(255,185,55,0.28) 0%, transparent 40%),
+                radial-gradient(ellipse at 35% 25%, rgba(55,130,230,0.22) 0%, transparent 55%);
+}
+body.azkar-after-prayer .azkar-overlay[data-prayer="maghrib"] .azkar-overlay-bg {
+    background: linear-gradient(148deg, #0d0318 0%, #1a0520 35%, #260a18 60%, #200800 82%, #160400 100%);
+}
+body.azkar-after-prayer .azkar-overlay[data-prayer="maghrib"] .azkar-overlay-bg::after {
+    background: radial-gradient(ellipse at 58% 92%, rgba(255,130,20,0.32) 0%, transparent 38%),
+                radial-gradient(ellipse at 30% 25%, rgba(150,30,200,0.18) 0%, transparent 48%);
+}
+body.azkar-after-prayer .azkar-overlay[data-prayer="isha"] .azkar-overlay-bg {
+    background: linear-gradient(150deg, #020612 0%, #04091f 50%, #060318 100%);
+}
+body.azkar-after-prayer .azkar-overlay[data-prayer="isha"] .azkar-overlay-bg::after {
+    background: radial-gradient(ellipse at 50% 25%, rgba(30,60,180,0.18) 0%, transparent 55%),
+                radial-gradient(ellipse at 20% 75%, rgba(10,20,80,0.14) 0%, transparent 50%);
+}
+
+/* Fog + the two accented controls follow the same key, so a Maghrib session isn't
+   a sunset sky with sky-blue buttons stapled on. */
+body.azkar-after-prayer .azkar-overlay[data-prayer="fajr"]    .azkar-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 40% 80%, rgba(255,215,50,0.10) 0%, transparent 55%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="fajr"]    .azkar-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 55% 20%, rgba(60,80,220,0.10) 0%, transparent 50%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="fajr"]    .azkar-fog-layer:nth-child(3) { background: radial-gradient(ellipse at 30% 55%, rgba(120,90,200,0.07) 0%, transparent 55%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="asr"]     .azkar-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 55% 80%, rgba(255,180,50,0.10) 0%, transparent 55%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="asr"]     .azkar-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 40% 25%, rgba(60,140,230,0.10) 0%, transparent 50%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="asr"]     .azkar-fog-layer:nth-child(3) { background: radial-gradient(ellipse at 30% 55%, rgba(180,140,60,0.07) 0%, transparent 55%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="maghrib"] .azkar-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 55% 85%, rgba(255,120,30,0.10) 0%, transparent 55%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="maghrib"] .azkar-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 35% 35%, rgba(190,40,180,0.10) 0%, transparent 50%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="maghrib"] .azkar-fog-layer:nth-child(3) { background: radial-gradient(ellipse at 30% 60%, rgba(240,90,60,0.07) 0%, transparent 55%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="isha"]    .azkar-fog-layer:nth-child(1) { background: radial-gradient(ellipse at 40% 50%, rgba(30,60,180,0.08) 0%, transparent 60%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="isha"]    .azkar-fog-layer:nth-child(2) { background: radial-gradient(ellipse at 60% 55%, rgba(10,20,100,0.07) 0%, transparent 55%); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="isha"]    .azkar-fog-layer:nth-child(3) { background: radial-gradient(ellipse at 30% 60%, rgba(40,50,140,0.06) 0%, transparent 58%); }
+
+body.azkar-after-prayer .azkar-overlay[data-prayer="fajr"]    .azkar-count-btn { background: rgba(255,210,50,0.16); border-color: rgba(255,215,60,0.32); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="fajr"]    .azkar-count-btn:hover { background: rgba(255,210,50,0.30); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="fajr"]    .azkar-item-text .azkar-highlight { color: rgba(255,220,110,0.95); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="fajr"]    .azkar-finish-btn.unlocked { background: rgba(255,210,50,0.48); border-color: rgba(255,215,60,0.65); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="asr"]     .azkar-count-btn { background: rgba(255,180,50,0.16); border-color: rgba(255,190,60,0.32); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="asr"]     .azkar-count-btn:hover { background: rgba(255,180,50,0.30); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="asr"]     .azkar-item-text .azkar-highlight { color: rgba(255,200,110,0.95); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="asr"]     .azkar-finish-btn.unlocked { background: rgba(255,180,50,0.48); border-color: rgba(255,190,60,0.65); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="maghrib"] .azkar-count-btn { background: rgba(220,60,140,0.18); border-color: rgba(240,80,160,0.34); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="maghrib"] .azkar-count-btn:hover { background: rgba(220,60,140,0.32); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="maghrib"] .azkar-item-text .azkar-highlight { color: rgba(255,160,200,0.95); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="maghrib"] .azkar-finish-btn.unlocked { background: rgba(220,60,140,0.48); border-color: rgba(240,80,160,0.65); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="isha"]    .azkar-count-btn { background: rgba(80,110,200,0.20); border-color: rgba(110,140,230,0.32); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="isha"]    .azkar-count-btn:hover { background: rgba(80,110,200,0.32); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="isha"]    .azkar-item-text .azkar-highlight { color: rgba(150,180,255,0.95); }
+body.azkar-after-prayer .azkar-overlay[data-prayer="isha"]    .azkar-finish-btn.unlocked { background: rgba(80,110,200,0.48); border-color: rgba(110,140,230,0.65); }
+
 .azkar-fog {
     position: absolute; inset: -40%;
     pointer-events: none; z-index: 0;
@@ -4982,9 +5059,40 @@ body.azkar-active .sound-item {
     padding: 6px 8px;
     gap: 6px;
 }
-body.azkar-active .sound-item .sound-vol { display: none; }
 body.azkar-active .sound-name { font-size: 0.72rem; }
 body.azkar-active .yt-focus-block { display: none !important; }
+
+/* Volume in the compact panel. The full-width slider doesn't fit next to a name in
+   a 2-column grid, so it becomes the item's own underline: a hairline that fills
+   left-to-right with the level, and only exists on a sound that's actually playing.
+   Same <input type="range"> as the roomy panel, so it's the same handler and the
+   same Firebase write (focusMix) — no second code path to keep in sync. */
+body.azkar-active .sound-item { position: relative; padding-bottom: 9px; }
+body.azkar-active .sound-item .sound-vol { display: none; }
+body.azkar-active .sound-item.active .sound-vol {
+    display: block;
+    position: absolute;
+    left: 8px; right: 8px; bottom: 3px;
+    width: auto;
+    height: 3px;
+    opacity: 0.55;
+    transition: opacity 0.15s;
+}
+body.azkar-active .sound-item.active:hover .sound-vol { opacity: 1; }
+/* The thumb is normally hidden until hover; on a 3px bar tucked at the edge that
+   leaves nothing to aim at, so give it a permanent (small) grab handle. */
+body.azkar-active .sound-item.active .sound-vol::-webkit-slider-thumb { opacity: 0.85; width: 9px; height: 9px; }
+body.azkar-active .sound-item.active .sound-vol::-moz-range-thumb { opacity: 0.85; width: 9px; height: 9px; }
+/* Touch: a 3px-tall hit area is unusable, so grow the target without growing the
+   painted bar (the track stays 3px; the input's own box is what gets taller). */
+body.is-mobile.azkar-active .sound-item.active .sound-vol { height: 18px; bottom: -4px; background-clip: content-box; padding: 7px 0; }
+
+/* After-prayer azkar sits on top of the PRAYER overlay, which already covers the
+   sounds panel and owns the audio fades. But `body.azkar-active` is on, so the
+   compact-panel rules above were lifting the panel to z-index 10001 — above prayer
+   (10000) — and it flashed into view for the frames before the azkar overlay
+   (10002) faded in over it. There's nothing to mix during salah, so keep it away. */
+body.azkar-after-prayer .focus-sounds-panel { display: none !important; }
 
 /* ── Hide / show the focus-sounds panel during azkar ── */
 /* Collapse button lives in the panel header; only visible during azkar (desktop). */
@@ -7408,18 +7516,67 @@ body.is-mobile.cc-active #game-canvas { display: none !important; }
    Full-screen look at the fireplace with the month's top 3 framed on it.
    Layer order matches the art brief: BG → Fireplace → member frames → Fire.
    ═══════════════════════════════════════════════════════════════════════════ */
+/* `display` can't transition, so toggling it in the same frame as `opacity` kills
+   the fade (the overlay used to snap in). Keep it laid out at all times and drive
+   enter/exit purely with opacity + visibility, like the azkar overlay. */
 .fp-overlay {
     position: fixed;
     inset: 0;
-    display: none;
+    display: flex;
     align-items: center;
     justify-content: center;
     background: #0b0705;
     z-index: 9000;            /* below prayer/azkar (10000) — those must cover it */
     opacity: 0;
-    transition: opacity 0.35s ease;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.5s ease, visibility 0s linear 0.5s;
 }
-.fp-overlay.active { display: flex; opacity: 1; }
+.fp-overlay.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 0.5s ease, visibility 0s linear 0s;
+}
+.fp-overlay.hidden { display: none; }
+
+/* Each art layer fades in on its own, back-to-front, so the room assembles rather
+   than appearing whole. Exiting reverses with no delay — the whole overlay fades
+   out at once, so a staggered exit would just look laggy. */
+.fp-bg, .fp-stage, .fp-topcoat, .fp-slot {
+    opacity: 0;
+    transition: opacity 0.55s ease;
+}
+.fp-overlay.active .fp-bg      { opacity: 1; transition-delay: 0.05s; }
+.fp-overlay.active .fp-stage   { opacity: 1; transition-delay: 0.25s; }
+.fp-overlay.active .fp-slot    { opacity: 1; transition-delay: 0.55s; }
+.fp-overlay.active .fp-topcoat { opacity: 1; transition-delay: 0.40s; }
+
+/* The room breathes — a slow, wide drift + a hair of rotation. Deliberately long
+   (17s) and never centred on a beat, so it reads as a held handheld shot rather
+   than a rumble. Scaled up a touch so the translate can't expose an edge.
+   transform-only → compositor-cheap, so it stays on across every graphics tier. */
+.fp-shake {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    will-change: transform;
+    animation: fpShake 17s ease-in-out infinite;
+}
+@keyframes fpShake {
+    0%   { transform: scale(1.05) translate(0, 0) rotate(0deg); }
+    17%  { transform: scale(1.05) translate(-1.1%, 0.5%) rotate(0.22deg); }
+    33%  { transform: scale(1.05) translate(0.7%, 1.0%) rotate(-0.16deg); }
+    51%  { transform: scale(1.05) translate(1.2%, -0.6%) rotate(-0.28deg); }
+    68%  { transform: scale(1.05) translate(-0.4%, -1.0%) rotate(0.12deg); }
+    84%  { transform: scale(1.05) translate(-0.9%, 0.2%) rotate(0.24deg); }
+    100% { transform: scale(1.05) translate(0, 0) rotate(0deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .fp-shake { animation: none; }
+}
 
 /* The 1920×1080 backdrop fills the screen behind everything. */
 .fp-bg {
@@ -7487,21 +7644,59 @@ body.is-mobile.cc-active #game-canvas { display: none !important; }
     color: rgba(255, 255, 255, 0.55);
 }
 /* Sits BELOW the frame, not inside it — the slot box is exactly the painted frame,
-   so an in-flow name would squash the photo out of it. */
-.fp-slot-name {
+   so an in-flow name would squash the photo out of it. Name, rank and points share
+   one stacked column so they can never overlap the art or each other. */
+.fp-slot-caption {
     position: absolute;
     top: calc(100% + 6px);
     left: 50%;
     transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    white-space: nowrap;
+    direction: rtl;
+}
+.fp-slot-name {
     font-family: 'Rubik', sans-serif;
     font-weight: 600;
     font-size: clamp(9px, 1.5vh, 15px);
     color: rgba(255, 255, 255, 0.9);
     text-shadow: 0 2px 6px rgba(0, 0, 0, 0.85);
-    white-space: nowrap;
+}
+/* Rank + points on one line: the medal chip then the score. */
+.fp-slot-meta {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    direction: ltr;   /* "#1" must not have its hash flipped to the far side in RTL */
+}
+.fp-slot-rank {
+    font-family: 'Rubik', sans-serif;
+    font-weight: 700;
+    font-size: clamp(8px, 1.25vh, 12px);
+    line-height: 1;
+    padding: 3px 6px;
+    border-radius: 50px;
+    color: rgba(20, 12, 6, 0.92);
+    background: rgba(255, 255, 255, 0.75);
+    text-shadow: none;
+}
+/* Gold / silver / bronze — the podium reads at a glance without needing the text. */
+.fp-slot-rank1 .fp-slot-rank { background: linear-gradient(150deg, #ffd970, #e0a326); }
+.fp-slot-rank2 .fp-slot-rank { background: linear-gradient(150deg, #e8eef4, #a9b4c0); }
+.fp-slot-rank3 .fp-slot-rank { background: linear-gradient(150deg, #e6a877, #b06f3c); }
+.fp-slot-points {
+    font-family: 'Rubik', sans-serif;
+    font-weight: 500;
+    font-size: clamp(8px, 1.3vh, 13px);
+    color: rgba(255, 226, 180, 0.92);
+    text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
     direction: rtl;
 }
 .fp-slot-empty .fp-slot-photo { background-color: rgba(28, 20, 14, 0.3); }
+.fp-slot-empty .fp-slot-meta { display: none; }
 
 .fp-close {
     position: absolute;

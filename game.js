@@ -2913,6 +2913,9 @@ function updatePlayerRenderPositions() {
             }
             continue;
         }
+        // A relayed sofa hop owns this avatar outright for its ~0.6s (see
+        // updateRemoteSitAnims, which already wrote renderX/renderY this frame).
+        if (player._sitAnim && player._sitAnim.active) continue;
         // Remote players: smooth snapshot interpolation from the position buffer
         // (fed by both the WebSocket relay and Firebase). Fall back to the plain
         // catch-up lerp until the first sample arrives.
@@ -4265,6 +4268,37 @@ function _sofa2SpotFree(spotId, excludeUid) {
     return !Object.values(gameState.players).some(p => p.userId !== excludeUid && p.sitSeatId === spotId);
 }
 
+// How far off a sofa a click has to land to read as "I'm done sitting". Anything
+// closer is treated as fidgeting on the couch (or aiming at a neighbouring seat)
+// and leaves the player put.
+const SOFA_LEAVE_R = 130;
+// True if `world` is a point on the sofa the local player is currently sitting on.
+// sofa1 is a vertical strip so its X is what matters (Y anywhere along the run);
+// the sofa2 spots are discrete seats, so it's a plain radius around the whole row.
+function _clickIsOnMySofa(world) {
+    const p = gameState.players[gameState.userId];
+    if (!p || !p.sitSeatId) return false;
+    if (p.sitSeatId === 'sofa1') {
+        const dx = Math.abs(world.x - SOFA1_X);
+        const dy = (world.y < SOFA1_Y0) ? SOFA1_Y0 - world.y
+                 : (world.y > SOFA1_Y1) ? world.y - SOFA1_Y1 : 0;
+        return dx < SOFA_LEAVE_R && dy < SOFA_LEAVE_R;
+    }
+    return SOFA2_SPOTS.some(s => Math.hypot(world.x - s.x, world.y - s.y) < SOFA_LEAVE_R);
+}
+// Click-anywhere-else to get up: the وقوف button is a shortcut, not the only exit.
+// Returns true when it handled the click, so the caller stops there — otherwise the
+// same click would fall through and immediately re-seat the player on the sofa they
+// just left. Never fires while READING: the reading panel owns that exit, and a
+// stray click must not end a timed session.
+function handleClickOffSofa(world) {
+    if (!gameState.isSitting || gameState.sitAnim.active) return false;
+    if (gameState.reading && gameState.reading.active) return false;
+    if (_clickIsOnMySofa(world)) return false;
+    standUp();
+    return true;
+}
+
 // Smooth slide-in tween into a seat — direct x/y override each frame, eased, the
 // same technique the laptop kidnap animation uses (see updateSitAnimation).
 // Sit/stand hop durations (seconds) — anticipate (crouch+squash) → jump (arc, mid-air
@@ -4291,6 +4325,9 @@ function startSitAnimation(seatId, targetX, targetY) {
         player.isSprinting = false;
         sendPositionWS(player.x, player.y, true);
     }
+    // Tell everyone to play the hop with us, before the Firebase write lands (that
+    // write is what used to snap them onto the seat — see sendSitWS).
+    sendSitWS('in', player.x, player.y, targetX, targetY);
     updatePlayerPosition(player.x, player.y);   // pushes sitSeatId/sitX/sitY right away
     if (seatId === 'sofa1') applySofaFocusUI(true);
     if (gameState.focusAudioEngine) gameState.focusAudioEngine.playEffect('sofaSit');
@@ -4323,22 +4360,24 @@ function standUp(instant) {
         targetX: back.x, targetY: back.y,
         scaleX: 1, scaleY: 1, hopY: 0,
     };
+    sendSitWS('out', player.x, player.y, back.x, back.y);
     player.sitSeatId = null;
     player.sitX = null;
     player.sitY = null;
     updatePlayerPosition(player.x, player.y);   // clears sitSeatId for everyone else right away
     if (wasSofa1) applySofaFocusUI(false);
 }
-// Per-frame hop animation — mirrors updateAnimation's direct x/y override, but adds a
-// squash/stretch scale (read by drawPlayers for the local player) and a vertical arc
-// instead of a plain slide. Same three stages whether sitting down or standing up.
-function updateSitAnimation() {
-    const sa = gameState.sitAnim;
-    if (!sa.active) return;
-    const player = gameState.players[gameState.userId];
-    if (!player) { sa.active = false; gameState.isSitting = false; return; }
-
+// One frame of the hop — mirrors updateAnimation's direct x/y override, but adds a
+// squash/stretch scale (read by drawPlayers) and a vertical arc instead of a plain
+// slide. Same three stages whether sitting down or standing up.
+//
+// Deliberately pure: it advances `sa` and returns where the avatar should be, and
+// touches no player and no Firebase. That's what lets REMOTE clients run the exact
+// same animation off a relayed sit event (see startRemoteSitAnim) instead of just
+// teleporting the avatar onto the cushion. Returns true when the hop has finished.
+function _stepSitAnim(sa, out) {
     sa.stageT += gameState.dtFactor / 60;
+    let done = false;
 
     if (sa.stage === 'anticipate') {
         const t = Math.min(1, sa.stageT / SIT_ANTICIPATE_DUR);
@@ -4346,24 +4385,24 @@ function updateSitAnimation() {
         sa.scaleX = 1 + 0.12 * e;
         sa.scaleY = 1 - 0.12 * e;
         sa.hopY = 0;
-        player.x = sa.startPos.x;
-        player.y = sa.startPos.y;
+        out.x = sa.startPos.x;
+        out.y = sa.startPos.y;
         if (t >= 1) { sa.stage = 'jump'; sa.stageT = 0; }
     } else if (sa.stage === 'jump') {
         const t = Math.min(1, sa.stageT / SIT_JUMP_DUR);
         const moveT = t * t * (3 - 2 * t);   // smoothstep — eases in and out of the arc
-        player.x = sa.startPos.x + (sa.targetX - sa.startPos.x) * moveT;
-        player.y = sa.startPos.y + (sa.targetY - sa.startPos.y) * moveT;
+        out.x = sa.startPos.x + (sa.targetX - sa.startPos.x) * moveT;
+        out.y = sa.startPos.y + (sa.targetY - sa.startPos.y) * moveT;
         const arc = Math.sin(t * Math.PI);   // 0 → 1 → 0 across the flight
         sa.hopY = -arc * 26;                 // hop upward, peaks mid-flight
         sa.scaleX = 1 - 0.12 * arc;           // thin...
         sa.scaleY = 1 + 0.16 * arc;           // ...and tall while airborne
         if (t >= 1) { sa.stage = 'land'; sa.stageT = 0; }
-    } else if (sa.stage === 'land') {
+    } else {   // 'land'
         const t = Math.min(1, sa.stageT / SIT_LAND_DUR);
         const settle = easeOutBack(t);       // overshoots past 1 then settles
-        player.x = sa.targetX;
-        player.y = sa.targetY;
+        out.x = sa.targetX;
+        out.y = sa.targetY;
         sa.hopY = 0;
         // Squash flat on impact, springs back to normal (with a tiny reverse wobble
         // as `settle` overshoots past 1) rather than snapping still.
@@ -4372,13 +4411,81 @@ function updateSitAnimation() {
         if (t >= 1) {
             sa.scaleX = 1; sa.scaleY = 1; sa.hopY = 0;
             sa.active = false;
-            if (sa.dir === 'in') {
-                updatePlayerPosition(player.x, player.y);
-            } else {
-                gameState.isSitting = false;
-                updatePlayerPosition(player.x, player.y);
-            }
+            done = true;
         }
+    }
+    return done;
+}
+
+const _sitOut = { x: 0, y: 0 };
+function updateSitAnimation() {
+    const sa = gameState.sitAnim;
+    if (!sa.active) return;
+    const player = gameState.players[gameState.userId];
+    if (!player) { sa.active = false; gameState.isSitting = false; return; }
+
+    const done = _stepSitAnim(sa, _sitOut);
+    player.x = _sitOut.x;
+    player.y = _sitOut.y;
+    if (done) {
+        if (sa.dir === 'out') gameState.isSitting = false;
+        updatePlayerPosition(player.x, player.y);
+    }
+}
+
+// ── Sit/stand over the relay ────────────────────────────────────────────────
+// The hop is a ~0.64s animation the local client plays out frame by frame, but
+// handleMovement bails while seated so no position packets go out during it — the
+// only thing observers ever got was the Firebase write at the END, which read as a
+// teleport onto the cushion. It's a one-off EVENT, not a stream, so it rides the
+// relay as a single message and every client replays it with the same code.
+// If the socket is down, remotes fall back to the old Firebase-driven glide.
+function sendSitWS(dir, sx, sy, tx, ty) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+        ws.send(JSON.stringify({
+            t: 'sit', uid: gameState.userId, d: dir,
+            sx: Math.round(sx), sy: Math.round(sy),
+            tx: Math.round(tx), ty: Math.round(ty),
+        }));
+        return true;
+    } catch (_) { return false; }
+}
+
+function startRemoteSitAnim(player, msg) {
+    if (typeof msg.sx !== 'number' || typeof msg.tx !== 'number') return;
+    player._sitAnim = {
+        active: true, dir: msg.d === 'out' ? 'out' : 'in', stage: 'anticipate', stageT: 0,
+        startPos: { x: msg.sx, y: msg.sy },
+        targetX: msg.tx, targetY: msg.ty,
+        scaleX: 1, scaleY: 1, hopY: 0,
+    };
+    // The hop owns this avatar's position for its duration, so start it from the
+    // sender's start point and drop the interpolation buffer — a queued sample
+    // landing mid-hop would drag the avatar off the arc.
+    player.renderX = msg.sx; player.renderY = msg.sy;
+    player.x = msg.sx; player.y = msg.sy;
+    player._netBuf = null;
+    player.isMoving = false;
+    player.isSprinting = false;
+}
+
+// Drive every remote player's hop. Runs before updatePlayerRenderPositions, which
+// skips anyone with a live _sitAnim so the two never fight over renderX/renderY.
+const _remoteSitOut = { x: 0, y: 0 };
+function updateRemoteSitAnims() {
+    for (const player of Object.values(gameState.players)) {
+        if (player.userId === gameState.userId) continue;
+        const sa = player._sitAnim;
+        if (!sa || !sa.active) continue;
+        _stepSitAnim(sa, _remoteSitOut);
+        player.renderX = _remoteSitOut.x;
+        player.renderY = _remoteSitOut.y;
+        player.x = _remoteSitOut.x;
+        player.y = _remoteSitOut.y;
+        // Whatever Firebase says next is the truth; the buffer restarts from here.
+        if (!sa.active) { player._sitAnim = null; player._netBuf = null; }
     }
 }
 
@@ -5518,7 +5625,36 @@ function updateEntrance(now) {
 }
 
 // JUICE: delete remote players once their disconnect scale-down has finished.
+// How long a player may be missing from the users snapshot before we accept that
+// they really left. Sized to cover a mobile-data blip / a laptop waking up, both
+// of which fire the server-side onDisconnect and are healed a second or two later
+// by the peer's own `.info/connected` re-assert. Erring long is cheap (a departed
+// player lingers a few seconds); erring short is the bug this fixes.
+const PRESENCE_GRACE_MS = 8000;
+
+// Commit (or cancel) pending departures. Split out from the users listener because
+// the decision is about ELAPSED TIME, and the listener only fires when Firebase has
+// something to say — a player who drops and never comes back produces no further
+// events at all, so nothing would ever finish the removal.
+function updatePresenceGrace() {
+    const now = performance.now();
+    for (const id of Object.keys(gameState.players)) {
+        const p = gameState.players[id];
+        if (!p || p._presenceLostAt == null) continue;
+        // A WebSocket packet is proof of life that beat Firebase to us — the relay
+        // has no presence concept, so anything arriving means they're still here.
+        if (now - (p._lastWsSampleAt || 0) < PRESENCE_GRACE_MS) { p._presenceLostAt = null; continue; }
+        if (now - p._presenceLostAt < PRESENCE_GRACE_MS) continue;
+        p._presenceLostAt = null;
+        // JUICE: scale the avatar DOWN before removing (mirror of the scale-up on
+        // connect). The delete lands below once the animation finishes.
+        if (JUICE_ENTRANCE) { if (p._exitT == null) p._exitT = now; }
+        else delete gameState.players[id];
+    }
+}
+
 function updateLeavingPlayers() {
+    updatePresenceGrace();
     if (!JUICE_ENTRANCE) return;
     const now = performance.now();
     for (const id of Object.keys(gameState.players)) {
@@ -5812,6 +5948,8 @@ function setupControls() {
                 return;
             }
         }
+        // ...and clicking anywhere off the sofa does the same thing.
+        if (handleClickOffSofa(clickWorld)) return;
         // Dashboard entry = second-floor papers desk — opens the dashboard (work
         // memories live inside it now).
         if (gameState.activeDashboardZone && !gameState.isLockedIn && !gameState.anim.active &&
@@ -6458,6 +6596,8 @@ function initMobileControls() {
                     return;
                 }
             }
+            // ...and tapping anywhere off the sofa does the same thing.
+            if (handleClickOffSofa(clickWorld)) return;
 
             // Boss results overlay return button
             if (gameState.laptopBoss && gameState.laptopBoss.showResultsInGame) {
@@ -7219,6 +7359,16 @@ function modeSelectGhostClick() {
     return gameState._modeSelectOpenedAt && (Date.now() - gameState._modeSelectOpenedAt) < 500;
 }
 
+// Show one of the laptop modals and re-arm the ghost-click window. Every hop in
+// this chain (world tap → mode select → pomo settings → back) is triggered by a
+// touch whose synthesized click lands ~300ms later — and juiceCloseThenOpen only
+// waits 230ms, so the NEXT modal is already up and its backdrop is under that
+// stray click. Re-stamping on each hop keeps the guard covering the whole chain.
+function openLaptopModal(id) {
+    gameState._modeSelectOpenedAt = Date.now();
+    document.getElementById(id)?.classList.add('active');
+}
+
 function setupModeSelectUI() {
     const modal = document.getElementById('mode-select-modal');
     if (!modal) return;
@@ -7227,9 +7377,25 @@ function setupModeSelectUI() {
         juiceCloseThenOpen(modal, null);   // JUICE: sequenced pop-out
     });
 
+    // The backdrop is a back button too — رجوع shouldn't be the only way out.
+    // Same ghost-click guard as the mode buttons: the tap that OPENED this modal
+    // is replayed ~300ms later as a synthesized click, and it would land on the
+    // backdrop and close the modal instantly.
+    modal.addEventListener('click', (e) => {
+        if (e.target !== modal) return;
+        if (modeSelectGhostClick()) return;
+        juiceCloseThenOpen(modal, null);
+    });
+    const testModal = document.getElementById('test-mode-modal');
+    testModal?.addEventListener('click', (e) => {
+        if (e.target !== testModal) return;
+        if (modeSelectGhostClick()) return;
+        juiceCloseThenOpen(testModal, null);
+    });
+
     document.getElementById('mode-select-pomo')?.addEventListener('click', () => {
         if (modeSelectGhostClick()) return;
-        juiceCloseThenOpen(modal, () => document.getElementById('pomodoro-modal').classList.add('active'));
+        juiceCloseThenOpen(modal, () => openLaptopModal('pomodoro-modal'));
     });
 
     document.getElementById('mode-select-free')?.addEventListener('click', () => {
@@ -7273,7 +7439,14 @@ function setupPomodoroUI() {
     });
 
     cancelBtn.addEventListener('click', () => {
-        juiceCloseThenOpen(modal, () => document.getElementById('mode-select-modal').classList.add('active'));   // JUICE
+        juiceCloseThenOpen(modal, () => openLaptopModal('mode-select-modal'));   // JUICE
+    });
+
+    // Backdrop = the same step back as رجوع (returns to the mode chooser).
+    modal.addEventListener('click', (e) => {
+        if (e.target !== modal) return;
+        if (modeSelectGhostClick()) return;
+        juiceCloseThenOpen(modal, () => openLaptopModal('mode-select-modal'));
     });
 
     confirmBtn.addEventListener('click', () => {
@@ -7789,6 +7962,10 @@ function listenToPlayers() {
                         };
                     } else {
                         const player = gameState.players[userId];
+                        // Presence came back — a blip, not a departure. Cancel the grace
+                        // clock silently: they never visibly left, so there's nothing to
+                        // re-animate.
+                        player._presenceLostAt = null;
                         // JUICE: reconnected mid scale-down → cancel the exit and re-pop in.
                         if (player._exitT != null) { player._exitT = null; player._entryT = performance.now(); }
                         player.username = userData.username;
@@ -7869,14 +8046,16 @@ function listenToPlayers() {
             Object.keys(gameState.players).forEach(id => {
                 if (id === gameState.userId || currentIdsInSnapshot.has(id)) return;
                 const p = gameState.players[id];
-                // JUICE: scale the avatar DOWN before removing (mirror of the scale-up
-                // on connect). The actual delete happens in updateLeavingPlayers once the
-                // animation finishes. With juice off, remove immediately as before.
-                if (JUICE_ENTRANCE && p) {
-                    if (p._exitT == null) p._exitT = performance.now();
-                } else {
-                    delete gameState.players[id];
-                }
+                if (!p) { delete gameState.players[id]; return; }
+                // Don't yank them out on the spot. `activeInGame` going false does NOT
+                // mean they left — Firebase fires their onDisconnect server-side the
+                // instant their socket blips (flaky mobile data, a sleeping laptop),
+                // and their own `.info/connected` listener sets it straight back to
+                // true a moment later. Removing immediately is what made players pop
+                // out and back in mid-session for everyone else. Start a grace clock
+                // instead; updatePresenceGrace commits the exit only if they're still
+                // gone when it expires, and any sign of life cancels it.
+                if (p._presenceLostAt == null) p._presenceLostAt = performance.now();
             });
             const playerCount = Object.keys(gameState.players).length;
             const countElem = document.getElementById('player-count');
@@ -7989,16 +8168,23 @@ function onPresenceMessage(data) {
     // listener adds them (with avatar, lobby filtering, presence) first.
     const player = gameState.players[msg.uid];
     if (!player) return;
+    // Mark that the WebSocket is the live source for this player, so the Firebase
+    // listener won't interleave its laggy (stale-position) writes into the
+    // interpolation buffer and snap the avatar backward. Stamped for EVERY message
+    // type, because it doubles as proof of life: any packet at all outranks whatever
+    // Firebase presence currently claims, so it cancels a pending removal too (see
+    // updatePresenceGrace).
+    player._lastWsSampleAt = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+    player._presenceLostAt = null;
+    // Sofa hop — a one-off event, not a position stream. Must return before the
+    // isMoving/position handling below: a sit message carries neither.
+    if (msg.t === 'sit') { startRemoteSitAnim(player, msg); return; }
     // isMoving must update before pushing the sample — interpolateRemoteFromBuffer
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
     player.isSprinting = msg.s === 1;
     if (msg.fl === 1 || msg.fl === 2) player.floor = msg.fl;
     if (typeof msg.x === 'number' && typeof msg.y === 'number') {
-        // Mark that the WebSocket is the live source for this player so the
-        // Firebase listener won't interleave its laggy (stale-position) writes
-        // into the interpolation buffer and snap the avatar backward.
-        player._lastWsSampleAt = (typeof performance !== 'undefined') ? performance.now() : Date.now();
         setEntityTarget(player, msg.x, msg.y);  // keep .x/.y authoritative
         if (player._pendingSpawn != null) {
             // Still settling in — pin (no buffered travel) until we pop them in.
@@ -8077,7 +8263,11 @@ function checkCollision(x, y) {
 function updateCamera() {
     const player = gameState.players[gameState.userId];
     if (!player) return;
-    
+
+    // المدفئة overlay: hold the framing so the world is untouched underneath and
+    // closing the overlay reveals exactly the view you left (see _fireFreezeCamera).
+    if (fireplaceHoldsCamera()) return;
+
     // Reading cinematic camera override — also covers the 'exiting' zoom-out tail
     // after reading.active flips false, otherwise this normal camera fights it.
     if (gameState.reading && (gameState.reading.active || gameState.reading._cameraPhase === 'exiting')) {
@@ -8746,7 +8936,8 @@ function gameLoop(timestamp) {
         handleMovement();
         updateAnimation();
         updateLemo(deltaTime);       // the robot's wander state machine (client-only)
-        updateSitAnimation();        // sofa sit-in / stand-up tween
+        updateSitAnimation();        // sofa sit-in / stand-up tween (local)
+        updateRemoteSitAnims();      // ...and the same hop for everyone else's
         updateMinigameLobbyProximity(); // auto-leave a race/coffee lobby if you wander off
         updateFloorsAndScales();     // per-player floor + dynamic stair scale
         updateSecondFloorFade();     // fade the second floor when a ground player is under it
@@ -12020,14 +12211,17 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             workScaleX = 1.0 - breathe * 0.012;
         }
 
-        // Playful sit/stand hop (local player only — mirrors the JUICE entrance
-        // treatment below) — overrides the idle/work scale for the animation's brief
-        // duration; normal breathing resumes once it finishes.
-        if (isCurrentUser && gameState.sitAnim.active) {
-            const sa = gameState.sitAnim;
-            workScaleX = sa.scaleX;
-            workScaleY = sa.scaleY;
-            workBob = sa.hopY;
+        // Playful sit/stand hop — overrides the idle/work scale for the animation's
+        // brief duration; normal breathing resumes once it finishes. Remote players
+        // get theirs from the relayed sit event, so the squash/stretch everyone sees
+        // is the same one the sitter sees.
+        {
+            const sa = isCurrentUser ? gameState.sitAnim : player._sitAnim;
+            if (sa && sa.active && !tpData) {
+                workScaleX = sa.scaleX;
+                workScaleY = sa.scaleY;
+                workBob = sa.hopY;
+            }
         }
 
         // Coop animation: read lerped blend values computed in updateCoopAnimation
@@ -17293,8 +17487,18 @@ function openAzkarOverlay(type, opts) {
     document.body.classList.remove('azkar-sounds-collapsed'); // always start expanded
     const overlay = document.getElementById('azkar-overlay');
     if (overlay) {
-        // After-prayer azkar uses the morning (sky-blue) look regardless of time.
+        // `mode` still drives the layout/accents; after-prayer keeps the morning base
+        // so anything the per-prayer rules below don't override stays sane.
         overlay.dataset.mode = afterPrayer ? 'morning' : type;
+        // After-prayer azkar continues the prayer overlay it opened from, so it wears
+        // that prayer's sky (dark blue for Isha, sunset for Maghrib, …) rather than a
+        // fixed morning blue. Read the key straight off the prayer overlay — that's
+        // where showPrayerOverlayDOM already normalised it.
+        const prayerKey = afterPrayer
+            ? (document.getElementById('prayer-overlay')?.dataset.prayer || '')
+            : '';
+        if (prayerKey) overlay.dataset.prayer = prayerKey;
+        else delete overlay.dataset.prayer;
         overlay.classList.remove('hidden');
         requestAnimationFrame(() => requestAnimationFrame(() => overlay.classList.add('active')));
     }
@@ -22307,9 +22511,12 @@ function _bookSlideDir(seatId) {
 // Per-player 0→1 slide, eased and reversible: it retracts under the player on
 // session end exactly the way it came out.
 function _updateBookProp(player, isLocal) {
+    // The `!sitAnim.active` half matters on BOTH sides: the seat's Firebase write
+    // lands as the hop starts, so without it the book would start sliding out from
+    // under a player who's still mid-air. Remotes read their own relayed hop.
     const seated = isLocal
         ? (gameState.reading.active && gameState.isSitting && !gameState.sitAnim.active)
-        : !!(player.isReading && player.sitSeatId);
+        : !!(player.isReading && player.sitSeatId && !(player._sitAnim && player._sitAnim.active));
     const target = seated ? 1 : 0;
     const cur = player._bookSlide || 0;
     // Retract fast (in sync with the camera zoom-out) while this player's own
@@ -23173,7 +23380,7 @@ const FIRE_SLOTS = [
     { rank: 3, x: 0.1813, y: 0.2135, w: 0.1700, h: 0.1188 },   // left
 ];
 
-const _fire = { open: false, loading: false, top3: null, avatars: {} };
+const _fire = { open: false, loading: false, top3: null, avatars: {}, camFrozen: null };
 function fireplaceIsOpen() { return !!_fire.open; }
 
 const _firePrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null };
@@ -23231,15 +23438,21 @@ function _fireRenderSlots(top3) {
         const m = top3[slot.rank - 1];
         const photo = el.querySelector('.fp-slot-photo');
         const nameEl = el.querySelector('.fp-slot-name');
+        const rankEl = el.querySelector('.fp-slot-rank');
+        const ptsEl  = el.querySelector('.fp-slot-points');
         if (!m) {
             el.classList.add('fp-slot-empty');
             photo.style.backgroundImage = '';
             photo.textContent = '';
             nameEl.textContent = '';
+            if (ptsEl) ptsEl.textContent = '';
             continue;
         }
         el.classList.remove('fp-slot-empty');
         nameEl.textContent = m.name;
+        if (rankEl) rankEl.textContent = `#${slot.rank}`;
+        // Grouped thousands read far faster than a bare 5-digit run.
+        if (ptsEl) ptsEl.textContent = `${m.points.toLocaleString('en-US')} نقطة`;
         const url = m.uid ? _fire.avatars[m.uid] : '';
         if (url) {
             photo.style.backgroundImage = `url("${url}")`;
@@ -23254,17 +23467,29 @@ function _fireRenderSlots(top3) {
 }
 
 async function openFireplaceOverlay() {
-    if (_fire.open || _fire.loading) return;
+    // Only `open` gates the view. `loading` used to gate it too, which meant closing
+    // during the points fetch locked you out of reopening until it resolved — much
+    // more noticeable now that closing is a half-second fade you might reverse.
+    if (_fire.open) return;
     const overlay = document.getElementById('fireplace-overlay');
     if (!overlay) return;
     _fire.open = true;
     gameState.keys = {};                 // drop any held movement key
+    // Park the world camera exactly where it is. The game loop keeps running behind
+    // the overlay, and a still-lerping camera would drift while you're not looking —
+    // so the room you come back to wouldn't be the one you left (the "snap on exit").
+    _fireFreezeCamera();
     document.body.classList.add('fireplace-active');
-    overlay.classList.add('active');
     overlay.setAttribute('aria-hidden', 'false');
+    // Two frames before `.active`: the first commits the pre-fade state (opacity 0,
+    // visibility hidden), the second flips it, so the transition actually runs.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (_fire.open) overlay.classList.add('active');
+    }));
 
     // Show whatever we fetched last time instantly, then refresh in the background.
     if (_fire.top3) _fireRenderSlots(_fire.top3);
+    if (_fire.loading) return;   // a fetch from the previous open is still in flight
     _fire.loading = true;
     try {
         const top3 = await fetchFireTop3();
@@ -23283,11 +23508,26 @@ function closeFireplaceOverlay() {
     _fire.open = false;
     const overlay = document.getElementById('fireplace-overlay');
     if (overlay) {
+        // Just drop `.active` — the CSS fades opacity out and only then flips
+        // visibility, so the exit is the mirror of the entrance.
         overlay.classList.remove('active');
         overlay.setAttribute('aria-hidden', 'true');
     }
     document.body.classList.remove('fireplace-active');
+    _fireUnfreezeCamera();
 }
+
+// While the overlay is up the camera is pinned, then handed back the moment it
+// closes. `updateCamera` lerps toward the player, so on release it eases from the
+// frozen framing instead of jumping — the player never moved, so in practice
+// there's nothing to ease at all.
+function _fireFreezeCamera() {
+    _fire.camFrozen = { x: gameState.camera.x, y: gameState.camera.y };
+}
+function _fireUnfreezeCamera() {
+    _fire.camFrozen = null;
+}
+function fireplaceHoldsCamera() { return !!_fire.camFrozen; }
 
 function setupFireplaceUI() {
     const overlay = document.getElementById('fireplace-overlay');
@@ -23304,13 +23544,24 @@ function setupFireplaceUI() {
         el.style.top    = `${slot.y * 100}%`;
         el.style.width  = `${slot.w * 100}%`;
         el.style.height = `${slot.h * 100}%`;
-        el.innerHTML = '<div class="fp-slot-photo"></div><div class="fp-slot-name"></div>';
+        el.innerHTML = '<div class="fp-slot-photo"></div>'
+                     + '<div class="fp-slot-caption">'
+                     +   '<div class="fp-slot-name"></div>'
+                     +   '<div class="fp-slot-meta">'
+                     +     '<span class="fp-slot-rank"></span>'
+                     +     '<span class="fp-slot-points"></span>'
+                     +   '</div>'
+                     + '</div>';
         stage.appendChild(el);
     }
 
     overlay.querySelector('#fireplace-close')?.addEventListener('click', closeFireplaceOverlay);
-    // Click the backdrop (never the fireplace itself) to close.
-    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeFireplaceOverlay(); });
+    // Click the backdrop (never the fireplace itself) to close. `.fp-shake` covers
+    // the whole overlay now, so an `e.target === overlay` test would never match —
+    // ask instead whether the click landed on the fireplace art or the close button.
+    overlay.addEventListener('click', (e) => {
+        if (!e.target.closest('.fp-stage, .fp-close')) closeFireplaceOverlay();
+    });
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && _fire.open) closeFireplaceOverlay(); });
 }
 

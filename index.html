@@ -127,7 +127,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 206 · Updated 8:54 AM</div>
+    <div id="build-number" class="build-number">Build 207 · Updated 9:18 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1259,12 +1259,16 @@
          BG → Fireplace → member frames → Fire → Overlay (overlay always on top,
          same viewport-covering scale as BG). -->
     <div id="fireplace-overlay" class="fp-overlay" aria-hidden="true">
-        <img class="fp-bg" src="Art/Fireplace BG.png?v=2" alt="">
-        <div class="fp-stage">
-            <img class="fp-body" src="Art/Fireplace.png" alt="المدفئة">
-            <img class="fp-fire" src="Art/Fireplace Fire.png" alt="">
+        <!-- Everything that should breathe with the room lives inside .fp-shake; the
+             close button stays outside it so it never drifts under the cursor. -->
+        <div class="fp-shake">
+            <img class="fp-bg" src="Art/Fireplace BG.png?v=2" alt="">
+            <div class="fp-stage">
+                <img class="fp-body" src="Art/Fireplace.png" alt="المدفئة">
+                <img class="fp-fire" src="Art/Fireplace Fire.png" alt="">
+            </div>
+            <img class="fp-topcoat" src="Art/Fireplace Overlay.png" alt="">
         </div>
-        <img class="fp-topcoat" src="Art/Fireplace Overlay.png" alt="">
         <button id="fireplace-close" class="fp-close" aria-label="إغلاق">✕</button>
     </div>
 
@@ -1539,7 +1543,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=212"></script>
+        <script type="module" src="game.js?v=213"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
