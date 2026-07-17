@@ -31,6 +31,7 @@ const SETTINGS_NAMES_KEY    = 'mdwnh_hide_names';        // '0' = show, '1' = hi
 const SETTINGS_JOYSTICK_KEY = 'mdwnh_joystick_mode';    // 'auto' | 'always' | 'off'
 const SETTINGS_NOIDLE_KEY   = 'mdwnh_disable_idle_anim'; // '1' = disable idle animation while working
 const SETTINGS_AZKAR_RANDOM_KEY = 'mdwnh_randomize_azkar'; // '1' = shuffle azkar order
+const SETTINGS_LEMO_KEY     = 'mdwnh_hide_lemo';        // '1' = hide Lemo entirely
 const SETTINGS_PRAYER_DELAY_KEY = 'mdwnh_prayer_jamaah_delay'; // '1' = +5 min to each prayer (mosque mode)
 // Particle / overlay OVERRIDES. These deliberately sit ON TOP of the graphics tier:
 // absent = follow the tier (the historical behaviour), 'on'/'off' = force it either
@@ -8634,6 +8635,7 @@ function gameLoop(timestamp) {
         gameState._potato = isPotato();
         gameState._disableIdleAnim = getDisableIdleAnim();
         gameState._hideNames = getHideNames();
+        gameState._hideLemo  = getHideLemo();
         gameState._particlesOn = particlesEnabled();
         gameState._overlaysOn  = overlaysEnabled();
         gameState._isMobile    = isMobile();   // cached for hot draw code (touches window/screen)
@@ -13343,6 +13345,10 @@ function overlaysEnabled() {
     return m === 'auto' ? !isPotato() : m === 'on';
 }
 
+function getHideLemo() {
+    return localStorage.getItem(SETTINGS_LEMO_KEY) === '1';
+}
+
 function getHideNames() {
     return localStorage.getItem(SETTINGS_NAMES_KEY) === '1';
 }
@@ -13363,6 +13369,8 @@ function setupSettingsUI() {
     const particlesLabel= document.getElementById('settings-particles-label');
     const overlaysBtn   = document.getElementById('settings-overlays-btn');
     const overlaysLabel = document.getElementById('settings-overlays-label');
+    const lemoBtn       = document.getElementById('settings-lemo-btn');
+    const lemoLabel     = document.getElementById('settings-lemo-label');
     const joystickBtn   = document.getElementById('settings-joystick-btn');
     const joystickLabel = document.getElementById('settings-joystick-label');
     const idleBtn       = document.getElementById('settings-idle-btn');
@@ -13390,6 +13398,15 @@ function setupSettingsUI() {
         const labels = { high: 'عالية', low: 'متوسطة', potato: 'بطاطس' };
         graphicsLabel.textContent = labels[tier];
         _applyGraphicsSetting();
+    }
+
+    function _reflectLemo() {
+        if (!lemoBtn) return;
+        const hide = getHideLemo();
+        lemoBtn.dataset.value = hide ? 'hide' : 'show';
+        lemoBtn.classList.toggle('settings-toggle-on', !hide);
+        lemoBtn.classList.toggle('settings-toggle-low', hide);
+        if (lemoLabel) lemoLabel.textContent = hide ? 'مخفي' : 'ظاهر';
     }
 
     function _reflectNames() {
@@ -13493,6 +13510,14 @@ function setupSettingsUI() {
         _reflectNames();
     });
 
+    if (lemoBtn) {
+        lemoBtn.addEventListener('click', () => {
+            localStorage.setItem(SETTINGS_LEMO_KEY, getHideLemo() ? '0' : '1');
+            gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
+            _reflectLemo();
+        });
+    }
+
     if (joystickBtn) {
         joystickBtn.addEventListener('click', () => {
             // Binary toggle: flip the resolved visible state.
@@ -13540,9 +13565,20 @@ function setupSettingsUI() {
     // Open/close with a disappearing animation (close adds a transient class, then hides
     // after the animation finishes — no more snapping out of existence).
     let _settingsCloseTimer = null;
+    // Stagger the entrance in DOM order. This lived in style.css as a hardcoded
+    // nth-child list, but it only covered the first two rows of each category —
+    // every row added after that animated at 0s and popped in ahead of the
+    // cascade. Indexing the real children keeps any new row/category sequenced.
+    const SETTINGS_ROW_STAGGER_MS = 50;
+    function _settingsSequenceRows() {
+        panel.querySelectorAll('.settings-category-title, .settings-row')
+             .forEach((el, i) => { el.style.animationDelay = (i * SETTINGS_ROW_STAGGER_MS) + 'ms'; });
+    }
+
     function openSettingsPanel() {
         clearTimeout(_settingsCloseTimer);
         panel.classList.remove('settings-panel-closing');
+        _settingsSequenceRows();          // before .hidden comes off, so the delays are live
         panel.classList.remove('hidden');
         settingsBtn.classList.add('active');
         _uiSeqReset();   // start the row cascade's pitch sweep fresh (deep → high)
@@ -13581,6 +13617,7 @@ function setupSettingsUI() {
     _reflectNames();
     _reflectParticles();
     _reflectOverlays();
+    _reflectLemo();
     _reflectJoystick();
     _reflectIdle();
     _reflectAzkarRandom();
@@ -23331,15 +23368,20 @@ const LEMO_WALK_MOVE_FRAMES = 45;
 // the same 2210×3160 space as the workspace layers — hence sx2w/sy2w straight through).
 const LEMO_SPAWN = { x: sx2w(137), y: sy2w(2711) };
 const LEMO_SPOTS = [
-    [840, 2146], [470, 2306], [1645, 2320], [911, 2727],
-    [492, 2764], [1465, 2765], [191, 2952],
+    [363, 2169], [1645, 2320], [604, 2698], [1259, 2758], [191, 2952],
 ].map(([px, py]) => ({ x: sx2w(px), y: sy2w(py) }));
 
 const LEMO_WAKE_R = 170;          // world px — how close you must get to wake him
-const LEMO_IDLE_MIN_MS = 3000;
-const LEMO_IDLE_MAX_MS = 10000;
+// He still has to finish the running Idle cycle (3s) before he'll move, so these are
+// a floor, not the whole wait — the effective idle rounds up to the next cycle.
+const LEMO_IDLE_MIN_MS = 600;
+const LEMO_IDLE_MAX_MS = 3200;
 const LEMO_PLAY_CHANCE = 0.12;    // chance an idle ends in Play instead of a walk
-const LEMO_FLIP_MS = 260;         // duration of the 3D turn
+
+// Travel easing. Not ease-IN-out: the walk art already opens with its own warm-up,
+// so easing the movement in on top of it read as him creeping off the mark. This
+// leaves at speed and only eases into the stop.
+const _lemoEase = (t) => 1 - Math.pow(1 - t, 2.5);
 
 const _lemo = {
     x: LEMO_SPAWN.x, y: LEMO_SPAWN.y,
@@ -23351,8 +23393,7 @@ const _lemo = {
     idleUntil: 0,
     spot: null,
     walk: null,
-    faceAngle: 0,                 // 0 = facing right (default), PI = facing left
-    faceTarget: 0,
+    face: 1,                      // 1 = facing right (the art's default), -1 = mirrored
     sheets: {},
     started: false,
 };
@@ -23403,9 +23444,9 @@ function _lemoStartWalk() {
     const spot = cands[Math.floor(Math.random() * cands.length)];
     _lemo.spot = spot;
     _lemo.walk = { sx: _lemo.x, sy: _lemo.y, tx: spot.x, ty: spot.y };
-    // The walk art faces RIGHT, so a leftward trip has to turn him around first;
-    // he turns back to the default once the animation finishes.
-    _lemo.faceTarget = (spot.x < _lemo.x) ? Math.PI : 0;
+    // The walk art faces RIGHT, so a leftward trip mirrors him on the spot; he
+    // snaps back to the default once the animation finishes.
+    _lemo.face = (spot.x < _lemo.x) ? -1 : 1;
     _lemoSetAnim('Walk', 'walking');
 }
 
@@ -23439,7 +23480,9 @@ function startLemo() {
 }
 
 function updateLemo(dt) {
-    if (!_lemo.started) return;
+    // Hidden: freeze him rather than keep simulating an invisible robot. He picks up
+    // wherever he was if it's turned back on.
+    if (!_lemo.started || gameState._hideLemo) return;
     const a = LEMO_ANIMS[_lemo.anim];
     const frameMs = 1000 / a.fps;
 
@@ -23457,14 +23500,6 @@ function updateLemo(dt) {
         }
     }
     _lemo.frame = Math.max(0, Math.min(a.frames - 1, f));
-
-    // 3D turn — faceAngle sweeps 0 ↔ PI and the draw takes cos() of it, so scaleX
-    // runs 1 → 0 → −1 and reads as a card flip rather than an instant mirror.
-    if (_lemo.faceAngle !== _lemo.faceTarget) {
-        const step = Math.PI * (dt / LEMO_FLIP_MS);
-        const d = _lemo.faceTarget - _lemo.faceAngle;
-        _lemo.faceAngle += Math.sign(d) * Math.min(step, Math.abs(d));
-    }
 
     switch (_lemo.state) {
         case 'sleeping': {
@@ -23495,24 +23530,25 @@ function updateLemo(dt) {
         case 'walking': {
             const w = _lemo.walk;
             const moveMs = LEMO_WALK_MOVE_FRAMES * frameMs;
-            const e = _easeInOutCubic(Math.min(1, _lemo.animT / moveMs));   // ease in, ease out
+            const e = _lemoEase(Math.min(1, _lemo.animT / moveMs));
             _lemo.x = w.sx + (w.tx - w.sx) * e;
             _lemo.y = w.sy + (w.ty - w.sy) * e;
-            if (done) { _lemo.faceTarget = 0; _lemoGoIdle(); }              // turn back to default
+            if (done) { _lemo.face = 1; _lemoGoIdle(); }                    // snap back to default
             break;
         }
     }
 }
 
 function drawLemo() {
-    if (!_lemo.started) return;
+    if (!_lemo.started || gameState._hideLemo) return;
     const sheet = _lemoSheet(_lemo.anim);
     if (!sheet) return;
     const ctx = gameState.ctx;
     const a = LEMO_ANIMS[_lemo.anim];
 
-    // Soft contact shadow on the floor — the same ellipse the avatars get.
-    const shW = LEMO_W * 0.46;
+    // Soft contact shadow on the floor — the same ellipse the avatars get, but
+    // tighter than theirs: he stands on small feet, not a full body footprint.
+    const shW = LEMO_W * 0.30;
     ctx.save();
     ctx.globalAlpha = 0.28;
     ctx.fillStyle = '#000';
@@ -23521,15 +23557,12 @@ function drawLemo() {
     ctx.fill();
     ctx.restore();
 
-    const sx = Math.cos(_lemo.faceAngle);
-    if (Math.abs(sx) < 0.02) return;    // mid-turn, edge-on: correctly invisible
-
     const [bx0, by0, bx1, by1] = a.box;
     const col = _lemo.frame % a.cols;
     const row = (_lemo.frame / a.cols) | 0;
     ctx.save();
     ctx.translate(_lemo.x, _lemo.y);
-    ctx.scale(sx, 1);                   // mirrors around his own anchor
+    ctx.scale(_lemo.face, 1);           // mirrors around his own anchor
     // Drop shadow, matching the avatars' (drawPlayers uses the same values on the
     // ring). installLowGfxShadowGuard zeroes shadowBlur on the reduced tiers, so
     // this costs nothing on mobile — same as every other shadow in the world pass.

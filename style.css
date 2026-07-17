@@ -2036,18 +2036,12 @@ body.is-mobile .btn-discord { width: 100%; }
     opacity: 0;
     animation: settingsRowIn 0.4s cubic-bezier(0.22,1,0.36,1) forwards;
 }
-/* Category 1 */
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(1) > .settings-category-title { animation-delay: 0.05s; }
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(1) > .settings-row:nth-child(2) { animation-delay: 0.10s; }
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(1) > .settings-row:nth-child(3) { animation-delay: 0.15s; }
-/* Category 2 */
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(2) > .settings-category-title { animation-delay: 0.20s; }
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(2) > .settings-row:nth-child(2) { animation-delay: 0.25s; }
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(2) > .settings-row:nth-child(3) { animation-delay: 0.30s; }
-/* Category 3 */
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(3) > .settings-category-title { animation-delay: 0.35s; }
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(3) > .settings-row:nth-child(2) { animation-delay: 0.40s; }
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category:nth-child(3) > .settings-row:nth-child(3) { animation-delay: 0.45s; }
+/* The stagger itself is assigned in JS (_settingsSequenceRows), in DOM order.
+   It used to be a hardcoded nth-child list here, but it only ever covered the
+   first two rows of each category — every row added after that inherited the
+   rule above with NO delay and popped in instantly, ahead of the cascade. JS
+   indexes whatever is actually in the panel, so new rows/categories stay
+   sequenced with nothing to update here. */
 .settings-panel-header {
     display: flex; align-items: center; justify-content: space-between;
     padding: 14px 16px 12px;

@@ -730,15 +730,19 @@ the most expensive write pattern in the app (see the Firebase Cost Rules).
 - **50/50 at login**: either asleep at `LEMO_SPAWN`, or already awake on a random spot.
 - **Waking**: the local player inside `LEMO_WAKE_R` sets `wakePending`; he only stirs
   once the current sleep loop **finishes** (no mid-cycle cut), then plays WakeUp once.
-- **Idle** for 3–10 s, then waits for the idle loop to land before choosing: a
-  `LEMO_PLAY_CHANCE` (12%) detour into Play, else a new spot.
+- **Idle**: `LEMO_IDLE_MIN/MAX_MS` is a **floor, not the whole wait** — he still has
+  to finish the running 3 s Idle cycle before he'll move, so the effective idle rounds
+  up to the next cycle. Then he chooses: a `LEMO_PLAY_CHANCE` (12%) detour into Play,
+  else a new spot.
 - **Walking**: the cycle can't be looped — it opens with a warm-up and closes with an
-  overshoot. So the **travel is bound to frames 0→45** (`LEMO_WALK_MOVE_FRAMES`,
-  eased in/out) and the last 15 frames play **in place** as he settles. One walk = one
-  playthrough, whatever the distance.
-- **Turning**: the art faces RIGHT, so a leftward trip mirrors him. `faceAngle` sweeps
-  0↔π and the draw takes `cos()` of it, so scaleX runs 1 → 0 → −1 and reads as a 3D
-  card flip. He turns back to the default when the walk animation ends.
+  overshoot. So the **travel is bound to frames 0→45** (`LEMO_WALK_MOVE_FRAMES`) and the
+  last 15 frames play **in place** as he settles. One walk = one playthrough, whatever
+  the distance. Easing is `_lemoEase` — **ease-out only**, deliberately: the walk art
+  already carries its own warm-up, and easing the movement in on top of it read as him
+  creeping off the mark.
+- **Turning**: the art faces RIGHT, so a leftward trip mirrors him — `_lemo.face` is a
+  plain ±1 snap into `ctx.scale`, no tween. He snaps back to the default when the walk
+  animation ends.
 
 ### Sprites — everything is baked by `Art/Lemo/slice.py`
 Re-run it after touching a master; it prints the `fw`/`fh`/`box` that **`LEMO_ANIMS` in
@@ -761,6 +765,12 @@ px**, mapping to `(lemo.x, lemo.y + LEMO_H/2)` — the same centre-origin,
 shadow-at-the-feet convention `drawPlayers` uses, which is also why mirroring around
 his own centre just works. `LEMO_SCALE` is derived from `LEMO_H / LEMO_BODY_SRC_H`, so
 resizing him means editing **`LEMO_H` alone**.
+
+### Hiding him
+`SETTINGS_LEMO_KEY` (العرض والأداء → ليمو). Cached per-frame as `gameState._hideLemo`
+like every other settings flag — **never call `getHideLemo()` from draw code**, it hits
+localStorage. Hidden **freezes** him (`updateLemo` early-returns) rather than simulating
+an invisible robot; he resumes wherever he was.
 
 ### Cost
 ~2.4 MB over 5 sheets, all lazy (`ensureLemoSheet`) and never on the login path; a
@@ -989,6 +999,7 @@ Opens **under the gear button, top-right** on desktop (`top:130px; right:18px`) 
 | `SETTINGS_JOYSTICK_KEY` | auto | show/hide the on-screen joystick |
 | `SETTINGS_NOIDLE_KEY` | off (`getDisableIdleAnim()`) | when **on**, freeze the local avatar's animation while working |
 | `SETTINGS_AZKAR_RANDOM_KEY` | off (`getRandomizeAzkar()`) | when **on**, shuffle morning/evening azkar order each open |
+| `SETTINGS_LEMO_KEY` | show (`getHideLemo()`) | ليمو — hide the robot entirely (freezes him; see **Lemo**) |
 | `SETTINGS_PARTICLES_KEY` | absent = follow tier | الجسيمات — tri-state **تلقائي → مفعّلة → مغلقة**. **Overrides the graphics tier** (see Graphics Tiers → Effect overrides) |
 | `SETTINGS_OVERLAYS_KEY` | absent = follow tier | الطبقات الجوية — tri-state, same override semantics |
 | `SETTINGS_PRAYER_DELAY_KEY` | off (`getPrayerJamaahDelay()`) | "صلاة الجماعة" — when **on**, adds **+5 min** to every prayer time (`prayerJamaahExtraMin()`, applied in `computeNextPrayer`/`updatePrayerPanelDOM`). **Per-USER, not per-device**: source of truth is Firebase `users/{uid}/prayerJamaahDelay`, read on login and **mirrored into localStorage** so the getter stays a cheap sync read; the toggle writes both. |
@@ -997,7 +1008,7 @@ Opens **under the gear button, top-right** on desktop (`top:130px; right:18px`) 
 Open removes `.hidden` (the `settingsPanelIn` keyframe pops it in). Close is **animated, not a snap**: `closeSettingsPanel()` adds `.settings-panel-closing` (runs `settingsPanelOut`), then `.hidden` after ~230 ms. All three close paths (close button, gear re-press, outside-click) go through it. **Closing makes no sound** (see below).
 
 ### Sequenced rows + the cascade blip (sound)
-Row/heading entrance lives in **style.css** as `@keyframes settingsRowIn` with **category-aware** `animation-delay`s (scoped `.settings-panel:not(.hidden):not(.settings-panel-closing) …` so it replays on every open). Do **not** re-add the old `juiceRowIn` settings rule in juice.css — it double-animates and fights the category delays.
+`@keyframes settingsRowIn` lives in **style.css** (scoped `.settings-panel:not(.hidden):not(.settings-panel-closing) …` so it replays on every open), but the **`animation-delay`s are assigned in JS**: `_settingsSequenceRows()` indexes `.settings-category-title, .settings-row` in DOM order on every open. They used to be a hardcoded nth-child list in CSS that only covered the **first two rows of each category** — every row added after that inherited the base rule with **no delay** and popped in instantly, ahead of the cascade. **Don't move the delays back into CSS**: the next row added would silently break the sequence again. Do **not** re-add the old `juiceRowIn` settings rule in juice.css either — it double-animates and fights the stagger.
 
 ### Avatar working animation (`drawPlayers`, the `suppressWorkAnim` block)
 Two independent suppressions, both gated on `localInWorkPhase()` (pomodoro **or** free-mode work):
