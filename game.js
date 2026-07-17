@@ -5732,7 +5732,14 @@ function updatePresenceGrace() {
         if (!p || p._presenceLostAt == null) continue;
         // A WebSocket packet is proof of life that beat Firebase to us — the relay
         // has no presence concept, so anything arriving means they're still here.
-        if (now - (p._lastWsSampleAt || 0) < PRESENCE_GRACE_MS) { p._presenceLostAt = null; continue; }
+        // Defer (not null) the deadline: nulling would rely on the `/users` onValue
+        // listener firing again to re-arm it, but RTDB suppresses no-op writes, so
+        // in a quiet lobby (nobody else's presence changing) it could stay null
+        // forever and the ghost would never get removed. Pushing the deadline keeps
+        // this self-contained — it still cancels a real reconnect (onPresenceMessage
+        // already nulls it immediately on any packet) while guaranteeing removal
+        // exactly PRESENCE_GRACE_MS after the last real sign of life either way.
+        if (now - (p._lastWsSampleAt || 0) < PRESENCE_GRACE_MS) { p._presenceLostAt = now; continue; }
         if (now - p._presenceLostAt < PRESENCE_GRACE_MS) continue;
         p._presenceLostAt = null;
         // JUICE: scale the avatar DOWN before removing (mirror of the scale-up on
