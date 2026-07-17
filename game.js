@@ -23835,7 +23835,7 @@ async function _fireStartFlame() {
         _flame.raf = requestAnimationFrame(step);
         if (t - _flame.last < 1000 / FIRE_FPS) return;
         _flame.last = t;
-        _flame.i = (_flame.i + 1) % FIRE_FRAME_COUNT;
+        _flame.i = (_flame.i - 1 + FIRE_FRAME_COUNT) % FIRE_FRAME_COUNT;
         el.src = frames[_flame.i].src;
     };
     el.src = frames[_flame.i].src;            // something to look at on frame one
