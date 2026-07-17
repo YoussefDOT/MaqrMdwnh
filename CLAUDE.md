@@ -47,7 +47,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **المدفئة / أعضاء الشهر** | Walk to the fireplace → a full-screen look at it with the month's top-3 point scorers framed on the mantel. Points come from a **separate Firebase project**. See **Fireplace / Members of the Month**. |
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
-| **Minigames** | Racing / Coffee / laptop-boss. **Entry is TEMPORARILY OFF** — the old break-room zones were removed with the old art; they'll be re-wired to the new **games table** later (all the minigame code still works, it's just unreachable for now). |
+| **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
 | **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
 | **Mobile mode** | Full touch support — virtual joystick, pull-up sounds drawer, focus-mode UI |
 | **Character customization** | Ring colour (full in-page colour wheel) + hats, placed/scaled/rotated by the user and seen by everyone. See **Character Customization**. |
@@ -985,12 +985,18 @@ Prayer location stored in localStorage (`mdwnh_prayer_location`).
 
 ## Minigame Architecture
 
-> **ENTRY IS CURRENTLY DISABLED.** The old break-room teleport zones (race / coffee /
-> laptop-boss) lived at coordinates that don't exist in the new world, and their art +
-> hints are no longer drawn — so the zones are **unreachable**. All the minigame logic
-> below still works; when we're ready, wire the new **games table** (`Workspace_0006`,
-> break room, bottom-left) as the entry point. Nothing here was deleted, just
-> disconnected.
+> **Entry = the games table** (`Workspace_0006`, break room, bottom-left). Three zones
+> (`GAME_RACE_ZONE` / `GAME_COFFEE_ZONE` / `GAME_BOSS_ZONE`), floor 1, break-time only.
+> Race + fig route through a shared host/ready lobby (`joinOrCreateMinigameLobby` →
+> `#race-panel`); laptop-boss is solo (confirm modal → straight in).
+>
+> **`MINIGAMES_ENABLED` gates the three session listeners** (`listenToRace` /
+> `listenToCoffee` / `listenToLaptopBoss`) and the idle race-track preload. It must
+> stay **true** for entry to work: without those listeners a zone press writes a lobby
+> session to Firebase that nobody ever reads back, so the sound plays and no panel
+> ever appears — that exact bug shipped once. The OLD break-room teleport zones
+> (`RACE_ZONE_RECT` & co) are separately dead behind `MINIGAME_LEGACY_ZONES` (false);
+> their rects are at coordinates the new world doesn't have.
 
 **Gender separation**: All minigame paths go through `lobbyPath()` — male/female never share sessions.
 
@@ -1000,13 +1006,31 @@ Prayer location stored in localStorage (`mdwnh_prayer_location`).
 3. Host waits for all `ready`, then sets `startTime = serverNow() + 3500`
 4. **Do NOT use a small offset** — clients need the full 3.5s window for 3-2-1 countdown
 
+### Laptop-boss art
+`LaptopBG.png` (background) → `Laptop Ground.png` → boss + player → **`Laptop Overlay.png` on top of everything**, drawn after the shake transform pops but *before* the countdown/results/teleport screens (those must stay readable over it). The laptop and the player carry a light warm wash (`_BOSS_WARM`) to sit in the art: **baked once per sheet into a cached canvas** (`_warmSheet`, keyed off the `<img>` in a WeakMap), never a per-frame `ctx.filter` — live canvas filters take a slow path on mobile GPUs, same reason `_tintedAvatar` exists. The player's wash is just a fill inside its already-clipped avatar circle.
+
 ### Race minigame
 Track is built from image pixel classification (`classifyRacePixel`); the 6 MB track PNG is **lazy-loaded** (`loadRaceTrackAsset()` — idempotent; idle after spawn + ensured on race entry). Physics: friction zones on/off-track. Camera rotates on mobile to always show car heading "up".
 
 **Car sync rides the WebSocket relay, NOT Firebase.** `syncRaceCar` sends `{t:'car', cuid, k:sessionKey, x,y,a,s,d,l,f,u}` over the presence socket ~11×/sec (`sendRaceCarWS`); `onRaceCarWS` merges it into `session.cars` (the same struct `updateRaceCarVisuals` lerps from). Firebase gets a **1s authoritative fallback** write (4/sec if the socket is down) so relay-less clients still see a working, choppier race. The field is `cuid` (not `uid`) on purpose so older clients drop the message instead of mistaking it for an avatar position. `listenToRace` keeps WS-fresh car positions when a fallback snapshot arrives (same anti-snap idea as avatars, `race._carWsAt`). **Never restore the old 90ms Firebase car writes** — every client in the lobby live-listens to the sessions node, so that was the app's most expensive Firebase pattern.
 
-### Coffee minigame
-Sugar falls from top. `progress = (serverNow() - spawnTime) / fallDuration` — computed by all clients independently. First writer wins the catch. Bad sugars (14% chance) give −3 pts.
+### Fig minigame (لعبة التين — was the coffee game)
+Figs fall from the top into a bowl held in two hands. `progress = (serverNow() - spawnTime) / fallDuration` — computed by all clients independently. First writer wins the catch. `fig.png` = +1, `Bad fig.png` (14% chance) = −3, `Golden Fig.png` = +3.
+
+**The internal names are still `coffee`** — the Firebase paths, `gameState.coffee`, `renderCoffee`, `COFFEE_*`, `sugars/{id}`, `localMug`. Only the art and the Arabic labels changed; renaming the tree would break every in-flight session doc for no gain.
+
+**Art is drawn from tight source rects** (`HANDS_SRC` / `FIG_SRC` / `BAD_FIG_SRC` / `BUBBLE_SRC`, same idea as `BOOK_SRC`) — every PNG is a 1000×1000 canvas with the art floating in the middle, so drawing the whole image makes the sprite ~30% of its box and it reads as a speck.
+
+**The bowl is TWO layers with the pile between them**: `Hands.png` (back half + hands) → `drawCoffeeFigPile` → `Hands Foreground.png` (front wall) on top. Both crop from **the same `HANDS_SRC` rect** — a different rect per layer drifts the two halves apart. Every catch pushes its type onto `mug.figs`, so a bad/golden one really shows up in the pile.
+
+- The pile is a **golden-angle spiral inside a shallow ellipse** (`COFFEE_PILE_*`), which fills evenly outward from the centre (grows with every catch, no row-jumping) and **shrinks each fig as the bowl crowds** so they always fit.
+- The visible fig window is the **lens between `Hands.png`'s rim and the front wall's top edge** — narrow. That's why the ellipse sits high (`COFFEE_PILE_CY = 0.16`) and shallow. Figs near its edges tuck behind the wall on purpose (reads as depth).
+- `COFFEE_MUG_Y_FRAC` is the **rim line** — where figs land, and the catch line. The hands box is centred *below* it (`coffeeHandsCY`), because the rim is near the top of `HANDS_SRC`.
+- `coffeeHandsSize(W,H)` clamps the drawn width against **both** axes, so a landscape phone can't push the bowl off the bottom. The catch hitbox is a **fraction of the drawn width** (`COFFEE_CATCH_FRAC`) for the same reason.
+
+**Golden fig**: 1–3 per match (`goldTarget`, host-only), never within `COFFEE_GOLD_MIN_GAP_MS` (8s) of the last golden **spawn**, falls 3× faster, +3 pts, and plays the normal collect cue at `playbackRate` 1.7.
+
+**Bubbles** (`_newCoffeeBubble`) drift up from below the screen to above it, wobbling sideways, alpha 0.3–0.7. **Seeded across the full height at match start** so the screen already has bubbles on frame one instead of filling in from the bottom.
 
 **Session lifetime rule**: `returnFromCoffee()` and `returnFromRace()` MUST write `null` to the session path. Forgetting this causes "can't play again" bugs.
 
@@ -1416,6 +1440,7 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | المدفئة overlay snaps in instead of fading | `display` can't transition, and `.active` set `display:flex` and `opacity:1` in the same frame | Keep it laid out always; drive enter/exit with `opacity` + `visibility` and apply `.active` after a double rAF (same as azkar/prayer) |
 | After-prayer azkar: the focus-sounds panel flashes for a few frames, then vanishes | `body.azkar-active` lifts the compact panel to z-index 10001 — above the prayer overlay (10000) — so it was visible until the azkar overlay (10002) finished fading in over it | `body.azkar-after-prayer .focus-sounds-panel { display: none }` — there's nothing to mix during salah |
 | After-prayer azkar per-prayer colours don't apply | `.azkar-overlay[data-prayer=…] .azkar-count-btn` ties `.azkar-overlay[data-mode="morning"] .azkar-count-btn` on specificity (0,2,1), and the mode rules come later in the file, so source order hands them the win | Prefix the per-prayer rules with `body.azkar-after-prayer` (0,3,1) so they win regardless of order |
+| Race + fig zones play the join sound but no panel ever appears; laptop-boss works fine | `MINIGAMES_ENABLED` was left `false` after the games table was wired. The zone press still ran `joinOrCreateMinigameLobby` (hence the sound) and wrote a lobby session to Firebase — but `listenToRace`/`listenToCoffee` were skipped, so `gameState.race.session` was never populated and `showRaceLobby` never ran. Laptop-boss was unaffected because it's solo: `openBossConfirm` opens its modal locally and needs no listener | `MINIGAMES_ENABLED = true`; the separately-dead old break-room rects moved behind `MINIGAME_LEGACY_ZONES` |
 | Disconnected user never leaves — others still see their avatar forever | Ending a reading session ran `onDisconnect(ref('users/{uid}')).cancel()` to disarm its own ghost-cleanup. **`cancel()` cancels the queued ops of that location AND all its children**, so it also wiped the presence handlers armed at login (`activeInGame` → false, `activeSession` → null). That user's tab close then cleared nothing, and `listenToPlayers` (which gates purely on `activeInGame === true`) kept rendering them. Only `.info/connected` re-armed it, so it self-healed only if they later had a network blip — hence "sometimes" | Arm/cancel the reading fields **individually on their own child refs** (`armReadingDisconnect` / `cancelReadingDisconnect` + `READING_DISCONNECT_FIELDS`). **Never `onDisconnect(...).cancel()` on `users/{uid}` or any other node that has child ops armed under it** |
 
 ---

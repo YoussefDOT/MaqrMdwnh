@@ -18,12 +18,15 @@ function isMobile() {
 }
 
 // ─── Minigames master switch ─────────────────────────────────────────────────
-// Minigame ENTRY is temporarily off (the old break-room zones died with the old
-// art — see CLAUDE.md). While it's off, don't pay their standby costs for every
-// user: the 3 session listeners (race/coffee/laptop-boss) and the idle race-track
-// preload (6 MB download + a CPU-heavy pixel classification). Flip this back to
-// true when the games table gets wired as the new entry point.
-const MINIGAMES_ENABLED = false;
+// Gates the 3 session listeners (race/coffee/laptop-boss) and the idle race-track
+// preload (6 MB download + a CPU-heavy pixel classification). Entry is the games
+// table (see GAME_RACE_ZONE & co) — with this false, pressing a zone writes a
+// lobby session nobody ever reads back, so the panel never appears.
+const MINIGAMES_ENABLED = true;
+// The OLD break-room teleport zones (RACE_ZONE_RECT & co) died with the old art —
+// their rects are at coordinates the new world doesn't have, so nobody can ever be
+// inside them. Their per-frame scans stay skipped; the games table replaced them.
+const MINIGAME_LEGACY_ZONES = false;
 
 // ─── Device-local settings keys (used before init() is called) ───────────────
 const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'high' | 'low' | 'potato'
@@ -2058,12 +2061,21 @@ const gameState = {
         book:         new Image(),
         race: new Image(),
         coffeeZone:     new Image(),
+        // "لعبة التين" (was the coffee game). coffeeMug = Hands.png (the bowl's back
+        // half + hands); coffeeHandsFg = Hands Foreground.png (its front wall) — the
+        // collected-fig pile is drawn BETWEEN them, which is what makes the bowl fill
+        // up. Both crop from the SAME source rect (HANDS_SRC) so they stay aligned.
         coffeeMug:      new Image(),
+        coffeeHandsFg:  new Image(),
         coffeeSugar:    new Image(),
         coffeeBadSugar: new Image(),
+        coffeeGoldFig:  new Image(),
+        coffeeWaterBg:  new Image(),
+        coffeeBubble:   new Image(),
         laptopBossZone: new Image(),
         bossBg:         new Image(),
         bossGround:     new Image(),
+        bossOverlay:    new Image(),
         bossHeart:      new Image(),
         bossHeartDead:  new Image(),
         bossIdle:       new Image(),
@@ -2497,12 +2509,35 @@ const COFFEE_BTN_CX      = 280;
 const COFFEE_BTN_CY      = BREAK_ROOM_CENTER_Y + 192;
 const COFFEE_BTN_R       = 26;
 const COFFEE_MATCH_MS    = 30000;  // 30 s match
-const COFFEE_MUG_W       = 82;
-const COFFEE_MUG_H       = 92;
-const COFFEE_MUG_Y_FRAC  = 0.80;  // mug center Y as fraction of screen H
-const COFFEE_SUGAR_W     = 48;
-const COFFEE_SUGAR_H     = 48;
-const COFFEE_CATCH_HALF  = 52;    // half-width of catch hitbox
+// Every fig-game PNG is a 1000×1000 canvas with the art floating in the middle, so
+// each one is drawn from its own tight source rect (same idea as BOOK_SRC) —
+// otherwise ~70% of the drawn box is empty padding and the sprite looks tiny.
+// Hands.png and Hands Foreground.png MUST share one rect or the bowl's two halves
+// drift apart.
+const HANDS_SRC     = { x: 234, y: 476, w: 518, h: 273 };
+const FIG_SRC       = { x: 229, y: 184, w: 590, h: 643 };   // fig.png + Golden Fig.png
+const BAD_FIG_SRC   = { x: 421, y: 238, w: 471, h: 480 };
+const BUBBLE_SRC    = { x: 195, y: 211, w: 618, h: 617 };
+const COFFEE_MUG_W       = 260;   // hands width on a roomy screen; clamped by coffeeHandsSize()
+// Fraction of screen H where the bowl's RIM sits — this is the line the figs fall
+// to (progress 1) and the catch line. The hands are drawn centred slightly below it
+// (the rim is near the top of HANDS_SRC), see coffeeHandsCY().
+const COFFEE_MUG_Y_FRAC  = 0.78;
+const COFFEE_SUGAR_W     = 54;
+const COFFEE_SUGAR_H     = Math.round(COFFEE_SUGAR_W * FIG_SRC.h / FIG_SRC.w); // 59
+const COFFEE_CATCH_FRAC  = 0.31;  // catch hitbox half-width, as a fraction of the hands width
+// Golden fig: rare, falls 3× faster, +3 points.
+const COFFEE_GOLD_MIN_GAP_MS = 8000;  // never two goldens closer than this
+const COFFEE_GOLD_FALL_MULT  = 1 / 3; // 3× faster than a normal fig
+const COFFEE_GOLD_POINTS     = 3;
+// The collected pile inside the bowl, in fractions of the drawn hands box. The
+// visible window is the lens between Hands.png's rim and the front wall's top edge,
+// so the mound sits high and shallow — figs that land near the ellipse's edges tuck
+// behind the wall on purpose (reads as depth).
+const COFFEE_PILE_CX = 0.50, COFFEE_PILE_CY = 0.16;
+const COFFEE_PILE_RX = 0.30, COFFEE_PILE_RY = 0.10;
+const COFFEE_PILE_FIG_W = 30;   // base width of a piled fig, before the crowding shrink
+const COFFEE_PILE_MAX   = 26;   // only the most recent N are drawn (the rest are buried)
 
 // Laptop boss fight minigame — to the left of the race teleporter
 const LAPTOP_BOSS_ZONE_IMG_W = 160;
@@ -3868,12 +3903,17 @@ function loadAssets() {
     gameState.assets.book.src = 'Art/Book.png';
     gameState.assets.race.src = 'Art/race.png';
     gameState.assets.coffeeZone.src     = 'Art/Coffee.png';
-    gameState.assets.coffeeMug.src      = 'Art/Coffee mug.png';
-    gameState.assets.coffeeSugar.src    = 'Art/Sugar.png';
-    gameState.assets.coffeeBadSugar.src = 'Art/Bad suger.png';
+    gameState.assets.coffeeMug.src      = 'Art/Hands.png';
+    gameState.assets.coffeeHandsFg.src  = 'Art/Hands Foreground.png';
+    gameState.assets.coffeeSugar.src    = 'Art/fig.png';
+    gameState.assets.coffeeBadSugar.src = 'Art/Bad fig.png';
+    gameState.assets.coffeeGoldFig.src  = 'Art/Golden Fig.png';
+    gameState.assets.coffeeWaterBg.src  = 'Art/Water BG.png';
+    gameState.assets.coffeeBubble.src   = 'Art/Bubbles.png';
     gameState.assets.laptopBossZone.src   = 'Art/Laptop.png?v=2';
-    gameState.assets.bossBg.src           = 'Art/LaptopBossFight/BG.png';
-    gameState.assets.bossGround.src       = 'Art/LaptopBossFight/Ground.png';
+    gameState.assets.bossBg.src           = 'Art/LaptopBossFight/LaptopBG.png';
+    gameState.assets.bossGround.src       = 'Art/LaptopBossFight/Laptop Ground.png';
+    gameState.assets.bossOverlay.src      = 'Art/LaptopBossFight/Laptop Overlay.png';
     gameState.assets.bossHeart.src        = 'Art/LaptopBossFight/Heart.png';
     gameState.assets.bossHeartDead.src    = 'Art/LaptopBossFight/HeartDead.png';
     gameState.assets.bossIdle.src         = 'Art/LaptopBossFight/laptop_idle.png';
@@ -4541,7 +4581,7 @@ function showCoffeeLobby(session) {
     const startBtn = document.getElementById('race-start');
     const returnBtn = document.getElementById('race-return');
     if (!panel || !title || !status || !startBtn || !returnBtn) return;
-    title.textContent = 'لعبة القهوة';
+    title.textContent = 'لعبة التين';
     status.textContent = session.hostId === gameState.userId ? 'أنت المضيف' : 'بانتظار المضيف';
     startBtn.textContent = 'ابدأ';
     startBtn.style.display = session.hostId === gameState.userId ? 'block' : 'none';
@@ -8455,7 +8495,7 @@ function updateInteractions() {
 
     // Minigame zone scans — 3 × Object.values().filter per frame during breaks,
     // for entry points that are currently unreachable. Skipped while disabled.
-    if (!MINIGAMES_ENABLED) {
+    if (!MINIGAME_LEGACY_ZONES) {
         gameState.raceZonePlayers = [];
         gameState.coffeeZonePlayers = [];
         gameState.laptopBossZonePlayers = [];
@@ -9532,7 +9572,10 @@ function startLocalCoffee(session) {
         tilt: 0,          // current tilt in radians
         score: 0, alive: true,
         flashFrames: 0,   // frames remaining for catch flash
-        flashType: 'good' // 'good' | 'bad'
+        flashType: 'good',// 'good' | 'bad' | 'golden'
+        // Every fig actually caught, in order — this IS the pile drawn inside the
+        // bowl, so a bad/golden catch really shows up among the normal ones.
+        figs: []
     };
     gameState.coffee.shakeX          = 0;
     gameState.coffee.shakeY          = 0;
@@ -9542,14 +9585,14 @@ function startLocalCoffee(session) {
     gameState.coffee.lastSugarSpawn  = 0;
     gameState.coffee.countdownSoundPlayed = false;
     gameState.coffee.mugVisuals      = {};  // uid → { displayX } for smooth ghost interpolation
-    // Warm ambient wind streaks for the background
-    gameState.coffee.windParticles   = Array.from({ length: 16 }, () => ({
-        x:     Math.random(),
-        y:     Math.random(),
-        speed: 0.00035 + Math.random() * 0.00055,
-        size:  1 + Math.random() * 1.8,
-        alpha: 0.03 + Math.random() * 0.07
-    }));
+    // Golden-fig budget for this match (host-only bookkeeping) — 1 to 3 per match,
+    // spaced at least COFFEE_GOLD_MIN_GAP_MS apart so two never land back-to-back.
+    gameState.coffee.goldTarget      = 1 + Math.floor(Math.random() * 3);
+    gameState.coffee.goldSpawned     = 0;
+    gameState.coffee.lastGoldSpawn   = 0;
+    // Bubbles drift up through the water. Seeded across the FULL height so the
+    // screen already has bubbles on frame one instead of filling in from the bottom.
+    gameState.coffee.bubbles = Array.from({ length: 22 }, () => _newCoffeeBubble(Math.random()));
 
     // Mouse control
     if (gameState.coffee._mouseMoveHandler) {
@@ -9672,6 +9715,9 @@ function returnFromCoffee(clearState) {
     gameState.coffee.localMug         = null;
     gameState.coffee.catchParticles   = [];
     gameState.coffee.sugarParticles   = [];
+    gameState.coffee.bubbles          = [];
+    gameState.coffee.goldSpawned      = 0;
+    gameState.coffee.lastGoldSpawn    = 0;
     gameState.coffee.timerClosePlayed = false;
     gameState.coffee.shakeX           = 0;
     gameState.coffee.shakeY           = 0;
@@ -9690,8 +9736,78 @@ function returnFromCoffee(clearState) {
     }
 }
 
+// One bubble. `y` is a 0..1 fraction of screen height; pass a random one to seed the
+// pre-filled screen, or >1 to have it enter from below.
+function _newCoffeeBubble(y) {
+    return {
+        x:      Math.random(),                       // fraction of W (drift centre)
+        y,                                            // fraction of H
+        speed:  0.0016 + Math.random() * 0.0028,     // fractions of H per frame, upward
+        size:   10 + Math.random() * 26,             // px
+        alpha:  0.3 + Math.random() * 0.4,           // 0.3 .. 0.7 per the brief
+        // Shake: a slow sideways wobble as it rises.
+        phase:  Math.random() * Math.PI * 2,
+        wobbleSpeed: 0.03 + Math.random() * 0.05,
+        wobbleAmp:   0.004 + Math.random() * 0.012   // fractions of W
+    };
+}
+
+// The drawn size of the bowl. Big by default — the hands are the thing you aim, they
+// must not read as a speck — but clamped against BOTH axes so a short/narrow window
+// (landscape phone) can't push them off the bottom or across the whole screen.
+function coffeeHandsSize(W, H) {
+    const w = Math.min(COFFEE_MUG_W, W * 0.34, H * 0.34 * HANDS_SRC.w / HANDS_SRC.h);
+    return { w, h: w * HANDS_SRC.h / HANDS_SRC.w };
+}
+// The bowl's rim line (= where figs land) is COFFEE_MUG_Y_FRAC of the screen, but the
+// rim sits near the TOP of the hands crop — so the hands box is centred below it.
+function coffeeHandsCY(rimY, handsH) { return rimY + handsH * 0.48; }
+
+// Draws one fig sprite from its tight source rect, centred on (0,0) of the current
+// transform. `type` picks which PNG (and therefore which crop).
+function _drawFigSprite(ctx, type, w, h) {
+    const img = type === 'bad'    ? gameState.assets.coffeeBadSugar
+              : type === 'golden' ? gameState.assets.coffeeGoldFig
+              :                     gameState.assets.coffeeSugar;
+    if (!img || !img.complete || !img.naturalWidth) return;
+    const src = type === 'bad' ? BAD_FIG_SRC : FIG_SRC;
+    ctx.drawImage(img, src.x, src.y, src.w, src.h, -w / 2, -h / 2, w, h);
+}
+
+// The collected pile, drawn between Hands.png and Hands Foreground.png. Figs are laid
+// out on a golden-angle spiral inside a shallow ellipse — that fills evenly from the
+// centre outward, so the mound grows with every catch instead of jumping rows, and it
+// shrinks each fig as the bowl crowds so they always fit.
+function drawCoffeeFigPile(ctx, figs, boxX, boxY, boxW, boxH) {
+    if (!figs || !figs.length) return;
+    const shown = figs.length > COFFEE_PILE_MAX ? figs.slice(figs.length - COFFEE_PILE_MAX) : figs;
+    const n     = shown.length;
+    const cx    = boxX + boxW * COFFEE_PILE_CX;
+    const cy    = boxY + boxH * COFFEE_PILE_CY;
+    const rx    = boxW * COFFEE_PILE_RX;
+    const ry    = boxH * COFFEE_PILE_RY;
+    const shrink = 1 / Math.sqrt(1 + n / 10);
+    const fw = COFFEE_PILE_FIG_W * shrink;
+    const fh = fw * FIG_SRC.h / FIG_SRC.w;
+    for (let i = 0; i < n; i++) {
+        const type  = shown[i];
+        // Golden angle → an even, non-clumping spiral; sqrt keeps the density flat.
+        const ang   = i * 2.39996323;
+        const r     = n === 1 ? 0 : Math.sqrt(i / n);
+        const fx    = cx + Math.cos(ang) * r * rx;
+        const fy    = cy + Math.sin(ang) * r * ry;
+        const bw    = type === 'bad' ? fw * BAD_FIG_SRC.w / FIG_SRC.w : fw;
+        const bh    = type === 'bad' ? bw * BAD_FIG_SRC.h / BAD_FIG_SRC.w : fh;
+        ctx.save();
+        ctx.translate(fx, fy);
+        ctx.rotate(Math.sin(ang * 3.1) * 0.5);
+        _drawFigSprite(ctx, type, bw, bh);
+        ctx.restore();
+    }
+}
+
 function spawnCatchParticles(x, y, type) {
-    const count = type === 'good' ? 10 : 8;
+    const count = type === 'golden' ? 16 : type === 'good' ? 10 : 8;
     for (let i = 0; i < count; i++) {
         const angle = (Math.PI * 2 * i / count) - Math.PI / 2 + (Math.random() - 0.5) * 0.9;
         const speed = 2.5 + Math.random() * 4;
@@ -9774,14 +9890,15 @@ function updateCoffeeMode() {
     // Tick down catch flash
     if (mug.flashFrames > 0) mug.flashFrames = Math.max(0, mug.flashFrames - gameState.dtFactor);
 
-    // Drift wind particles
-    if (gameState.coffee.windParticles) {
-        gameState.coffee.windParticles.forEach(p => {
-            p.x += p.speed * gameState.dtFactor * 0.75;
-            p.y += p.speed * gameState.dtFactor * 0.22;
-            if (p.x > 1.06) { p.x = -0.06; p.y = Math.random(); }
-            if (p.y > 1.06) { p.y = -0.06; p.x = Math.random(); }
-        });
+    // Bubbles rise; once one clears the top it's recycled in from below the bottom.
+    if (gameState.coffee.bubbles) {
+        const bubbles = gameState.coffee.bubbles;
+        for (let i = 0; i < bubbles.length; i++) {
+            const b = bubbles[i];
+            b.y     -= b.speed * gameState.dtFactor;
+            b.phase += b.wobbleSpeed * gameState.dtFactor;
+            if (b.y < -0.08) bubbles[i] = _newCoffeeBubble(1.08);
+        }
     }
 
     // Decay shake
@@ -9862,20 +9979,35 @@ function updateCoffeeMode() {
         return;
     }
 
-    // Host: spawn sugars
+    // Host: spawn figs
     if (session.hostId === gameState.userId) {
         const spawnInterval = Math.max(450, 1050 - (elapsed / COFFEE_MATCH_MS) * 600);
         if (now - gameState.coffee.lastSugarSpawn > spawnInterval) {
             gameState.coffee.lastSugarSpawn = now;
-            const isBad      = Math.random() < 0.14;
-            const fallDur    = Math.max(1800, 4300 - (elapsed / COFFEE_MATCH_MS) * 2500);
-            const sugarId    = `s${now}${Math.floor(Math.random() * 9999)}`;
+            let fallDur = Math.max(1800, 4300 - (elapsed / COFFEE_MATCH_MS) * 2500);
+            // Golden fig: rare, and never within COFFEE_GOLD_MIN_GAP_MS of the last
+            // one. The gap is measured from the last golden SPAWN, and a golden falls
+            // 3× faster, so two can't visually overlap either.
+            const goldReady = gameState.coffee.goldSpawned < gameState.coffee.goldTarget
+                && (gameState.coffee.lastGoldSpawn === 0
+                    || now - gameState.coffee.lastGoldSpawn >= COFFEE_GOLD_MIN_GAP_MS);
+            const isGold = goldReady && Math.random() < 0.22;
+            let type;
+            if (isGold) {
+                type = 'golden';
+                fallDur *= COFFEE_GOLD_FALL_MULT;
+                gameState.coffee.goldSpawned++;
+                gameState.coffee.lastGoldSpawn = now;
+            } else {
+                type = Math.random() < 0.14 ? 'bad' : 'good';
+            }
+            const sugarId = `s${now}${Math.floor(Math.random() * 9999)}`;
             update(ref(database), {
                 [coffeeSessionPath(`sugars/${sugarId}`)]: {
                     x:            0.08 + Math.random() * 0.84,
                     spawnTime:    now,
                     fallDuration: fallDur,
-                    type:         isBad ? 'bad' : 'good',
+                    type,
                     caughtBy:     null
                 }
             });
@@ -9889,6 +10021,9 @@ function updateCoffeeMode() {
     const H        = canvas.height / dpr;
     const mugSX    = mug.x * W;
     const mugSY    = H * COFFEE_MUG_Y_FRAC;
+    // Hitbox tracks the DRAWN bowl width — coffeeHandsSize clamps on a small window,
+    // so a fixed pixel value would let you catch figs off the side of the bowl there.
+    const catchHalf = coffeeHandsSize(W, H).w * COFFEE_CATCH_FRAC;
     const sugars   = session.sugars || {};
 
     for (const [sid, sugar] of Object.entries(sugars)) {
@@ -9904,8 +10039,11 @@ function updateCoffeeMode() {
         const sy = progress * mugSY;
         const sx = sugar.x * W;
 
-        if (sy >= mugSY - 28 && sy <= mugSY + 22 && Math.abs(sx - mugSX) < COFFEE_CATCH_HALF) {
+        if (sy >= mugSY - 28 && sy <= mugSY + 22 && Math.abs(sx - mugSX) < catchHalf) {
             update(ref(database), { [coffeeSessionPath(`sugars/${sid}/caughtBy`)]: gameState.userId });
+            // Every catch lands in the pile, whatever it was — that's what makes the
+            // bowl show the bad/golden ones among the normal figs.
+            mug.figs.push(sugar.type === 'bad' ? 'bad' : sugar.type === 'golden' ? 'golden' : 'good');
             if (sugar.type === 'bad') {
                 mug.score = Math.max(0, mug.score - 3);
                 mug.flashFrames = 5; mug.flashType = 'bad';
@@ -9913,19 +10051,23 @@ function updateCoffeeMode() {
                 addCoffeeShake(40, 0.72);
                 // Play bad collect sound (cloned so overlapping works)
                 playPooledSound('Sound/Minigame_Coffee_Collect_Bad.mp3');
-                update(ref(database), {
-                    [coffeeSessionPath(`participants/${gameState.userId}/score`)]: mug.score
-                });
+            } else if (sugar.type === 'golden') {
+                mug.score += COFFEE_GOLD_POINTS;
+                mug.flashFrames = 9; mug.flashType = 'golden';
+                spawnCatchParticles(sx, mugSY, 'golden');
+                addCoffeeShake(12, 0.86);
+                // Same collect cue, pitched up — reads as "that one was special".
+                playPooledSound('Sound/Minigame_Coffee_Collect.mp3', 1, 1.7);
             } else {
                 mug.score++;
                 mug.flashFrames = 7; mug.flashType = 'good';
                 spawnCatchParticles(sx, mugSY, 'good');
                 addCoffeeShake(7, 0.83);
                 playPooledSound('Sound/Minigame_Coffee_Collect.mp3', 1, 0.85 + Math.random() * 0.35);
-                update(ref(database), {
-                    [coffeeSessionPath(`participants/${gameState.userId}/score`)]: mug.score
-                });
             }
+            update(ref(database), {
+                [coffeeSessionPath(`participants/${gameState.userId}/score`)]: mug.score
+            });
         }
     }
 
@@ -9961,33 +10103,33 @@ function renderCoffee() {
     ctx.save();
     ctx.scale(dpr, dpr);
 
-    // Background
-    ctx.fillStyle = '#180d06';
-    ctx.fillRect(0, 0, W, H);
-
     const now       = serverNow();
     const startTime = session.startTime || 0;
     const elapsed   = startTime > 0 ? Math.max(0, now - startTime) : 0;
-    const mugSY     = H * COFFEE_MUG_Y_FRAC;
+    const mugSY     = H * COFFEE_MUG_Y_FRAC;   // the bowl's rim = the fall/catch line
     const shX       = gameState.coffee.shakeX || 0;
     const shY       = gameState.coffee.shakeY || 0;
 
-    // Background gradient warmth
-    const grad = ctx.createRadialGradient(W / 2, H * 0.3, 0, W / 2, H * 0.3, W * 0.7);
-    grad.addColorStop(0, 'rgba(80,40,10,0.28)');
-    grad.addColorStop(1, 'rgba(0,0,0,0)');
-    ctx.fillStyle = grad;
+    // Background — Water BG, cover-fit (fills the canvas at any aspect, no stretch)
+    const waterImg = gameState.assets.coffeeWaterBg;
+    ctx.fillStyle = '#0b3a4a';
     ctx.fillRect(0, 0, W, H);
+    if (waterImg && waterImg.complete && waterImg.naturalWidth) {
+        const iw = waterImg.naturalWidth, ih = waterImg.naturalHeight;
+        const s  = Math.max(W / iw, H / ih);
+        ctx.drawImage(waterImg, (W - iw * s) / 2, (H - ih * s) / 2, iw * s, ih * s);
+    }
 
-    // Ambient wind streaks
-    if (mug && mug.windParticles) {
-        mug.windParticles.forEach(p => {
+    // Bubbles — rise from below the screen to above it, wobbling as they go.
+    const bubbleImg = gameState.assets.coffeeBubble;
+    if (gameState.coffee.bubbles && bubbleImg && bubbleImg.complete && bubbleImg.naturalWidth) {
+        gameState.coffee.bubbles.forEach(b => {
+            const bx = (b.x + Math.sin(b.phase) * b.wobbleAmp) * W;
+            const by = b.y * H;
             ctx.save();
-            ctx.globalAlpha = p.alpha;
-            ctx.fillStyle   = '#c8844a';
-            ctx.beginPath();
-            ctx.ellipse(p.x * W, p.y * H, p.size * 4, p.size * 0.9, 0.25, 0, Math.PI * 2);
-            ctx.fill();
+            ctx.globalAlpha = b.alpha;
+            ctx.drawImage(bubbleImg, BUBBLE_SRC.x, BUBBLE_SRC.y, BUBBLE_SRC.w, BUBBLE_SRC.h,
+                          bx - b.size / 2, by - b.size / 2, b.size, b.size);
             ctx.restore();
         });
     }
@@ -10006,23 +10148,28 @@ function renderCoffee() {
             // Soft trail
             if (progress < 0.9) {
                 ctx.save();
-                ctx.globalAlpha = (1 - progress) * 0.18;
+                ctx.globalAlpha = (1 - progress) * (sugar.type === 'golden' ? 0.34 : 0.18);
                 const trailGrad = ctx.createLinearGradient(sugarX, sugarY - COFFEE_SUGAR_H, sugarX, sugarY);
                 trailGrad.addColorStop(0, 'transparent');
-                trailGrad.addColorStop(1, sugar.type === 'bad' ? '#ff5555' : '#ffe0a0');
+                trailGrad.addColorStop(1, sugar.type === 'bad' ? '#ff5555'
+                                        : sugar.type === 'golden' ? '#ffd44a' : '#ffe0a0');
                 ctx.fillStyle = trailGrad;
                 ctx.fillRect(sugarX - 10, sugarY - COFFEE_SUGAR_H * 0.8, 20, COFFEE_SUGAR_H * 0.8);
                 ctx.restore();
             }
 
-            const img = sugar.type === 'bad' ? gameState.assets.coffeeBadSugar : gameState.assets.coffeeSugar;
-            if (img && img.complete && img.naturalWidth) {
-                ctx.save();
-                ctx.translate(sugarX, sugarY);
-                ctx.rotate(Math.sin(now * 0.0025 + sugar.spawnTime * 0.001) * 0.07);
-                ctx.drawImage(img, -COFFEE_SUGAR_W / 2, -COFFEE_SUGAR_H / 2, COFFEE_SUGAR_W, COFFEE_SUGAR_H);
-                ctx.restore();
+            const isBad = sugar.type === 'bad';
+            const fw = isBad ? COFFEE_SUGAR_W * BAD_FIG_SRC.w / FIG_SRC.w : COFFEE_SUGAR_W;
+            const fh = isBad ? fw * BAD_FIG_SRC.h / BAD_FIG_SRC.w : COFFEE_SUGAR_H;
+            ctx.save();
+            ctx.translate(sugarX, sugarY);
+            ctx.rotate(Math.sin(now * 0.0025 + sugar.spawnTime * 0.001) * 0.07);
+            if (sugar.type === 'golden') {
+                ctx.shadowBlur  = 18;
+                ctx.shadowColor = 'rgba(255,212,74,0.9)';
             }
+            _drawFigSprite(ctx, sugar.type, fw, fh);
+            ctx.restore();
         }
     }
 
@@ -10031,7 +10178,7 @@ function renderCoffee() {
         const alpha = Math.max(0, p.life / p.maxLife);
         ctx.save();
         ctx.globalAlpha = alpha;
-        ctx.fillStyle = p.type === 'good' ? '#f4c82b' : '#ff4444';
+        ctx.fillStyle = p.type === 'bad' ? '#ff4444' : p.type === 'golden' ? '#ffd44a' : '#8e5a72';
         ctx.beginPath();
         ctx.arc(p.x + shX, p.y + shY, p.size * alpha, 0, Math.PI * 2);
         ctx.fill();
@@ -10050,60 +10197,43 @@ function renderCoffee() {
         ctx.restore();
     });
 
-    // Ghost mugs (other players) — use client-side smoothed position
-    const mugImg = gameState.assets.coffeeMug;
+    // Ghost bowls (other players) — use client-side smoothed position
+    const hands   = coffeeHandsSize(W, H);
+    const handsCY = coffeeHandsCY(mugSY, hands.h);
     Object.entries(session.participants || {}).forEach(([uid, participant]) => {
         if (uid === gameState.userId) return;
         const mugVis = gameState.coffee.mugVisuals || {};
         const ghostX = ((mugVis[uid] ? mugVis[uid].displayX : null) ?? participant.mugX ?? 0.5) * W;
         ctx.save();
         ctx.globalAlpha = participant.alive === false ? 0.12 : 0.28;
-        if (mugImg && mugImg.complete && mugImg.naturalWidth) {
-            ctx.drawImage(mugImg, ghostX - COFFEE_MUG_W / 2 + shX, mugSY - COFFEE_MUG_H / 2 + shY, COFFEE_MUG_W, COFFEE_MUG_H);
-        }
+        ctx.translate(ghostX + shX, handsCY + shY);
+        drawCoffeeHands(ctx, null, hands.w, hands.h);
+        ctx.restore();
+        ctx.save();
         ctx.globalAlpha = participant.alive === false ? 0.2 : 0.5;
         ctx.fillStyle   = 'white';
         ctx.font        = '11px Rubik';
         ctx.textAlign   = 'center';
         ctx.textBaseline = 'alphabetic';
-        ctx.fillText((participant.username || '?').slice(0, 10), ghostX + shX, mugSY - COFFEE_MUG_H / 2 - 5 + shY);
+        ctx.fillText((participant.username || '?').slice(0, 10), ghostX + shX, mugSY - 14 + shY);
         ctx.restore();
     });
 
-    // Local mug — rendered with tilt, flash overlay, and score bubble
+    // Local bowl — rendered with tilt, flash overlay, fig pile, and score bubble
     if (mug) {
         const mugX = mug.x * W + shX;
-        const mugY = mugSY + shY;
 
         ctx.save();
         if (!mug.alive) ctx.globalAlpha = 0.35;
-        ctx.translate(mugX, mugY);
+        ctx.translate(mugX, handsCY + shY);
         ctx.rotate(mug.tilt || 0);
-        if (mugImg && mugImg.complete && mugImg.naturalWidth) {
-            if (mug.flashFrames > 0) {
-                // Tint mug on an offscreen canvas so source-atop only affects
-                // the mug's own pixels — never the transparent bounding box.
-                const oc   = document.createElement('canvas');
-                oc.width   = COFFEE_MUG_W;
-                oc.height  = COFFEE_MUG_H;
-                const octx = oc.getContext('2d');
-                octx.drawImage(mugImg, 0, 0, COFFEE_MUG_W, COFFEE_MUG_H);
-                const flashAlpha = Math.min(1, mug.flashFrames / 7) * 0.92;
-                octx.globalAlpha = flashAlpha;
-                octx.globalCompositeOperation = 'source-atop';
-                octx.fillStyle = mug.flashType === 'bad' ? '#ff3030' : '#ffffff';
-                octx.fillRect(0, 0, COFFEE_MUG_W, COFFEE_MUG_H);
-                ctx.drawImage(oc, -COFFEE_MUG_W / 2, -COFFEE_MUG_H / 2);
-            } else {
-                ctx.drawImage(mugImg, -COFFEE_MUG_W / 2, -COFFEE_MUG_H / 2, COFFEE_MUG_W, COFFEE_MUG_H);
-            }
-        }
+        drawCoffeeHands(ctx, mug, hands.w, hands.h);
         ctx.restore();
 
-        // Score bubble above mug (follows tilt)
+        // Score bubble above the bowl (follows tilt)
         if (mug.alive && startTime > 0 && now >= startTime) {
             ctx.save();
-            ctx.translate(mugX, mugY - COFFEE_MUG_H / 2 - 22);
+            ctx.translate(mugX, mugSY - 34 + shY);
             ctx.rotate((mug.tilt || 0) * 0.4);  // subtle echo of the tilt
             ctx.fillStyle = 'rgba(255,255,255,0.12)';
             ctx.beginPath();
@@ -10162,6 +10292,48 @@ function renderCoffee() {
     drawMinigameLoadFade(W, H);
 
     ctx.restore(); // undo DPR scale
+}
+
+// The bowl, centred on (0,0) of the current transform: Hands.png (back half + hands)
+// → the collected-fig pile → Hands Foreground.png (front wall) on top. `mug` null =
+// a ghost bowl (no pile, no flash).
+function drawCoffeeHands(ctx, mug, hw, hh) {
+    const backImg = gameState.assets.coffeeMug;
+    const fgImg   = gameState.assets.coffeeHandsFg;
+    const x = -hw / 2, y = -hh / 2;
+
+    if (mug && mug.flashFrames > 0) {
+        // Tint on an offscreen canvas so source-atop only touches the bowl's own
+        // pixels, never its transparent bounding box.
+        const oc  = document.createElement('canvas');
+        oc.width  = Math.max(1, Math.round(hw));
+        oc.height = Math.max(1, Math.round(hh));
+        const octx = oc.getContext('2d');
+        if (backImg && backImg.complete && backImg.naturalWidth) {
+            octx.drawImage(backImg, HANDS_SRC.x, HANDS_SRC.y, HANDS_SRC.w, HANDS_SRC.h,
+                           0, 0, oc.width, oc.height);
+        }
+        drawCoffeeFigPile(octx, mug.figs, 0, 0, oc.width, oc.height);
+        if (fgImg && fgImg.complete && fgImg.naturalWidth) {
+            octx.drawImage(fgImg, HANDS_SRC.x, HANDS_SRC.y, HANDS_SRC.w, HANDS_SRC.h,
+                           0, 0, oc.width, oc.height);
+        }
+        octx.globalAlpha = Math.min(1, mug.flashFrames / 7) * 0.92;
+        octx.globalCompositeOperation = 'source-atop';
+        octx.fillStyle = mug.flashType === 'bad'    ? '#ff3030'
+                       : mug.flashType === 'golden' ? '#ffd44a' : '#ffffff';
+        octx.fillRect(0, 0, oc.width, oc.height);
+        ctx.drawImage(oc, x, y);
+        return;
+    }
+
+    if (backImg && backImg.complete && backImg.naturalWidth) {
+        ctx.drawImage(backImg, HANDS_SRC.x, HANDS_SRC.y, HANDS_SRC.w, HANDS_SRC.h, x, y, hw, hh);
+    }
+    if (mug) drawCoffeeFigPile(ctx, mug.figs, x, y, hw, hh);
+    if (fgImg && fgImg.complete && fgImg.naturalWidth) {
+        ctx.drawImage(fgImg, HANDS_SRC.x, HANDS_SRC.y, HANDS_SRC.w, HANDS_SRC.h, x, y, hw, hh);
+    }
 }
 
 function drawCoffeeHud(W, H, elapsed, session, mug) {
@@ -10305,7 +10477,7 @@ function drawCoffeeResults(W, H, session) {
     ctx.font         = 'bold 22px Rubik';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'alphabetic';
-    ctx.fillText('النتائج ☕', W / 2, py + 40);
+    ctx.fillText('النتائج', W / 2, py + 40);
 
     ranked.forEach(([uid, result], i) => {
         const ry     = py + 64 + i * rowH;
@@ -19529,6 +19701,14 @@ function renderLaptopBoss() {
 
     ctx.restore(); // shake
 
+    // Foreground overlay — sits above EVERYTHING in the arena (background, ground,
+    // boss and player), so it goes after the shake transform is popped but before the
+    // countdown/results/teleport screens, which must stay readable on top of it.
+    const overlayImg = gameState.assets.bossOverlay;
+    if (overlayImg && overlayImg.complete && overlayImg.naturalWidth) {
+        ctx.drawImage(overlayImg, 0, 0, W, H);
+    }
+
     // Countdown overlay (if not yet started)
     if (session && session.startTime && serverNow() < session.startTime) {
         const remaining = Math.max(0, session.startTime - serverNow());
@@ -19570,6 +19750,32 @@ function renderLaptopBoss() {
     drawMinigameLoadFade(W, H);
 
     ctx.restore(); // dpr
+}
+
+// The boss arena art is warm, so the laptop and the player get a light warm wash to
+// sit in it. Baked ONCE per sheet into a cached canvas rather than a per-frame
+// ctx.filter — live canvas filters take a slow path on mobile GPUs (same reason
+// _tintedAvatar exists). Keyed off the <img>, so a sheet that hasn't decoded yet
+// simply isn't tinted until it has.
+const _BOSS_WARM = 'rgba(255,150,60,0.16)';
+const _bossWarmCache = new WeakMap();
+function _warmSheet(img) {
+    if (!img || !img.complete || !img.naturalWidth) return null;
+    const hit = _bossWarmCache.get(img);
+    if (hit) return hit;
+    try {
+        const c = document.createElement('canvas');
+        c.width = img.naturalWidth; c.height = img.naturalHeight;
+        const cx = c.getContext('2d');
+        cx.imageSmoothingEnabled = false;
+        cx.drawImage(img, 0, 0);
+        // source-atop → only the sprite's own pixels are tinted, not its padding.
+        cx.globalCompositeOperation = 'source-atop';
+        cx.fillStyle = _BOSS_WARM;
+        cx.fillRect(0, 0, c.width, c.height);
+        _bossWarmCache.set(img, c);
+        return c;
+    } catch (e) { return null; }
 }
 
 function drawBossSprite(ctx, boss, x, y, alpha) {
@@ -19633,7 +19839,7 @@ function drawBossSprite(ctx, boss, x, y, alpha) {
     if (boss.flashWhiteT > 0) {
         ctx.filter = 'brightness(2.5)';
     }
-    ctx.drawImage(sheet, frameIdx * sw, 0, sw, sh, x - dw / 2, y - dh / 2, dw, dh);
+    ctx.drawImage(_warmSheet(sheet) || sheet, frameIdx * sw, 0, sw, sh, x - dw / 2, y - dh / 2, dw, dh);
     ctx.filter = 'none';
     ctx.restore();
 }
@@ -19666,6 +19872,10 @@ function drawPlayerAvatar(ctx, player, local) {
         ctx.fillStyle = COLORS.blue;
         ctx.fillRect(-r, -r, r * 2, r * 2);
     }
+    // Warm wash, to match the arena art (and the same tint baked onto the laptop).
+    // Free here — the avatar circle is already clipped, so this is one small fill.
+    ctx.fillStyle = _BOSS_WARM;
+    ctx.fillRect(-r, -r, r * 2, r * 2);
     // Flash overlays
     if (player.flashRedT > 0) {
         ctx.fillStyle = `rgba(255,40,40,${Math.min(1, player.flashRedT / 14)})`;
@@ -20077,7 +20287,7 @@ function drawStandUpButton() {
 
 // Games-table trigger prompt: "press to join" when it's break time, or a locked
 // "closed — opens on break" notice (with a 🔒) otherwise. Same fade/pop pattern.
-const _GAME_ZONE_LABEL = { race: 'اضغط للانضمام لسباق السيارات', coffee: 'اضغط للانضمام للعبة القهوة', boss: 'اضغط لتحدي الحاسوب' };
+const _GAME_ZONE_LABEL = { race: 'اضغط للانضمام لسباق السيارات', coffee: 'اضغط للانضمام للعبة التين', boss: 'اضغط لتحدي الحاسوب' };
 const _gameZonePrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null, shown: null };
 function drawGameZonePrompt() {
     const target = gameState.activeGameZone;
