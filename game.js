@@ -23378,10 +23378,12 @@ const LEMO_IDLE_MIN_MS = 600;
 const LEMO_IDLE_MAX_MS = 3200;
 const LEMO_PLAY_CHANCE = 0.12;    // chance an idle ends in Play instead of a walk
 
-// Travel easing. Not ease-IN-out: the walk art already opens with its own warm-up,
-// so easing the movement in on top of it read as him creeping off the mark. This
-// leaves at speed and only eases into the stop.
-const _lemoEase = (t) => 1 - Math.pow(1 - t, 2.5);
+// Travel easing — ease in AND out, but the in-phase uses a lower power (1.6 vs the
+// usual cubic's 3) so he's already moving at a decent clip a few frames in instead
+// of visibly creeping off the mark on top of the walk art's own warm-up.
+const _lemoEase = (t) => t < 0.5
+    ? 0.5 * Math.pow(2 * t, 1.6)
+    : 1 - 0.5 * Math.pow(2 * (1 - t), 3);
 
 const _lemo = {
     x: LEMO_SPAWN.x, y: LEMO_SPAWN.y,
