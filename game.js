@@ -8400,15 +8400,19 @@ function updateCamera() {
 }
 
 function handleMovement() {
-    if (JUICE_ENTRANCE && _entrance.active) return;   // JUICE: lock controls during the login entrance
-    if (dashboardIsOpen()) return;                    // dashboard overlay locks movement
-    if (charCustomIsOpen()) return;                   // تخصيص الشخصية owns all input while open
-    if (fireplaceIsOpen()) return;                     // أعضاء الشهر overlay locks movement
-    if (isMinigameOverlayOpen()) return;               // minigame lobby/confirm/gameplay locks movement
-    if (gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
-        || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)) return;
     const player = gameState.players[gameState.userId];
     if (!player) return;
+    // Any of these lock out free movement. Zero the momentum velocity so a stale
+    // glide can't lurch the player the instant the lock lifts (unlock / stand up /
+    // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
+    // minigame overlays, locked-in sessions, kidnap anim, prayer, sitting, reading.
+    if ((JUICE_ENTRANCE && _entrance.active)
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || isMinigameOverlayOpen()
+        || gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
+        || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)) {
+        player._vx = 0; player._vy = 0;
+        return;
+    }
     let dx = 0, dy = 0;
     let isSprinting = gameState.keys['ShiftLeft'] || gameState.keys['ShiftRight'];
     const currentSpeed = (isSprinting ? MOVE_SPEED * 1.8 : MOVE_SPEED) * gameState.dtFactor;
@@ -8430,30 +8434,70 @@ function handleMovement() {
     // passing under it vertically (or standing still) shouldn't flip it.
     player._moveDX = dx;
 
-    if (dx !== 0 || dy !== 0) {
-        // Modal check only when there IS movement input — the full-document
-        // querySelector ran on every idle frame before and was measurable on
-        // weak phones. Behaviour is identical: with a modal open, input is ignored.
-        if (document.querySelector('.modal-overlay.active')) return;
+    const hasInput = (dx !== 0 || dy !== 0);
+
+    // Modal check only when there IS movement input — the full-document
+    // querySelector ran on every idle frame before and was measurable on
+    // weak phones. With a modal open, input is ignored (and momentum bleeds off).
+    if (hasInput && document.querySelector('.modal-overlay.active')) {
+        player._vx = 0; player._vy = 0;
+        if (player.isMoving) {
+            player.isMoving = false; player.isSprinting = false;
+            sendPositionWS(player.x, player.y, true);
+            updatePlayerPosition(player.x, player.y);
+        }
+        return;
+    }
+
+    // JUICE — momentum: ease the real velocity toward the input target instead of
+    // snapping. Short ramp so it feels weighty, not floaty. dx/dy already carry the
+    // per-frame speed incl. dtFactor, so at steady state velocity == input (same top
+    // speed as before); we accelerate a touch slower than we brake.
+    if (player._vx === undefined) { player._vx = 0; player._vy = 0; }
+    const ramp = hasInput ? 0.30 : 0.40;
+    const rk = 1 - Math.pow(1 - ramp, gameState.dtFactor);
+    player._vx += (dx - player._vx) * rk;
+    player._vy += (dy - player._vy) * rk;
+
+    const vmag = Math.hypot(player._vx, player._vy);
+    // Kill tiny residual velocity so we come to a real stop (only when no input —
+    // during a direction reversal velocity passes through zero and must NOT snap).
+    if (!hasInput && vmag < 0.25) { player._vx = 0; player._vy = 0; }
+    const moving = (player._vx !== 0 || player._vy !== 0);
+
+    if (moving) {
         player.isMoving = true;
-        player.isSprinting = isSprinting;
-        const nextX = player.x + dx;
-        const nextY = player.y + dy;
-        if (!checkCollision(nextX, player.y)) player.x = nextX;
-        if (!checkCollision(player.x, nextY)) player.y = nextY;
+        player.isSprinting = isSprinting && hasInput;
+        const nextX = player.x + player._vx;
+        const nextY = player.y + player._vy;
+        if (!checkCollision(nextX, player.y)) player.x = nextX; else player._vx = 0;
+        if (!checkCollision(player.x, nextY)) player.y = nextY; else player._vy = 0;
         player.smoothMove = false;
         syncEntityRenderToTarget(player);
         // Live movement goes over the WebSocket relay (throttled), NOT Firebase —
         // this is the per-frame write that used to spam the database.
         sendPositionWS(player.x, player.y);
 
-        if (Math.random() < (isSprinting ? 0.8 : 0.4) * gameState.dtFactor) {
-            spawnDust(player.renderX, player.renderY, isSprinting ? 2 : 1, false);
+        if (Math.random() < (player.isSprinting ? 0.8 : 0.4) * gameState.dtFactor) {
+            spawnDust(player.renderX, player.renderY, player.isSprinting ? 2 : 1, false);
         }
+
+        // JUICE: a kick of dust the instant a sprint BEGINS.
+        if (player.isSprinting && !player._wasSprinting) {
+            spawnImpactBurst(player.renderX, player.renderY + PLAYER_SIZE / 2, 8);
+        }
+        // Track "was moving fast" so a hard stop can kick up dust + land-squash.
+        player._wasMovingFast = player.isSprinting || vmag > MOVE_SPEED * 1.15;
     } else {
         if (player.isMoving) {
             player.isMoving = false;
             player.isSprinting = false;
+            // JUICE: coming to a hard stop from speed kicks up dust + a land-squash.
+            if (player._wasMovingFast) {
+                spawnImpactBurst(player.renderX, player.renderY + PLAYER_SIZE / 2, 7);
+                player._stopSquashT = performance.now();
+            }
+            player._wasMovingFast = false;
             // On stop: persist the final position to Firebase (so late joiners /
             // reclaim / spawn read a correct last-known spot) AND push one forced
             // socket update so others halt our walk animation immediately.
@@ -8461,6 +8505,7 @@ function handleMovement() {
             updatePlayerPosition(player.x, player.y);
         }
     }
+    player._wasSprinting = player.isSprinting;
 }
 
 function updateWindParticles() {
@@ -8844,6 +8889,26 @@ function updatePlayerBobbing() {
         if (player.bobTime === undefined) player.bobTime = 0;
         if (player.bobOffset === undefined) player.bobOffset = 0;
 
+        // JUICE: render velocity → drives the lean-into-turns tilt and the shadow
+        // stretch. Computed here (this loop already walks every player) for local
+        // AND remote — both have renderX/renderY, so remotes lean/stretch too.
+        if (player.renderX === undefined || player.renderY === undefined) {
+            player._rspeedSm = 0; player._rvxSm = 0; player._leanAngle = 0;
+        } else {
+            if (player._prevRX === undefined) { player._prevRX = player.renderX; player._prevRY = player.renderY; }
+            const _dtf = Math.max(0.0001, gameState.dtFactor);
+            const rvx = (player.renderX - player._prevRX) / _dtf;
+            const rvy = (player.renderY - player._prevRY) / _dtf;
+            player._prevRX = player.renderX; player._prevRY = player.renderY;
+            const rspeed = Math.hypot(rvx, rvy);
+            const _sm = 0.2 * gameState.dtFactor;
+            player._rspeedSm = (player._rspeedSm ?? 0) + (rspeed - (player._rspeedSm ?? 0)) * _sm;
+            player._rvxSm = (player._rvxSm ?? 0) + (rvx - (player._rvxSm ?? 0)) * _sm;
+            const _leanTarget = player.isMoving
+                ? Math.max(-1, Math.min(1, player._rvxSm / (MOVE_SPEED * 1.4))) * 0.12 : 0;
+            player._leanAngle = (player._leanAngle ?? 0) + (_leanTarget - (player._leanAngle ?? 0)) * 0.15 * gameState.dtFactor;
+        }
+
         const isLocal = player.userId === gameState.userId;
         const lastBobTime = player.bobTime;
         const lockedIn = isLocal ? gameState.isLockedIn : player.isLockedIn;
@@ -8878,6 +8943,13 @@ function updatePlayerBobbing() {
                         const walkSound = pool.els[pool.i = (pool.i + 1) % pool.els.length];
                         try { walkSound.currentTime = 0; } catch (_) {}
                         walkSound.volume = player.isSprinting ? 0.6 : 0.3;
+                        // JUICE: a crisper, higher tick on the wooden stairs, a touch
+                        // brighter when sprinting, plus a hair of random pitch so the
+                        // footsteps don't sound robotic.
+                        try {
+                            walkSound.playbackRate = (onStairs ? 1.28 : (player.isSprinting ? 1.08 : 1.0))
+                                + (Math.random() - 0.5) * 0.08;
+                        } catch (_) {}
                         walkSound.play().catch(e => {});
                     }
                 }
@@ -12519,6 +12591,24 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             }
         }
 
+        // JUICE — lean into the direction of travel + walking squash & stretch.
+        // Lean/stretch apply for local AND remote (both fed by _leanAngle/_rspeedSm
+        // in updatePlayerBobbing). The land-squash pulse is local-only (set on stop).
+        if (!tpData) {
+            // Applied unconditionally (not gated on isMoving) so the tilt rides
+            // _leanAngle's own smooth decay back to 0 instead of snapping off
+            // the instant movement stops.
+            workAngle += (player._leanAngle || 0);
+            if (player._stopSquashT != null) {
+                const st = (performance.now() - player._stopSquashT) / 260;
+                if (st >= 1) { player._stopSquashT = null; }
+                else {
+                    const s = Math.sin(st * Math.PI) * (1 - st) * 0.16;   // quick squash → recover
+                    workScaleX *= (1 + s); workScaleY *= (1 - s);
+                }
+            }
+        }
+
         // JUICE: entrance drop (local player) + scale-in pop (remote players).
         let _juiceScale = 1, _juiceDropY = 0, _juiceSquashX = 1, _juiceSquashY = 1;
         if (JUICE_ENTRANCE) {
@@ -12551,14 +12641,19 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             const lift = (player.bobOffset || 0) + Math.abs(workBob) + tpFly * 110
                 + Math.abs(_juiceScale - 1) * 40;
             const liftN = Math.min(1, lift / 24);
-            const shW = (PLAYER_SIZE * 0.46) * (1 - liftN * 0.32) * rScale;
-            const shH = shW * 0.32;
+            // JUICE: the shadow stretches along the ground with speed and lags a hair
+            // behind the direction of travel — reads as motion.
+            const spdN = Math.min(1, (player._rspeedSm || 0) / (MOVE_SPEED * 1.8));
+            const base = (PLAYER_SIZE * 0.46) * (1 - liftN * 0.32) * rScale;
+            const shW = base * (1 + spdN * 0.22);
+            const shH = base * 0.32 * (1 - spdN * 0.18);
+            const shLag = Math.max(-8, Math.min(8, -(player._rvxSm || 0) * 0.9)) * spdN;
             const shGroundY = renderY + (PLAYER_SIZE / 2) * rScale - 2;
             ctx.save();
             ctx.globalAlpha = (0.28 - liftN * 0.14) * (tpData ? (1 - tpFadeOut) : 1) * floorVis;
             ctx.fillStyle = '#000';
             ctx.beginPath();
-            ctx.ellipse(screenX + coopDX, shGroundY, shW, shH, 0, 0, Math.PI * 2);
+            ctx.ellipse(screenX + coopDX + shLag, shGroundY, shW, shH, 0, 0, Math.PI * 2);
             ctx.fill();
             ctx.restore();
         }
