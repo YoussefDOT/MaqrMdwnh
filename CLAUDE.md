@@ -512,11 +512,18 @@ prefixed **`body.azkar-after-prayer`** — without that prefix it ties `[data-mo
 on specificity and silently loses on source order. Glow strengths are dialled down from
 the prayer overlay's: this is a reading surface.
 
-**The focus-sounds panel is hidden outright during after-prayer azkar**
-(`body.azkar-after-prayer .focus-sounds-panel { display: none }`). `body.azkar-active` is
-on, so the compact-panel rules were lifting it to z-index 10001 — above the prayer overlay
-(10000) — and it flashed for the frames before the azkar overlay (10002) faded in over it.
-There's nothing to mix during salah.
+**Closing must keep the class through the fade, not drop it on press.** `.azkar-overlay-bg`
+transitions `background` over 1.2s and the overlay itself fades opacity over 0.65s — so
+stripping `body.azkar-after-prayer` the instant رجوع/انتهيت is pressed swapped the still-
+visible overlay back to plain `data-mode="morning"` blue mid-fade (a blue flash right
+before it disappears). Both `closeAzkarToPrayerOverlay` and `closeAzkarOverlay`'s
+after-prayer branch now remove the class inside the same `setTimeout` that adds
+`hidden`, so the correct colour holds for the whole fade-out.
+
+**The focus-sounds panel behaves exactly like normal azkar** — compact, mixable —
+just bumped to `z-index: 10003` under `body.azkar-after-prayer` (vs the normal 10001)
+so the after-prayer overlay's own opaque background (z-index 10002) can't cover it once
+it finishes fading in.
 
 ### Key functions
 | Function | Purpose |
@@ -542,7 +549,7 @@ There's nothing to mix during salah.
 - Lock is CSS-only (`.unlocked` class) — button is **never** `disabled` attribute. On iOS, `button[disabled]` leaks touch events through to elements below. Use `classList.contains('unlocked')` check in click handler instead.
 
 ### Focus sounds during azkar
-- Desktop: panel shown in compact 2-column grid, bg/border at 10% opacity, `z-index: 10001` (above overlay at 10000), `pointer-events: all`
+- Desktop: panel shown in compact 2-column grid, bg/border at 10% opacity, `z-index: 10001` (above overlay at 10000), `pointer-events: all` — bumped to `10003` during after-prayer azkar (its own overlay is `10002`)
 - **Per-sound volume in the compact panel**: the roomy panel's inline slider doesn't fit beside a name in a 2-column grid, so the same `<input type="range">` is re-positioned as the item's own **underline** — a hairline pinned to the item's bottom edge that fills with the level, and rendered **only on a sound that's active**. It's the same element and therefore the same handler + the same `focusMix` Firebase write; there is no second code path. Its thumb stays visible (a 3px bar has nothing to aim at otherwise), and on mobile the input's box grows to 18px for a usable touch target while `background-clip: content-box` keeps the painted bar 3px
 - Mobile: sounds panel hidden entirely (`display: none !important`)
 - Prayer overlay (z-index 10000) still covers sounds panel — azkar's elevated z-index only lifts it above the *azkar* overlay, not above prayer

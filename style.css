@@ -5087,12 +5087,13 @@ body.azkar-active .sound-item.active .sound-vol::-moz-range-thumb { opacity: 0.8
    painted bar (the track stays 3px; the input's own box is what gets taller). */
 body.is-mobile.azkar-active .sound-item.active .sound-vol { height: 18px; bottom: -4px; background-clip: content-box; padding: 7px 0; }
 
-/* After-prayer azkar sits on top of the PRAYER overlay, which already covers the
-   sounds panel and owns the audio fades. But `body.azkar-active` is on, so the
-   compact-panel rules above were lifting the panel to z-index 10001 — above prayer
-   (10000) — and it flashed into view for the frames before the azkar overlay
-   (10002) faded in over it. There's nothing to mix during salah, so keep it away. */
-body.azkar-after-prayer .focus-sounds-panel { display: none !important; }
+/* After-prayer azkar's OWN overlay is z-index 10002 (see `.azkar-overlay` above),
+   above the compact panel's normal 10001 — so the panel appeared for a frame while
+   the overlay was still fading in, then vanished under its opaque background once
+   it reached full opacity. It should behave exactly like morning/evening azkar
+   (visible, compact, mixable) — just bumped one layer higher so the after-prayer
+   overlay's own backdrop can't cover it. */
+body.azkar-after-prayer .focus-sounds-panel { z-index: 10003; }
 
 /* ── Hide / show the focus-sounds panel during azkar ── */
 /* Collapse button lives in the panel header; only visible during azkar (desktop). */

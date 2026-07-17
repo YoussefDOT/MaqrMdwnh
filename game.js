@@ -17740,10 +17740,19 @@ function closeAzkarToPrayerOverlay() {
     const overlay = document.getElementById('azkar-overlay');
     if (overlay) {
         overlay.classList.remove('active');
-        setTimeout(() => { overlay.classList.add('hidden'); }, 700);
+        // `azkar-after-prayer` must outlive the fade — its per-prayer bg rules are
+        // what's actually painted, and `.azkar-overlay-bg` transitions `background`
+        // over 1.2s. Dropping the class immediately swaps it back to the plain
+        // data-mode="morning" blue WHILE the overlay is still visibly fading out,
+        // i.e. a blue flash right before it disappears. Strip it only once hidden.
+        setTimeout(() => {
+            overlay.classList.add('hidden');
+            document.body.classList.remove('azkar-after-prayer');
+        }, 700);
+    } else {
+        document.body.classList.remove('azkar-after-prayer');
     }
     document.body.classList.remove('azkar-active');
-    document.body.classList.remove('azkar-after-prayer');
     document.body.classList.remove('azkar-sounds-collapsed');
     if (az._lockInterval) { clearInterval(az._lockInterval); az._lockInterval = null; }
     az.type = null;
@@ -17767,10 +17776,17 @@ function closeAzkarOverlay(markDone) {
         const overlay = document.getElementById('azkar-overlay');
         if (overlay) {
             overlay.classList.remove('active');
-            setTimeout(() => { overlay.classList.add('hidden'); }, 700);
+            // Same reasoning as closeAzkarToPrayerOverlay: keep `azkar-after-prayer`
+            // through the fade so the overlay doesn't flash back to default blue
+            // right before it disappears.
+            setTimeout(() => {
+                overlay.classList.add('hidden');
+                document.body.classList.remove('azkar-after-prayer');
+            }, 700);
+        } else {
+            document.body.classList.remove('azkar-after-prayer');
         }
         document.body.classList.remove('azkar-active');
-        document.body.classList.remove('azkar-after-prayer');
         document.body.classList.remove('azkar-sounds-collapsed');
         if (az._lockInterval) { clearInterval(az._lockInterval); az._lockInterval = null; }
         az.type = null;
