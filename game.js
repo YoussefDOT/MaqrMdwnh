@@ -19548,6 +19548,27 @@ function damagePlayer(local, player, boss, fromGrab = false) {
 
 // ─── Boss render ──────────────────────────────────────────────────────────────
 
+// Draws `img` covering a W×H box with no stretch — crops the overflow, like CSS
+// `background-size: cover`. The boss art is a fixed 3200×1800 (16:9); a portrait
+// mobile canvas would otherwise squash it to fit.
+function _bossDrawCover(ctx, img, W, H) {
+    const ir = img.naturalWidth / img.naturalHeight;
+    const cr = W / H;
+    let sx, sy, sw, sh;
+    if (ir > cr) {
+        sh = img.naturalHeight;
+        sw = sh * cr;
+        sx = (img.naturalWidth - sw) / 2;
+        sy = 0;
+    } else {
+        sw = img.naturalWidth;
+        sh = sw / cr;
+        sx = 0;
+        sy = (img.naturalHeight - sh) / 2;
+    }
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, W, H);
+}
+
 function renderLaptopBoss() {
     const ctx = gameState.ctx;
     const canvas = gameState.canvas;
@@ -19587,7 +19608,7 @@ function renderLaptopBoss() {
     // Background — fallback gradient if image not loaded
     const bgImg = gameState.assets.bossBg;
     if (bgImg && bgImg.complete && bgImg.naturalWidth) {
-        ctx.drawImage(bgImg, 0, 0, W, H);
+        _bossDrawCover(ctx, bgImg, W, H);
     } else {
         const g = ctx.createLinearGradient(0, 0, 0, H);
         g.addColorStop(0, '#1a0f2e');
@@ -19626,7 +19647,7 @@ function renderLaptopBoss() {
     // Ground image
     const groundImg = gameState.assets.bossGround;
     if (groundImg && groundImg.complete && groundImg.naturalWidth) {
-        ctx.drawImage(groundImg, 0, 0, W, H);
+        _bossDrawCover(ctx, groundImg, W, H);
     } else {
         ctx.fillStyle = '#3a2d1c';
         ctx.fillRect(0, local.groundY, W, H - local.groundY);
@@ -19828,7 +19849,7 @@ function renderLaptopBoss() {
     // countdown/results/teleport screens, which must stay readable on top of it.
     const overlayImg = gameState.assets.bossOverlay;
     if (overlayImg && overlayImg.complete && overlayImg.naturalWidth) {
-        ctx.drawImage(overlayImg, 0, 0, W, H);
+        _bossDrawCover(ctx, overlayImg, W, H);
     }
 
     // Countdown overlay (if not yet started)
