@@ -691,8 +691,8 @@ on it. Code lives at the end of `game.js`; markup is `#fireplace-overlay` in
 
 ### The art stack (draw order is fixed)
 `Art/Fireplace BG.png` (1920×1080, `object-fit: cover` behind everything) → `.fp-stage`
-holding `Art/Fireplace.png` (1500×1920) → the 3 member frames → `Art/Fireplace Fire.png`
-(1500×1920, **always on top**). The stage is sized `width: min(100%, 100dvh*1500/1920)`
+holding `Art/Fireplace.png` (1500×1920) → the 3 member frames → the animated flame
+(`Art/Fire/fire_NN.png`, **always on top** — see **The flame**). The stage is sized `width: min(100%, 100dvh*1500/1920)`
 with `aspect-ratio: 1500/1920` — **width is the only sized axis on purpose**; a
 `height: 100%` fighting `max-width` breaks the ratio and the frames drift off the art.
 
@@ -753,14 +753,33 @@ foreign DB whose size we don't control, and the avatars are one `get()` per top-
 **memoised for the session** (`_fire.avatars`). A re-open renders the previous result
 instantly, then refreshes in the background.
 
-### Animating the fire later
-The plan is a **normal (opaque) MP4 of the flame on a BLACK background, composited with
-`mix-blend-mode: screen`** on `.fp-fire` — black goes transparent, the flame stays. Do
-**not** reach for a transparent video: alpha video needs VP9-alpha `.webm` for Chrome
-**plus** HEVC-alpha `.mp4` for Safari (two encodes, and Safari has no VP9 alpha), and a
-PNG sequence is far worse — dozens of full-size decoded frames is exactly the memory
-pressure that was OOM-crashing Safari (see **The World → Perf notes**). One short
-looping MP4 is a few hundred KB, hardware-decoded, and one file for every browser.
+### The flame — a 29-frame PNG sequence (`Art/Fire/fire_NN.png`)
+`.fp-fire` is an `<img>` whose `src` is cycled at **12 fps** by `_fireStartFlame`; the
+frames are preloaded `Image`s, so the swap doesn't flash and no stacked layers are
+needed. `_flame.i` is never reset, so reopening resumes the flicker instead of restarting
+on the same frame. Started from `openFireplaceOverlay`; stopped **550 ms after** close so
+it keeps flickering through the 0.5 s fade-out (the stop is guarded on `_fire.open`, so
+reopening mid-fade isn't killed by the previous close's timer).
+
+**Loading**: `_fireEnsureFrames()` is idempotent and kicked from `updateInteractions` the
+moment `gameState.nearFireplace` goes true — walking up is the earliest honest signal
+you're about to look, so the set is decoded by the time the overlay fades in. Never on the
+login path. A frame that 404s resolves anyway: one gap in the flicker beats no flame.
+
+**Why a sequence and not the MP4 it replaced.** The frames carry **real alpha**, so
+there's no black background and no `mix-blend-mode: screen` — which was washing out the
+dark log. The memory objection to a PNG sequence is real but is about *full-size* frames:
+`Art/Fireplace Fire.png` is a 4×8 grid of 1500×1920 cells (29 painted, 3 blank) which
+would decode to ~340 MB — the exact pressure that OOM-crashed Safari (see **The World →
+Perf notes**). Each shipped frame is cropped to the flame's own bbox (`448,946 →
+1129,1644` in cell space — that's where `.fp-fire`'s fraction rect comes from),
+downscaled to 512×525 and saved **255-colour**: the art is flat cel shading, so the
+palette is lossless to the eye (unlike Lemo's baked gradients, which banded — hence WebP
+there). The set is **~890 KB** and ~31 MB decoded.
+
+The master spritesheet stays **local-only, gitignored** like the Lemo masters. Re-cutting
+it means re-running the crop/downscale/quantize — keep the bbox and the CSS fraction rect
+in sync if it ever changes.
 
 ### Input lock
 `fireplaceIsOpen()` bails the window `keydown`, the wheel-zoom handler and

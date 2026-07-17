@@ -7626,22 +7626,19 @@ body.is-mobile.cc-active #game-canvas { display: none !important; }
     pointer-events: none;
     z-index: 1;
 }
-/* The looping flame video — cropped tight to the flame's own bounding box
-   (not the full 1500×1920 stage, unlike .fp-body) to keep the encode small,
-   so it's positioned as a fraction rect instead of `inset:0`. Composited on
-   a BLACK background + `mix-blend-mode: screen` (black → transparent, flame
-   stays) rather than a real alpha video or PNG frame sequence — Safari has
-   neither VP9-alpha nor HEVC-alpha, and decoding dozens of full-size PNG
-   frames at once is the exact memory pressure that OOM-crashed Safari
-   elsewhere (see The World → Perf notes). always on top — the members sit
-   behind the flame. */
+/* The looping flame — a 29-frame PNG sequence cycled by _fireStartFlame. The
+   frames are cropped tight to the flame's own bounding box in the source
+   spritesheet (not the full 1500×1920 stage, unlike .fp-body), so this is
+   positioned as that bbox's fraction rect instead of `inset:0`. The PNGs carry
+   real alpha, so no blend mode: `screen` would wash the dark log out.
+   Always on top — the members sit behind the flame. */
 .fp-fire {
     position: absolute;
-    left: 28.267%; top: 48.021%;
-    width: 48.667%; height: 38.854%;
+    left: 29.867%; top: 49.271%;
+    width: 45.4%; height: 36.354%;
     object-fit: fill;
-    mix-blend-mode: screen;
     user-select: none;
+    -webkit-user-drag: none;
     pointer-events: none;
     z-index: 3;
 }

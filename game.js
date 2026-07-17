@@ -8545,6 +8545,10 @@ function updateInteractions() {
     gameState.nearFireplace = pFloor === 1 && !gameState.isLockedIn && !gameState.anim.active
         && !sessionBlocksInteraction() && !fireplaceIsOpen()
         && Math.hypot(player.x - FIRE_X, player.y - FIRE_Y) < FIRE_SELECT_R;
+    // Walking up to it is the earliest honest signal you're about to look at it, so the
+    // flame frames start downloading here rather than on the click — by the time the
+    // overlay has faded in they're decoded. Idempotent, and never on the login path.
+    if (gameState.nearFireplace && !_flame.frames) _fireEnsureFrames();
 
     // Games table (race / boss / coffee triggers) — floor 1 only, one big room now
     // (no more separate break room), so proximity alone shows the prompt; whether
@@ -23764,6 +23768,60 @@ const FIRE_SLOTS = [
 const _fire = { open: false, loading: false, top3: null, avatars: {}, camFrozen: null };
 function fireplaceIsOpen() { return !!_fire.open; }
 
+// ── The flame — a 29-frame PNG sequence cut from Art/Fireplace Fire.png ──────────
+// The source spritesheet is a 4×8 grid of 1500×1920 cells (29 painted, 3 blank) and
+// stays local-only, gitignored like the Lemo masters. Each shipped frame is cropped to
+// the flame's own bounding box, downscaled to 512×525 and saved 255-colour: the art is
+// flat cel shading, so the palette is lossless to the eye and the whole set is ~890 KB.
+// The crop is also what keeps it off Safari's OOM cliff — the full cells would decode to
+// ~340 MB, the exact pressure documented for the world art layers (The World → Perf).
+// The PNGs keep their real alpha, so unlike the MP4 this replaced there's no black
+// background and no `mix-blend-mode: screen` washing out the dark log.
+const FIRE_FRAME_COUNT = 29;
+const FIRE_FPS = 12;
+const _flame = { frames: null, loading: null, raf: 0, i: 0, last: 0 };
+
+// Resolves once every frame has settled. A frame that fails to load resolves anyway —
+// one gap in the flicker beats no flame at all.
+function _fireEnsureFrames() {
+    if (_flame.frames) return Promise.resolve(_flame.frames);
+    if (_flame.loading) return _flame.loading;
+    _flame.loading = Promise.all(
+        Array.from({ length: FIRE_FRAME_COUNT }, (_, i) => new Promise(resolve => {
+            const img = new Image();
+            img.decoding = 'async';
+            img.onload = img.onerror = () => resolve(img);
+            img.src = `Art/Fire/fire_${String(i).padStart(2, '0')}.png`;
+        }))
+    ).then(imgs => (_flame.frames = imgs));
+    return _flame.loading;
+}
+
+// Swapping `src` between preloaded, decoded frames doesn't flash, so this needs no
+// stacked layers. `_flame.i` is never reset, so the flicker picks up where it left off
+// instead of restarting on the same frame every open.
+async function _fireStartFlame() {
+    const el = document.querySelector('#fireplace-overlay .fp-fire');
+    if (!el) return;
+    const frames = await _fireEnsureFrames();
+    if (!_fire.open || _flame.raf) return;    // closed again, or already running
+    const step = (t) => {
+        _flame.raf = requestAnimationFrame(step);
+        if (t - _flame.last < 1000 / FIRE_FPS) return;
+        _flame.last = t;
+        _flame.i = (_flame.i + 1) % FIRE_FRAME_COUNT;
+        el.src = frames[_flame.i].src;
+    };
+    el.src = frames[_flame.i].src;            // something to look at on frame one
+    _flame.last = performance.now();
+    _flame.raf = requestAnimationFrame(step);
+}
+
+function _fireStopFlame() {
+    if (_flame.raf) cancelAnimationFrame(_flame.raf);
+    _flame.raf = 0;
+}
+
 const _firePrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null };
 function drawFireplacePrompt() {
     const key = gameState.nearFireplace ? 'fire' : null;
@@ -23867,6 +23925,7 @@ async function openFireplaceOverlay() {
     requestAnimationFrame(() => requestAnimationFrame(() => {
         if (_fire.open) overlay.classList.add('active');
     }));
+    _fireStartFlame();
 
     // Show whatever we fetched last time instantly, then refresh in the background.
     if (_fire.top3) _fireRenderSlots(_fire.top3);
@@ -23896,6 +23955,10 @@ function closeFireplaceOverlay() {
     }
     document.body.classList.remove('fireplace-active');
     _fireUnfreezeCamera();
+    // Keep the flame flickering through the 0.5s fade-out — freezing it the instant you
+    // press close is visible. Guarded on `open` so reopening mid-fade can't be killed by
+    // the timer the close that preceded it armed.
+    setTimeout(() => { if (!_fire.open) _fireStopFlame(); }, 550);
 }
 
 // While the overlay is up the camera is pinned, then handed back the moment it

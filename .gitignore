@@ -10,6 +10,6 @@ Art/Lemo/*.png
 # reff.png is small and is where the spawn/wander coords were measured — keep it.
 !Art/Lemo/reff.png
 
-# Fireplace fire source spritesheet (4x8 grid of 1500x1920 frames, ~12 MB) — only
-# the baked "Art/Fireplace Fire.mp4" loop ships. Keep the master out of git history.
+# Fireplace fire source spritesheet (4x8 grid of 1500x1920 cells, ~12 MB) — only the
+# sliced Art/Fire/fire_NN.png sequence (~890 KB) ships. Keep the master out of git.
 Art/Fireplace Fire.png
