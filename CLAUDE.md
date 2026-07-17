@@ -46,6 +46,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock; optional shuffled order; **after-prayer azkar** reachable from the prayer overlay |
 | **المدفئة / أعضاء الشهر** | Walk to the fireplace → a full-screen look at it with the month's top-3 point scorers framed on the mantel. Points come from a **separate Firebase project**. See **Fireplace / Members of the Month**. |
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
+| **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / Coffee / laptop-boss. **Entry is TEMPORARILY OFF** — the old break-room zones were removed with the old art; they'll be re-wired to the new **games table** later (all the minigame code still works, it's just unreachable for now). |
 | **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
 | **Mobile mode** | Full touch support — virtual joystick, pull-up sounds drawer, focus-mode UI |
@@ -59,6 +60,10 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 ## File Map
 
 ```
+Art/Lemo/                    — Lemo. `Sheets/*.webp` ship (~2.4 MB); the 197 MB master
+                               PNGs and `slice.py` that bakes them down live here too,
+                               masters gitignored. `reff.png` = where his spots were
+                               measured. See Lemo.
 Hats/                        — hat PNGs + hats.json (the production manifest; the
                                pre-commit hook regenerates it). See Character Customization.
 Icon Elements/               — 7 decorative brush icons (masked + brand-tinted in the menu)
@@ -707,6 +712,72 @@ looping MP4 is a few hundred KB, hardware-decoded, and one file for every browse
 `handleMovement` — same pattern as the dashboard / char-customizer. `body.fireplace-active`
 locks body scroll and hides `#game-canvas` on mobile. `z-index: 9000` — **below** the
 prayer/azkar overlays (10000), which must cover it.
+
+---
+
+## Lemo (the robot)
+
+An ambient character in the break room. Code is the `Lemo` block at the end of
+`game.js`; there is **no markup and no CSS** — he's drawn straight onto the canvas.
+
+**Client-only, on purpose.** Nothing about him is written to Firebase and nothing is
+read back, so every player meets him in a different place and he costs **zero** of the
+10 GB download budget. Don't "fix" this by syncing him — a wandering entity would be
+the most expensive write pattern in the app (see the Firebase Cost Rules).
+
+### Behaviour (`updateLemo`, one state machine)
+`sleeping → waking → idle ⇄ walking`, with a rare `playing` detour.
+- **50/50 at login**: either asleep at `LEMO_SPAWN`, or already awake on a random spot.
+- **Waking**: the local player inside `LEMO_WAKE_R` sets `wakePending`; he only stirs
+  once the current sleep loop **finishes** (no mid-cycle cut), then plays WakeUp once.
+- **Idle** for 3–10 s, then waits for the idle loop to land before choosing: a
+  `LEMO_PLAY_CHANCE` (12%) detour into Play, else a new spot.
+- **Walking**: the cycle can't be looped — it opens with a warm-up and closes with an
+  overshoot. So the **travel is bound to frames 0→45** (`LEMO_WALK_MOVE_FRAMES`,
+  eased in/out) and the last 15 frames play **in place** as he settles. One walk = one
+  playthrough, whatever the distance.
+- **Turning**: the art faces RIGHT, so a leftward trip mirrors him. `faceAngle` sweeps
+  0↔π and the draw takes `cos()` of it, so scaleX runs 1 → 0 → −1 and reads as a 3D
+  card flip. He turns back to the default when the walk animation ends.
+
+### Sprites — everything is baked by `Art/Lemo/slice.py`
+Re-run it after touching a master; it prints the `fw`/`fh`/`box` that **`LEMO_ANIMS` in
+game.js must mirror**. Four decisions worth keeping:
+- **Per-animation crop, not one shared box.** Play needs the arms-out width; Idle
+  doesn't. Every box is measured in the SAME source-cell space, so frames still align.
+- **Alpha threshold 48.** The masters carry a stray alpha≤40 dot at the far right of
+  every cell — measuring at alpha>0 pads every frame with ~35% dead width.
+- **Lit from directly ABOVE.** The rim sits on top-facing edges only, so it survives
+  the horizontal mirror. A top-left rim would flip to top-right and read as the light
+  teleporting. Rim + shading are **baked** — a live rim pass means an offscreen canvas
+  every frame, the exact cost the graphics tiers exist to avoid.
+- **WebP q90, not PNG.** The baked gradients need thousands of shades; a 255-colour PNG
+  palette bands the head badly (1530 → 54 unique colours) and lossless PNG is ~3.3× the
+  bytes for no visible gain. `.webp` is already in `sw.js`'s `MEDIA_EXT`.
+
+### Geometry
+One anchor: `LEMO_ANCHOR_SX/SY` = the idle body's centre-x and feet-y **in source-cell
+px**, mapping to `(lemo.x, lemo.y + LEMO_H/2)` — the same centre-origin,
+shadow-at-the-feet convention `drawPlayers` uses, which is also why mirroring around
+his own centre just works. `LEMO_SCALE` is derived from `LEMO_H / LEMO_BODY_SRC_H`, so
+resizing him means editing **`LEMO_H` alone**.
+
+### Cost
+~2.4 MB over 5 sheets, all lazy (`ensureLemoSheet`) and never on the login path; a
+missing sheet just skips a frame of drawing. **Sleeping + WakeUp are freed the moment
+he's up** (`_lemoReleaseSleepSheets` — he only sleeps once per session, so that's ~19 MB
+of decoded frames that can never be needed again; same reason the world frees its
+layers). They're left as tombstones so they can't re-fetch. Play is the heaviest sheet
+and a rare detour, so it warms on idle, not at spawn.
+
+### Gotchas
+- `drawLemo` is called from **both** `render()` and `renderPiPInto` — `updateLemo` runs
+  only in `gameLoop`, so the PiP pass draws him without double-advancing (the same trap
+  the hat springs hit, see `_pipPass`).
+- He's drawn **before** `drawPlayers(false, 1)`: he's set dressing and must never
+  occlude a player.
+- The drop shadow uses the avatars' exact values; `installLowGfxShadowGuard` zeroes
+  `shadowBlur` on reduced tiers, so it's free on mobile like every other world shadow.
 
 ---
 

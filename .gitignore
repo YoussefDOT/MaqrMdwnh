@@ -3,3 +3,9 @@
 .claude/worktrees/
 presence-server/node_modules/
 presence-server/.wrangler/
+
+# Lemo source spritesheets — 197 MB of 2048² cells. Only the sliced/downscaled
+# Art/Lemo/Sheets/*.png (~950 KB) ship; keep the masters out of git history.
+Art/Lemo/*.png
+# reff.png is small and is where the spawn/wander coords were measured — keep it.
+!Art/Lemo/reff.png

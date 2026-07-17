@@ -5162,6 +5162,9 @@ function startGame(userData) {
         // Hats are tiny, but the manifest read is a network hop — keep it off the
         // spawn path. Nothing waits on it: a hat draws the moment its asset lands.
         loadHatManifest().catch(() => {});
+        // Lemo: decides asleep-vs-awake and kicks his sheets. Nothing waits on it —
+        // he simply isn't drawn until a sheet lands.
+        startLemo();
         // Race-track preload only while minigames are reachable — the 6 MB PNG +
         // its full-image getImageData/classification is a big main-thread spike
         // right around the intro, wasted while entry is off. The race-entry paths
@@ -8740,6 +8743,7 @@ function gameLoop(timestamp) {
 
         handleMovement();
         updateAnimation();
+        updateLemo(deltaTime);       // the robot's wander state machine (client-only)
         updateSitAnimation();        // sofa sit-in / stand-up tween
         updateMinigameLobbyProximity(); // auto-leave a race/coffee lobby if you wander off
         updateFloorsAndScales();     // per-player floor + dynamic stair scale
@@ -8811,6 +8815,10 @@ function render() {
     // ── Ground floor (both rooms are one open world now) ────────────────────────
     drawWorldGround();
     drawLaptopLights(1);
+
+    // Lemo lives on the ground floor. Drawn before the avatars so players always
+    // pass in FRONT of him — he's set dressing, he shouldn't ever occlude someone.
+    drawLemo();
 
     drawAmbientMotes();
     drawDustParticles();
@@ -12557,6 +12565,7 @@ function renderPiPInto(ctx, canvas, dpr) {
 
         drawWorldGround();
         drawLaptopLights(1);
+        drawLemo();               // draw-only — updateLemo never runs on the PiP pass
         drawAmbientMotes();
         drawDustParticles();
         drawPlayers(false, 1);
@@ -23268,3 +23277,272 @@ function setupFireplaceUI() {
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && _fire.open) closeFireplaceOverlay(); });
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// Lemo — the office robot
+// ════════════════════════════════════════════════════════════════════════════
+// A client-only ambient character: nothing about him is written to Firebase, so
+// every player meets him somewhere different and he costs zero download budget.
+// He sleeps at LEMO_SPAWN until someone walks up, wakes, then wanders LEMO_SPOTS
+// forever — idle → walk → idle, with a rare Play detour.
+//
+// SPRITE GEOMETRY. The five sheets were sliced out of 2048² source cells, each
+// cropped to its OWN tight alpha box (`box`, still in source-cell px). Cropping
+// per-animation rather than with one shared box keeps a third of the decoded
+// pixels out of memory — Play needs the arms-out width, Idle doesn't — and
+// because every box is recorded in the SAME source-cell space, the frames still
+// line up exactly. (The source art also carries a stray alpha≤40 dot at the far
+// right of every cell; the boxes were measured above that threshold, or it would
+// have padded each frame by ~35% of dead width.)
+//
+// The rim light and the body shading are BAKED INTO the sheets by Art/Lemo/slice.py,
+// not composited here — a live rim pass means an offscreen canvas every frame, which
+// is the exact mobile cost the graphics tiers exist to avoid. He's lit from directly
+// ABOVE on purpose: the rim sits on top-facing edges only, so it survives the
+// horizontal mirror he does to walk left. A top-left rim would flip to top-right.
+//
+// Everything is placed off ONE anchor: the source-cell point that is Lemo's
+// ground contact — LEMO_ANCHOR_SX/SY = the idle body's centre-x and feet-y —
+// which maps to (lemo.x, lemo.y + LEMO_H/2). That's the same centre-origin,
+// shadow-at-the-feet convention drawPlayers uses, so he sits in the world the
+// way an avatar does and mirrors cleanly around his own centre when he turns.
+const LEMO_BODY_SRC_W = 1018;     // idle body size in source-cell px (measured by slice.py)
+const LEMO_BODY_SRC_H = 1394;
+const LEMO_H = 88;                // world height of the idle body (a touch taller than a player)
+const LEMO_SCALE = LEMO_H / LEMO_BODY_SRC_H;   // source-cell px → world px
+const LEMO_W = LEMO_BODY_SRC_W * LEMO_SCALE;
+const LEMO_ANCHOR_SX = 999;       // idle body centre-x, source-cell px
+const LEMO_ANCHOR_SY = 1767;      // idle feet-y,        source-cell px
+
+// fw/fh/box are printed by slice.py — re-run it and these must be updated to match.
+const LEMO_ANIMS = {
+    Sleeping: { frames: 40, cols: 4, fw: 280, fh: 318, box: [479, 233, 1883, 1820], fps: 8,  loop: true  },
+    WakeUp:   { frames: 27, cols: 4, fw: 234, fh: 288, box: [410, 365, 1584, 1803], fps: 8,  loop: false },
+    Idle:     { frames: 24, cols: 4, fw: 206, fh: 280, box: [486, 369, 1512, 1771], fps: 8,  loop: true  },
+    Walk:     { frames: 60, cols: 4, fw: 210, fh: 298, box: [485, 368, 1537, 1860], fps: 10, loop: false },
+    Play:     { frames: 52, cols: 4, fw: 342, fh: 338, box: [137, 26, 1847, 1719], fps: 8,  loop: false },
+};
+
+// The walk cycle can't just be looped: it opens with a warm-up and closes with an
+// overshoot. So the TRAVEL is bound to frames 0→45 and the last 15 frames play out
+// in place as he settles. One walk = one playthrough, whatever the distance.
+const LEMO_WALK_MOVE_FRAMES = 45;
+
+// Spawn + wander spots, in source-art px (measured off Art/Lemo/reff.png, which is
+// the same 2210×3160 space as the workspace layers — hence sx2w/sy2w straight through).
+const LEMO_SPAWN = { x: sx2w(137), y: sy2w(2711) };
+const LEMO_SPOTS = [
+    [840, 2146], [470, 2306], [1645, 2320], [911, 2727],
+    [492, 2764], [1465, 2765], [191, 2952],
+].map(([px, py]) => ({ x: sx2w(px), y: sy2w(py) }));
+
+const LEMO_WAKE_R = 170;          // world px — how close you must get to wake him
+const LEMO_IDLE_MIN_MS = 3000;
+const LEMO_IDLE_MAX_MS = 10000;
+const LEMO_PLAY_CHANCE = 0.12;    // chance an idle ends in Play instead of a walk
+const LEMO_FLIP_MS = 260;         // duration of the 3D turn
+
+const _lemo = {
+    x: LEMO_SPAWN.x, y: LEMO_SPAWN.y,
+    state: 'sleeping',            // sleeping | waking | idle | walking | playing
+    anim: 'Sleeping',
+    frame: 0,
+    animT: 0,                     // ms into the current animation
+    wakePending: false,
+    idleUntil: 0,
+    spot: null,
+    walk: null,
+    faceAngle: 0,                 // 0 = facing right (default), PI = facing left
+    faceTarget: 0,
+    sheets: {},
+    started: false,
+};
+
+function ensureLemoSheet(name) {
+    if (_lemo.sheets[name]) return;                 // loaded, loading, or freed
+    const img = new Image();
+    img.decoding = 'async';
+    try { img.fetchPriority = 'low'; } catch (_) {}
+    img.src = 'Art/Lemo/Sheets/' + name + '.webp';
+    _lemo.sheets[name] = { img };
+}
+
+// Drawable, or null. Never blocks: a missing sheet just skips a frame of drawing.
+function _lemoSheet(name) {
+    const s = _lemo.sheets[name];
+    if (!s) { ensureLemoSheet(name); return null; }
+    const img = s.img;
+    return (img && img.complete && img.naturalWidth) ? img : null;
+}
+
+// He only ever sleeps once per session, so Sleeping + WakeUp are ~15 MB of decoded
+// frames that can never be needed again — free them the moment he's up. Same reason
+// the world drops its source layers once the cache is composited (Safari OOM).
+// The entries stay behind as tombstones so _lemoSheet can't re-fetch them.
+function _lemoReleaseSleepSheets() {
+    for (const n of ['Sleeping', 'WakeUp']) {
+        const s = _lemo.sheets[n];
+        if (s && s.img) { try { s.img.src = ''; } catch (_) {} }
+        _lemo.sheets[n] = { img: null, freed: true };
+    }
+}
+
+function _lemoSetAnim(name, state) {
+    _lemo.anim = name;
+    _lemo.state = state;
+    _lemo.animT = 0;
+    _lemo.frame = 0;
+}
+
+function _lemoGoIdle() {
+    _lemoSetAnim('Idle', 'idle');
+    _lemo.idleUntil = Date.now() + LEMO_IDLE_MIN_MS + Math.random() * (LEMO_IDLE_MAX_MS - LEMO_IDLE_MIN_MS);
+}
+
+function _lemoStartWalk() {
+    const cands = LEMO_SPOTS.filter(s => s !== _lemo.spot);   // never re-pick the spot he's on
+    const spot = cands[Math.floor(Math.random() * cands.length)];
+    _lemo.spot = spot;
+    _lemo.walk = { sx: _lemo.x, sy: _lemo.y, tx: spot.x, ty: spot.y };
+    // The walk art faces RIGHT, so a leftward trip has to turn him around first;
+    // he turns back to the default once the animation finishes.
+    _lemo.faceTarget = (spot.x < _lemo.x) ? Math.PI : 0;
+    _lemoSetAnim('Walk', 'walking');
+}
+
+function startLemo() {
+    if (_lemo.started) return;
+    _lemo.started = true;
+    ensureLemoSheet('Idle');
+    ensureLemoSheet('Walk');
+
+    // 50/50: either he's still curled up at his spot and you have to walk over to
+    // him, or he's already been up a while — drop him on a random spot, awake.
+    if (Math.random() < 0.5) {
+        const spot = LEMO_SPOTS[Math.floor(Math.random() * LEMO_SPOTS.length)];
+        _lemo.spot = spot;
+        _lemo.x = spot.x;
+        _lemo.y = spot.y;
+        _lemoReleaseSleepSheets();      // tombstones them before they ever load
+        _lemoGoIdle();
+    } else {
+        ensureLemoSheet('Sleeping');
+        ensureLemoSheet('WakeUp');
+        _lemo.x = LEMO_SPAWN.x;
+        _lemo.y = LEMO_SPAWN.y;
+        _lemoSetAnim('Sleeping', 'sleeping');
+    }
+
+    // Play is a rare detour and the heaviest sheet — keep it off the spawn path.
+    const warmPlay = () => ensureLemoSheet('Play');
+    if (window.requestIdleCallback) requestIdleCallback(warmPlay, { timeout: 20000 });
+    else setTimeout(warmPlay, 12000);
+}
+
+function updateLemo(dt) {
+    if (!_lemo.started) return;
+    const a = LEMO_ANIMS[_lemo.anim];
+    const frameMs = 1000 / a.fps;
+
+    _lemo.animT += dt;
+    let f = Math.floor(_lemo.animT / frameMs);
+    let justLooped = false, done = false;
+    if (f >= a.frames) {
+        if (a.loop) {
+            _lemo.animT -= a.frames * frameMs;
+            f = Math.floor(_lemo.animT / frameMs);
+            justLooped = true;
+        } else {
+            f = a.frames - 1;
+            done = true;                 // latches until the state handler moves on
+        }
+    }
+    _lemo.frame = Math.max(0, Math.min(a.frames - 1, f));
+
+    // 3D turn — faceAngle sweeps 0 ↔ PI and the draw takes cos() of it, so scaleX
+    // runs 1 → 0 → −1 and reads as a card flip rather than an instant mirror.
+    if (_lemo.faceAngle !== _lemo.faceTarget) {
+        const step = Math.PI * (dt / LEMO_FLIP_MS);
+        const d = _lemo.faceTarget - _lemo.faceAngle;
+        _lemo.faceAngle += Math.sign(d) * Math.min(step, Math.abs(d));
+    }
+
+    switch (_lemo.state) {
+        case 'sleeping': {
+            if (!_lemo.wakePending) {
+                const p = gameState.players[gameState.userId];
+                if (p) {
+                    const dx = p.x - _lemo.x, dy = p.y - _lemo.y;
+                    if (dx * dx + dy * dy < LEMO_WAKE_R * LEMO_WAKE_R) _lemo.wakePending = true;
+                }
+            }
+            // Let the current sleep cycle finish before he stirs — no mid-loop cut.
+            if (_lemo.wakePending && justLooped) _lemoSetAnim('WakeUp', 'waking');
+            break;
+        }
+        case 'waking':
+            if (done) { _lemoReleaseSleepSheets(); _lemoGoIdle(); }
+            break;
+        case 'idle':
+            // Idle for 3–10s, then let the cycle land before deciding what's next.
+            if (Date.now() >= _lemo.idleUntil && justLooped) {
+                if (Math.random() < LEMO_PLAY_CHANCE && _lemoSheet('Play')) _lemoSetAnim('Play', 'playing');
+                else _lemoStartWalk();
+            }
+            break;
+        case 'playing':
+            if (done) _lemoGoIdle();     // a play always drops back into more idling
+            break;
+        case 'walking': {
+            const w = _lemo.walk;
+            const moveMs = LEMO_WALK_MOVE_FRAMES * frameMs;
+            const e = _easeInOutCubic(Math.min(1, _lemo.animT / moveMs));   // ease in, ease out
+            _lemo.x = w.sx + (w.tx - w.sx) * e;
+            _lemo.y = w.sy + (w.ty - w.sy) * e;
+            if (done) { _lemo.faceTarget = 0; _lemoGoIdle(); }              // turn back to default
+            break;
+        }
+    }
+}
+
+function drawLemo() {
+    if (!_lemo.started) return;
+    const sheet = _lemoSheet(_lemo.anim);
+    if (!sheet) return;
+    const ctx = gameState.ctx;
+    const a = LEMO_ANIMS[_lemo.anim];
+
+    // Soft contact shadow on the floor — the same ellipse the avatars get.
+    const shW = LEMO_W * 0.46;
+    ctx.save();
+    ctx.globalAlpha = 0.28;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(_lemo.x, _lemo.y + LEMO_H / 2 - 2, shW, shW * 0.32, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+
+    const sx = Math.cos(_lemo.faceAngle);
+    if (Math.abs(sx) < 0.02) return;    // mid-turn, edge-on: correctly invisible
+
+    const [bx0, by0, bx1, by1] = a.box;
+    const col = _lemo.frame % a.cols;
+    const row = (_lemo.frame / a.cols) | 0;
+    ctx.save();
+    ctx.translate(_lemo.x, _lemo.y);
+    ctx.scale(sx, 1);                   // mirrors around his own anchor
+    // Drop shadow, matching the avatars' (drawPlayers uses the same values on the
+    // ring). installLowGfxShadowGuard zeroes shadowBlur on the reduced tiers, so
+    // this costs nothing on mobile — same as every other shadow in the world pass.
+    ctx.shadowBlur = 10;
+    ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+    ctx.shadowOffsetY = 4;
+    ctx.drawImage(
+        sheet,
+        col * a.fw, row * a.fh, a.fw, a.fh,
+        (bx0 - LEMO_ANCHOR_SX) * LEMO_SCALE,
+        (by0 - LEMO_ANCHOR_SY) * LEMO_SCALE + LEMO_H / 2,
+        (bx1 - bx0) * LEMO_SCALE,
+        (by1 - by0) * LEMO_SCALE
+    );
+    ctx.restore();
+}
