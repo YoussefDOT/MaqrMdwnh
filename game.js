@@ -23378,12 +23378,21 @@ const LEMO_IDLE_MIN_MS = 600;
 const LEMO_IDLE_MAX_MS = 3200;
 const LEMO_PLAY_CHANCE = 0.12;    // chance an idle ends in Play instead of a walk
 
-// Travel easing — ease in AND out, but the in-phase uses a lower power (1.6 vs the
-// usual cubic's 3) so he's already moving at a decent clip a few frames in instead
-// of visibly creeping off the mark on top of the walk art's own warm-up.
-const _lemoEase = (t) => t < 0.5
-    ? 0.5 * Math.pow(2 * t, 1.6)
-    : 1 - 0.5 * Math.pow(2 * (1 - t), 3);
+// Travel easing — ease in AND out, but NOT as two power curves stitched at t=0.5
+// (that was tried and it visibly kicked: a piecewise 0.5*(2t)^p1 / 1-0.5*(2(1-t))^p2
+// only has a continuous VELOCITY at the seam when p1 === p2, so using a lower power
+// for a faster start than the tail's power made the speed jump right at the midpoint
+// — the "sudden speedup" bug). A logistic curve has no seam: it's one smooth
+// function for the whole travel, and shifting its center below 0.5 front-loads the
+// acceleration (fast pickup) while the back two-thirds decelerate into a long, gentle
+// stop — same intent as before, minus the discontinuity.
+const _LEMO_EASE_K = 7, _LEMO_EASE_C = 0.32;
+const _LEMO_EASE_R0 = 1 / (1 + Math.exp(_LEMO_EASE_K * _LEMO_EASE_C));
+const _LEMO_EASE_R1 = 1 / (1 + Math.exp(-_LEMO_EASE_K * (1 - _LEMO_EASE_C)));
+const _lemoEase = (t) => {
+    const raw = 1 / (1 + Math.exp(-_LEMO_EASE_K * (t - _LEMO_EASE_C)));
+    return (raw - _LEMO_EASE_R0) / (_LEMO_EASE_R1 - _LEMO_EASE_R0);
+};
 
 const _lemo = {
     x: LEMO_SPAWN.x, y: LEMO_SPAWN.y,
@@ -23442,8 +23451,16 @@ function _lemoGoIdle() {
 }
 
 function _lemoStartWalk() {
-    const cands = LEMO_SPOTS.filter(s => s !== _lemo.spot);   // never re-pick the spot he's on
-    const spot = cands[Math.floor(Math.random() * cands.length)];
+    // Nearest spot, not a random one — but picking the single nearest EVERY time
+    // ping-pongs him between two neighbours forever once he's settled into a
+    // pocket of the room. Sort by distance, take the closest 2, then roll between
+    // those — close enough to always read as "he went to the nearby spot" while
+    // the coin flip keeps him from a permanent back-and-forth.
+    const cands = LEMO_SPOTS.filter(s => s !== _lemo.spot)    // never re-pick the spot he's on
+        .sort((a, b) => ((a.x - _lemo.x) ** 2 + (a.y - _lemo.y) ** 2)
+                       - ((b.x - _lemo.x) ** 2 + (b.y - _lemo.y) ** 2));
+    const pool = cands.slice(0, Math.min(2, cands.length));
+    const spot = pool[Math.floor(Math.random() * pool.length)];
     _lemo.spot = spot;
     _lemo.walk = { sx: _lemo.x, sy: _lemo.y, tx: spot.x, ty: spot.y };
     // The walk art faces RIGHT, so a leftward trip mirrors him on the spot; he
