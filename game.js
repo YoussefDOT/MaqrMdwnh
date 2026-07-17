@@ -27,6 +27,11 @@ const MINIGAMES_ENABLED = true;
 // their rects are at coordinates the new world doesn't have, so nobody can ever be
 // inside them. Their per-frame scans stay skipped; the games table replaced them.
 const MINIGAME_LEGACY_ZONES = false;
+// Hides the "نشارك بومو؟" nearby-invite chip panel (proximity → invite a free
+// player to shared pomodoro) without touching the feature underneath — proximity
+// detection, sendSpInvite, accept/decline all keep working, the panel just never
+// renders. Flip back to true to bring the button back.
+const SP_INVITE_UI_ENABLED = false;
 
 // ─── Device-local settings keys (used before init() is called) ───────────────
 const SETTINGS_GRAPHICS_KEY = 'mdwnh_graphics_quality'; // 'auto' | 'high' | 'low' | 'potato'
@@ -14245,7 +14250,7 @@ function checkNearbyCoopSession() {
 function renderSpNearbyPanel(players) {
     const panel = document.getElementById('sp-nearby');
     if (!panel) return;
-    if (players.length === 0) { panel.classList.add('hidden'); return; }
+    if (!SP_INVITE_UI_ENABLED || players.length === 0) { panel.classList.add('hidden'); return; }
     panel.classList.remove('hidden');
     panel.innerHTML = `<div class="sp-nearby-label">مجاورون</div>` +
         players.map(p => {
