@@ -8083,6 +8083,11 @@ function listenToPlayers() {
                             _pendingSpawn: (!isCurrentUser) ? performance.now() : null,
                             _entryT: null,
                         };
+                        // Kick the hat PNG loading the moment we learn about it (login /
+                        // loading screen, well before this player is ever drawn) instead of
+                        // waiting for the first draw call — was causing a hat to pop in a
+                        // beat late on spawn. ensureHatAsset is idempotent/cached.
+                        if (userData.hat && userData.hat.id) ensureHatAsset(userData.hat.id);
                     } else {
                         const player = gameState.players[userId];
                         // Presence came back — a blip, not a departure. Cancel the grace
@@ -8099,6 +8104,7 @@ function listenToPlayers() {
                         // outside the !isCurrentUser block below.
                         player.ringColor = _validHex(userData.ringColor);
                         player.hat       = sanitizeHat(userData.hat);
+                        if (player.hat) ensureHatAsset(player.hat.id);
                         if (isCurrentUser) ccSyncFromPlayer(player);
 
                         if (isCurrentUser) {
@@ -8422,7 +8428,14 @@ function handleMovement() {
     }
     let dx = 0, dy = 0;
     let isSprinting = gameState.keys['ShiftLeft'] || gameState.keys['ShiftRight'];
-    const currentSpeed = (isSprinting ? MOVE_SPEED * 1.8 : MOVE_SPEED) * gameState.dtFactor;
+    // NB: this target is a velocity (px per ideal 60fps tick), NOT a per-frame
+    // displacement — dtFactor is applied once, later, when the eased velocity is
+    // actually applied to position. Baking dtFactor in here too used to make _vx
+    // carry a "long frame's worth" of momentum into whatever frame came next,
+    // which on an uneven mobile frame pace (slow frame followed by a fast
+    // catch-up frame) overshot the short frame's real elapsed time and read as
+    // jitter. Cheap tiers (بطاطس) rarely jank, so it hid there.
+    const currentSpeed = isSprinting ? MOVE_SPEED * 1.8 : MOVE_SPEED;
     if (gameState.keys['KeyW'] || gameState.keys['ArrowUp']) dy -= currentSpeed;
     if (gameState.keys['KeyS'] || gameState.keys['ArrowDown']) dy += currentSpeed;
     if (gameState.keys['KeyA'] || gameState.keys['ArrowLeft']) dx -= currentSpeed;
@@ -8431,7 +8444,7 @@ function handleMovement() {
     // Mobile joystick input
     if (gameState.joystick.active && gameState.joystick.magnitude > 0.08) {
         const jSprint = gameState.joystick.sprinting;
-        const jSpeed = (jSprint ? MOVE_SPEED * 1.8 : MOVE_SPEED) * gameState.dtFactor;
+        const jSpeed = jSprint ? MOVE_SPEED * 1.8 : MOVE_SPEED;
         dx += gameState.joystick.dx * jSpeed;
         dy += gameState.joystick.dy * jSpeed;
         if (jSprint) isSprinting = true;
@@ -8457,9 +8470,10 @@ function handleMovement() {
     }
 
     // JUICE — momentum: ease the real velocity toward the input target instead of
-    // snapping. Short ramp so it feels weighty, not floaty. dx/dy already carry the
-    // per-frame speed incl. dtFactor, so at steady state velocity == input (same top
-    // speed as before); we accelerate a touch slower than we brake.
+    // snapping. Short ramp so it feels weighty, not floaty. dx/dy are a target
+    // velocity (dtFactor-free); at steady state velocity == input (same top speed
+    // as before) once dtFactor is applied where it's used below; we accelerate a
+    // touch slower than we brake.
     if (player._vx === undefined) { player._vx = 0; player._vy = 0; }
     const ramp = hasInput ? 0.30 : 0.40;
     const rk = 1 - Math.pow(1 - ramp, gameState.dtFactor);
@@ -8475,8 +8489,8 @@ function handleMovement() {
     if (moving) {
         player.isMoving = true;
         player.isSprinting = isSprinting && hasInput;
-        const nextX = player.x + player._vx;
-        const nextY = player.y + player._vy;
+        const nextX = player.x + player._vx * gameState.dtFactor;
+        const nextY = player.y + player._vy * gameState.dtFactor;
         if (!checkCollision(nextX, player.y)) player.x = nextX; else player._vx = 0;
         if (!checkCollision(player.x, nextY)) player.y = nextY; else player._vy = 0;
         player.smoothMove = false;
