@@ -6533,10 +6533,12 @@ function initMobileControls() {
     const joystickEl = document.getElementById('mobile-joystick');
     const knob = document.getElementById('joystick-knob');
     if (joystickEl && knob) {
-        const RADIUS = 58; // max knob displacement in px (outer ring radius - knob radius)
+        const RADIUS = 76; // max knob displacement in px (outer ring radius - knob radius)
         let joyTouchId = null;
         let joyCenterX = 0;
         let joyCenterY = 0;
+        let joyWasMoving = false;
+        let joyWasSprinting = false;
 
         const getJoyCenter = () => {
             const rect = joystickEl.getBoundingClientRect();
@@ -6553,6 +6555,8 @@ function initMobileControls() {
             joyCenterY = center.y;
             joystickEl.classList.add('active');
             gameState.joystick.active = true;
+            joyWasMoving = false;
+            joyWasSprinting = false;
         }, { passive: false });
 
         window.addEventListener('touchmove', (e) => {
@@ -6583,6 +6587,15 @@ function initMobileControls() {
 
             // Sprint visual
             joystickEl.classList.toggle('sprinting', gameState.joystick.sprinting);
+
+            // Haptic feedback: short buzz on walk start, stronger buzz on run start
+            const isMoving = mag > 0.08;
+            if (navigator.vibrate) {
+                if (isMoving && !joyWasMoving) navigator.vibrate(12);
+                if (gameState.joystick.sprinting && !joyWasSprinting) navigator.vibrate([15, 25, 15]);
+            }
+            joyWasMoving = isMoving;
+            joyWasSprinting = gameState.joystick.sprinting;
         }, { passive: false });
 
         const endJoy = (e) => {
@@ -6597,6 +6610,8 @@ function initMobileControls() {
             gameState.joystick.dy = 0;
             gameState.joystick.magnitude = 0;
             gameState.joystick.sprinting = false;
+            joyWasMoving = false;
+            joyWasSprinting = false;
             knob.style.transform = 'translate(-50%, -50%)';
             joystickEl.classList.remove('active', 'sprinting');
         };

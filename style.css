@@ -2218,9 +2218,9 @@ body.is-mobile .settings-panel {
     display: none; /* hidden on desktop */
     position: fixed;
     bottom: 36px;
-    left: 36px;
-    width: 116px;
-    height: 116px;
+    right: 36px;
+    width: 152px;
+    height: 152px;
     border-radius: 50%;
     background: rgba(255, 255, 255, 0.07);
     border: 2px solid rgba(255, 255, 255, 0.18);
@@ -2244,8 +2244,8 @@ body.is-mobile .settings-panel {
     position: absolute;
     top: 50%;
     left: 50%;
-    width: 46px;
-    height: 46px;
+    width: 60px;
+    height: 60px;
     border-radius: 50%;
     background: rgba(255, 255, 255, 0.70);
     box-shadow: 0 2px 12px rgba(0, 0, 0, 0.4);
@@ -2256,8 +2256,8 @@ body.is-mobile .settings-panel {
 }
 
 .mobile-joystick.active .joystick-knob {
-    width: 40px;
-    height: 40px;
+    width: 52px;
+    height: 52px;
     background: white;
 }
 
