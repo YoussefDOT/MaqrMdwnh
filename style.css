@@ -365,13 +365,17 @@ body {
     gap: 12px;
 }
 
-/* Sequential punchy entrance for each setting row when the modal opens */
+/* Sequential punchy entrance for each setting row when the modal opens.
+   Opacity stays at 1 the whole time (only the slide-up is animated) — if the
+   keyframe animation ever gets skipped/interrupted (e.g. tab backgrounded mid-
+   open on Safari), the row is still fully visible, just without the flourish.
+   An opacity:0 start here previously meant a stuck animation left the whole
+   pomodoro settings section invisible. */
 @keyframes settingGroupIn {
-    from { opacity: 0; transform: translateY(14px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from { transform: translateY(14px); }
+    to   { transform: translateY(0); }
 }
 .modal-overlay.active .setting-group {
-    opacity: 0;
     animation: settingGroupIn 0.5s cubic-bezier(0.34,1.56,0.64,1) forwards;
 }
 .modal-overlay.active .setting-group:nth-child(1) { animation-delay: 0.12s; }
