@@ -1241,8 +1241,10 @@ body {
    MENU (القائمة الرئيسية) — Discord-only entry.
    ═══════════════════════════════════════════════════════════════════════════ */
 #menu-screen {
+    flex-direction: column;
     justify-content: center;
     align-items: center;
+    gap: 14px;
     background: var(--menu-bg);
     overflow: hidden;
 }
@@ -1647,13 +1649,13 @@ body {
 }
 #pwa-install-btn svg { width: 15px; height: 15px; }
 
-/* ── "شرح الموقع" button (under the login pill) + its video player ─────────── */
+/* ── "شرح الموقع" button — a sibling of .menu-card, sitting right under it ── */
 #explainer-btn {
+    position: relative; z-index: 1; /* above #menu-screen::before like .menu-card */
     display: inline-flex;
     align-items: center;
     justify-content: center;
     gap: 9px;
-    margin-top: 10px;
     padding: 9px 18px;
     background: rgba(255,255,255,0.05);
     border: 1px solid rgba(255,255,255,0.11);
@@ -1679,7 +1681,7 @@ body {
     color: var(--brand-red);
 }
 #explainer-btn svg { width: 16px; height: 16px; }
-#explainer-btn { animation: menuCardIn 0.6s var(--bounce-hi) 0.30s backwards; }
+#explainer-btn { animation: menuCardIn 0.6s var(--bounce-hi) 0.44s backwards; }
 
 /* Overlay: opacity + visibility only (no `display` transition — see the
    azkar/prayer/fireplace pattern). Enter = backdrop fade + content slide+fade
