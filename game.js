@@ -9058,8 +9058,16 @@ function gameLoop(timestamp) {
         gameState._overlaysOn  = overlaysEnabled();
         gameState._isMobile    = isMobile();   // cached for hot draw code (touches window/screen)
     }
-    // On mobile, cap dtFactor more aggressively to reduce stutters from dropped frames
-    if (gameState._isMobile && gameState.dtFactor > 2) gameState.dtFactor = 2;
+    // Cap dtFactor more aggressively to reduce stutters from dropped frames. Was
+    // mobile-only, capped at the 100ms/16.666 ≈ 6× ceiling above on desktop — a
+    // browser whose per-frame cost (backdrop-filter, canvas shadows) is heavy
+    // enough to stall a frame past ~33ms (Firefox especially) then fed every
+    // dtFactor-scaled lerp (camera smoothing, player velocity, fade-ins) a huge
+    // multiplier, so it jumped most of the way to its target in one frame instead
+    // of easing — read as the world "snapping"/stretching, and a velocity jump
+    // that overshot into collision got zeroed, reading as "can't move". Same cap
+    // on every platform now.
+    if (gameState.dtFactor > 2) gameState.dtFactor = 2;
 
     // Position heartbeat: while locked in / in a session the player doesn't move, so
     // updatePlayerPosition isn't being called — re-assert the authoritative position
@@ -13899,10 +13907,29 @@ function getGraphicsQuality() {
     return (v === 'high' || v === 'low' || v === 'potato') ? v : null;
 }
 
+// Firefox (Gecko) and Safari (WebKit) both cost noticeably more per frame than
+// Chromium for the things this app leans on hardest — `backdrop-filter` blur and
+// canvas `shadowBlur` (see the style.css note above the backdrop-filter-removal
+// rule: "the main 'sometimes smooth, sometimes unusable' culprit... hits weak
+// LAPTOPS just as hard as phones"). Reported symptoms match exactly: bad Firefox
+// perf + stretching/snapping (frame stalls spiking dtFactor), and Safari
+// destabilizing right as a work session starts (several backdrop-filter panels —
+// focus sounds, current-task, user card — all animate in at once on top of the
+// live canvas). Default those two engines into the same reduced tier mobile
+// already gets; an explicit user choice in settings still wins.
+function _isFirefoxBrowser() {
+    return /firefox/i.test(navigator.userAgent || '');
+}
+function _isSafariBrowser() {
+    const ua = navigator.userAgent || '';
+    return /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(ua);
+}
+
 // Resolve to a concrete tier: an explicit choice, else the device default — mobile
-// → 'low' (atmosphere gradients ON, cheap compositing), desktop → 'high'.
+// or Firefox/Safari → 'low' (atmosphere gradients ON, cheap compositing), else
+// 'high'.
 function graphicsTier() {
-    return getGraphicsQuality() || (isMobile() ? 'low' : 'high');
+    return getGraphicsQuality() || ((isMobile() || _isFirefoxBrowser() || _isSafariBrowser()) ? 'low' : 'high');
 }
 
 // Reduced compositing: DPR cap, no live backdrop-filter, no canvas shadows, fewer
