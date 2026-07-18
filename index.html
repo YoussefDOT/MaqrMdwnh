@@ -91,6 +91,17 @@
                 <button id="menu-logout" class="menu-logout">تغيير الحساب</button>
             </div>
 
+            <!-- زر شرح الموقع — يفتح مشغّل فيديو داخل الموقع -->
+            <button id="explainer-btn" type="button">
+                <span class="explainer-icon-badge">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <rect x="2.5" y="4.5" width="19" height="14" rx="3"/>
+                        <path d="M10.5 8.6v5.8l5-2.9-5-2.9z" fill="currentColor" stroke="none"/>
+                    </svg>
+                </span>
+                <span>شرح الموقع</span>
+            </button>
+
             <!-- زر تثبيت التطبيق (PWA) — يخفيه السكربت في سفاري وداخل التطبيق المثبّت -->
             <button id="pwa-install-btn" type="button">
                 <span class="pwa-icon-badge">
@@ -127,7 +138,57 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 223 · Updated 6:06 AM</div>
+    <div id="build-number" class="build-number">Build 224 · Updated 6:33 AM</div>
+
+    <!-- نافذة فيديو "شرح الموقع" — مشغّل فيديو كامل داخل الموقع -->
+    <div id="explainer-overlay" class="explainer-overlay">
+        <div class="explainer-content">
+            <button id="explainer-close" class="explainer-close" type="button" aria-label="إغلاق">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+                    <path d="M6 6l12 12M18 6L6 18"/>
+                </svg>
+            </button>
+            <div class="explainer-video-wrap">
+                <video id="explainer-video" playsinline preload="none"></video>
+
+                <div id="explainer-loading" class="explainer-loading">
+                    <div class="explainer-loading-bar"><div id="explainer-loading-fill" class="explainer-loading-fill"></div></div>
+                    <div id="explainer-loading-text" class="explainer-loading-text">جارٍ التحميل… 0%</div>
+                </div>
+
+                <div id="explainer-controls" class="explainer-controls">
+                    <button id="explainer-back" class="explainer-ctrl-btn" type="button" aria-label="رجوع 10 ثوانٍ">
+                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <path d="M11.5 12l7-5v10l-7-5z"/>
+                            <path d="M4.5 12l7-5v10l-7-5z"/>
+                        </svg>
+                        <span class="explainer-skip-label">10</span>
+                    </button>
+
+                    <button id="explainer-playpause" class="explainer-ctrl-btn explainer-play-btn" type="button" aria-label="تشغيل">
+                        <svg id="explainer-play-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <path d="M8 5.5v13l11-6.5z"/>
+                        </svg>
+                        <svg id="explainer-pause-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display:none">
+                            <path d="M7 5h4v14H7zM13 5h4v14h-4z"/>
+                        </svg>
+                    </button>
+
+                    <button id="explainer-fwd" class="explainer-ctrl-btn" type="button" aria-label="تقديم 10 ثوانٍ">
+                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <path d="M12.5 12l-7-5v10l7-5z"/>
+                            <path d="M19.5 12l-7-5v10l7-5z"/>
+                        </svg>
+                        <span class="explainer-skip-label">10</span>
+                    </button>
+
+                    <span id="explainer-time-current" class="explainer-time">0:00</span>
+                    <input id="explainer-seek" class="explainer-seek" type="range" min="0" max="100" value="0" step="0.1">
+                    <span id="explainer-time-duration" class="explainer-time">0:00</span>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1545,7 +1606,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=223"></script>
+        <script type="module" src="game.js?v=224"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

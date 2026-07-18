@@ -1647,6 +1647,254 @@ body {
 }
 #pwa-install-btn svg { width: 15px; height: 15px; }
 
+/* ── "شرح الموقع" button (under the login pill) + its video player ─────────── */
+#explainer-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+    margin-top: 10px;
+    padding: 9px 18px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.11);
+    border-radius: 50px;
+    color: rgba(255,255,255,0.50);
+    font-family: var(--font-main);
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s, color 0.2s, border-color 0.2s, transform 0.28s var(--bounce);
+}
+#explainer-btn:hover {
+    background: rgba(240,77,57,0.16);
+    border-color: rgba(240,77,57,0.42);
+    color: rgba(255,255,255,0.90);
+    transform: translateY(-2px) scale(1.03);
+}
+#explainer-btn:active { transform: scale(0.96); }
+#explainer-btn .explainer-icon-badge {
+    display: grid;
+    place-items: center;
+    width: 18px; height: 18px;
+    color: var(--brand-red);
+}
+#explainer-btn svg { width: 16px; height: 16px; }
+#explainer-btn { animation: menuCardIn 0.6s var(--bounce-hi) 0.30s backwards; }
+
+/* Overlay: opacity + visibility only (no `display` transition — see the
+   azkar/prayer/fireplace pattern). Enter = backdrop fade + content slide+fade
+   (below). Exit = pure fade, per spec. */
+.explainer-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    background: rgba(0,0,0,0.72);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    backdrop-filter: blur(14px) saturate(1.2);
+    z-index: 2100;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.4s ease, visibility 0s linear 0.4s;
+}
+.explainer-overlay.active {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.4s ease, visibility 0s linear 0s;
+}
+
+@keyframes explainerContentIn {
+    from { opacity: 0; transform: translateY(30px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+.explainer-content {
+    position: relative;
+    width: 92%;
+    max-width: 880px;
+    padding: 14px;
+    background: rgba(12,12,18,0.94);
+    -webkit-backdrop-filter: blur(28px) saturate(1.5);
+    backdrop-filter: blur(28px) saturate(1.5);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 24px;
+    box-shadow: 0 12px 56px rgba(0,0,0,0.75), inset 0 1px 0 rgba(255,255,255,0.06);
+    opacity: 0;
+}
+.explainer-overlay.active .explainer-content {
+    animation: explainerContentIn 0.5s cubic-bezier(0.34,1.56,0.64,1) forwards;
+}
+
+.explainer-close {
+    position: absolute;
+    top: 14px; left: 14px;
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.09);
+    background: rgba(18,18,18,0.68);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    color: rgba(255,255,255,0.85);
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    z-index: 5;
+    transition: transform 0.25s var(--bounce), background 0.25s ease;
+}
+.explainer-close svg { width: 16px; height: 16px; }
+.explainer-close:hover { transform: scale(1.08); background: rgba(38,38,38,0.78); }
+
+.explainer-video-wrap {
+    position: relative;
+    background: #000;
+    border-radius: 14px;
+    overflow: hidden;
+    line-height: 0;
+}
+#explainer-video {
+    display: block;
+    width: 100%;
+    max-height: 72vh;
+    background: #000;
+}
+
+.explainer-loading {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    background: rgba(6,6,10,0.92);
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.3s ease, visibility 0s linear 0s;
+}
+.explainer-loading.done {
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.3s ease, visibility 0s linear 0.3s;
+}
+.explainer-loading-bar {
+    width: min(260px, 70%);
+    height: 6px;
+    border-radius: 50px;
+    background: rgba(255,255,255,0.10);
+    overflow: hidden;
+}
+.explainer-loading-fill {
+    height: 100%;
+    width: 0%;
+    border-radius: 50px;
+    background: linear-gradient(90deg, var(--brand-red), var(--brand-yellow));
+    transition: width 0.2s linear;
+}
+.explainer-loading-text {
+    font-family: var(--font-main);
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.55);
+    direction: rtl;
+}
+
+/* Controls stay locked (opacity + pointer-events, never [disabled] — see the
+   azkar انتهيت / reading أنا لها convention) until the whole file is buffered. */
+.explainer-controls {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.72) 55%, rgba(0,0,0,0.86) 100%);
+    direction: ltr; /* timeline always reads start → end, like the reading shelf track */
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s ease;
+}
+.explainer-controls.ready { opacity: 1; pointer-events: all; }
+
+.explainer-ctrl-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    background: transparent;
+    border: none;
+    color: rgba(255,255,255,0.85);
+    cursor: pointer;
+    padding: 4px;
+    transition: color 0.2s, transform 0.2s var(--bounce);
+}
+.explainer-ctrl-btn:hover { color: #fff; transform: scale(1.08); }
+.explainer-ctrl-btn:active { transform: scale(0.92); }
+.explainer-ctrl-btn svg { width: 20px; height: 20px; }
+.explainer-skip-label {
+    font-family: var(--font-main);
+    font-size: 0.56rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+.explainer-play-btn svg { width: 24px; height: 24px; }
+
+.explainer-time {
+    font-family: var(--font-main);
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.65);
+    min-width: 34px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.explainer-seek {
+    flex: 1;
+    -webkit-appearance: none;
+    appearance: none;
+    height: 4px;
+    border-radius: 50px;
+    background: linear-gradient(90deg, var(--brand-red) 0%, var(--brand-red) var(--explainer-progress, 0%), rgba(255,255,255,0.18) var(--explainer-progress, 0%), rgba(255,255,255,0.18) 100%);
+    cursor: pointer;
+    outline: none;
+}
+.explainer-seek::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+    cursor: pointer;
+}
+.explainer-seek::-moz-range-thumb {
+    width: 13px; height: 13px;
+    border-radius: 50%;
+    background: #fff;
+    border: none;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+    cursor: pointer;
+}
+.explainer-seek::-moz-range-track {
+    height: 4px;
+    border-radius: 50px;
+    background: rgba(255,255,255,0.18);
+}
+.explainer-seek::-moz-range-progress {
+    height: 4px;
+    border-radius: 50px;
+    background: var(--brand-red);
+}
+
+body.is-mobile .explainer-content { width: 96%; padding: 10px; border-radius: 20px; }
+body.is-mobile #explainer-video { max-height: 62vh; }
+body.is-mobile .explainer-controls { padding: 8px 10px; gap: 6px; }
+body.is-mobile .explainer-ctrl-btn svg { width: 18px; height: 18px; }
+body.is-mobile .explainer-play-btn svg { width: 22px; height: 22px; }
+body.is-mobile .explainer-time { font-size: 0.68rem; min-width: 30px; }
+
 /* ── Menu on phones ───────────────────────────────────────────────────────── */
 body.is-mobile .menu-card { padding: 34px 22px 22px; border-radius: 26px; }
 body.is-mobile .menu-actions { margin-top: 24px; }
