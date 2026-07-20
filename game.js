@@ -8622,8 +8622,11 @@ function updateInteractions() {
 
     // Books library — floor 1 only, reachable when free to sit (not working/locked/
     // sitting/already reading). This flag drives both the "ابدأ القراءة" prompt and
-    // the click-to-open gate in the click handlers.
-    gameState.nearBooksLibrary = pFloor === 1 && canSit() && !gameState.reading.active
+    // the click-to-open gate in the click handlers. Unlike canSit()'s other uses,
+    // reading is blocked during a break too — starting a timed reading session while
+    // a break is running collided with the break-end kidnap-back-to-work sequence
+    // and left the reader desynced from other clients (invisible to everyone else).
+    gameState.nearBooksLibrary = pFloor === 1 && canSit() && !isBreakActive() && !gameState.reading.active
         && Math.hypot(player.x - BOOKS_LIBRARY_POS.x, player.y - BOOKS_LIBRARY_POS.y) < BOOKS_LIBRARY_SELECT_R;
 
     // Fireplace — floor 1 only. Drives the "انقر للنظر الى المدفئة" prompt and the
@@ -22426,7 +22429,7 @@ function setupReadingUI() {
 }
 
 function openReadingPopup() {
-    if (gameState.reading.active || gameState.isLockedIn) return;
+    if (gameState.reading.active || gameState.isLockedIn || isBreakActive()) return;
     const modal = document.getElementById('reading-modal');
     if (!modal) return;
     // Lock movement while the popup is open, same as every other modal.
@@ -22684,6 +22687,9 @@ function cancelReadingDisconnect() {
 }
 
 function startReadingSession(durationMin, bookName, bookStyle) {
+    // A break can end (back to work) or start while the popup was already open —
+    // never let a session actually begin while on break (see nearBooksLibrary).
+    if (isBreakActive()) { closeReadingPopup(); return; }
     closeReadingPopup();
 
     // Pick a RANDOM free sofa spot, not the closest — the walk over is part of the
