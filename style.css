@@ -7588,18 +7588,18 @@ body.is-mobile .reading-flip-overlay.active { background: rgba(6, 6, 9, 0.72); }
     100% { transform: translateY(0) scale(1); }
 }
 
-/* Drops straight down out from under the book, shaking side-to-side and spinning
+/* Drops straight down out from under the book, shaking side-to-side (no rotation)
    as it falls, all the way until it's fully escaped below the frame — no return
    trip, it just keeps falling and fades out near the bottom. */
 @keyframes rfPaperDrop {
-    0%   { opacity: 0; transform: translate(0, 0) rotate(0deg) scale(0.85); }
-    8%   { opacity: 1; transform: translate(-3%, 8%) rotate(-8deg) scale(0.92); }
-    20%  { transform: translate(5%, 32%) rotate(14deg) scale(0.95); }
-    34%  { transform: translate(-6%, 60%) rotate(-16deg) scale(0.97); }
-    48%  { transform: translate(6%, 92%) rotate(20deg) scale(0.98); }
-    62%  { transform: translate(-4%, 128%) rotate(-12deg) scale(1); }
-    78%  { opacity: 1; transform: translate(3%, 168%) rotate(10deg) scale(1); }
-    100% { opacity: 0; transform: translate(0, 215%) rotate(0deg) scale(1); }
+    0%   { opacity: 0; transform: translate(0, 0) scale(0.85); }
+    8%   { opacity: 1; transform: translate(-3%, 8%) scale(0.92); }
+    20%  { transform: translate(5%, 32%) scale(0.95); }
+    34%  { transform: translate(-6%, 60%) scale(0.97); }
+    48%  { transform: translate(6%, 92%) scale(0.98); }
+    62%  { transform: translate(-4%, 128%) scale(1); }
+    78%  { opacity: 1; transform: translate(3%, 168%) scale(1); }
+    100% { opacity: 0; transform: translate(0, 215%) scale(1); }
 }
 
 /* ─── The completion card ───────────────────────────────────────────────────── */
