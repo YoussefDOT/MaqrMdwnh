@@ -127,7 +127,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 229 · Updated 5:41 AM</div>
+    <div id="build-number" class="build-number">Build 230 · Updated 8:48 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1284,7 +1284,26 @@
                 <div id="reading-shelf-track" class="reading-shelf-track"></div>
             </div>
             <div id="reading-shelf-label" class="reading-shelf-label">&nbsp;</div>
-            <div class="setting-group reading-duration">
+
+            <!-- Mode switch: read a set number of PAGES (default) or for a set TIME -->
+            <div class="reading-mode-switch" id="reading-mode-switch">
+                <span class="reading-mode-thumb" id="reading-mode-thumb"></span>
+                <button class="reading-mode-opt active" data-mode="pages">صفحات</button>
+                <button class="reading-mode-opt" data-mode="timed">وقت</button>
+            </div>
+
+            <!-- Pages mode (default): stepper with − / + and a typeable count -->
+            <div class="setting-group reading-pages-group" id="reading-pages-group">
+                <label>عدد الصفحات</label>
+                <div class="reading-pages-stepper">
+                    <button id="reading-pages-minus" class="reading-step-btn" aria-label="أنقص">−</button>
+                    <input type="text" inputmode="numeric" id="reading-pages-input" class="reading-pages-input" value="5">
+                    <button id="reading-pages-plus" class="reading-step-btn" aria-label="زد">+</button>
+                </div>
+            </div>
+
+            <!-- Timed mode -->
+            <div class="setting-group reading-duration" id="reading-duration-group" style="display:none;">
                 <label>المدة (دقائق)</label>
                 <div class="options" id="reading-time-options">
                     <button class="opt-btn" data-val="15">15</button>
@@ -1297,6 +1316,8 @@
                 <button id="reading-confirm" class="btn-primary reading-confirm-btn">أنا لها</button>
                 <button id="reading-cancel" class="btn-secondary">إلغاء</button>
             </div>
+            <!-- Siraj-only: open a 5-second timed session for testing the end sequence -->
+            <button id="reading-siraj-test" class="reading-siraj-test" style="display:none;">تجربة (٥ ثواني)</button>
         </div>
     </div>
 
@@ -1337,10 +1358,19 @@
         <div class="reading-timer-card">
             <div id="reading-panel-timer" class="reading-panel-timer">30:00</div>
             <div class="reading-timer-sub">
-                <span class="reading-timer-label">المتبقي</span>
+                <span class="reading-timer-label" id="reading-panel-sublabel">المتبقي</span>
                 <span id="reading-panel-duration" class="reading-timer-duration">30 دقيقة</span>
             </div>
             <div class="reading-progress"><div id="reading-panel-progress-fill" class="reading-progress-fill"></div></div>
+        </div>
+        <!-- Pages-mode controls (hidden in timed mode) -->
+        <div id="reading-panel-pages" class="reading-pages-controls hidden">
+            <button id="reading-panel-prev" class="reading-page-btn reading-page-prev">
+                <span class="reading-page-arrow">›</span> السابقة
+            </button>
+            <button id="reading-panel-next" class="reading-page-btn reading-page-next">
+                التالية <span class="reading-page-arrow">‹</span>
+            </button>
         </div>
         <div class="reading-leaderboard-section">
             <h3 class="reading-lb-title">المتصدرين</h3>
@@ -1368,6 +1398,16 @@
          always reachable without pulling the drawer open (replaces وقوف on mobile
          while reading). -->
     <button id="reading-mobile-exit-btn" class="reading-exit-btn mobile-exit hidden">إنهاء القراءة</button>
+
+    <!-- Reading Mobile Pages Controls (pages mode only) -->
+    <div id="reading-mobile-pages" class="reading-mobile-pages hidden">
+        <button id="reading-mobile-prev" class="reading-page-btn reading-page-prev">
+            <span class="reading-page-arrow">›</span> السابقة
+        </button>
+        <button id="reading-mobile-next" class="reading-page-btn reading-page-next">
+            التالية <span class="reading-page-arrow">‹</span>
+        </button>
+    </div>
 
     <!-- Reading Mobile Drawer -->
     <div id="reading-drawer" class="reading-drawer hidden">
@@ -1399,6 +1439,45 @@
                 <button id="reading-delete-yes" class="btn-primary" style="flex:1; background: rgba(255,80,80,0.2); border-color: rgba(255,80,80,0.5); color: #ff8888;">حذف</button>
                 <button id="reading-delete-no" class="btn-secondary" style="flex:1;">إلغاء</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Page-flip cinematic: the book cover flies to centre, the backdrop dims/blurs,
+         a page turns, then it flies back. Built once, driven by JS (playReadingPageFlip). -->
+    <div id="reading-flip-overlay" class="reading-flip-overlay">
+        <div id="reading-flip-book" class="reading-flip-book">
+            <div class="rf-stage">
+                <div class="rf-sunburst"></div>       <!-- rays behind, fade in at centre -->
+                <div class="rf-paper"></div>          <!-- drops from behind, spins + shakes -->
+                <div id="reading-flip-cover" class="rf-cover"></div>  <!-- the book cover svg -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Reading end card — shown AFTER the exit sequence when a session is COMPLETED
+         (full time or all pages), never on an early إنهاء. Screenshot-and-share. -->
+    <div id="reading-end-modal" class="reading-end-modal">
+        <div class="reading-end-card" id="reading-end-card">
+            <div id="reading-end-cover" class="reading-end-cover"></div>
+            <div id="reading-end-avatar" class="reading-end-avatar">
+                <img id="reading-end-avatar-img" src="" alt="">
+                <div id="reading-end-avatar-text"></div>
+            </div>
+            <div id="reading-end-name" class="reading-end-name">-</div>
+            <div class="reading-end-title">أتممت القراءة</div>
+            <div id="reading-end-book" class="reading-end-book">اسم الكتاب</div>
+            <div class="reading-end-stats">
+                <div class="reading-end-stat">
+                    <span class="reading-end-stat-label">وقت القراءة</span>
+                    <span id="reading-end-time" class="reading-end-stat-value">-</span>
+                </div>
+                <div class="reading-end-stat" id="reading-end-pages-stat" style="display:none;">
+                    <span class="reading-end-stat-label">الصفحات</span>
+                    <span id="reading-end-pages" class="reading-end-stat-value">-</span>
+                </div>
+            </div>
+            <p class="reading-end-note">قم بالتقاط الشاشة وارسلها لاصدقائك</p>
+            <button id="reading-end-exit" class="btn-primary reading-end-exit">خروج</button>
         </div>
     </div>
 
@@ -1545,7 +1624,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=225"></script>
+        <script type="module" src="game.js?v=228"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

@@ -6813,6 +6813,110 @@ body.is-mobile .dash-stage.side-todo .inv-peep { transform: translate(calc(-50% 
     color: white;
 }
 
+/* ─── Mode switch (صفحات / وقت) — segmented pill with a sliding thumb ─── */
+.reading-mode-switch {
+    position: relative;
+    display: flex;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 50px;
+    padding: 4px;
+    margin: 4px auto 16px;
+    width: fit-content;
+}
+.reading-mode-thumb {
+    position: absolute;
+    top: 4px;
+    bottom: 4px;
+    /* LTR box: the "pages" option is the FIRST child on the left. left/width set in JS
+       would be cleaner, but the two options are equal-width so a % works. */
+    right: 4px;
+    width: calc(50% - 4px);
+    border-radius: 50px;
+    background: rgba(var(--rd-accent), 0.18);
+    box-shadow: inset 0 0 0 1px rgba(var(--rd-accent), 0.35);
+    transition: transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+    pointer-events: none;
+}
+/* pages active → thumb on the right (RTL first slot); timed → slides left */
+.reading-mode-switch[data-mode="timed"] .reading-mode-thumb { transform: translateX(calc(-100% + 0px)); }
+.reading-mode-opt {
+    position: relative;
+    z-index: 1;
+    flex: 1;
+    min-width: 96px;
+    padding: 9px 18px;
+    border: none;
+    background: none;
+    color: rgba(255, 255, 255, 0.5);
+    font-family: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    border-radius: 50px;
+    transition: color 0.25s ease;
+    -webkit-tap-highlight-color: transparent;
+}
+.reading-mode-opt.active { color: white; }
+
+/* ─── Pages stepper (− [n] +) ─── */
+.reading-pages-stepper {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+}
+.reading-step-btn {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.08);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 26px;
+    font-weight: 400;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+    -webkit-tap-highlight-color: transparent;
+    flex: 0 0 auto;
+}
+.reading-step-btn:hover { background: rgba(var(--rd-accent), 0.16); border-color: rgba(var(--rd-accent), 0.4); }
+.reading-step-btn:active { transform: scale(0.9); }
+.reading-pages-input {
+    width: 92px;
+    text-align: center;
+    padding: 10px 6px;
+    border-radius: 14px;
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    color: white;
+    font-family: inherit;
+    font-size: 30px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+}
+.reading-pages-input:focus { outline: none; border-color: rgba(var(--rd-accent), 0.45); }
+
+/* Siraj-only 5-second test link */
+.reading-siraj-test {
+    display: block;
+    margin: 12px auto 0;
+    padding: 7px 16px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px dashed rgba(255, 255, 255, 0.18);
+    border-radius: 50px;
+    color: rgba(255, 255, 255, 0.55);
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.reading-siraj-test:hover { color: white; border-color: rgba(var(--rd-accent), 0.4); }
+
 /* ─── New-book modal ─── */
 .reading-newbook-content {
     max-width: 420px;
@@ -6995,16 +7099,21 @@ body.is-mobile .reading-panel, body.reduced-gfx .reading-panel {
 .reading-timer-duration { font-size: 11px; color: rgba(var(--rd-accent), 0.6); font-weight: 600; }
 
 .reading-progress {
+    position: relative;
     height: 3px;
     border-radius: 3px;
     background: rgba(255, 255, 255, 0.08);
     overflow: hidden;
 }
+/* Anchored to the RIGHT so the intro fill grows right → left (RTL), not from the left. */
 .reading-progress-fill {
+    position: absolute;
+    top: 0;
+    right: 0;
     height: 100%;
     width: 0%;
     border-radius: 3px;
-    background: linear-gradient(to right, rgba(var(--rd-accent), 0.5), rgba(var(--rd-accent), 0.92));
+    background: linear-gradient(to left, rgba(var(--rd-accent), 0.5), rgba(var(--rd-accent), 0.92));
     transition: width 0.9s linear;
 }
 
@@ -7266,6 +7375,7 @@ body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
 #reading-modal.active .title,
 #reading-modal.active .reading-shelf,
 #reading-modal.active .reading-shelf-label,
+#reading-modal.active .reading-mode-switch,
 #reading-modal.active .setting-group,
 #reading-modal.active .pomo-launch-row,
 #reading-newbook-modal.active .title,
@@ -7279,14 +7389,332 @@ body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
 #reading-modal.active .title { animation-delay: 0.12s; }
 #reading-modal.active .reading-shelf { animation-delay: 0.19s; }
 #reading-modal.active .reading-shelf-label { animation-delay: 0.26s; }
-#reading-modal.active .setting-group { animation-delay: 0.33s; }
-#reading-modal.active .pomo-launch-row { animation-delay: 0.40s; }
+#reading-modal.active .reading-mode-switch { animation-delay: 0.31s; }
+#reading-modal.active .setting-group { animation-delay: 0.37s; }
+#reading-modal.active .pomo-launch-row { animation-delay: 0.43s; }
 
 #reading-newbook-modal.active .title { animation-delay: 0.05s; }
 #reading-newbook-modal.active .reading-newbook-preview { animation-delay: 0.12s; }
 #reading-newbook-modal.active .setting-group:nth-of-type(1) { animation-delay: 0.19s; }
 #reading-newbook-modal.active .setting-group:nth-of-type(2) { animation-delay: 0.26s; }
 #reading-newbook-modal.active .pomo-launch-row { animation-delay: 0.33s; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Pages-mode reading — next/prev controls, flip cinematic, end card
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Desktop next/prev row (inside .reading-panel) */
+.reading-pages-controls {
+    display: flex;
+    gap: 10px;
+    direction: rtl;
+}
+.reading-pages-controls.hidden { display: none; }
+
+.reading-page-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 13px 10px;
+    border-radius: 16px;
+    font-family: var(--font-main);
+    font-size: 15px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s ease, opacity 0.2s ease;
+    -webkit-tap-highlight-color: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.85);
+}
+.reading-page-next {
+    background: rgba(var(--rd-accent), 0.16);
+    border-color: rgba(var(--rd-accent), 0.4);
+    color: white;
+}
+.reading-page-btn:active { transform: scale(0.95); }
+.reading-page-arrow { font-size: 20px; line-height: 1; opacity: 0.85; }
+/* Prev on the first page — visual-only lock via class (never disabled attr; iOS). */
+.reading-page-btn.is-disabled { opacity: 0.32; pointer-events: none; }
+/* Final page → next becomes انتهيت */
+.reading-page-next.is-finish {
+    background: linear-gradient(135deg, rgba(120, 210, 140, 0.28), rgba(90, 190, 120, 0.22));
+    border-color: rgba(120, 220, 150, 0.5);
+    color: #d7ffe0;
+}
+.reading-page-next.is-finish .reading-page-arrow { display: none; }
+
+/* Mobile next/prev bar — fixed just above the exit button / drawer peek */
+.reading-mobile-pages {
+    position: fixed;
+    left: 14px;
+    right: 14px;
+    bottom: calc(48px + env(safe-area-inset-bottom, 20px) + 62px);
+    z-index: 1099;
+    display: flex;
+    gap: 10px;
+    direction: rtl;
+    transition: opacity 0.3s ease;
+}
+.reading-mobile-pages.hidden { display: none; }
+.reading-mobile-pages .reading-page-btn {
+    padding: 15px 10px;
+    font-size: 16px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+    background: rgba(24, 24, 28, 0.94);
+}
+.reading-mobile-pages .reading-page-next {
+    background: rgba(var(--rd-accent), 0.9);
+    border-color: rgba(var(--rd-accent), 1);
+    color: #23201a;
+}
+.reading-mobile-pages .reading-page-next.is-finish {
+    background: linear-gradient(135deg, #74d78c, #4fb877);
+    border-color: #74d78c;
+    color: #10321c;
+}
+
+/* ─── The page-flip cinematic ───────────────────────────────────────────────── */
+.reading-flip-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 3000;
+    background: rgba(6, 6, 9, 0);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: background 0.4s ease, opacity 0.4s ease, visibility 0s linear 0.4s;
+}
+.reading-flip-overlay.active {
+    background: rgba(6, 6, 9, 0.55);
+    opacity: 1;
+    visibility: visible;
+    transition: background 0.4s ease, opacity 0.4s ease;
+}
+/* Blur behind — desktop only. Over the live canvas on mobile a backdrop-filter
+   re-rasterizes every frame (see CLAUDE.md hard invariant #10), so mobile just
+   dims more heavily instead. */
+body:not(.is-mobile) .reading-flip-overlay.active {
+    backdrop-filter: blur(9px) saturate(1.1);
+    -webkit-backdrop-filter: blur(9px) saturate(1.1);
+}
+body.is-mobile .reading-flip-overlay.active { background: rgba(6, 6, 9, 0.72); }
+
+/* The travelling book. Sized to its FINAL (large) size in JS and scaled DOWN to the
+   panel-cover size with transform, then animated to scale(1) — so at rest (centre) the
+   SVG renders at its native large size and stays crisp (a transform:scale() up of a
+   small SVG rasterizes it → the pixelation the closed book showed before). No `filter`
+   anywhere in this subtree: a filter flattens descendant 3D transforms, which would
+   kill the cover's open/close rotation (esp. in Safari). */
+.reading-flip-book {
+    position: fixed;
+    left: 0;
+    top: 0;
+    transform-origin: 0 0;
+}
+.rf-stage {
+    position: absolute;
+    inset: 0;
+}
+.rf-stage > * { position: absolute; }
+
+.rf-cover {
+    inset: 0;
+    filter: drop-shadow(0 16px 34px rgba(0, 0, 0, 0.55));
+    z-index: 2;
+}
+.rf-cover .book-svg { width: 100%; height: 100%; }
+
+/* Subtle sunburst behind the book — fades in when centred, slowly spins, fades out. */
+.rf-sunburst {
+    /* larger than the book, centred on it */
+    inset: -80% -80%;
+    z-index: 0;
+    opacity: 0;
+    pointer-events: none;
+    background:
+        repeating-conic-gradient(from 0deg at 50% 50%,
+            rgba(var(--rd-accent), 0.16) 0deg 6deg,
+            transparent 6deg 12deg);
+    -webkit-mask-image: radial-gradient(closest-side, #000 12%, rgba(0,0,0,0.55) 40%, transparent 72%);
+    mask-image: radial-gradient(closest-side, #000 12%, rgba(0,0,0,0.55) 40%, transparent 72%);
+    transition: opacity 0.45s ease;
+}
+.reading-flip-book.playing .rf-sunburst {
+    opacity: 1;
+    animation: rfSunSpin 9s linear infinite;
+}
+
+/* The paper that drops out from behind the book, shakes + spins, then returns. */
+.rf-paper {
+    inset: 6% 12%;
+    z-index: 1;
+    border-radius: 3px 3px 9px 9px;
+    background:
+        repeating-linear-gradient(rgba(120, 96, 60, 0.12) 0 1px, transparent 1px 13px),
+        linear-gradient(120deg, #fdf8ec 0%, #f2e9d4 100%);
+    box-shadow: 0 14px 30px rgba(0, 0, 0, 0.4);
+    opacity: 0;
+    transform-origin: 50% 40%;
+}
+.reading-flip-book.playing .rf-paper {
+    animation: rfPaperDrop 1.05s cubic-bezier(0.34, 1.1, 0.5, 1) both;
+}
+
+@keyframes rfSunSpin { to { transform: rotate(360deg); } }
+
+/* Prev button — a small down-and-up bob on the panel cover (no cinematic). */
+.reading-panel-cover.rf-bob,
+.reading-mobile-cover.rf-bob { animation: rfCoverBob 0.44s cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes rfCoverBob {
+    0%   { transform: translateY(0) scale(1); }
+    38%  { transform: translateY(10px) scale(0.95); }
+    70%  { transform: translateY(-4px) scale(1.02); }
+    100% { transform: translateY(0) scale(1); }
+}
+
+/* Drops down out of the bottom of the book, jitters (shake) side-to-side while
+   spinning a full turn, then rises back behind the book and fades. */
+@keyframes rfPaperDrop {
+    0%   { opacity: 0; transform: translate(0, 0) rotate(0deg) scale(0.82); }
+    12%  { opacity: 1; transform: translate(-4%, 20%) rotate(70deg) scale(0.9); }
+    26%  { transform: translate(6%, 44%) rotate(150deg) scale(0.96); }
+    40%  { transform: translate(-5%, 56%) rotate(215deg) scale(0.99); }
+    52%  { transform: translate(5%, 52%) rotate(260deg) scale(0.98); }
+    66%  { transform: translate(-3%, 38%) rotate(305deg) scale(0.95); }
+    82%  { opacity: 1; transform: translate(2%, 14%) rotate(345deg) scale(0.9); }
+    100% { opacity: 0; transform: translate(0, 0) rotate(360deg) scale(0.82); }
+}
+
+/* ─── The completion card ───────────────────────────────────────────────────── */
+.reading-end-modal {
+    position: fixed;
+    inset: 0;
+    z-index: 3200;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(6, 6, 9, 0);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: background 0.45s ease, opacity 0.45s ease, visibility 0s linear 0.45s;
+}
+.reading-end-modal.active {
+    background: rgba(6, 6, 9, 0.62);
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: background 0.45s ease, opacity 0.45s ease;
+}
+body:not(.is-mobile) .reading-end-modal.active {
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+}
+.reading-end-card {
+    position: relative;
+    width: min(360px, calc(100vw - 40px));
+    padding: 74px 26px 26px;
+    border-radius: 28px;
+    text-align: center;
+    background: linear-gradient(180deg, rgba(30, 28, 24, 0.96), rgba(20, 19, 17, 0.98));
+    border: 1px solid rgba(var(--rd-accent), 0.18);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+    transform: scale(0.86) translateY(14px);
+    opacity: 0;
+    transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.4s ease;
+}
+.reading-end-modal.active .reading-end-card { transform: scale(1) translateY(0); opacity: 1; }
+.reading-end-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 26px; right: 26px;
+    height: 1px;
+    background: linear-gradient(to right, transparent, rgba(var(--rd-accent), 0.45), transparent);
+}
+/* The book cover floats above the card top */
+.reading-end-cover {
+    position: absolute;
+    top: -46px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 84px;
+    height: 112px;
+    filter: drop-shadow(0 12px 26px rgba(0, 0, 0, 0.6));
+}
+.reading-end-cover .book-svg { width: 100%; height: 100%; }
+.reading-end-avatar {
+    width: 104px;
+    height: 104px;
+    border-radius: 50%;
+    margin: 0 auto 12px;
+    overflow: hidden;
+    background: rgba(var(--rd-accent), 0.12);
+    border: 3px solid rgba(var(--rd-accent), 0.45);
+    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.4);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.reading-end-avatar img { width: 100%; height: 100%; object-fit: cover; }
+.reading-end-avatar #reading-end-avatar-text {
+    font-size: 42px;
+    font-weight: 800;
+    color: rgba(var(--rd-accent), 0.9);
+}
+.reading-end-name {
+    font-size: 20px;
+    font-weight: 800;
+    color: white;
+    margin-bottom: 2px;
+}
+.reading-end-title {
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    color: rgba(var(--rd-accent), 0.75);
+    margin-bottom: 12px;
+}
+.reading-end-book {
+    font-size: 16px;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.9);
+    margin-bottom: 16px;
+}
+.reading-end-stats {
+    display: flex;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+.reading-end-stat {
+    flex: 1;
+    max-width: 140px;
+    background: rgba(0, 0, 0, 0.28);
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
+    padding: 12px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+.reading-end-stat-label { font-size: 10px; color: rgba(255, 255, 255, 0.4); }
+.reading-end-stat-value {
+    font-size: 19px;
+    font-weight: 800;
+    color: white;
+    font-variant-numeric: tabular-nums;
+}
+.reading-end-note {
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.5);
+    margin-bottom: 18px;
+    line-height: 1.5;
+}
+.reading-end-exit { width: 100%; padding: 13px; font-size: 16px; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    تخصيص الشخصية — Character Customization

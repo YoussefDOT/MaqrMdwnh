@@ -1,6 +1,6 @@
 # Mdwnh Digital Workspace — AI Dev Guide
 
-> **This project is entirely vibe-coded.** Every line of JS/HTML/CSS was written by an AI model. Only the art assets and audio files are human-made. When Claude is working on this, it IS the developer — read this file carefully before touching anything.
+> **This project is entirely vibe-coded.** Every line of JS/HTML/CSS was written by an AI model. Only the art assets and audio files are human-made. When Claude is working on this, it IS the developer — read this file carefully before touching anything. **Start with "How to Work in This Repo — Operating Procedure" and follow it on every task; it is not optional background.**
 
 > **Always use the `caveman` skill in this project.** Every reply in this repo runs in
 > caveman mode (`Skill: anthropic-skills:caveman`) — terse, no filler — while keeping
@@ -29,6 +29,138 @@ python3 -m http.server 8080
 **Pre-commit hook**: besides the build number below, it regenerates `Hats/hats.json` from the PNGs in `Hats/` (see Character Customization).
 
 **Build number**: A `#build-number` div sits below the `#siraj-test-link` button on the login screen showing `Build N · Updated H:MM AM/PM`. The `.git/hooks/pre-commit` hook auto-increments the number and timestamps it on every commit — no manual edits needed. If the hook ever fails to find the pattern, it logs a warning and exits cleanly.
+
+---
+
+## How to Work in This Repo — Operating Procedure (READ THIS BEFORE ANY EDIT)
+
+This section is the process; the rest of the file is the knowledge. Follow the process
+literally — every rule here exists because skipping it produced a real bug.
+
+### 1. Navigate by search, never by memory or line number
+
+`game.js` is ~24k lines in ONE file. Line numbers and even function names in this doc
+drift as the code evolves. **Always locate code by grepping an identifier from this doc.
+If the identifier has zero hits, the code was renamed/inlined — search nearby concept
+keywords, trust the CODE over this doc, and fix the doc reference in the same commit.**
+Never write an edit against a remembered or doc-quoted line number.
+
+Grep anchors for the major systems (all verified to exist):
+
+| System | Grep for |
+|---|---|
+| World load / collision / cache | `loadWorldArt`, `worldCollision`, `worldCache`, `checkCollision` |
+| Movement + live sync | `handleMovement`, `ensurePresenceSocket`, `updatePlayerPosition`, `listenToPlayers` |
+| Pomodoro (solo) | `startPomodoroPhase`, `updatePomodoro` |
+| Shared pomo | `sendSpInvite`, `setupSpLiveListener` |
+| Azkar | `openAzkarOverlay`, `closeAzkarOverlay` |
+| Prayer | `initPrayerSystem`, `triggerPrayerOverlay` |
+| Reading | `startReadingSession`, `bookCoverSVG` |
+| Fireplace | `openFireplaceOverlay` |
+| Lemo | `updateLemo` |
+| Minigames | `joinOrCreateMinigameLobby`, `listenToRace` |
+| PiP | `openPiPMode`, `renderPiPInto` |
+| Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession` |
+| Character custom / hats | `openCharCustom`, `loadHatManifest` |
+| Audio | `FocusAudioEngine`, `warmGameSounds` |
+| Settings | `setupSettingsUI` |
+| Success card | `setupSuccessCardUI` |
+| UI cascade blips | `setupJuiceUi` |
+
+### 2. Before touching a feature
+
+1. **Read that feature's section in this file, fully.** Not a skim — the constraints are
+   in the details ("don't re-split it", "never `set(null)`", z-index numbers).
+2. **Grep the Common Bugs table for any identifier you're about to change.** If it
+   appears there, the "weird" code you're looking at is a FIX. Understand the bug it
+   fixed before altering it; never "clean up" something documented as intentional.
+3. **Read the actual code region ±50 lines** around your edit point before writing.
+
+### 3. Edit discipline
+
+- **Smallest possible diff.** No drive-by refactors, no renames, no reformatting
+  untouched lines. This codebase keeps intentional legacy names (the fig game's
+  internals are still `coffee`) because renames break live Firebase session docs.
+- **Never rename a Firebase path or key** without an explicit migration plan — old
+  clients and existing data still use it.
+- **Never hand-edit generated files**: `Hats/hats.json`, `Art/Workspace/manifest.json`,
+  the `#build-number` div. The pre-commit hook owns all three.
+- **Match surrounding style** — comment density, naming, Arabic labels. All UI text is
+  Arabic and spell-checked (see top of file).
+- **When a product decision is needed** (behaviour, wording, visuals not derivable from
+  existing patterns), ask the owner — don't invent. When a technical fact is checkable
+  by grep/read, check it — don't ask.
+
+### 4. Verify every change — WITHOUT a browser (see Testing Policy)
+
+Run all of these after editing, before telling the owner it's done:
+
+1. `node --check game.js` — must pass. (For inline `<script>` edits, re-read the diff.)
+2. **Re-read your own diff** (`git diff`) line by line, asking of each hunk: which
+   documented rule/bug could this violate? Scan it against **§6 Hard Invariants** below.
+3. **Bump `?v=N` on `game.js` in `index.html`** in every commit that touches `game.js`.
+   Forgetting this ships stale code to returning visitors — it's the #1 silent failure.
+4. Touched UI? Check BOTH desktop and `body.is-mobile` CSS paths, and RTL layout.
+5. Touched anything on the login/spawn path? Re-read the **Loading Strategy** section
+   and confirm you added no serial `await`, no eager media fetch, no work before spawn.
+6. New feature? Run the **Edge case scan** in "Adding a New Feature — Checklist".
+
+Do NOT launch a browser preview to click through features — the owner tests himself.
+`node --check`, one-off Node snippets, and reading the diff are the allowed checks.
+
+### 5. Where does new state live? (decision tree)
+
+Walk this top-down for ANY new piece of state; when in doubt read **Firebase Cost Rules**.
+
+1. Changes many times per second, nobody needs it after the fact (positions, cursor,
+   transient anim) → **WebSocket relay** (`sendPositionWS` pattern). Never Firebase.
+2. Client can derive it from one written value (countdown from `endTime`, progress from
+   `spawnTime`) → **write once, compute locally per frame**. Never stream ticks.
+3. Purely local, per-device preference → **localStorage** (`SETTINGS_*` pattern; cache
+   the getter per-frame in `gameState._*`, never read localStorage in draw code).
+4. Private per-user, persistent, written more than ~once/day → **`dashboards/{uid}/…`**
+   (one-shot `get()`s, zero fan-out). NOT under `users/{uid}`.
+5. Must be seen live by everyone to render another player (avatar ring, hat, floor,
+   task) → **`users/{uid}/…`** — the documented exception; keep writes rare and small.
+6. Lobby-shared feature state → **`lobbyPath('…')`** so male/female never mix.
+7. Client-only ambience nobody needs synced (Lemo) → **plain `gameState`, no network.**
+
+### 6. Hard Invariants — scan every diff against ALL of these
+
+Each one is a shipped bug (details in Common Bugs & the feature sections):
+
+1. **Never `disabled` attribute** for visual-only button locks — iOS leaks touches.
+   Use a CSS class (`.unlocked` / `.is-disabled` / `.cc-unlocked`).
+2. **Never `!important` on `transform`** — silently beats JS inline drag/animation styles.
+3. **Never `new Audio(src)` at module scope, never `preload='auto'` at parse.** New SFX
+   go through `_lazyAudio` + the 4-step pattern in Focus Audio Engine.
+4. **Never per-frame / per-second Firebase writes.** High-frequency = WebSocket relay.
+5. **`serverNow()` for any multiplayer timing**, never `Date.now()` across clients.
+6. **All lobby-scoped paths through `lobbyPath()`** — gender lobbies never share data.
+7. **Never `!userData.x` to test "no position"** — world x≈0 is legit. Use
+   `x !== undefined && x !== null`.
+8. **Never `onDisconnect(parent).cancel()`** on a node with child ops armed under it
+   (it cancels ALL descendants' handlers — the forever-ghost bug). Arm/cancel per-field.
+9. **Never `set(null)` on `lastPomoSession` while in-session** — re-persist a full
+   snapshot via `trackSessionForReclaim`.
+10. **Always pair `backdrop-filter` with `-webkit-backdrop-filter`**; no `backdrop-filter`
+    at all on `body.is-mobile` surfaces over the live canvas.
+11. **Never `scrollIntoView` inside overlays** — scroll the list element manually.
+12. **Never an infinite animation of `filter: blur()` / `transform: scale()` /
+    `background-position` on full-screen or always-visible elements** — per-frame repaint.
+13. **Hot draw code reads cached `gameState._*` flags**, never the localStorage getters.
+14. **Store every `onValue` unsubscribe and call it on cleanup** — leaked listeners
+    stream downloads forever.
+15. **Minigame session docs must be nulled on return** (`returnFromRace`/`returnFromCoffee`
+    pattern) or the game can't be replayed.
+16. **Never `imageSmoothingEnabled = false`** for world art — the pixel-art era is over.
+17. **`display` can't transition** — animate overlays with `opacity` + `visibility` +
+    double-rAF `.active` (azkar/prayer/fireplace pattern).
+18. **`ctx.resume()` is async** — `.then(play)`, never fire-and-forget.
+19. **Sounds that must fire in background tabs** use `focusAudioEngine.playEffect`
+    (Web Audio), never `HTMLAudioElement`.
+20. **Git**: never push unless the owner asks; when pushing, straight to `main`
+    (`git push origin HEAD:main`); bump `?v=` with every `game.js` change.
 
 ---
 
@@ -68,9 +200,9 @@ Hats/                        — hat PNGs + hats.json (the production manifest; 
                                pre-commit hook regenerates it). See Character Customization.
 Icon Elements/               — 7 decorative brush icons (masked + brand-tinted in the menu)
 Maqr logo.png                — the brand logo: menu + boot screen
-game.js        ~19000 lines — all game logic, classes, Firebase, rendering
-index.html      ~1400 lines — single page; all panels/overlays live here
-style.css       ~6300 lines — all styling; mobile rules under body.is-mobile
+game.js        ~24000 lines — all game logic, classes, Firebase, rendering
+index.html      ~1600 lines — single page; all panels/overlays live here
+style.css       ~7700 lines — all styling; mobile rules under body.is-mobile
 firebase-config.js           — exports { database, ref, onValue, update, get, onDisconnect, set }
 sw.js                        — service worker: cache-first for Sound/Art/Fonts (see Loading strategy)
 Sound/                       — UI/minigame sound effects (.mp3)
@@ -112,11 +244,12 @@ before the game is playable.** The current model:
 - **World art layers** (`Art/Workspace/`, ~15 MB total — the 5 MB background + two
   ~2 MB day overlays are the big ones): loaded in `loadAssets()`. `render()` guards
   every layer on decode (`_drawWorldLayer` skips a not-yet-loaded `<img>`), so the
-  login screen never waits on them. Once every layer decodes, `buildWorldCollision()`
-  builds the alpha collision masks AND `buildWorldCache()` pre-composites the ~9
-  ground layers + 3 second-floor layers into **two cached canvases** — so the per-frame
-  cost is ~2 `drawImage`s, not ~14 (matters on the owner's phone). Both are idempotent
-  and self-retry until the images decode.
+  login screen never waits on them. As each layer decodes, `loadWorldArt()`'s pipeline
+  builds the alpha collision masks (into `worldCollision`) AND pre-composites the ~9
+  ground layers + 3 second-floor layers into **two cached canvases** (`worldCache`) —
+  so the per-frame cost is ~2 `drawImage`s, not ~14 (matters on the owner's phone).
+  (The old standalone `buildWorldCollision()`/`buildWorldCache()` functions were
+  inlined into this pipeline — grep `worldCollision` / `worldCache`, not those names.)
 - **Race track** (`Art/RaceTrack Var1.png`, 6 MB + CPU-heavy pixel classification):
   `loadRaceTrackAsset()` is idempotent and lazy — kicked on idle after spawn and
   ensured by every race entry path. Never call it in `init()`.
@@ -188,7 +321,7 @@ Painted bottom → top:
 6. screen-space FX: focus mask, smooth wind, fog, sun rays, **cloud shadows**, vignette.
 
 ### Collision — alpha masks from the actual filled pixels
-`buildWorldCollision()` rasterises the collidable layers into half-res `Uint8` bitmaps
+The mask build (inside `loadWorldArt()`, results in `worldCollision`) rasterises the collidable layers into half-res `Uint8` bitmaps
 (`MASK_W×MASK_H`) — collision follows the **real painted shape**, not a box, and empty
 pixels never collide. Two morphology passes tune it:
 - **Walls are DILATED** ~3 px (`_dilate`) so the thin room-divider can't be tunneled
@@ -341,8 +474,8 @@ bar** + Arabic messages that fade every 2s (`BOOT_MESSAGES`, shuffled via
 1. `showBootScreen('instant')` — page load, while the Discord token is checked.
 2. `showBootScreen('slide')` — after the pill press; slides DOWN over the menu.
 
-Flow: pill → boot slides in → `startGame` → world art decodes → `buildWorldCache()`
-sets `_worldReady` and calls `finishBootScreen()` → bar eases to 100% → boot slides
+Flow: pill → boot slides in → `startGame` → world art decodes → `loadWorldArt()`'s
+compose step sets `_worldReady` and calls `finishBootScreen()` → bar eases to 100% → boot slides
 up → **`_openEntranceGate()`** → the intro (player falls) plays.
 
 **Gotchas — all of these were real bugs, don't undo them:**
@@ -892,6 +1025,13 @@ click falls through and instantly re-seats the player on the sofa they just left
 not end a timed session.
 
 ## Shared Pomodoro (Coop) System
+
+> **COOP IS DISABLED FOR NOW (buggy).** `COOP_ENABLED = false` in `game.js`
+> short-circuits `checkNearbyCoopSession()` so the proximity **"يعمل بمفرده — join"**
+> card (`#sp-join-panel`) never shows and no join/invite flow is reachable. The whole
+> shared-pomo machinery is still in the tree (invites, host promotion, coop anim) but
+> is effectively unreachable through the UI. Don't wire the join card back on without
+> fixing the underlying coop bugs — flip `COOP_ENABLED` to re-enable.
 
 State machine at `gameState.sharedPomo.phase`: `'idle' | 'gathering' | 'guest-waiting' | 'active'`
 
@@ -1537,7 +1677,10 @@ drawFocusMask: uses physical mCanvas; player positions computed with * dpr
    - What if Firebase write fails / is stale?
    - Does `updatePlayerPosition` correctly reflect state to other users?
    - Does cleanup happen on logout, tab close, and `endFreeMode`/`exitPomoNow`?
-8. **Test locally**, then tell the user to git push.
+8. **Verify** per the Operating Procedure §4: `node --check game.js`, diff scanned
+   against the §6 Hard Invariants, `?v=` bumped in `index.html`.
+9. **Tell the user it's ready to test** (they test in Safari themselves), then git
+   push only when they ask.
 
 ---
 

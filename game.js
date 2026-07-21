@@ -2021,11 +2021,15 @@ function _lazyAudio(src) {
 const gameState = {
     reading: {
         active: false,
+        mode: 'timed',         // 'timed' (countdown) | 'pages' (count-up, page-by-page)
         bookName: null,
         bookStyle: null,       // id into BOOK_STYLES — drives the drawn cover art
         durationMs: 0,
         startTime: 0,
         endTime: 0,
+        targetPages: 0,        // pages mode: total pages to read
+        currentPage: 1,        // pages mode: page currently on (1-based)
+        _flipping: false,      // pages mode: a page-flip cinematic is playing
         sofaIdx: null,
         totalBookMs: 0,
         leaderboardData: [],
@@ -5985,7 +5989,7 @@ function setupControls() {
     window.addEventListener('keydown', (e) => {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || readingEndCardOpen()) return;
         gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
@@ -8437,7 +8441,8 @@ function handleMovement() {
     if ((JUICE_ENTRANCE && _entrance.active)
         || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || isMinigameOverlayOpen()
         || gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
-        || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)) {
+        || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)
+        || readingEndCardOpen()) {
         player._vx = 0; player._vy = 0;
         return;
     }
@@ -8876,7 +8881,16 @@ function updateAnimation() {
     }
 }
 
+// Tag every dust particle with the floor the local player is on when it spawns,
+// so drawDustParticles can render floor-2 dust ABOVE the mezzanine art instead of
+// under it (the render order paints the ground-floor dust before drawSecondFloor).
+function _localFloor() {
+    const me = gameState.players[gameState.userId];
+    return (me && me.floor) || 1;
+}
+
 function spawnDust(x, y, amount, isDragging = false) {
+    const fl = _localFloor();
     for (let i = 0; i < amount; i++) {
         gameState.dustParticles.push({
             x: x + (Math.random() - 0.5) * 30,
@@ -8885,7 +8899,8 @@ function spawnDust(x, y, amount, isDragging = false) {
             vy: (Math.random() - 0.5) * (isDragging ? 4 : 1) - (isDragging ? 1 : 0.5),
             life: 1.0,
             decay: 0.03 + Math.random() * 0.04,
-            size: 2 + Math.random() * (isDragging ? 5 : 3)
+            size: 2 + Math.random() * (isDragging ? 5 : 3),
+            floor: fl
         });
     }
 }
@@ -8894,6 +8909,7 @@ function spawnDust(x, y, amount, isDragging = false) {
 // entrance. Reuses the dust pool (drawn by drawDustParticles). The optional
 // gravity field arcs them back down; plain dust has no gravity field (no-op).
 function spawnImpactBurst(cx, groundY, count) {
+    const fl = _localFloor();
     for (let i = 0; i < count; i++) {
         const dir = i % 2 === 0 ? 1 : -1;
         const speed = 2.5 + Math.random() * 4.5;
@@ -8906,6 +8922,7 @@ function spawnImpactBurst(cx, groundY, count) {
             life: 1.0,
             decay: 0.022 + Math.random() * 0.03,
             size: 3 + Math.random() * 5,
+            floor: fl
         });
     }
 }
@@ -9253,7 +9270,7 @@ function render() {
     drawLemo();
 
     drawAmbientMotes();
-    drawDustParticles();
+    drawDustParticles(1);   // ground-floor dust — under the mezzanine art
 
     // Kidnap line: drawn right BEFORE the players of whichever floor the target
     // laptop is on, so it always sits under the player (and everyone else on that
@@ -9273,6 +9290,7 @@ function render() {
     drawSecondFloor();          // platform + its laptops + papers desk, at secondFloorVis
     drawLaptopLights(2, gameState.secondFloorVis ?? 1);
     if (_kidnapLineActive && (gameState.anim.laptop.floor || 1) === 2) drawKidnapLine();
+    drawDustParticles(2);       // mezzanine dust — above the floor art, UNDER the players
     drawPlayers(false, 2);      // players standing on the platform
     drawTimers(2);
 
@@ -11517,11 +11535,15 @@ function updateRaceHud(session, car) {
         : formatRaceTime(elapsed);
 }
 
-function drawDustParticles() {
+// floorFilter: 1 or 2 draws only that floor's dust (so floor-2 dust can be painted
+// after the mezzanine art); undefined draws everything (legacy callers). Missing
+// floor tag counts as floor 1.
+function drawDustParticles(floorFilter) {
     if (!gameState._particlesOn) return;
     const ctx = gameState.ctx;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
     gameState.dustParticles.forEach(p => {
+        if (floorFilter && (p.floor || 1) !== floorFilter) return;
         ctx.globalAlpha = Math.max(0, p.life);
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
@@ -13179,12 +13201,13 @@ function renderPiPInto(ctx, canvas, dpr) {
         drawLaptopLights(1);
         drawLemo();               // draw-only — updateLemo never runs on the PiP pass
         drawAmbientMotes();
-        drawDustParticles();
+        drawDustParticles(1);
         drawPlayers(false, 1);
         drawTimers(1);
         drawSecondFloorFog();
         drawSecondFloor();
         drawLaptopLights(2, gameState.secondFloorVis ?? 1);
+        drawDustParticles(2);
         drawPlayers(false, 2);
         drawTimers(2);
         drawCoopEmojiFloats();
@@ -14350,8 +14373,19 @@ function updateSharedPomoProximity() {
     checkNearbyCoopSession();
 }
 
+// Coop / join-solo is DISABLED for now (buggy — see CLAUDE.md). The proximity
+// "يعمل بمفرده — join" card is fully suppressed: bail before anything can show it,
+// and make sure any stale panel is hidden.
+const COOP_ENABLED = false;
+
 function checkNearbyCoopSession() {
     const sp = gameState.sharedPomo;
+    if (!COOP_ENABLED) {
+        if (sp.nearbyCoopId) sp.nearbyCoopId = '';
+        if (sp.nearbySoloId) sp.nearbySoloId = '';
+        document.getElementById('sp-join-panel')?.classList.add('hidden');
+        return;
+    }
     if (sp.phase !== 'idle' || gameState.pomodoro.active || gameState.freeMode.active || gameState.reading.active) {
         if (sp.nearbyCoopId)  { sp.nearbyCoopId  = ''; document.getElementById('sp-join-panel')?.classList.add('hidden'); }
         if (sp.nearbySoloId)  { sp.nearbySoloId  = ''; }
@@ -22272,6 +22306,32 @@ function bookCoverSVG(styleId, name, opts) {
 
 const READING_BOOK_LIMIT = 24;   // shelf cap — also what we prune to on add
 
+// Pages-mode config
+const READING_PAGES_DEFAULT = 5;
+const READING_PAGES_MAX = 2000;
+// Pages mode is infinite (count-up), so cap the credited time in case someone
+// leaves a session open — nobody legitimately reads a page-set for days.
+const READING_PAGES_MAX_MS = 8 * 3600000;
+
+// Current mode is stored on the switch's data-mode; default pages when absent.
+function _readingCurrentMode() {
+    return document.getElementById('reading-mode-switch')?.getAttribute('data-mode') || 'pages';
+}
+
+// Toggles the setup modal between صفحات (pages) and وقت (timed): moves the pill
+// thumb, swaps which group is shown, and marks the active option.
+function setReadingMode(mode) {
+    const sw = document.getElementById('reading-mode-switch');
+    if (!sw) return;
+    sw.setAttribute('data-mode', mode);
+    sw.querySelectorAll('.reading-mode-opt').forEach(b =>
+        b.classList.toggle('active', b.getAttribute('data-mode') === mode));
+    const pagesGroup = document.getElementById('reading-pages-group');
+    const timeGroup = document.getElementById('reading-duration-group');
+    if (pagesGroup) pagesGroup.style.display = mode === 'pages' ? '' : 'none';
+    if (timeGroup) timeGroup.style.display = mode === 'timed' ? '' : 'none';
+}
+
 function setupReadingUI() {
     const timeOptions = document.getElementById('reading-time-options');
     const customTimeInput = document.getElementById('reading-custom-time');
@@ -22297,7 +22357,46 @@ function setupReadingUI() {
         });
     }
 
+    // ── Mode switch (صفحات / وقت) ──
+    const modeSwitch = document.getElementById('reading-mode-switch');
+    modeSwitch?.querySelectorAll('.reading-mode-opt').forEach(btn => {
+        btn.addEventListener('click', () => setReadingMode(btn.getAttribute('data-mode')));
+    });
+
+    // ── Pages stepper (− / +) ──
+    const pagesInput = document.getElementById('reading-pages-input');
+    const stepPages = (delta) => {
+        let n = parseInt(pagesInput.value, 10);
+        if (isNaN(n)) n = READING_PAGES_DEFAULT;
+        n = Math.max(1, Math.min(READING_PAGES_MAX, n + delta));
+        pagesInput.value = n;
+    };
+    document.getElementById('reading-pages-minus')?.addEventListener('click', () => stepPages(-1));
+    document.getElementById('reading-pages-plus')?.addEventListener('click', () => stepPages(1));
+    if (pagesInput) {
+        // Keep it numeric; clamp only on blur so typing "10" isn't fought mid-keystroke.
+        pagesInput.addEventListener('input', () => {
+            pagesInput.value = pagesInput.value.replace(/[^0-9]/g, '').slice(0, 4);
+        });
+        pagesInput.addEventListener('blur', () => {
+            let n = parseInt(pagesInput.value, 10);
+            if (isNaN(n) || n < 1) n = READING_PAGES_DEFAULT;
+            pagesInput.value = Math.min(READING_PAGES_MAX, n);
+        });
+    }
+
     document.getElementById('reading-confirm')?.addEventListener('click', () => {
+        const book = gameState._readingSelectedBook;
+        if (!book) { openNewBookModal(); return; }   // nothing on the shelf yet
+
+        if (_readingCurrentMode() === 'pages') {
+            let pages = parseInt(pagesInput?.value, 10);
+            if (isNaN(pages) || pages < 1) pages = READING_PAGES_DEFAULT;
+            pages = Math.min(READING_PAGES_MAX, pages);
+            startReadingSession({ mode: 'pages', pages, bookName: book.name, bookStyle: book.style });
+            return;
+        }
+
         let mins = 30;
         const activeBtn = timeOptions?.querySelector('.opt-btn.active');
         if (customTimeInput && customTimeInput.value) {
@@ -22307,10 +22406,26 @@ function setupReadingUI() {
         } else if (activeBtn) {
             mins = parseInt(activeBtn.getAttribute('data-val'), 10);
         }
+        startReadingSession({ mode: 'timed', durationMs: mins * 60000, bookName: book.name, bookStyle: book.style });
+    });
 
+    // Siraj-only: a 5-second timed session for testing the completion/card flow.
+    document.getElementById('reading-siraj-test')?.addEventListener('click', () => {
         const book = gameState._readingSelectedBook;
-        if (!book) { openNewBookModal(); return; }   // nothing on the shelf yet
-        startReadingSession(mins, book.name, book.style);
+        if (!book) { openNewBookModal(); return; }
+        startReadingSession({ mode: 'timed', durationMs: 5000, bookName: book.name, bookStyle: book.style });
+    });
+
+    // ── Page-flip nav (desktop + mobile share the handlers) ──
+    document.getElementById('reading-panel-prev')?.addEventListener('click', () => readingPrevPage());
+    document.getElementById('reading-panel-next')?.addEventListener('click', () => readingNextPage());
+    document.getElementById('reading-mobile-prev')?.addEventListener('click', () => readingPrevPage());
+    document.getElementById('reading-mobile-next')?.addEventListener('click', () => readingNextPage());
+
+    // End card — خروج just dismisses it (session already ended + player stood up).
+    document.getElementById('reading-end-exit')?.addEventListener('click', hideReadingEndCard);
+    document.getElementById('reading-end-modal')?.addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) hideReadingEndCard();
     });
 
     document.getElementById('reading-cancel')?.addEventListener('click', closeReadingPopup);
@@ -22442,6 +22557,13 @@ function openReadingPopup() {
     const timeOptions = document.getElementById('reading-time-options');
     timeOptions.querySelectorAll('.opt-btn').forEach(b => b.classList.remove('active'));
     timeOptions.querySelector('.opt-btn[data-val="30"]')?.classList.add('active');
+    // Pages is the default mode; reset its count to 5 too.
+    const pagesInput = document.getElementById('reading-pages-input');
+    if (pagesInput) pagesInput.value = READING_PAGES_DEFAULT;
+    setReadingMode('pages');
+    // Siraj-only 5-second test shortcut.
+    const sirajTest = document.getElementById('reading-siraj-test');
+    if (sirajTest) sirajTest.style.display = gameState.isSirajGhost ? 'block' : 'none';
 
     // Render whatever we already have (instant shelf on a re-open), then refresh.
     renderReadingShelf();
@@ -22686,7 +22808,11 @@ function cancelReadingDisconnect() {
     }
 }
 
-function startReadingSession(durationMin, bookName, bookStyle) {
+// opts = { mode: 'pages'|'timed', durationMs?, pages?, bookName, bookStyle }
+function startReadingSession(opts) {
+    const o = opts || {};
+    const mode = o.mode === 'pages' ? 'pages' : 'timed';
+    const bookName = o.bookName;
     // A break can end (back to work) or start while the popup was already open —
     // never let a session actually begin while on break (see nearBooksLibrary).
     if (isBreakActive()) { closeReadingPopup(); return; }
@@ -22699,14 +22825,21 @@ function startReadingSession(durationMin, bookName, bookStyle) {
     const sofaIdx = best ? best.id : null;
 
     const now = serverNow();
-    const style = bookStyle || bookStyleForName(bookName);
+    const style = o.bookStyle || bookStyleForName(bookName);
+    // Timed mode has a real endTime; pages mode counts UP with no fixed end.
+    const durationMs = mode === 'timed' ? (o.durationMs || 30 * 60000) : 0;
+    const targetPages = mode === 'pages' ? Math.max(1, o.pages || READING_PAGES_DEFAULT) : 0;
     gameState.reading = {
         active: true,
+        mode,
         bookName,
         bookStyle: style,
-        durationMs: durationMin * 60000,
+        durationMs,
         startTime: now,
-        endTime: now + (durationMin * 60000),
+        endTime: mode === 'timed' ? now + durationMs : 0,
+        targetPages,
+        currentPage: 1,
+        _flipping: false,
         sofaIdx,
         totalBookMs: 0,
         leaderboardData: [],
@@ -22726,13 +22859,14 @@ function startReadingSession(durationMin, bookName, bookStyle) {
     gameState.isLockedIn = true;
     if (sofaIdx) startSitAnimation(sofaIdx, best.x, best.y);
 
-    // Save to Firebase (dashboards + users presence)
+    // Save to Firebase (dashboards + users presence). readingEnd is a countdown
+    // anchor for others; pages mode has no end, so leave it null.
     const slug = _readingSlug(bookName);
     const updates = {};
     updates[`dashboards/${gameState.userId}/reading/lastBook`] = bookName;
     updates[`users/${gameState.userId}/isReading`] = true;
     updates[`users/${gameState.userId}/readingBook`] = bookName;
-    updates[`users/${gameState.userId}/readingEnd`] = gameState.reading.endTime;
+    updates[`users/${gameState.userId}/readingEnd`] = mode === 'timed' ? gameState.reading.endTime : null;
     updates[`users/${gameState.userId}/booksSofa`] = sofaIdx;
 
     // Load existing total for this book
@@ -22832,38 +22966,59 @@ function abortReadingCamera() {
     if (gameState.reading) gameState.reading._cameraPhase = null;
 }
 
+// Formats an elapsed span as a clock — mm:ss, or h:mm:ss once past an hour.
+function _formatReadingClock(ms) {
+    const totalSec = Math.floor(Math.max(0, ms) / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    const pad = (n) => String(n).padStart(2, '0');
+    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
 function updateReadingSession() {
     if (!gameState.reading.active) return;
     const r = gameState.reading;
     const now = serverNow();
 
-    if (now >= r.endTime) {
-        endReadingSession(false);
+    // Timed mode ends on the clock; pages mode is infinite (ends on انتهيت).
+    if (r.mode !== 'pages' && now >= r.endTime) {
+        endReadingSession(false, true);
         return;
     }
 
-    if (r._panelVisible) {
+    if (!r._panelVisible) return;
+
+    const pre = isMobile() ? 'reading-mobile' : 'reading-panel';
+    const sessionMs = now - r.startTime;
+
+    let timeStr;
+    if (r.mode === 'pages') {
+        timeStr = _formatReadingClock(sessionMs);   // count UP
+    } else {
         const remaining = Math.max(0, r.endTime - now);
         const mins = String(Math.floor(remaining / 60000)).padStart(2, '0');
         const secs = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
-        const timeStr = `${mins}:${secs}`;
+        timeStr = `${mins}:${secs}`;                 // count DOWN
+    }
 
-        // The displayed values only change once a second — skip the per-frame DOM
-        // writes (innerText replaces the text node and re-lays-out even when the
-        // string is identical, 60×/sec for the whole session).
-        if (timeStr === r._lastPanelTimeStr) return;
-        r._lastPanelTimeStr = timeStr;
+    // The displayed values only change once a second — skip the per-frame DOM
+    // writes (innerText replaces the text node and re-lays-out even when the
+    // string is identical, 60×/sec for the whole session).
+    if (timeStr === r._lastPanelTimeStr) return;
+    r._lastPanelTimeStr = timeStr;
 
-        const sessionMs = now - r.startTime;
-        const totalStr = _formatReadingDuration(r.totalBookMs + sessionMs);
+    const totalStr = _formatReadingDuration(r.totalBookMs + sessionMs);
+    const tm = document.getElementById(`${pre}-timer`);
+    const tot = document.getElementById(`${pre}-total`);
+    if (tm) tm.innerText = timeStr;
+    if (tot) tot.innerText = totalStr;
+
+    // Timed mode's progress bar tracks the clock; pages mode's tracks pages
+    // (set in _readingPagesUiRefresh, not per-frame).
+    if (r.mode !== 'pages') {
         const pct = Math.max(0, Math.min(100, (sessionMs / r.durationMs) * 100));
-
-        const pre = isMobile() ? 'reading-mobile' : 'reading-panel';
-        const tm = document.getElementById(`${pre}-timer`);
-        const tot = document.getElementById(`${pre}-total`);
         const fill = document.getElementById(`${pre}-progress-fill`);
-        if (tm) tm.innerText = timeStr;
-        if (tot) tot.innerText = totalStr;
         if (fill) fill.style.width = `${pct.toFixed(2)}%`;
     }
 }
@@ -22877,6 +23032,44 @@ function _rdSlideIn(el) {
     el.classList.add('rd-slide-init');
     void el.offsetWidth;
     requestAnimationFrame(() => el.classList.remove('rd-slide-init'));
+}
+
+// Updates the page indicator + prev/next button states for the active pages
+// session (both desktop + mobile). Runs on show and after every flip.
+function _readingPagesUiRefresh() {
+    const r = gameState.reading;
+    if (!r.active || r.mode !== 'pages') return;
+    const onFinal = r.currentPage >= r.targetPages;
+    const pageStr = `الصفحة ${r.currentPage} / ${r.targetPages}`;
+    const pct = Math.max(0, Math.min(100, (r.currentPage / r.targetPages) * 100));
+
+    for (const pre of ['reading-panel', 'reading-mobile']) {
+        const dur = document.getElementById(`${pre}-duration`);
+        if (dur) dur.innerText = pageStr;
+        const fill = document.getElementById(`${pre}-progress-fill`);
+        if (fill) fill.style.width = `${pct.toFixed(2)}%`;
+        const prev = document.getElementById(`${pre}-prev`);
+        const next = document.getElementById(`${pre}-next`);
+        if (prev) prev.classList.toggle('is-disabled', r.currentPage <= 1);
+        if (next) {
+            next.classList.toggle('is-finish', onFinal);
+            // On the last page the button becomes انتهيت (end + card).
+            next.innerHTML = onFinal
+                ? 'انتهيت'
+                : 'التالية <span class="reading-page-arrow">‹</span>';
+        }
+    }
+}
+
+// Sets the timer-card sub-labels + shows/hides the pages controls for the mode.
+function _readingConfigurePanelForMode(pre) {
+    const r = gameState.reading;
+    const isPages = r.mode === 'pages';
+    const sublabel = document.getElementById(`${pre}-sublabel`);
+    if (sublabel) sublabel.innerText = isPages ? 'الوقت' : 'المتبقي';
+    // Desktop control row / mobile control bar
+    const ctrl = document.getElementById(pre === 'reading-mobile' ? 'reading-mobile-pages' : 'reading-panel-pages');
+    if (ctrl) ctrl.classList.toggle('hidden', !isPages);
 }
 
 function showReadingPanel() {
@@ -22898,9 +23091,11 @@ function showReadingPanel() {
             const d = document.getElementById('reading-mobile-duration');
             if (d) d.innerText = durStr;
         }
+        _readingConfigurePanelForMode('reading-mobile');   // shows the pages bar in pages mode
         _rdSlideIn(drawer);
         _rdSlideIn(exitBtn);
         renderReadingLeaderboard();
+        _readingPagesUiRefresh();
         return;
     }
 
@@ -22912,10 +23107,13 @@ function showReadingPanel() {
     if (c) c.innerHTML = cover;
     const d = document.getElementById('reading-panel-duration');
     if (d) d.innerText = durStr;
+    _readingConfigurePanelForMode('reading-panel');
     renderReadingLeaderboard();
 
-    // Cascade the rows in with the house pitch-sweep blip (deep → high).
-    const kids = Array.from(panel.children);
+    // Cascade the rows in with the house pitch-sweep blip (deep → high). Skip any
+    // element hidden for this mode (the pages controls in timed mode) — a display:none
+    // child would be left with inline opacity:0 and never fade in when shown.
+    const kids = Array.from(panel.children).filter(el => !el.classList.contains('hidden'));
     _uiSeqReset();
     kids.forEach((el, i) => {
         el.style.opacity = '0';
@@ -22929,9 +23127,163 @@ function showReadingPanel() {
             : `readingRowIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards`;
         el.style.animationDelay = `${0.1 + i * 0.08}s`;
     });
+    _readingPagesUiRefresh();
 }
 
-function endReadingSession(manual) {
+// ─── Pages-mode page navigation + the flip cinematic ─────────────────────────
+const READING_FLIP_TRAVEL_MS = 440;   // book flies out to centre
+const READING_FLIP_PAGE_MS   = 1080;  // sunburst + paper drop/spin/return (matches the CSS)
+const READING_FLIP_RETURN_MS = 460;   // book flies back
+// How big the book gets at centre — a fraction of the shorter viewport axis.
+const READING_FLIP_CENTER_FRAC = 0.46;
+
+function readingNextPage() {
+    const r = gameState.reading;
+    if (!r.active || r.mode !== 'pages' || r._flipping) return;
+    if (r.currentPage >= r.targetPages) {
+        // On the final page the button is انتهيت — finish the (completed) session.
+        endReadingSession(false, true);
+        return;
+    }
+    playReadingPageFlip('next', () => {
+        r.currentPage = Math.min(r.targetPages, r.currentPage + 1);
+        _readingPagesUiRefresh();
+    });
+}
+
+// Prev is deliberately lightweight — no centred cinematic like التالية. Just pop the
+// panel's book cover down-and-up, play a soft page sound, and step the page back.
+function readingPrevPage() {
+    const r = gameState.reading;
+    if (!r.active || r.mode !== 'pages' || r._flipping) return;
+    if (r.currentPage <= 1) return;   // can't go before the first page
+    r.currentPage = Math.max(1, r.currentPage - 1);
+    _readingPagesUiRefresh();
+    try { gameState.focusAudioEngine?.playEffect('paperSwipe'); } catch (_) {}
+
+    const srcEl = document.getElementById(isMobile() ? 'reading-mobile-cover' : 'reading-panel-cover');
+    if (srcEl) {
+        srcEl.classList.remove('rf-bob');
+        void srcEl.offsetWidth;   // restart the animation if pressed rapidly
+        srcEl.classList.add('rf-bob');
+        setTimeout(() => srcEl.classList.remove('rf-bob'), 480);
+    }
+}
+
+// The showpiece: the panel's book cover flies to screen centre over a dimmed,
+// blurred backdrop, a page turns, then it flies playfully back — ~1.7s total.
+// `onMid` fires at the turn's midpoint (that's when the page number updates).
+function playReadingPageFlip(dir, onMid) {
+    const r = gameState.reading;
+    const overlay = document.getElementById('reading-flip-overlay');
+    const bookEl = document.getElementById('reading-flip-book');
+    const coverEl = document.getElementById('reading-flip-cover');
+    const srcEl = document.getElementById(isMobile() ? 'reading-mobile-cover' : 'reading-panel-cover');
+    if (!overlay || !bookEl || !coverEl || !srcEl) { onMid && onMid(); return; }
+
+    r._flipping = true;
+    coverEl.innerHTML = bookCoverSVG(r.bookStyle, r.bookName);
+    try { gameState.focusAudioEngine?.playEffect('paperDaysSwap'); } catch (_) {}
+
+    // Measure the panel's live cover, then size the flying book to its FINAL (large)
+    // centre size and scale it DOWN onto the panel cover. Animating scale → 1 means the
+    // book is at native large resolution at rest, so the SVG stays crisp (scaling a
+    // small SVG UP rasterizes it — that was the pixelation).
+    const rect = srcEl.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const aspect = rect.width / rect.height;
+    const targetH = Math.min(vw, vh) * READING_FLIP_CENTER_FRAC;
+    const targetW = targetH * aspect;
+
+    // origin (0,0): initial = translate to the panel cover + scale down to its size.
+    const startScale = rect.height / targetH;
+    const startT = `translate(${rect.left}px, ${rect.top}px) scale(${startScale})`;
+    const centerT = `translate(${(vw - targetW) / 2}px, ${(vh - targetH) / 2}px) scale(1)`;
+
+    bookEl.className = 'reading-flip-book';
+    bookEl.style.width = `${targetW}px`;
+    bookEl.style.height = `${targetH}px`;
+    bookEl.style.transition = 'none';
+    bookEl.style.transform = startT;
+    srcEl.style.opacity = '0';   // the clone stands in for it while it "lifts off"
+
+    overlay.classList.add('active');
+    void bookEl.offsetWidth;   // commit the start frame before transitioning
+
+    requestAnimationFrame(() => {
+        bookEl.style.transition = `transform ${READING_FLIP_TRAVEL_MS}ms cubic-bezier(0.22, 1, 0.36, 1)`;
+        bookEl.style.transform = centerT;
+    });
+
+    // At centre → sunburst fades in, a paper drops from behind, spins + shakes, returns.
+    setTimeout(() => {
+        bookEl.classList.add('playing');
+    }, READING_FLIP_TRAVEL_MS);
+
+    // Midpoint of the drop: swap the page number.
+    setTimeout(() => { onMid && onMid(); }, READING_FLIP_TRAVEL_MS + READING_FLIP_PAGE_MS / 2);
+
+    // Beat done → fly back to the panel.
+    setTimeout(() => {
+        bookEl.classList.remove('playing');
+        bookEl.style.transition = `transform ${READING_FLIP_RETURN_MS}ms cubic-bezier(0.4, 0, 0.2, 1)`;
+        bookEl.style.transform = startT;
+    }, READING_FLIP_TRAVEL_MS + READING_FLIP_PAGE_MS);
+
+    // Back home → drop the backdrop, restore the panel cover, unlock.
+    setTimeout(() => {
+        overlay.classList.remove('active');
+        srcEl.style.opacity = '';
+        r._flipping = false;
+    }, READING_FLIP_TRAVEL_MS + READING_FLIP_PAGE_MS + READING_FLIP_RETURN_MS);
+}
+
+// ─── Completion card ─────────────────────────────────────────────────────────
+function showReadingEndCard(data) {
+    const modal = document.getElementById('reading-end-modal');
+    if (!modal || !data) return;
+
+    const cover = document.getElementById('reading-end-cover');
+    if (cover) cover.innerHTML = bookCoverSVG(data.bookStyle, data.bookName);
+    document.getElementById('reading-end-book').innerText = data.bookName || '';
+    document.getElementById('reading-end-time').innerText = _formatReadingDuration(data.ms);
+
+    const pagesStat = document.getElementById('reading-end-pages-stat');
+    if (data.pages) {
+        document.getElementById('reading-end-pages').innerText = data.pages;
+        if (pagesStat) pagesStat.style.display = '';
+    } else if (pagesStat) {
+        pagesStat.style.display = 'none';
+    }
+
+    // Name + avatar from the local player entity (currentUser is just the name string).
+    const me = gameState.players[gameState.userId] || {};
+    document.getElementById('reading-end-name').innerText = me.username || 'قارئ';
+    const img = document.getElementById('reading-end-avatar-img');
+    const txt = document.getElementById('reading-end-avatar-text');
+    if (me.avatar) {
+        img.src = me.avatar; img.style.display = ''; if (txt) txt.style.display = 'none';
+    } else {
+        if (img) img.style.display = 'none';
+        if (txt) { txt.style.display = ''; txt.innerText = (me.username || 'ق').charAt(0); }
+    }
+
+    // Double-rAF so the enter transition (opacity + scale) actually plays.
+    requestAnimationFrame(() => requestAnimationFrame(() => modal.classList.add('active')));
+    try { gameState.focusAudioEngine?.playEffect('yipee'); } catch (_) {}
+}
+
+function hideReadingEndCard() {
+    document.getElementById('reading-end-modal')?.classList.remove('active');
+}
+
+function readingEndCardOpen() {
+    return document.getElementById('reading-end-modal')?.classList.contains('active') || false;
+}
+
+// manual = ended early by the user (إنهاء القراءة). completed = the session was
+// FINISHED (full time, or all pages via انتهيت) — only then does the end card show.
+function endReadingSession(manual, completed) {
     if (!gameState.reading.active) return;
 
     const r = gameState.reading;
@@ -22940,8 +23292,10 @@ function endReadingSession(manual) {
     // a stop, so the session ends whenever the user comes BACK, and a raw
     // `serverNow() - startTime` banked the entire away period (start a 25-min
     // session, background the tab for five hours, come back to +5h of reading).
-    // The session can never legitimately be worth more than its own duration.
-    const sessionMs = Math.max(0, Math.min(serverNow() - r.startTime, r.durationMs));
+    // The session can never legitimately be worth more than its cap (timed: its own
+    // duration; pages: infinite, so a generous ceiling).
+    const cap = r.mode === 'pages' ? READING_PAGES_MAX_MS : r.durationMs;
+    const sessionMs = Math.max(0, Math.min(serverNow() - r.startTime, cap));
 
     // Save to Firebase
     const slug = _readingSlug(r.bookName);
@@ -22986,6 +23340,14 @@ function endReadingSession(manual) {
         gameState._readingBooks[slug].totalMs = (gameState._readingBooks[slug].totalMs || 0) + sessionMs;
     }
 
+    // Snapshot what the completion card will show BEFORE we tear the state down.
+    const cardData = {
+        bookName: r.bookName,
+        bookStyle: r.bookStyle,
+        ms: sessionMs,
+        pages: r.mode === 'pages' ? r.targetPages : null,
+    };
+
     // UI Cleanup
     r.active = false;
     r._cameraPhase = 'exiting';
@@ -22996,6 +23358,10 @@ function endReadingSession(manual) {
     gameState.isLockedIn = false;
     setMobileFocusMode(false);
 
+    document.getElementById('reading-mobile-pages')?.classList.add('hidden');
+    // If a page-flip was mid-air when the session ended, drop its backdrop.
+    document.getElementById('reading-flip-overlay')?.classList.remove('active');
+    r._flipping = false;
     if (isMobile()) {
         document.getElementById('reading-mobile-header')?.classList.add('hidden');
         document.getElementById('reading-drawer')?.classList.add('hidden');
@@ -23021,6 +23387,13 @@ function endReadingSession(manual) {
     setTimeout(() => {
         standUp();
     }, 800);
+
+    // The completion card only shows for a FINISHED session (never a manual early
+    // exit), and only AFTER the exit sequence — the camera has zoomed back out
+    // (READING_EXIT_MS) and the player has stood up (~800ms). ~1.7s covers both.
+    if (completed) {
+        setTimeout(() => showReadingEndCard(cardData), 1700);
+    }
 }
 
 // ─── The book prop (Art/Book.png) ────────────────────────────────────────────
