@@ -23132,7 +23132,7 @@ function showReadingPanel() {
 
 // ─── Pages-mode page navigation + the flip cinematic ─────────────────────────
 const READING_FLIP_TRAVEL_MS = 440;   // book flies out to centre
-const READING_FLIP_PAGE_MS   = 1050;  // sunburst + book pop + paper drop-and-escape (matches the CSS)
+const READING_FLIP_PAGE_MS   = 680;   // sunburst + book pop + paper drop-and-escape (matches the CSS)
 const READING_FLIP_RETURN_MS = 460;   // book flies back
 // How big the book gets at centre — a fraction of the shorter viewport axis.
 const READING_FLIP_CENTER_FRAC = 0.46;
