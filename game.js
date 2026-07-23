@@ -24485,7 +24485,7 @@ function _fireNormName(s) {
 // Keys are normalised at build time, so any hamza spelling matches. `مجود` is
 // spelled `نجود` in the points DB (a real different letter, not a hamza variant —
 // normalisation can't fix it), so BOTH spellings map to the same UID.
-const FIRE_NAME_TO_UID = (() => {
+let FIRE_NAME_TO_UID = (() => {
     const raw = {
         'الشعيرة': '1019357346641739806',
         'عمر': '1069103376807243806',
@@ -24522,6 +24522,29 @@ const FIRE_NAME_TO_UID = (() => {
 // Names in the points DB that are never real members (the Siraj test account has
 // tens of thousands of points and would permanently own first place).
 const FIRE_EXCLUDE_NAMES = new Set(['سراج'].map(_fireNormName));
+
+// The name→UID map and the exclude set above are now fed by the SHARED team roster
+// (github.com/mdwnstudio/MdwnhMembers) — the single source of truth across all the
+// مدونة sites. The hardcoded map stays as an offline fallback; this hydrates it from
+// the repo on load (a member added to the roster shows up here with no code edit).
+// dbKey = the exact points-DB spelling; dummy members (سراج) go into the exclude set.
+const MDWNH_ROSTER_BASE = 'https://raw.githubusercontent.com/mdwnstudio/MdwnhMembers/main';
+(async function _hydrateFireRosterFromRepo() {
+    try {
+        const res = await fetch(`${MDWNH_ROSTER_BASE}/members.json`, { cache: 'no-cache' });
+        if (!res.ok) return;
+        const data = await res.json();
+        const merged = {};
+        for (const m of (data.members || [])) {
+            if (m.dummy) { if (m.dbKey) FIRE_EXCLUDE_NAMES.add(_fireNormName(m.dbKey)); continue; }
+            if (m.discordId && m.dbKey) merged[_fireNormName(m.dbKey)] = String(m.discordId);
+        }
+        // Preserve the مجود↔نجود alias (the points DB uses a spelling our list normalises away).
+        const nj = merged[_fireNormName('نجود')] || FIRE_NAME_TO_UID[_fireNormName('نجود')];
+        if (nj) merged[_fireNormName('مجود')] = nj;
+        FIRE_NAME_TO_UID = { ...FIRE_NAME_TO_UID, ...merged };
+    } catch (_) { /* offline / repo unreachable — keep the hardcoded fallback */ }
+})();
 
 // The three frames painted into `Art/Fireplace.png`, as fractions of that image
 // (1500×1920) — measured off the reference overlay. Middle = 1st place, right =
