@@ -530,6 +530,16 @@ body {
     pointer-events: none;
 }
 
+/* Fig lobby (لعبة التين) reuses this panel — swap the race saffron/brown accent
+   for a water-blue one. Applied via the .race-coffee class in showCoffeeLobby;
+   the race show-functions strip it so a race lobby stays saffron. */
+.race-panel.race-coffee .race-kicker { color: #48c5ea; }
+.race-panel.race-coffee .race-rank {
+    background: #48c5ea;
+    color: #04242f;
+}
+.race-panel.race-coffee .race-avatar { background: #1c7fa8; }
+
 .race-card {
     width: min(460px, calc(100vw - 32px));
     background: rgba(18, 22, 28, 0.94);
@@ -7812,12 +7822,14 @@ body:not(.is-mobile) .reading-end-modal.active {
     background: #3a3f52; color: #fff; font-size: 3rem; font-weight: 700;
 }
 .cc-char.no-avatar .cc-initial { display: flex; }
+/* Layer holding every preview hat, centred on the character. */
+.cc-hats-layer { position: absolute; inset: 0; pointer-events: none; }
 .cc-hat {
     position: absolute; left: 50%; top: 50%;
     display: none;
     transform-origin: 50% 50%;
     pointer-events: auto; cursor: grab;
-    filter: drop-shadow(0 8px 14px rgba(0,0,0,0.5));
+    /* No drop-shadow: the in-world hat has none, so the preview must match. */
     -webkit-user-select: none; user-select: none;
     -webkit-user-drag: none;
 }
@@ -7905,7 +7917,76 @@ body:not(.is-mobile) .reading-end-modal.active {
 }
 .cc-mini-btn:hover { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.88); }
 
-/* Hats */
+/* ── Hat instance cards (one per worn hat) ─────────────────────────────────── */
+.cc-hat-list { display: flex; flex-direction: column; gap: 12px; }
+.cc-hat-inst {
+    border-radius: 16px;
+    background: rgba(255,255,255,0.045);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 12px;
+}
+.cc-hat-inst-head { display: flex; align-items: center; gap: 11px; }
+/* The preview button: press it → the picker opens; the chosen hat shows inside. */
+.cc-hat-pick {
+    flex: 0 0 auto; width: 52px; height: 52px; border-radius: 13px;
+    background: rgba(255,255,255,0.06); border: 1.5px dashed rgba(255,255,255,0.18);
+    cursor: pointer; padding: 6px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.18s, border-color 0.18s;
+    -webkit-tap-highlight-color: transparent;
+}
+.cc-hat-pick:hover { background: rgba(255,255,255,0.11); }
+.cc-hat-pick.has-hat { border-style: solid; border-color: rgba(59,185,171,0.6); background: rgba(59,185,171,0.10); }
+.cc-hat-pick-img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.cc-hat-pick-none { font-size: 0.68rem; font-weight: 700; color: rgba(255,255,255,0.42); }
+.cc-hat-pick-label { flex: 1 1 auto; font-size: 0.82rem; font-weight: 700; color: rgba(255,255,255,0.72); }
+.cc-hat-del {
+    flex: 0 0 auto; width: 28px; height: 28px; border-radius: 50%;
+    background: rgba(255,255,255,0.06); border: none; color: rgba(255,255,255,0.5);
+    cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: background 0.18s, color 0.18s;
+}
+.cc-hat-del svg { width: 13px; height: 13px; }
+.cc-hat-del:hover { background: rgba(240,78,58,0.22); color: #ff8a7a; }
+.cc-hat-ctrls { margin-top: 12px; }
+.cc-hat-ctrls .cc-slider-row { margin-top: 8px; }
+.cc-hat-ctrls .cc-slider-row:first-child { margin-top: 0; }
+.cc-slider-val { flex: 0 0 34px; text-align: left; font-size: 0.70rem; font-weight: 700; color: rgba(255,255,255,0.5); font-variant-numeric: tabular-nums; }
+.cc-hat-inst-btns { display: flex; gap: 8px; margin-top: 12px; }
+.cc-hat-inst-btns .cc-mini-btn { flex: 1 1 auto; text-align: center; padding: 8px; }
+.cc-hat-flip.on { background: rgba(59,185,171,0.85); color: #06231f; border-color: transparent; }
+/* Add-a-hat button */
+.cc-hat-add {
+    width: 100%; margin-top: 12px; padding: 11px; border-radius: 14px;
+    background: rgba(255,255,255,0.06); border: 1.5px dashed rgba(255,255,255,0.18);
+    color: rgba(255,255,255,0.7); font-family: inherit; font-size: 0.80rem; font-weight: 700; cursor: pointer;
+    display: flex; align-items: center; justify-content: center; gap: 6px;
+    transition: background 0.18s, color 0.18s;
+}
+.cc-hat-add:hover { background: rgba(255,255,255,0.11); color: #fff; }
+.cc-hat-add-plus { font-size: 1.05rem; font-weight: 800; }
+.cc-hat-add.cc-hat-add-full { display: none; }   /* hidden once 5 hats are worn */
+.cc-hat-hint { margin-top: 12px; font-size: 0.68rem; color: rgba(255,255,255,0.30); }
+
+/* ── Hat picker popup (grid of every hat) ──────────────────────────────────── */
+.cc-hat-picker {
+    position: absolute; inset: 0; z-index: 5;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(6,7,10,0.72);
+    -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+    padding: 18px;
+}
+.cc-hat-picker.hidden { display: none; }
+.cc-hat-picker-card {
+    width: 100%; max-height: 100%; display: flex; flex-direction: column;
+    background: rgba(24,25,30,0.98); border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 18px; box-shadow: 0 18px 44px rgba(0,0,0,0.5); padding: 16px;
+}
+.cc-hat-picker-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.cc-hat-picker-title { font-size: 0.92rem; font-weight: 700; color: rgba(255,255,255,0.88); }
+.cc-hat-picker .cc-hats { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+
+/* Hat grid — shared by the picker */
 .cc-hats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
 .cc-hat-card {
     position: relative;
@@ -7923,12 +8004,6 @@ body:not(.is-mobile) .reading-end-modal.active {
 .cc-hat-card img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .cc-hat-card .cc-hat-none { font-size: 0.74rem; font-weight: 700; color: rgba(255,255,255,0.45); }
 .cc-hats-empty { font-size: 0.74rem; color: rgba(255,255,255,0.34); padding: 8px 0; }
-/* Transform tools stay locked until a hat is picked. Visual-only lock via a class —
-   never the `disabled` attribute (it leaks touch events on iOS). */
-.cc-hat-tools { margin-top: 14px; opacity: 0.3; pointer-events: none; transition: opacity 0.25s; }
-.cc-hat-tools.cc-unlocked { opacity: 1; pointer-events: auto; }
-.cc-hat-tools .cc-mini-btn { display: block; width: 100%; margin-top: 12px; padding: 8px 11px; }
-.cc-hat-hint { margin-top: 10px; font-size: 0.68rem; color: rgba(255,255,255,0.30); }
 
 .cc-panel-foot { flex: 0 0 auto; padding: 14px 20px 20px; border-top: 1px solid rgba(255,255,255,0.07); }
 .cc-save-btn {
@@ -7955,6 +8030,7 @@ body.is-mobile .cc-shadow { margin-left: -75px; }
 body.is-mobile .cc-char { width: 120px; height: 120px; }
 /* No live backdrop-filter on mobile — it re-rasterizes over the 60fps canvas. */
 body.is-mobile .cc-panel { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(14,14,16,0.96); }
+body.is-mobile .cc-hat-picker { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(6,7,10,0.9); }
 /* The game loop keeps rendering behind the overlay — same rule as azkar/dashboard:
    drop the live blur and hide the canvas on mobile so its 60fps repaint can't
    contend with the customization scene. */

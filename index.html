@@ -127,7 +127,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 238 · Updated 8:07 AM</div>
+    <div id="build-number" class="build-number">Build 239 · Updated 1:17 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -632,7 +632,7 @@
             <div id="cc-shadow" class="cc-shadow"></div>
             <div id="cc-char" class="cc-char">
                 <div id="cc-ring" class="cc-ring"><img id="cc-avatar" class="cc-avatar" alt=""><span id="cc-initial" class="cc-initial"></span></div>
-                <img id="cc-hat" class="cc-hat" alt="">
+                <div id="cc-hats-layer" class="cc-hats-layer"></div>
             </div>
         </div>
         <div id="cc-panel" class="cc-panel">
@@ -672,31 +672,27 @@
                 </div>
                 <div class="cc-section">
                     <div class="cc-section-title">القبعات</div>
-                    <div id="cc-hats" class="cc-hats"></div>
-                    <div id="cc-hat-tools" class="cc-hat-tools">
-                        <div class="cc-slider-row">
-                            <span class="cc-slider-name">الحجم</span>
-                            <input id="cc-hat-scale" class="cc-range" type="range" min="20" max="180" value="80">
-                        </div>
-                        <div class="cc-slider-row">
-                            <span class="cc-slider-name">الدوران</span>
-                            <input id="cc-hat-rot" class="cc-range" type="range" min="-180" max="180" value="0">
-                        </div>
-                        <div class="cc-slider-row">
-                            <span class="cc-slider-name">أفقي</span>
-                            <input id="cc-hat-x" class="cc-range" type="range" min="-100" max="100" value="0">
-                        </div>
-                        <div class="cc-slider-row">
-                            <span class="cc-slider-name">رأسي</span>
-                            <input id="cc-hat-y" class="cc-range" type="range" min="-140" max="60" value="-55">
-                        </div>
-                        <button id="cc-reset-hat" class="cc-mini-btn" type="button">استعادة الافتراضي</button>
-                        <div class="cc-hat-hint">يمكنك أيضًا سحب القبعة على الشخصية</div>
-                    </div>
+                    <div id="cc-hat-list" class="cc-hat-list"></div>
+                    <button id="cc-hat-add" class="cc-hat-add" type="button">
+                        <span class="cc-hat-add-plus">+</span> إضافة قبعة
+                    </button>
+                    <div class="cc-hat-hint">اسحب أي قبعة على الشخصية لتحريكها</div>
                 </div>
             </div>
             <div class="cc-panel-foot">
                 <button id="cc-save" class="cc-save-btn" type="button">حفظ</button>
+            </div>
+            <!-- Hat picker popup — opened by a hat card's preview button -->
+            <div id="cc-hat-picker" class="cc-hat-picker hidden">
+                <div class="cc-hat-picker-card">
+                    <div class="cc-hat-picker-head">
+                        <span class="cc-hat-picker-title">اختر قبعة</span>
+                        <button id="cc-hat-picker-close" class="cc-close" type="button" aria-label="إغلاق">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                        </button>
+                    </div>
+                    <div id="cc-hats" class="cc-hats"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -1624,7 +1620,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=231"></script>
+        <script type="module" src="game.js?v=232"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

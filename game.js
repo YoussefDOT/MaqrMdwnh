@@ -2543,7 +2543,9 @@ const COFFEE_MUG_W       = 260;   // hands width on a roomy screen; clamped by c
 const COFFEE_MUG_Y_FRAC  = 0.78;
 const COFFEE_SUGAR_W     = 54;
 const COFFEE_SUGAR_H     = Math.round(COFFEE_SUGAR_W * FIG_SRC.h / FIG_SRC.w); // 59
-const COFFEE_CATCH_FRAC  = 0.31;  // catch hitbox half-width, as a fraction of the hands width
+const COFFEE_CATCH_FRAC  = 0.42;  // catch hitbox half-width, as a fraction of the hands width
+                                  // (widened to match the actual painted bowl opening —
+                                  //  the old 0.31 dropped figs that hit the sides)
 // Golden fig: rare, falls 3× faster, +3 points.
 const COFFEE_GOLD_MIN_GAP_MS = 8000;  // never two goldens closer than this
 const COFFEE_GOLD_FALL_MULT  = 1 / 3; // 3× faster than a normal fig
@@ -4641,6 +4643,7 @@ function showCoffeeLobby(session) {
     returnBtn.textContent = session.hostId === gameState.userId ? 'إلغاء' : 'خروج';
     returnBtn.style.display = 'block';
     renderRacePlayerList(session);   // generic enough (avatar/name/host-or-ready) — reused as-is
+    panel.classList.add('race-coffee');   // water-blue theme for the fig lobby
     panel.classList.remove('hidden');
 }
 // Which type (if any) currently has a lobby-phase session the local player is in —
@@ -7076,6 +7079,7 @@ function showRaceLobby(session) {
     const returnBtn = document.getElementById('race-return');
     if (!panel || !title || !status || !startBtn || !returnBtn) return;
 
+    panel.classList.remove('race-coffee');
     title.textContent = 'سباق السيارات';
     status.textContent = session.hostId === gameState.userId ? 'أنت المضيف' : 'بانتظار المضيف';
     startBtn.textContent = 'ابدأ السباق';
@@ -7094,6 +7098,7 @@ function showRaceResults(session) {
     const returnBtn = document.getElementById('race-return');
     if (!panel || !title || !status || !startBtn || !returnBtn) return;
 
+    panel.classList.remove('race-coffee');
     title.textContent = 'النتائج';
     status.textContent = 'سيتم إعادتك بعد لحظات';
     startBtn.style.display = 'none';
@@ -7111,6 +7116,7 @@ function showRaceMessage(message) {
     const startBtn = document.getElementById('race-start');
     const returnBtn = document.getElementById('race-return');
     if (!panel || !title || !list || !status || !startBtn || !returnBtn) return;
+    panel.classList.remove('race-coffee');
     title.textContent = 'سباق السيارات';
     list.innerHTML = '';
     status.textContent = message;
@@ -8095,7 +8101,7 @@ function listenToPlayers() {
                             booksSofa:          userData.booksSofa || null,
                             // Customization (تخصيص الشخصية) — everyone sees everyone's.
                             ringColor:          _validHex(userData.ringColor),
-                            hat:                sanitizeHat(userData.hat),
+                            hats:               sanitizeHats(userData),
                             // Hold a new remote player invisible until their position settles,
                             // then pop them in (see SPAWN_SETTLE_MS) — no "snap on join". The
                             // pop-in `_entryT` is set at promotion time, not here.
@@ -8106,7 +8112,7 @@ function listenToPlayers() {
                         // loading screen, well before this player is ever drawn) instead of
                         // waiting for the first draw call — was causing a hat to pop in a
                         // beat late on spawn. ensureHatAsset is idempotent/cached.
-                        if (userData.hat && userData.hat.id) ensureHatAsset(userData.hat.id);
+                        for (const h of sanitizeHats(userData)) ensureHatAsset(h.id);
                     } else {
                         const player = gameState.players[userId];
                         // Presence came back — a blip, not a departure. Cancel the grace
@@ -8122,8 +8128,8 @@ function listenToPlayers() {
                         // another device / tab must land here as well), so it sits
                         // outside the !isCurrentUser block below.
                         player.ringColor = _validHex(userData.ringColor);
-                        player.hat       = sanitizeHat(userData.hat);
-                        if (player.hat) ensureHatAsset(player.hat.id);
+                        player.hats      = sanitizeHats(userData);
+                        for (const h of player.hats) ensureHatAsset(h.id);
                         if (isCurrentUser) ccSyncFromPlayer(player);
 
                         if (isCurrentUser) {
@@ -8889,8 +8895,8 @@ function _localFloor() {
     return (me && me.floor) || 1;
 }
 
-function spawnDust(x, y, amount, isDragging = false) {
-    const fl = _localFloor();
+function spawnDust(x, y, amount, isDragging = false, floor = null) {
+    const fl = floor || _localFloor();
     for (let i = 0; i < amount; i++) {
         gameState.dustParticles.push({
             x: x + (Math.random() - 0.5) * 30,
@@ -8972,7 +8978,9 @@ function updatePlayerBobbing() {
         if (!isLocal && player.isMoving) {
             if (Math.random() < 0.2 * gameState.dtFactor) {
                 const { x: dustX, y: dustY } = getPlayerRenderPos(player);
-                spawnDust(dustX, dustY, 1, false);
+                // Tag with the REMOTE player's floor, not mine — otherwise a floor-2
+                // walker's dust gets my floor and shows on the wrong level.
+                spawnDust(dustX, dustY, 1, false, player.floor || 1);
             }
         }
 
@@ -9112,6 +9120,26 @@ function gameLoop(timestamp) {
             gameState._lastPresenceHeartbeat = _now;
             update(ref(database), { [`users/${gameState.userId}/activeInGame`]: true });
             ensurePresenceSocket();   // self-heal the relay if it silently died
+        }
+    }
+
+    // WebSocket presence ping — the real fix for "a present player vanishes then
+    // reappears (logout→login anim) even with the site open". An idle/standing user
+    // sends NO position packets, so if their Firebase `activeInGame` merely blips
+    // (a flaky connection to Firebase while the socket is fine), observers get no
+    // sign of life and updatePresenceGrace removes them after PRESENCE_GRACE_MS,
+    // then re-adds them when presence heals. A forced position packet every ~3s (well
+    // under the 8s grace) keeps `_lastWsSampleAt` fresh on every observer, so a truly-
+    // connected peer's grace never expires. Only skipped while moving (sendPositionWS
+    // already streams ~11/s then). Costs nothing on Firebase — it's the relay.
+    if (gameState.userId && !gameState.isSirajGhost) {
+        const _p = gameState.players[gameState.userId];
+        if (_p && !_p.isMoving) {
+            const _now = Date.now();
+            if (!gameState._lastWsPing || _now - gameState._lastWsPing > 3000) {
+                gameState._lastWsPing = _now;
+                sendPositionWS(_p.x, _p.y, true);
+            }
         }
     }
 
@@ -10424,7 +10452,13 @@ function renderCoffee() {
         ctx.save();
         ctx.globalAlpha = participant.alive === false ? 0.12 : 0.28;
         ctx.translate(ghostX + shX, handsCY + shY);
-        drawCoffeeHands(ctx, null, hands.w, hands.h);
+        // Show the other player's figs piling up too. We don't sync the fig-type
+        // array (it grows every catch → too costly on a live-listened doc), so the
+        // pile is derived from their synced score: N 'good' figs, capped at the
+        // pile's own draw limit. `flashFrames:0` skips the flash branch cleanly.
+        const gScore = Math.max(0, Math.min(COFFEE_PILE_MAX, participant.score || 0));
+        const ghostFigs = gScore > 0 ? new Array(gScore).fill('good') : [];
+        drawCoffeeHands(ctx, { figs: ghostFigs, flashFrames: 0 }, hands.w, hands.h);
         ctx.restore();
         ctx.save();
         ctx.globalAlpha = participant.alive === false ? 0.2 : 0.5;
@@ -10568,7 +10602,7 @@ function drawCoffeeHud(W, H, elapsed, session, mug) {
         const remaining = Math.max(0, COFFEE_MATCH_MS - elapsed);
         const secs      = Math.ceil(remaining / 1000);
         ctx.save();
-        ctx.fillStyle = remaining < 8000 ? 'rgba(200,30,30,0.92)' : 'rgba(18,10,4,0.82)';
+        ctx.fillStyle = remaining < 8000 ? 'rgba(200,30,30,0.92)' : 'rgba(6,26,38,0.85)';
         if (ctx.roundRect) {
             ctx.beginPath(); ctx.roundRect(listX, listY, listW, 38, 10); ctx.fill();
         } else { ctx.fillRect(listX, listY, listW, 38); }
@@ -10594,18 +10628,18 @@ function drawCoffeeHud(W, H, elapsed, session, mug) {
     const panelH  = headerH + participants.length * rowH + 6;
 
     ctx.save();
-    // Panel background
-    ctx.fillStyle = 'rgba(12,6,2,0.80)';
+    // Panel background — water-blue theme (was the old brown fig tint)
+    ctx.fillStyle = 'rgba(5,22,34,0.82)';
     if (ctx.roundRect) {
         ctx.beginPath(); ctx.roundRect(listX, listY, listW, panelH, 10); ctx.fill();
     } else { ctx.fillRect(listX, listY, listW, panelH); }
-    ctx.strokeStyle = 'rgba(244,200,43,0.18)';
+    ctx.strokeStyle = 'rgba(59,185,214,0.22)';
     ctx.lineWidth   = 1;
     if (ctx.roundRect) {
         ctx.beginPath(); ctx.roundRect(listX, listY, listW, panelH, 10); ctx.stroke();
     }
     // Header label
-    ctx.fillStyle    = 'rgba(244,200,43,0.7)';
+    ctx.fillStyle    = 'rgba(120,215,245,0.85)';
     ctx.font         = 'bold 12px Rubik';
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
@@ -10618,7 +10652,7 @@ function drawCoffeeHud(W, H, elapsed, session, mug) {
 
         // Row highlight
         if (isLocal) {
-            ctx.fillStyle = 'rgba(244,200,43,0.12)';
+            ctx.fillStyle = 'rgba(59,185,214,0.14)';
             ctx.fillRect(listX + 4, ry, listW - 8, rowH - 2);
         }
 
@@ -10627,7 +10661,7 @@ function drawCoffeeHud(W, H, elapsed, session, mug) {
         const acy = ry + rowH / 2;
         ctx.save();
         ctx.beginPath(); ctx.arc(ax, acy, avSize / 2, 0, Math.PI * 2);
-        ctx.fillStyle = dead ? '#333' : (isLocal ? '#f4c82b' : '#444');
+        ctx.fillStyle = dead ? '#333' : (isLocal ? '#38aee0' : '#444');
         ctx.fill();
         const avImg = gameState.avatarCache[uid];
         if (!avImg && p.avatar) {
@@ -10648,14 +10682,14 @@ function drawCoffeeHud(W, H, elapsed, session, mug) {
         ctx.restore();
 
         // Name
-        ctx.fillStyle    = dead ? '#555' : (isLocal ? '#f4c82b' : 'rgba(255,255,255,0.85)');
+        ctx.fillStyle    = dead ? '#555' : (isLocal ? '#7fd4f0' : 'rgba(255,255,255,0.85)');
         ctx.font         = `${isLocal ? 'bold ' : ''}14px Rubik`;
         ctx.textAlign    = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText((p.username || '?').slice(0, 9), listX + 10 + avSize + 4, acy);
 
         // Score / dead
-        ctx.fillStyle = dead ? '#666' : '#f4c82b';
+        ctx.fillStyle = dead ? '#666' : '#7fd4f0';
         ctx.font      = 'bold 14px Rubik';
         ctx.textAlign = 'right';
         ctx.fillText(dead ? '💀' : `${p.score || 0}`, listX + listW - 8, acy);
@@ -12824,7 +12858,7 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         // The hat rides OUTSIDE the avatar transform: it chases the avatar's anchor
         // on its own spring, so it lags a few frames behind and overshoots on stop —
         // which is what sells it as a real object sitting on the player's head.
-        drawPlayerHat(player,
+        drawPlayerHats(player,
             screenX + coopDX,
             screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY,
             rScale * _juiceScale,
@@ -23593,7 +23627,10 @@ function renderReadingLeaderboard() {
 //  and survives the second-floor scale-up unchanged.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const HAT_DEFAULT = { x: 0, y: -0.55, scale: 0.80, rot: 0 };
+// Hats now spawn CENTRED on the avatar (y:0), not perched on top, and at a smaller
+// default — the max size was halved (slider now caps at 0.9, sanitize at 1.0).
+const HAT_DEFAULT = { x: 0, y: 0, scale: 0.55, rot: 0, flip: false };
+const HAT_MAX = 5;                          // a player can wear up to 5 hats at once
 const HAT_MANIFEST_URL = 'Hats/hats.json';
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
@@ -23772,9 +23809,29 @@ function sanitizeHat(raw) {
         id:    raw.id,
         x:     num(raw.x,     HAT_DEFAULT.x,     -1.5, 1.5),
         y:     num(raw.y,     HAT_DEFAULT.y,     -2.0, 1.0),
-        scale: num(raw.scale, HAT_DEFAULT.scale,  0.2, 2.0),
+        scale: num(raw.scale, HAT_DEFAULT.scale,  0.2, 1.0),   // max halved (was 2.0)
         rot:   num(raw.rot,   HAT_DEFAULT.rot,   -Math.PI, Math.PI),
+        flip:  !!raw.flip,
     };
+}
+
+// Read a player's hats as a clean array (max HAT_MAX). Supports the new `hats`
+// array AND the legacy single `hat` field (RTDB may hand an array back as an
+// object keyed 0,1,2… so accept both shapes), so existing saved hats survive.
+function sanitizeHats(userData) {
+    if (!userData) return [];
+    let raw = userData.hats;
+    let arr = Array.isArray(raw) ? raw
+            : (raw && typeof raw === 'object') ? Object.values(raw)
+            : null;
+    if (!arr) arr = userData.hat ? [userData.hat] : [];   // legacy single hat
+    const out = [];
+    for (const h of arr) {
+        const s = sanitizeHat(h);
+        if (s) out.push(s);
+        if (out.length >= HAT_MAX) break;
+    }
+    return out;
 }
 
 // ── Hat physics: pinned position, overshooting ROTATION only ─────────────────
@@ -23820,27 +23877,31 @@ function _updateHatSpring(player, tx, ty) {
     return h;
 }
 
-// Draw a player's hat pinned to the avatar's centre anchor. Called from drawPlayers
+// Draw a player's hats pinned to the avatar's centre anchor. Called from drawPlayers
 // AFTER the avatar's transform is restored, with the anchor the avatar was drawn at.
-function drawPlayerHat(player, anchorX, anchorY, rScale, alpha) {
-    const hat = player.hat;
-    if (!hat || alpha < 0.02) { player._hatSpring = null; return; }
-    const entry = ensureHatAsset(hat.id);
-    if (!entry || !entry.ready) return;
+// One shared rotation spring drives the flop for every hat the player wears.
+function drawPlayerHats(player, anchorX, anchorY, rScale, alpha) {
+    const hats = player.hats;
+    if (!hats || !hats.length || alpha < 0.02) { player._hatSpring = null; return; }
 
     const spr = _updateHatSpring(player, anchorX, anchorY);
-    const src = entry.canvas;
-    const w = PLAYER_SIZE * hat.scale * rScale;
-    const h = w * (src.height / src.width);
-
     const ctx = gameState.ctx;
-    ctx.save();
-    ctx.globalAlpha = alpha;
-    ctx.translate(spr.x, spr.y);
-    ctx.translate(hat.x * PLAYER_SIZE * rScale, hat.y * PLAYER_SIZE * rScale);
-    ctx.rotate(hat.rot + spr.rot);
-    ctx.drawImage(src, -w / 2, -h / 2, w, h);
-    ctx.restore();
+    for (const hat of hats) {
+        if (!hat || !hat.id) continue;
+        const entry = ensureHatAsset(hat.id);
+        if (!entry || !entry.ready) continue;
+        const src = entry.canvas;
+        const w = PLAYER_SIZE * hat.scale * rScale;
+        const h = w * (src.height / src.width);
+        ctx.save();
+        ctx.globalAlpha = alpha;
+        ctx.translate(spr.x, spr.y);
+        ctx.translate(hat.x * PLAYER_SIZE * rScale, hat.y * PLAYER_SIZE * rScale);
+        ctx.rotate(hat.rot + spr.rot);
+        if (hat.flip) ctx.scale(-1, 1);
+        ctx.drawImage(src, -w / 2, -h / 2, w, h);
+        ctx.restore();
+    }
 }
 
 // ── The customization scene (overlay) ─────────────────────────────────────────
@@ -23850,7 +23911,8 @@ function drawPlayerHat(player, anchorX, anchorY, rScale, alpha) {
 const _cc = {
     open: false,
     color: COLORS.blue,
-    hat: null,            // working copy — only committed to Firebase on حفظ
+    hats: [],             // working copy of the hat array — committed to Firebase on حفظ
+    pickFor: null,        // instance index the hat picker is currently choosing for
     hsv: { h: 205, s: 1, v: 0.71 },
     raf: null,
     drag: null,
@@ -23862,7 +23924,7 @@ const _cc = {
 function ccSyncFromPlayer(player) {
     if (_cc.open) return;   // never stomp an in-progress edit
     _cc.color = _validHex(player.ringColor) || COLORS.blue;
-    _cc.hat   = player.hat ? { ...player.hat } : null;
+    _cc.hats  = (player.hats || []).map(h => ({ ...h }));
 }
 
 function _ccEl(id) { return document.getElementById(id); }
@@ -23947,7 +24009,82 @@ function _ccDrawWheel() {
     _cc.wheelDrawn = true;
 }
 
-// Push _cc.color / _cc.hat into the preview character + the controls.
+// Rebuild the whole hat UI: the instance cards + the preview hats on the character.
+// Called whenever the set of hats changes (add / delete / pick).
+function _ccRebuild() {
+    _ccBuildHatList();
+    _ccBuildPreviewHats();
+    _ccReflect();
+}
+
+// Set the preview button image (or "اختر" placeholder) for one hat, once decoded.
+function _ccPaintPickButton(btn, id) {
+    if (!id) { btn.classList.remove('has-hat'); btn.innerHTML = '<span class="cc-hat-pick-none">اختر</span>'; return; }
+    const entry = ensureHatAsset(id);
+    const set = () => {
+        if (!btn.isConnected) return;
+        if (entry.ready) {
+            btn.classList.add('has-hat');
+            btn.innerHTML = `<img class="cc-hat-pick-img" src="${entry.url}" alt="">`;
+        } else if (!entry.failed) { setTimeout(set, 90); }
+        else { btn.classList.remove('has-hat'); btn.innerHTML = '<span class="cc-hat-pick-none">؟</span>'; }
+    };
+    set();
+}
+
+// Build one instance card per hat (preview button that opens the picker, delete,
+// and its own transform controls). Each card is bound to its hat index — no shared
+// "active" concept, so every hat has the same full UI, matching the brief.
+function _ccBuildHatList() {
+    const list = _ccEl('cc-hat-list');
+    if (!list) return;
+    list.innerHTML = '';
+    const AR = ['الأولى', 'الثانية', 'الثالثة', 'الرابعة', 'الخامسة'];
+    _cc.hats.forEach((hat, idx) => {
+        const card = document.createElement('div');
+        card.className = 'cc-hat-inst';
+        card.dataset.idx = idx;
+        card.innerHTML = `
+            <div class="cc-hat-inst-head">
+                <button class="cc-hat-pick" type="button" data-act="pick" title="تغيير القبعة"></button>
+                <span class="cc-hat-pick-label">القبعة ${AR[idx] || (idx + 1)}</span>
+                <button class="cc-hat-del" type="button" data-act="del" aria-label="حذف">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="cc-hat-ctrls">
+                <div class="cc-slider-row"><span class="cc-slider-name">الحجم</span><input class="cc-range" data-k="scale" type="range" min="20" max="90"><span class="cc-slider-val" data-v="scale"></span></div>
+                <div class="cc-slider-row"><span class="cc-slider-name">الدوران</span><input class="cc-range" data-k="rot" type="range" min="-180" max="180"><span class="cc-slider-val" data-v="rot"></span></div>
+                <div class="cc-slider-row"><span class="cc-slider-name">أفقي</span><input class="cc-range" data-k="x" type="range" min="-100" max="100"><span class="cc-slider-val" data-v="x"></span></div>
+                <div class="cc-slider-row"><span class="cc-slider-name">رأسي</span><input class="cc-range" data-k="y" type="range" min="-140" max="60"><span class="cc-slider-val" data-v="y"></span></div>
+                <div class="cc-hat-inst-btns">
+                    <button class="cc-mini-btn cc-hat-flip" type="button" data-act="flip">قلب أفقي</button>
+                    <button class="cc-mini-btn" type="button" data-act="reset">افتراضي</button>
+                </div>
+            </div>`;
+        list.appendChild(card);
+        _ccPaintPickButton(card.querySelector('.cc-hat-pick'), hat.id);
+    });
+    // "add" button state
+    const add = _ccEl('cc-hat-add');
+    if (add) add.classList.toggle('cc-hat-add-full', _cc.hats.length >= HAT_MAX);
+}
+
+// Build the draggable hat previews on the character — one <img> per hat.
+function _ccBuildPreviewHats() {
+    const layer = _ccEl('cc-hats-layer');
+    if (!layer) return;
+    layer.innerHTML = '';
+    _cc.hats.forEach((hat, idx) => {
+        const img = document.createElement('img');
+        img.className = 'cc-hat';
+        img.dataset.idx = idx;
+        img.alt = '';
+        layer.appendChild(img);
+    });
+}
+
+// Push _cc.color / _cc.hats into the preview character + every card's controls.
 function _ccReflect() {
     const overlay = _ccEl('char-custom-overlay');
     if (overlay) overlay.style.setProperty('--cc-ring', _cc.color);
@@ -23966,67 +24103,104 @@ function _ccReflect() {
     const light = _ccEl('cc-light');
     if (light && document.activeElement !== light) light.value = Math.round(_cc.hsv.v * 100);
 
-    // Hat preview — mirrors drawPlayerHat's maths against the preview's own size, so
+    const charEl = _ccEl('cc-char'), layer = _ccEl('cc-hats-layer');
+    let awaiting = false;
+
+    // Preview hats — mirror drawPlayerHats' maths against the preview's own size, so
     // what you place here is exactly what lands in the world.
-    const hatEl = _ccEl('cc-hat'), charEl = _ccEl('cc-char');
-    const tools = _ccEl('cc-hat-tools');
-    if (tools) tools.classList.toggle('cc-unlocked', !!_cc.hat);
-    if (hatEl && charEl) {
-        if (!_cc.hat) { hatEl.classList.remove('cc-hat-on'); hatEl.removeAttribute('src'); }
-        else {
-            const entry = ensureHatAsset(_cc.hat.id);
-            // Not decoded yet (a saved hat on first open): re-reflect when it lands.
-            if (entry && !entry.ready && !entry.failed && !_cc._awaitHat) {
-                _cc._awaitHat = true;
-                const wait = () => {
-                    if (!_cc.open) { _cc._awaitHat = false; return; }
-                    if (entry.ready || entry.failed) { _cc._awaitHat = false; _ccReflect(); }
-                    else setTimeout(wait, 90);
-                };
-                setTimeout(wait, 90);
-            }
-            if (entry && entry.ready) {
-                if (hatEl.dataset.hatId !== _cc.hat.id) {
-                    hatEl.dataset.hatId = _cc.hat.id;
-                    hatEl.src = entry.url;
-                }
-                const S = charEl.clientWidth || 160;   // preview size stands in for PLAYER_SIZE
-                const w = S * _cc.hat.scale;
-                const h = w * (entry.canvas.height / entry.canvas.width);
-                hatEl.style.width = w + 'px';
-                hatEl.style.height = h + 'px';
-                hatEl.style.transform =
-                    `translate(${(-w / 2 + _cc.hat.x * S).toFixed(1)}px, ${(-h / 2 + _cc.hat.y * S).toFixed(1)}px) rotate(${_cc.hat.rot}rad)`;
-                hatEl.classList.add('cc-hat-on');
-            }
-        }
+    if (charEl && layer) {
+        const S = charEl.clientWidth || 160;   // preview size stands in for PLAYER_SIZE
+        layer.querySelectorAll('.cc-hat').forEach(imgEl => {
+            const idx = Number(imgEl.dataset.idx);
+            const hat = _cc.hats[idx];
+            if (!hat) return;
+            const entry = ensureHatAsset(hat.id);
+            if (!entry || !entry.ready) { if (entry && !entry.failed) awaiting = true; imgEl.classList.remove('cc-hat-on'); return; }
+            if (imgEl.dataset.hatId !== hat.id) { imgEl.dataset.hatId = hat.id; imgEl.src = entry.url; }
+            const w = S * hat.scale;
+            const h = w * (entry.canvas.height / entry.canvas.width);
+            imgEl.style.width = w + 'px';
+            imgEl.style.height = h + 'px';
+            imgEl.style.transform =
+                `translate(${(-w / 2 + hat.x * S).toFixed(1)}px, ${(-h / 2 + hat.y * S).toFixed(1)}px) rotate(${hat.rot}rad)${hat.flip ? ' scaleX(-1)' : ''}`;
+            imgEl.classList.add('cc-hat-on');
+        });
     }
-    ['cc-hat-scale', 'cc-hat-rot', 'cc-hat-x', 'cc-hat-y'].forEach(id => {
-        const el = _ccEl(id);
-        if (!el || !_cc.hat || document.activeElement === el) return;
-        if (id === 'cc-hat-scale') el.value = Math.round(_cc.hat.scale * 100);
-        if (id === 'cc-hat-rot')   el.value = Math.round(_cc.hat.rot * 180 / Math.PI);
-        if (id === 'cc-hat-x')     el.value = Math.round(_cc.hat.x * 100);
-        if (id === 'cc-hat-y')     el.value = Math.round(_cc.hat.y * 100);
+
+    // Each card's sliders / value badges / flip state (skip the one being dragged).
+    document.querySelectorAll('#cc-hat-list .cc-hat-inst').forEach(card => {
+        const idx = Number(card.dataset.idx);
+        const hat = _cc.hats[idx];
+        if (!hat) return;
+        const vals = { scale: Math.round(hat.scale * 100), rot: Math.round(hat.rot * 180 / Math.PI),
+                       x: Math.round(hat.x * 100), y: Math.round(hat.y * 100) };
+        card.querySelectorAll('.cc-range').forEach(el => {
+            const k = el.dataset.k;
+            if (document.activeElement !== el) el.value = vals[k];
+        });
+        card.querySelectorAll('.cc-slider-val').forEach(el => {
+            const k = el.dataset.v;
+            el.textContent = k === 'rot' ? `${vals[k]}°` : `${vals[k]}`;
+        });
+        const flipBtn = card.querySelector('.cc-hat-flip');
+        if (flipBtn) flipBtn.classList.toggle('on', !!hat.flip);
     });
-    document.querySelectorAll('#cc-hats .cc-hat-card').forEach(card => {
-        card.classList.toggle('selected', (card.dataset.hatId || '') === (_cc.hat ? _cc.hat.id : ''));
-    });
+
+    // A hat asset still decoding: re-reflect once it lands so the preview appears.
+    if (awaiting && !_cc._awaitHat) {
+        _cc._awaitHat = true;
+        const waitR = () => {
+            _cc._awaitHat = false;
+            if (_cc.open) _ccReflect();
+        };
+        setTimeout(waitR, 110);
+    }
 }
 
-// Build the hat picker. Previews are the CROPPED canvases, so each card shows the
+// ── The hat PICKER popup: a grid of every hat, opened by a card's preview button ──
+function _ccOpenPicker(idx) {
+    _cc.pickFor = idx;
+    const pop = _ccEl('cc-hat-picker');
+    if (!pop) return;
+    pop.classList.remove('hidden');
+    _ccBuildPicker();
+}
+function _ccClosePicker() {
+    _cc.pickFor = null;
+    const pop = _ccEl('cc-hat-picker');
+    if (pop) pop.classList.add('hidden');
+}
+// Apply a picker choice to the slot the picker was opened for. `null` id = بدون:
+// removes an existing instance, or cancels a brand-new one.
+function _ccPickHat(id) {
+    const idx = _cc.pickFor;
+    if (idx == null) return;
+    if (!id) {
+        if (idx < _cc.hats.length) _cc.hats.splice(idx, 1);
+    } else if (idx < _cc.hats.length) {
+        _cc.hats[idx].id = id;                       // change image, keep placement
+    } else if (_cc.hats.length < HAT_MAX) {
+        _cc.hats.push({ id, ...HAT_DEFAULT });       // brand-new hat
+    }
+    _ccClosePicker();
+    _ccRebuild();
+}
+
+// Build the picker grid. Previews are the CROPPED canvases, so each card shows the
 // hat filling its box instead of a speck in an ocean of transparent pixels.
-async function _ccBuildHats() {
+async function _ccBuildPicker() {
     const box = _ccEl('cc-hats');
     if (!box) return;
     const list = await loadHatManifest(true);   // re-read every open → new files appear
+    if (_cc.pickFor == null) return;             // closed while awaiting the manifest
     box.innerHTML = '';
+    const curId = (_cc.pickFor < _cc.hats.length) ? _cc.hats[_cc.pickFor].id : '';
 
     const none = document.createElement('div');
     none.className = 'cc-hat-card';
     none.dataset.hatId = '';
     none.innerHTML = '<span class="cc-hat-none">بدون</span>';
-    none.addEventListener('click', () => { _cc.hat = null; _ccReflect(); });
+    none.addEventListener('click', () => _ccPickHat(null));
     box.appendChild(none);
 
     if (!list.length) {
@@ -24041,25 +24215,22 @@ async function _ccBuildHats() {
         const card = document.createElement('div');
         card.className = 'cc-hat-card';
         card.dataset.hatId = id;
+        if (id === curId) card.classList.add('selected');
         const img = document.createElement('img');
         img.alt = id.replace(/\.(png|webp)$/i, '');
         card.appendChild(img);
-        card.addEventListener('click', () => {
-            // Re-picking the same hat keeps its placement; a new hat starts at the default.
-            if (!_cc.hat || _cc.hat.id !== id) _cc.hat = { id, ...HAT_DEFAULT };
-            _ccReflect();
-        });
+        card.addEventListener('click', () => _ccPickHat(id));
         box.appendChild(card);
 
         const entry = ensureHatAsset(id);
         const paint = () => {
-            if (entry.ready) { img.src = entry.url; _ccReflect(); }
+            if (!card.isConnected) return;
+            if (entry.ready) { img.src = entry.url; }
             else if (!entry.failed) setTimeout(paint, 90);
             else card.remove();
         };
         paint();
     }
-    _ccReflect();
 }
 
 function _ccSetColor(hex, fromWheel) {
@@ -24078,7 +24249,8 @@ function openCharCustom() {
     // Start from what's live right now.
     const me = gameState.players[gameState.userId];
     _cc.color = _validHex(me && me.ringColor) || COLORS.blue;
-    _cc.hat   = (me && me.hat) ? { ...me.hat } : null;
+    _cc.hats  = (me && me.hats) ? me.hats.map(h => ({ ...h })) : [];
+    _cc.pickFor = null;
     _cc.hsv   = _hexToHsv(_cc.color);
 
     // The avatar in the scene.
@@ -24102,8 +24274,8 @@ function openCharCustom() {
     overlay.classList.add('cc-in');
 
     _ccDrawWheel();
-    _ccBuildHats();
-    _ccReflect();
+    _ccClosePicker();
+    _ccRebuild();
     _ccPlayDrop();
 }
 
@@ -24118,14 +24290,19 @@ function closeCharCustom() {
     setTimeout(() => { if (!_cc.open) overlay.classList.add('hidden'); }, 460);
 }
 
-// حفظ — one small multi-path write, then close. Both fields are read by every
+// حفظ — one small multi-path write, then close. These fields are read by every
 // client's users listener, which is what makes the change visible to everyone.
 function saveCharCustom() {
     const uid = gameState.userId;
+    const clean = _cc.hats.map(h => sanitizeHat(h)).filter(Boolean).slice(0, HAT_MAX);
     if (uid) {
         const payload = {
             [`users/${uid}/ringColor`]: _cc.color,
-            [`users/${uid}/hat`]: _cc.hat ? sanitizeHat(_cc.hat) : null,
+            [`users/${uid}/hats`]: clean.length ? clean : null,
+            // Keep the legacy single-hat field pointing at the first hat so a client
+            // still running old code shows at least that one (harmless once everyone
+            // is on the new build). New clients read `hats` first (see sanitizeHats).
+            [`users/${uid}/hat`]: clean.length ? clean[0] : null,
         };
         update(ref(database), payload).catch(e => console.warn('[custom] save failed', e));
     }
@@ -24133,7 +24310,7 @@ function saveCharCustom() {
     const me = gameState.players[uid];
     if (me) {
         me.ringColor = _cc.color;
-        me.hat = _cc.hat ? sanitizeHat(_cc.hat) : null;
+        me.hats = clean.map(h => ({ ...h }));
     }
     closeCharCustom();
 }
@@ -24153,11 +24330,6 @@ function setupCharCustomUI() {
     _ccEl('cc-presets')?.addEventListener('click', (e) => {
         const btn = e.target.closest('.cc-preset');
         if (btn) _ccSetColor(btn.dataset.color);
-    });
-    _ccEl('cc-reset-hat')?.addEventListener('click', () => {
-        if (!_cc.hat) return;
-        _cc.hat = { id: _cc.hat.id, ...HAT_DEFAULT };
-        _ccReflect();
     });
 
     // Escape closes; typing must never bleed into player movement while open.
@@ -24199,48 +24371,81 @@ function setupCharCustomUI() {
         if (_validHex(v)) _ccSetColor(v);
     });
 
-    // ── Hat transform sliders ────────────────────────────────────────────────
-    // snapZero: a magnetic 0 — get within _CC_SNAP_TOL of centre and the value
-    // (and the visible thumb) snap dead to 0, so restoring "no rotation / no
-    // offset" doesn't need pixel-perfect dragging.
+    // ── Hat instance cards: sliders + buttons (delegated, since cards are built
+    //    dynamically). snapZero gives a magnetic 0 on rot/x/y so "no offset" doesn't
+    //    need pixel-perfect dragging. Each slider carries data-k = which field.
     const _CC_SNAP_TOL = 4;
-    const bind = (id, apply, snapZero) => {
-        const el = _ccEl(id);
-        el?.addEventListener('input', (e) => {
-            if (!_cc.hat) return;
-            let v = Number(e.target.value);
-            if (snapZero && Math.abs(v) <= _CC_SNAP_TOL) { v = 0; e.target.value = '0'; }
-            apply(v);
+    const list = _ccEl('cc-hat-list');
+    if (list) {
+        list.addEventListener('input', (e) => {
+            const el = e.target.closest('.cc-range');
+            if (!el) return;
+            const card = el.closest('.cc-hat-inst');
+            const hat = _cc.hats[Number(card.dataset.idx)];
+            if (!hat) return;
+            const k = el.dataset.k;
+            let v = Number(el.value);
+            if (k !== 'scale' && Math.abs(v) <= _CC_SNAP_TOL) { v = 0; el.value = '0'; }
+            if (k === 'scale')     hat.scale = v / 100;
+            else if (k === 'rot')  hat.rot   = v * Math.PI / 180;
+            else if (k === 'x')    hat.x     = v / 100;
+            else if (k === 'y')    hat.y     = v / 100;
             _ccReflect();
         });
-    };
-    bind('cc-hat-scale', v => { _cc.hat.scale = v / 100; });
-    bind('cc-hat-rot',   v => { _cc.hat.rot   = v * Math.PI / 180; }, true);
-    bind('cc-hat-x',     v => { _cc.hat.x     = v / 100; }, true);
-    bind('cc-hat-y',     v => { _cc.hat.y     = v / 100; }, true);
-
-    // ── Drag the hat directly on the character ───────────────────────────────
-    const hatEl = _ccEl('cc-hat'), charEl = _ccEl('cc-char');
-    if (hatEl && charEl) {
-        let start = null;
-        hatEl.addEventListener('pointerdown', (e) => {
-            if (!_cc.hat) return;
-            e.preventDefault();
-            hatEl.setPointerCapture(e.pointerId);
-            hatEl.classList.add('cc-dragging');
-            start = { px: e.clientX, py: e.clientY, hx: _cc.hat.x, hy: _cc.hat.y };
+        list.addEventListener('click', (e) => {
+            const btn = e.target.closest('[data-act]');
+            if (!btn) return;
+            const card = btn.closest('.cc-hat-inst');
+            const idx = Number(card.dataset.idx);
+            const act = btn.dataset.act;
+            if (act === 'pick')  { _ccOpenPicker(idx); }
+            else if (act === 'del')  { _cc.hats.splice(idx, 1); _ccRebuild(); }
+            else if (act === 'flip') { const h = _cc.hats[idx]; if (h) { h.flip = !h.flip; _ccReflect(); } }
+            else if (act === 'reset'){ const h = _cc.hats[idx]; if (h) { _cc.hats[idx] = { id: h.id, ...HAT_DEFAULT }; _ccReflect(); } }
         });
-        hatEl.addEventListener('pointermove', (e) => {
-            if (!start || !_cc.hat) return;
-            const S = charEl.clientWidth || 160;
-            _cc.hat.x = Math.max(-1.5, Math.min(1.5, start.hx + (e.clientX - start.px) / S));
-            _cc.hat.y = Math.max(-2.0, Math.min(1.0, start.hy + (e.clientY - start.py) / S));
-            _ccReflect();
-        });
-        const stop = () => { start = null; hatEl.classList.remove('cc-dragging'); };
-        hatEl.addEventListener('pointerup', stop);
-        hatEl.addEventListener('pointercancel', stop);
     }
+
+    // "add a hat" → open the picker for a fresh slot (capped at HAT_MAX).
+    _ccEl('cc-hat-add')?.addEventListener('click', () => {
+        if (_cc.hats.length >= HAT_MAX) return;
+        _ccOpenPicker(_cc.hats.length);
+    });
+    // Picker popup close (button + backdrop click).
+    _ccEl('cc-hat-picker-close')?.addEventListener('click', _ccClosePicker);
+    _ccEl('cc-hat-picker')?.addEventListener('click', (e) => {
+        if (e.target.id === 'cc-hat-picker') _ccClosePicker();
+    });
+
+    // ── Drag any hat directly on the character (delegated on the layer) ───────
+    const layer = _ccEl('cc-hats-layer'), charEl = _ccEl('cc-char');
+    if (layer && charEl) {
+        let start = null;
+        layer.addEventListener('pointerdown', (e) => {
+            const imgEl = e.target.closest('.cc-hat');
+            if (!imgEl) return;
+            const idx = Number(imgEl.dataset.idx);
+            const hat = _cc.hats[idx];
+            if (!hat) return;
+            e.preventDefault();
+            imgEl.setPointerCapture(e.pointerId);
+            imgEl.classList.add('cc-dragging');
+            start = { el: imgEl, idx, px: e.clientX, py: e.clientY, hx: hat.x, hy: hat.y };
+        });
+        layer.addEventListener('pointermove', (e) => {
+            if (!start) return;
+            const hat = _cc.hats[start.idx];
+            if (!hat) return;
+            const S = charEl.clientWidth || 160;
+            hat.x = Math.max(-1.5, Math.min(1.5, start.hx + (e.clientX - start.px) / S));
+            hat.y = Math.max(-2.0, Math.min(1.0, start.hy + (e.clientY - start.py) / S));
+            _ccReflect();
+        });
+        const stop = () => { if (start) { start.el.classList.remove('cc-dragging'); start = null; } };
+        layer.addEventListener('pointerup', stop);
+        layer.addEventListener('pointercancel', stop);
+    }
+
+    // Picker grid clicks are wired per-card in _ccBuildPicker.
 }
 
 function charCustomIsOpen() { return !!_cc.open; }
