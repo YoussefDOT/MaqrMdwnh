@@ -3308,11 +3308,26 @@ function getCurrentTaskText() {
     return (player && player.currentTask ? player.currentTask : '').trim();
 }
 
+// Clock for every session timer (pomodoro, free mode, the badges over other
+// players' heads). Past an hour it rolls into h:mm:ss — people work for hours,
+// and a flat "61:00" reads as nonsense next to "01:00".
 function formatTime(sec) {
     sec = Math.floor(sec || 0);
-    const m = Math.floor(sec / 60);
+    const h = Math.floor(sec / 3600);
+    const m = Math.floor((sec % 3600) / 60);
     const s = sec % 60;
-    return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+    const pad = (n) => n.toString().padStart(2, '0');
+    return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+// Same clock, taking milliseconds — the shape most timer call sites already hold.
+function formatTimeMs(ms) { return formatTime((ms || 0) / 1000); }
+
+// The huge HUD timers are sized for mm:ss; the h:mm:ss form is 3 glyphs wider and
+// would run off a phone. Tag the element so CSS can scale the hour form down.
+function setTimerText(el, str) {
+    if (!el) return;
+    if (el.textContent !== str) el.textContent = str;
+    el.classList.toggle('has-hours', str.replace('+', '').length > 5);
 }
 
 // Tab-title countdown: while in a session, show the remaining work/break time in
@@ -11828,11 +11843,11 @@ function updatePomodoro() {
         const az = gameState.azkar;
         gameState.pomodoro.endTime = Date.now() + az.pausedPomoRemaining;
         const pr = az.pausedPomoRemaining;
-        const frozenStr = `${Math.floor(pr / 60000).toString().padStart(2, '0')}:${Math.floor((pr % 60000) / 1000).toString().padStart(2, '0')}`;
+        const frozenStr = formatTimeMs(pr);
         const lg = document.getElementById('large-timer-text');
         const sm = document.getElementById('small-timer-text');
-        if (gameState.pomodoro.phase === 'work' && lg) lg.textContent = frozenStr;
-        if (gameState.pomodoro.phase === 'break' && sm) sm.textContent = frozenStr;
+        if (gameState.pomodoro.phase === 'work') setTimerText(lg, frozenStr);
+        if (gameState.pomodoro.phase === 'break') setTimerText(sm, frozenStr);
         return;
     }
 
@@ -11842,11 +11857,11 @@ function updatePomodoro() {
         if (gameState.sharedPomo.phase !== 'active') {
             gameState.pomodoro.endTime = Date.now() + gameState.prayer.pausedRemaining;
             const pr = gameState.prayer.pausedRemaining;
-            const frozenStr = `${Math.floor(pr / 60000).toString().padStart(2, '0')}:${Math.floor((pr % 60000) / 1000).toString().padStart(2, '0')}`;
+            const frozenStr = formatTimeMs(pr);
             const lg = document.getElementById('large-timer-text');
             const sm = document.getElementById('small-timer-text');
-            if (gameState.pomodoro.phase === 'work' && lg) lg.textContent = frozenStr;
-            if (gameState.pomodoro.phase === 'break' && sm) sm.textContent = frozenStr;
+            if (gameState.pomodoro.phase === 'work') setTimerText(lg, frozenStr);
+            if (gameState.pomodoro.phase === 'break') setTimerText(sm, frozenStr);
             return;
         }
         // Shared pomo: fall through so the timer display and transitions keep updating normally
@@ -11881,14 +11896,12 @@ function updatePomodoro() {
     const largeTimer = document.getElementById('pomodoro-large-timer');
     const smallTimer = document.getElementById('pomodoro-small-timer');
 
-    const mins = Math.floor(remaining / 60000);
-    const secs = Math.floor((remaining % 60000) / 1000);
-    const timeStr = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    const timeStr = formatTimeMs(remaining);
 
     if (gameState.pomodoro.phase === 'work') {
         largeTimer.classList.remove('hidden');
         smallTimer.classList.add('hidden');
-        document.getElementById('large-timer-text').textContent = timeStr;
+        setTimerText(document.getElementById('large-timer-text'), timeStr);
         document.getElementById('large-session-text').textContent = `جلسة ${gameState.pomodoro.totalSessions - gameState.pomodoro.sessionsLeft + 1} من ${gameState.pomodoro.totalSessions}`;
 
         if (remaining === 0 && !gameState.pomodoro.transitioning) {
@@ -11977,9 +11990,7 @@ function updatePomodoro() {
             if (!gameState.pomodoro.breakOvertimeSince) gameState.pomodoro.breakOvertimeSince = Date.now();
             gameState.pomodoro._breakOvertimeExitAt = null;
             const overMs = Date.now() - gameState.pomodoro.breakOvertimeSince;
-            const om = Math.floor(overMs / 60000), os = Math.floor((overMs % 60000) / 1000);
-            document.getElementById('small-timer-text').textContent =
-                `+${om.toString().padStart(2, '0')}:${os.toString().padStart(2, '0')}`;
+            setTimerText(document.getElementById('small-timer-text'), `+${formatTimeMs(overMs)}`);
             return;
         }
         if (gameState.pomodoro.breakOvertimeSince) {
@@ -11992,7 +12003,7 @@ function updatePomodoro() {
             gameState.pomodoro._breakOvertimeExitAt = null;
         }
 
-        document.getElementById('small-timer-text').textContent = timeStr;
+        setTimerText(document.getElementById('small-timer-text'), timeStr);
 
         if (remaining === 0 && !gameState.pomodoro.transitioning) {
             gameState.pomodoro.transitioning = true;
@@ -12199,7 +12210,7 @@ function drawTimers(floorFilter = null) {
         if (laptop.phase !== 'work' && laptop.phase !== 'break') return;
 
         const remaining = Math.max(0, laptop.endTime - now);
-        const timeStr = `${String(Math.floor(remaining / 60000)).padStart(2,'0')}:${String(Math.floor((remaining % 60000) / 1000)).padStart(2,'0')}`;
+        const timeStr = formatTimeMs(remaining);
         const phaseColor = laptop.phase === 'work' ? COLORS.red : '#3bb9ab';
 
         // Gather coop participants for this laptop
@@ -12227,7 +12238,7 @@ function drawTimers(floorFilter = null) {
             const renderX = player.x;
             const renderY = player.y - PLAYER_SIZE * 0.5 - 20; // Hover above head
             const remaining = Math.max(0, player.readingEnd - now);
-            const timeStr = `${String(Math.floor(remaining / 60000)).padStart(2,'0')}:${String(Math.floor((remaining % 60000) / 1000)).padStart(2,'0')}`;
+            const timeStr = formatTimeMs(remaining);
             const taskText = player.readingBook ? `يتم قراءة ${player.readingBook}` : 'يتم قراءة';
             
             drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText: timeStr, color: '#3b82f6', textColor: 'white' });
@@ -14559,9 +14570,7 @@ function showSpJoinPanel(hostId) {
             if (sessEl)  sessEl.textContent  = '∞';
         } else {
             const remaining = Math.max(0, data.endTime - Date.now());
-            const mm = String(Math.floor(remaining / 60000)).padStart(2,'0');
-            const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2,'0');
-            if (timerEl) timerEl.textContent = `${mm}:${ss}`;
+            if (timerEl) timerEl.textContent = formatTimeMs(remaining);
             if (breakEl) breakEl.textContent = `${data.breakDuration} د`;
             if (sessEl)  sessEl.textContent  = data.sessionsLeft || '—';
         }
@@ -14695,12 +14704,10 @@ function showSoloJoinPanel(hostId) {
 
     document.getElementById('sp-join-peek')?.addEventListener('click', () => {
         const remaining = Math.max(0, laptop.endTime - Date.now());
-        const mm = String(Math.floor(remaining / 60000)).padStart(2,'0');
-        const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2,'0');
         const timerEl = document.getElementById('sp-join-timer');
         const breakEl = document.getElementById('sp-join-break');
         const sessEl  = document.getElementById('sp-join-sess');
-        if (timerEl) timerEl.textContent = `${mm}:${ss}`;
+        if (timerEl) timerEl.textContent = formatTimeMs(remaining);
         if (breakEl) breakEl.textContent = `${laptop.breakDuration || '?'} د`;
         if (sessEl)  sessEl.textContent  = laptop.sessionsLeft || '—';
         document.getElementById('sp-join-details')?.classList.remove('hidden');
@@ -15665,7 +15672,7 @@ function updateFreeMode() {
 
     if (fm.phase === 'work') {
         const elapsedMs = fm.totalWorkMs + (Date.now() - fm.workStartTime);
-        if (timerEl) timerEl.textContent = formatTime(elapsedMs / 1000);
+        setTimerText(timerEl, formatTime(elapsedMs / 1000));
 
         // Threshold is relative to work done SINCE the last break (not total session time)
         const msSinceLastBreak = elapsedMs - (fm.workMsAtLastBreak || 0);
@@ -15681,10 +15688,9 @@ function updateFreeMode() {
         if (smallText && fm.phase === 'break') {
             if (fm.breakOvertimeSince) {
                 const overMs = Date.now() - fm.breakOvertimeSince;
-                const om = Math.floor(overMs / 60000), os = Math.floor((overMs % 60000) / 1000);
-                smallText.textContent = `+${om.toString().padStart(2, '0')}:${os.toString().padStart(2, '0')}`;
+                setTimerText(smallText, `+${formatTimeMs(overMs)}`);
             } else {
-                smallText.textContent = formatTime(remaining / 1000);
+                setTimerText(smallText, formatTime(remaining / 1000));
             }
         }
     }
@@ -15769,7 +15775,7 @@ function startFreeModeBreak(durationMins) {
     const smallTimer = document.getElementById('pomodoro-small-timer');
     const smallText  = document.getElementById('small-timer-text');
     if (smallTimer) smallTimer.classList.remove('hidden');
-    if (smallText)  smallText.textContent = formatTime(durationMins * 60);
+    setTimerText(smallText, formatTime(durationMins * 60));
 
     updatePomoLeaveBtn();
 
@@ -16591,9 +16597,7 @@ function updateCoopTaskPanel() {
     panel.classList.remove('hidden');
 
     const remaining = Math.max(0, gameState.pomodoro.endTime - Date.now());
-    const mm = String(Math.floor(remaining / 60000)).padStart(2, '0');
-    const ss = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
-    const timeStr = `${mm}:${ss}`;
+    const timeStr = formatTimeMs(remaining);
 
     // Rebuild the member rows only when they actually change — this used to
     // re-assign panel.innerHTML (avatars included) EVERY frame, re-creating the
@@ -23031,9 +23035,7 @@ function updateReadingSession() {
         timeStr = _formatReadingClock(sessionMs);   // count UP
     } else {
         const remaining = Math.max(0, r.endTime - now);
-        const mins = String(Math.floor(remaining / 60000)).padStart(2, '0');
-        const secs = String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0');
-        timeStr = `${mins}:${secs}`;                 // count DOWN
+        timeStr = _formatReadingClock(remaining);    // count DOWN
     }
 
     // The displayed values only change once a second — skip the per-frame DOM

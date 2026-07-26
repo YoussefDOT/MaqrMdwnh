@@ -473,6 +473,9 @@ body {
     line-height: 1;
     font-variant-numeric: tabular-nums;
 }
+/* h:mm:ss (past an hour) is 3 glyphs wider than mm:ss — shrink so it still fits.
+   The class is toggled by setTimerText() in game.js. */
+.timer-text.has-hours { font-size: 5.6rem; }
 
 .session-text {
     font-size: 1.5rem;
@@ -2040,14 +2043,18 @@ body.is-mobile .btn-discord { width: 100%; }
     from { opacity: 1; transform: scale(1) translateY(0); }
     to   { opacity: 0; transform: scale(0.93) translateY(-8px); }
 }
-/* Sequential entrance for each category heading + row (replays on every open) */
+/* Sequential entrance for each category heading + row (replays on every open).
+   Opacity stays at 1 the whole time (only the slide-up is animated) — same fix as
+   the pomodoro .setting-group rows: an `opacity: 0` base that relied on the
+   keyframe to reveal it meant that if the animation never ran (Firefox skipped
+   the sequence entirely) the whole settings panel rendered EMPTY. Now a stalled
+   animation just costs the flourish, never the content. */
 @keyframes settingsRowIn {
-    from { opacity: 0; transform: translateY(9px); }
-    to   { opacity: 1; transform: translateY(0); }
+    from { transform: translateY(9px); }
+    to   { transform: translateY(0); }
 }
 .settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category-title,
 .settings-panel:not(.hidden):not(.settings-panel-closing) .settings-row {
-    opacity: 0;
     animation: settingsRowIn 0.4s cubic-bezier(0.22,1,0.36,1) forwards;
 }
 /* The stagger itself is assigned in JS (_settingsSequenceRows), in DOM order.
@@ -2493,6 +2500,7 @@ body.is-mobile .pomodoro-large {
     top: 16px;
 }
 body.is-mobile .timer-text { font-size: 5.5rem; }
+body.is-mobile .timer-text.has-hours { font-size: 3.6rem; }
 body.is-mobile .session-text { font-size: 1.1rem; }
 
 /* Pomodoro small timer on mobile */
@@ -3876,6 +3884,8 @@ body.is-mobile .prayer-overlay-sub { font-size: 0.8rem; }
     font-size: 8rem; font-weight: 700; color: white;
     line-height: 1; font-variant-numeric: tabular-nums;
 }
+/* Free mode counts UP, so it crosses the hour on any real session — see .timer-text.has-hours */
+.free-timer-text.has-hours { font-size: 5.6rem; }
 .free-mode-label {
     font-size: 1.1rem; font-weight: 600;
     color: rgba(255,255,255,0.45);
@@ -4134,6 +4144,7 @@ body.is-mobile .prayer-overlay-sub { font-size: 0.8rem; }
 /* ── Mobile tweaks for free mode ── */
 body.is-mobile .free-mode-panel { top: 16px; }
 body.is-mobile .free-timer-text { font-size: 5rem; }
+body.is-mobile .free-timer-text.has-hours { font-size: 3.3rem; }
 /* Push break prompt below the 3-button row (buttons bottom ≈ 186px + gap).
    Panel starts at 16px; timer (80px) + label (~18px, mt:-6) ends at ~108px;
    original margin-top was 14px → prompt at ~122px; needs to be at ~200px. */

@@ -10,7 +10,25 @@
 
 > **The owner is a beginner developer.** Explain things in plain language — what broke, why, and what the fix does — as if to someone who doesn't know much about code. Skip jargon, and when you must use a technical term, define it briefly. Don't over-explain either: keep it short and clear, not a tutorial. Claude is the one writing the code; the owner is steering, so help them understand decisions without drowning them in detail.
 
-> **The owner is on macOS and tests mainly in Safari.** Every new feature must work cross-browser — don't assume Chrome behaviour. Common Safari gotchas: aggressive favicon caching + rejection of oversized favicons (use a small ~128px PNG, not a 1MB+ one — see `favicon-128.png`/`apple-touch-icon.png`); no `documentPictureInPicture` and no `canvas.captureStream()` (PiP falls back to a popup window — see Picture-in-Picture tiers); `button[disabled]` leaks touch events on iOS (use a CSS `.unlocked` class, never the `disabled` attribute, for visual-only locks); always pair `backdrop-filter` with `-webkit-backdrop-filter`; stricter autoplay / AudioContext-resume rules. When something "works for me but not for the owner," suspect a Safari difference first.
+> **The owner is on macOS and now tests in a Chromium-based browser (no longer Safari).**
+> That changes what the owner will *catch*, not what the code must *support* — the members
+> use Safari, Firefox and Chrome, so **every feature must still be browser-inclusive** and
+> the Safari/iOS constraints below all still apply. Don't drop a `-webkit-` prefix or a
+> Safari fallback just because the owner won't see it break.
+>
+> **Safari / iOS gotchas (still enforced):** aggressive favicon caching + rejection of
+> oversized favicons (use a small ~128px PNG, not a 1MB+ one — see
+> `favicon-128.png`/`apple-touch-icon.png`); no `documentPictureInPicture` and no
+> `canvas.captureStream()` (PiP falls back to a popup window — see Picture-in-Picture
+> tiers); `button[disabled]` leaks touch events on iOS (use a CSS `.unlocked` class, never
+> the `disabled` attribute, for visual-only locks); always pair `backdrop-filter` with
+> `-webkit-backdrop-filter`; stricter autoplay / AudioContext-resume rules.
+>
+> **Firefox gotcha:** a CSS entrance animation may **never run at all**. Never leave an
+> element at `opacity: 0` and rely on a keyframe to reveal it — a skipped animation then
+> renders the whole panel permanently **empty** (hit twice: the pomodoro settings rows and
+> the settings panel rows). Animate `transform` only and keep opacity at 1; a stalled
+> animation should cost the flourish, never the content.
 
 ---
 
@@ -1054,6 +1072,16 @@ Firebase path: `lobbyPath('pomodoro/{laptopId}')` — written by host, read by a
 
 `startPomodoroPhase(phase)` handles `'work' | 'break' | 'end'`. Phase transitions fire audio cues and UI changes.
 
+**Every session clock goes through `formatTime(sec)` / `formatTimeMs(ms)`** — mm:ss, rolling
+into **h:mm:ss past an hour** (people work for hours; a flat `61:00` read as nonsense next to
+`01:00`). This covers the HUD timers, the free-mode count-up, and the badges over other
+players' heads. **Don't hand-roll `Math.floor(ms/60000)` + `padStart` at a new call site** —
+that's exactly what had to be swept out. Write the big HUD timers with **`setTimerText(el, str)`**,
+not `el.textContent`: it toggles a `.has-hours` class that shrinks the font (8rem → 5.6rem
+desktop, 5.5 → 3.6rem mobile), because the 3-glyph-wider hour form runs off a phone otherwise.
+Reading has its own equivalent (`_formatReadingClock`); the 3-minute azkar/prayer unlock
+counters stay plain m:ss on purpose.
+
 `updatePomodoro()` runs every frame — drives the countdown, phase transitions, and the focus mask/fog effects.
 
 **Focus mask**: `drawFocusMask()` renders a dark vignette around the active laptop. Alpha driven by `gameState.focusAlpha` (lerped 0→1 on work start).
@@ -1272,7 +1300,7 @@ Opens **under the gear button, top-right** on desktop (`top:130px; right:18px`) 
 Open removes `.hidden` (the `settingsPanelIn` keyframe pops it in). Close is **animated, not a snap**: `closeSettingsPanel()` adds `.settings-panel-closing` (runs `settingsPanelOut`), then `.hidden` after ~230 ms. All three close paths (close button, gear re-press, outside-click) go through it. **Closing makes no sound** (see below).
 
 ### Sequenced rows + the cascade blip (sound)
-`@keyframes settingsRowIn` lives in **style.css** (scoped `.settings-panel:not(.hidden):not(.settings-panel-closing) …` so it replays on every open), but the **`animation-delay`s are assigned in JS**: `_settingsSequenceRows()` indexes `.settings-category-title, .settings-row` in DOM order on every open. They used to be a hardcoded nth-child list in CSS that only covered the **first two rows of each category** — every row added after that inherited the base rule with **no delay** and popped in instantly, ahead of the cascade. **Don't move the delays back into CSS**: the next row added would silently break the sequence again. Do **not** re-add the old `juiceRowIn` settings rule in juice.css either — it double-animates and fights the stagger.
+`@keyframes settingsRowIn` lives in **style.css** (scoped `.settings-panel:not(.hidden):not(.settings-panel-closing) …` so it replays on every open). It animates **`transform` only — the rows are never `opacity: 0`**: in Firefox the sequence could fail to trigger at all, and an opacity-0 base then left the entire panel blank (same failure the pomodoro `.setting-group` rows had). Don't put the fade back. The **`animation-delay`s are assigned in JS**: `_settingsSequenceRows()` indexes `.settings-category-title, .settings-row` in DOM order on every open. They used to be a hardcoded nth-child list in CSS that only covered the **first two rows of each category** — every row added after that inherited the base rule with **no delay** and popped in instantly, ahead of the cascade. **Don't move the delays back into CSS**: the next row added would silently break the sequence again. Do **not** re-add the old `juiceRowIn` settings rule in juice.css either — it double-animates and fights the stagger.
 
 ### Avatar working animation (`drawPlayers`, the `suppressWorkAnim` block)
 Two independent suppressions, both gated on `localInWorkPhase()` (pomodoro **or** free-mode work):
@@ -1600,6 +1628,8 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | After-prayer azkar: the focus-sounds panel flashes for a few frames, then vanishes | `body.azkar-active` lifts the compact panel to z-index 10001 — above the prayer overlay (10000) — so it was visible until the azkar overlay (10002) finished fading in over it | `body.azkar-after-prayer .focus-sounds-panel { display: none }` — there's nothing to mix during salah |
 | After-prayer azkar per-prayer colours don't apply | `.azkar-overlay[data-prayer=…] .azkar-count-btn` ties `.azkar-overlay[data-mode="morning"] .azkar-count-btn` on specificity (0,2,1), and the mode rules come later in the file, so source order hands them the win | Prefix the per-prayer rules with `body.azkar-after-prayer` (0,3,1) so they win regardless of order |
 | Race + fig zones play the join sound but no panel ever appears; laptop-boss works fine | `MINIGAMES_ENABLED` was left `false` after the games table was wired. The zone press still ran `joinOrCreateMinigameLobby` (hence the sound) and wrote a lobby session to Firebase — but `listenToRace`/`listenToCoffee` were skipped, so `gameState.race.session` was never populated and `showRaceLobby` never ran. Laptop-boss was unaffected because it's solo: `openBossConfirm` opens its modal locally and needs no listener | `MINIGAMES_ENABLED = true`; the separately-dead old break-room rects moved behind `MINIGAME_LEGACY_ZONES` |
+| Settings panel opens completely empty on Firefox | The rows sat at `opacity: 0` and relied on the `settingsRowIn` keyframe to reveal them; Firefox sometimes never triggered the sequence, so nothing was ever faded in. Same root cause as the earlier pomodoro-settings blank | Animate `transform` only, keep opacity at 1 — a skipped animation costs the flourish, not the content |
+| Timer reads `61:00` after an hour of work | Every clock was hand-built as `mm:ss` with no hour rollover | One `formatTime`/`formatTimeMs` that emits `h:mm:ss` past an hour, + `setTimerText()`'s `.has-hours` class so the wider string still fits the HUD |
 | Disconnected user never leaves — others still see their avatar forever | Ending a reading session ran `onDisconnect(ref('users/{uid}')).cancel()` to disarm its own ghost-cleanup. **`cancel()` cancels the queued ops of that location AND all its children**, so it also wiped the presence handlers armed at login (`activeInGame` → false, `activeSession` → null). That user's tab close then cleared nothing, and `listenToPlayers` (which gates purely on `activeInGame === true`) kept rendering them. Only `.info/connected` re-armed it, so it self-healed only if they later had a network blip — hence "sometimes" | Arm/cancel the reading fields **individually on their own child refs** (`armReadingDisconnect` / `cancelReadingDisconnect` + `READING_DISCONNECT_FIELDS`). **Never `onDisconnect(...).cancel()` on `users/{uid}` or any other node that has child ops armed under it** |
 
 ---
