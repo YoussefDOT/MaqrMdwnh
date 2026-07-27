@@ -3559,6 +3559,19 @@ function _activeSessionLaptopId() {
     return null;
 }
 
+// When a pomodoro is restored (reload / reclaim) we don't know when the current WORK
+// block actually began — but the doc's endTime is "block start + workDuration", so we
+// can rebuild it. Returns 0 for any non-work phase or a nonsensical stamp (never a
+// value in the future or older than the block length, which would inflate the total).
+function _restoredWorkStartMs(phase, endTime, workDuration) {
+    if (phase !== 'work') return 0;
+    const now  = Date.now();
+    const mins = workDuration || 25;
+    const start = (endTime || 0) - mins * 60000;
+    if (!(start > 0) || start > now || now - start > mins * 60000) return now;
+    return start;
+}
+
 function _pomoDocFromState() {
     const p = gameState.pomodoro;
     return {
@@ -3570,6 +3583,9 @@ function _pomoDocFromState() {
         sessionsLeft:  p.sessionsLeft,
         totalSessions: p.totalSessions || p.sessionsLeft || 1,
         createdAt:     p.createdAt || Date.now(),
+        // Dashboard work-time tracking — persisted so a reload/reclaim doesn't
+        // restart the accumulator at 0 and save the whole session as "0 minutes".
+        workedMs:      p._workedMs || 0,
     };
 }
 
@@ -3603,6 +3619,7 @@ function _buildReclaimSnapshot() {
         workDuration: p.workDuration, breakDuration: p.breakDuration || 5,
         sessionsLeft: p.sessionsLeft, totalSessions: p.totalSessions || p.sessionsLeft || 1,
         createdAt: p.createdAt || Date.now(),
+        workedMs: pomoWorkedMsNow(),   // includes the in-flight work block
     };
 }
 
@@ -5173,6 +5190,13 @@ function startGame(userData) {
             gameState.pomodoro.breakDuration = state.breakDuration || 5;
             gameState.pomodoro.totalSessions = state.totalSessions || state.sessionsLeft || 1;
             gameState.pomodoro.createdAt = state.createdAt || Date.now();
+            // Dashboard work-time tracking. _workedMs/_workStartMs are only stamped by
+            // startPomodoroPhase, which a restore never calls — leaving them at 0 made
+            // pomoWorkedMsNow() return 0, so a reloaded session was silently dropped by
+            // dashSaveSession's 10-minute floor. Restore the accumulator and re-derive
+            // the in-flight work block from its endTime.
+            gameState.pomodoro._workedMs = state.workedMs || 0;
+            gameState.pomodoro._workStartMs = _restoredWorkStartMs(state.phase, state.endTime, state.workDuration);
             break;
         }
 
@@ -5291,6 +5315,7 @@ function startGame(userData) {
                         sessionsLeft: ls.sessionsLeft,
                         totalSessions: ls.totalSessions,
                         createdAt: ls.createdAt || now,
+                        workedMs: ls.workedMs || 0,
                     };
                     update(ref(database), {
                         [lobbyPath(`pomodoro/${target.id}`)]: restoredDoc,
@@ -5307,6 +5332,10 @@ function startGame(userData) {
                     gameState.pomodoro.breakDuration = ls.breakDuration || 5;
                     gameState.pomodoro.totalSessions = ls.totalSessions || ls.sessionsLeft || 1;
                     gameState.pomodoro.createdAt    = ls.createdAt || now;
+                    // Carry the work-time accumulator across the reclaim (see the reload
+                    // restore above) — the phase restarts here, so the block starts now.
+                    gameState.pomodoro._workedMs    = ls.workedMs || 0;
+                    gameState.pomodoro._workStartMs = restoredPhase === 'work' ? now : 0;
                     locked = restoredPhase === 'work';
                 } else {
                     // Stale (>4h), no progress, or no free device — discard.
@@ -7830,7 +7859,8 @@ function startPomodoroPhase(phase) {
             breakDuration: gameState.pomodoro.breakDuration,
             sessionsLeft: gameState.pomodoro.sessionsLeft,
             totalSessions: gameState.pomodoro.totalSessions,
-            createdAt: gameState.pomodoro.createdAt || Date.now()
+            createdAt: gameState.pomodoro.createdAt || Date.now(),
+            workedMs: gameState.pomodoro._workedMs || 0
         };
         updates[lobbyPath(`pomodoro/${gameState.pomodoro.laptopId}`)] = pomoData;
         // Host pushes phaseEndTime + currentPhase to the live doc so guests stay in sync
@@ -15844,7 +15874,10 @@ function endFreeModeBreak() {
 
 function endFreeMode() {
     const fm = gameState.freeMode;
-    if (!fm.active) return;
+    // Bail-out still has to clear the >2h confirm flags. They're module-level and are
+    // otherwise only reset at the BOTTOM of this function, so an early return left them
+    // armed and silently suppressed the NEXT session's save + end card.
+    if (!fm.active) { _dashFreeHandled = false; _dashFreeOverrideMins = null; _dashFreeDiscarded = false; return; }
 
     // Cancel pending post-break kidnap if session ends during 2-second wait
     if (fm._breakEndTimer) { clearTimeout(fm._breakEndTimer); fm._breakEndTimer = null; }
@@ -20511,7 +20544,13 @@ function openFreeLongConfirmModal(elapsedMs) {
         else { m += delta; if (m > 59) m = 0; if (m < 0) m = 59; }
         sync();
     };
+    // One answer per open. Without this, a second press (a mobile ghost click, a
+    // double-tap) saves the session twice AND re-arms the flags that endFreeMode
+    // clears — poisoning the next session.
+    let answered = false;
     modal._confirm = () => {
+        if (answered) return;
+        answered = true;
         dashSaveSession('free', getCurrentTaskText(), (h * 60 + m) * 60000);
         _dashFreeHandled = true;
         _dashFreeOverrideMins = h * 60 + m;   // the end card should reflect the adjusted time
@@ -20519,6 +20558,8 @@ function openFreeLongConfirmModal(elapsedMs) {
         endFreeMode();
     };
     modal._discard = () => {
+        if (answered) return;
+        answered = true;
         _dashFreeHandled = true;   // discard: end the session WITHOUT saving to the dashboard
         _dashFreeDiscarded = true; // …and without the end card / sound
         modal.classList.remove('active');
@@ -21372,7 +21413,11 @@ function setupDashboardUI() {
 // One-time cleanup of leftover seeded mock data (the old "temp stats"). Only fires if
 // the `_seed` marker is present, so it never touches genuinely-entered data.
 function dashClearSeedData() {
-    const uid = DASH_TARGET_UID;
+    // The current user's OWN node only. This used to be the hardcoded owner UID, which
+    // was safe while the dashboard was owner-only — but it's open to everyone now, so
+    // every member's login was checking (and potentially wiping) the owner's node.
+    const uid = gameState.userId;
+    if (!uid) return;
     get(ref(database, `dashboards/${uid}/_seed`)).then(snap => {
         if (!snap.exists()) return;
         update(ref(database), { [`dashboards/${uid}`]: null })
