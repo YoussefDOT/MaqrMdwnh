@@ -4290,6 +4290,10 @@ async function loadWorldArt() {
     }
     worldCollision.stairs = _st;
     worldCollision.built = true;
+    // The login restore usually lands BEFORE this point, and checkCollision reports
+    // "walkable" until the masks exist — so a stored position that is really inside
+    // furniture is accepted and only becomes a trap now. Nudge the player out.
+    _unstickLocalPlayer();
 
     // The world is fully decoded, masked and composited — this is the real
     // "loaded" moment, so let the boot screen finish and hand off to the
@@ -5045,6 +5049,14 @@ function startGame(userData) {
             // (Re)arm disconnect cleanup first, then assert the live value.
             onDisconnect(activeRef).set(false);
             set(activeRef, true);
+            // Free the sofa seat too, so a closed tab doesn't leave the seat claimed
+            // (and doesn't leave a stored position sitting inside the couch's
+            // collision mask for the next login to restore into). Armed PER FIELD —
+            // never on the `users/{uid}` parent, which would cancel these handlers'
+            // siblings (see READING_DISCONNECT_FIELDS).
+            for (const f of ['sitSeatId', 'sitX', 'sitY']) {
+                onDisconnect(ref(database, `users/${gameState.userId}/${f}`)).set(null);
+            }
             onDisconnect(sessionRef).set(null);
             set(sessionRef, gameState._sessionToken);
             // Undo any session-freeing onDisconnect that fired during the dropout so
@@ -5358,7 +5370,13 @@ function startGame(userData) {
                     restoreFloor = laptop.floor || 1;   // second-floor laptop → seat on floor 2
                     if (!restoringFreeMode && (gameState.pomodoro.phase === 'work' || gameState.pomodoro.phase === 'wait')) locked = true;
                 }
-            } else if (data && (data.x !== undefined && data.y !== undefined) && data.x !== 0 && !checkCollision(data.x, data.y)) {
+            // `!data.sitSeatId`: a seated player's stored x/y IS the cushion, and the
+            // sofas are solid furniture in the collision mask — restoring onto one
+            // buries the player inside it with nowhere to walk (this is what trapped
+            // a user who closed the tab mid-reading-session). Spawn them normally
+            // instead; the seat itself is cleared by the disconnect handler.
+            } else if (data && (data.x !== undefined && data.y !== undefined) && data.x !== 0
+                       && !data.sitSeatId && !checkCollision(data.x, data.y)) {
                 spawnX = data.x;
                 spawnY = data.y;
                 if (data.floor === 2) restoreFloor = 2;
@@ -8436,6 +8454,38 @@ function updatePlayerPosition(x, y) {
         updates[`users/${gameState.userId}/booksSofa`] = reading?.active ? reading.sofaIdx : null;
     }
     update(ref(database), updates);
+}
+
+// Last-resort escape hatch for a local player standing inside solid geometry —
+// which the login restore can produce, because checkCollision answers "walkable"
+// for everything until the collision masks finish decoding. Only ever moves a
+// player who is genuinely free to walk: anyone seated, mid-animation or locked
+// into a session is where they're SUPPOSED to be (a laptop seat / sofa cushion).
+function _unstickLocalPlayer() {
+    const p = gameState.players[gameState.userId];
+    if (!p || !worldCollision.built) return;
+    if (gameState.isSitting || gameState.sitAnim.active || gameState.anim.active) return;
+    if (gameState.isLockedIn || gameState.pomodoro.active || gameState.freeMode.active) return;
+    if (gameState.reading && gameState.reading.active) return;
+    if (!checkCollision(p.x, p.y)) return;
+
+    // Spiral outward for the nearest free point, so the player pops out of whatever
+    // they're buried in rather than teleporting across the room.
+    for (let r = 20; r <= 420; r += 20) {
+        for (let a = 0; a < 16; a++) {
+            const ang = (a / 16) * Math.PI * 2;
+            const nx = p.x + Math.cos(ang) * r;
+            const ny = p.y + Math.sin(ang) * r;
+            if (!checkCollision(nx, ny)) {
+                teleportEntity(p, nx, ny);
+                updatePlayerPosition(nx, ny);
+                return;
+            }
+        }
+    }
+    const spawn = getRandomSpawnPosition();
+    teleportEntity(p, spawn.x, spawn.y);
+    updatePlayerPosition(spawn.x, spawn.y);
 }
 
 function checkCollision(x, y) {
@@ -22936,6 +22986,11 @@ function startReadingSession(opts) {
         _zoomBefore: gameState.zoom,
         _panelVisible: false,
         _exitConfirmOpen: false,
+        // Progress is credited incrementally (see bankReadingProgress) — `_bankedMs`
+        // is how much of this session is already written to Firebase.
+        _bankedMs: 0,
+        _lastBankAt: Date.now(),
+        _bankedMeta: false,
     };
 
     // Lock player input, set sitting
@@ -23068,6 +23123,12 @@ function updateReadingSession() {
     if (r.mode !== 'pages' && now >= r.endTime) {
         endReadingSession(false, true);
         return;
+    }
+
+    // Credit the time read so far every minute, so closing the tab mid-session
+    // loses at most a minute instead of the whole session (see bankReadingProgress).
+    if (Date.now() - (r._lastBankAt || 0) >= READING_BANK_INTERVAL_MS) {
+        bankReadingProgress(_readingSessionMsNow(r));
     }
 
     if (!r._panelVisible) return;
@@ -23362,6 +23423,62 @@ function readingEndCardOpen() {
     return document.getElementById('reading-end-modal')?.classList.contains('active') || false;
 }
 
+// ── Reading progress is banked INCREMENTALLY, not only at انتهيت ─────────────
+// Nothing used to be written until the session ended, so closing the tab (or a
+// reload) threw the whole session away — an hour of reading simply vanished.
+// `r._bankedMs` records how much of the session is already committed, so every
+// write only ever adds the delta since the last one and nothing is double-counted.
+const READING_BANK_INTERVAL_MS = 60000;
+
+// Elapsed session time, CLAMPED to the session's cap — a backgrounded tab throttles
+// rAF to a stop, so a raw `serverNow() - startTime` would bank the whole away period.
+function _readingSessionMsNow(r) {
+    const cap = r.mode === 'pages' ? READING_PAGES_MAX_MS : r.durationMs;
+    return Math.max(0, Math.min(serverNow() - r.startTime, cap));
+}
+
+function bankReadingProgress(upToMs) {
+    const r = gameState.reading;
+    if (!r || !r.bookName || !gameState.userId) return 0;
+    const delta = Math.max(0, Math.round(upToMs) - (r._bankedMs || 0));
+    r._lastBankAt = Date.now();
+    if (delta <= 0) return 0;
+    r._bankedMs = Math.round(upToMs);
+
+    const slug = _readingSlug(r.bookName);
+    runTransaction(ref(database, `dashboards/${gameState.userId}/reading/books/${slug}/totalMs`),
+        (curr) => (curr || 0) + delta).catch(() => {});
+
+    // Siraj test ghosts are ephemeral and must never appear in المتصدرين.
+    if (!gameState.isSirajGhost) {
+        runTransaction(ref(database, `${lobbyPath('readingLeaderboard')}/${gameState.userId}/totalMs`),
+            (curr) => (curr || 0) + delta).catch(() => {});
+    }
+
+    // Name/cover/avatar never change mid-session — write them once, on the first
+    // bank, instead of re-sending them every minute.
+    if (!r._bankedMeta) {
+        r._bankedMeta = true;
+        const meta = {
+            [`dashboards/${gameState.userId}/reading/books/${slug}/name`]: r.bookName,
+            [`dashboards/${gameState.userId}/reading/books/${slug}/style`]: r.bookStyle,
+        };
+        if (!gameState.isSirajGhost) {
+            const meP = gameState.players[gameState.userId] || {};
+            meta[`${lobbyPath('readingLeaderboard')}/${gameState.userId}/name`] = meP.username || 'قارئ';
+            meta[`${lobbyPath('readingLeaderboard')}/${gameState.userId}/avatar`] = meP.avatar || '';
+        }
+        update(ref(database), meta).catch(() => {});
+    }
+
+    // Keep the local shelf in sync so re-opening the popup shows the new total
+    // without waiting on a round trip.
+    if (gameState._readingBooks && gameState._readingBooks[slug]) {
+        gameState._readingBooks[slug].totalMs = (gameState._readingBooks[slug].totalMs || 0) + delta;
+    }
+    return delta;
+}
+
 // manual = ended early by the user (إنهاء القراءة). completed = the session was
 // FINISHED (full time, or all pages via انتهيت) — only then does the end card show.
 function endReadingSession(manual, completed) {
@@ -23375,11 +23492,7 @@ function endReadingSession(manual, completed) {
     // session, background the tab for five hours, come back to +5h of reading).
     // The session can never legitimately be worth more than its cap (timed: its own
     // duration; pages: infinite, so a generous ceiling).
-    const cap = r.mode === 'pages' ? READING_PAGES_MAX_MS : r.durationMs;
-    const sessionMs = Math.max(0, Math.min(serverNow() - r.startTime, cap));
-
-    // Save to Firebase
-    const slug = _readingSlug(r.bookName);
+    const sessionMs = _readingSessionMsNow(r);
 
     // 1. Clear active state for others
     const updates = {};
@@ -23388,38 +23501,23 @@ function endReadingSession(manual, completed) {
     updates[`users/${gameState.userId}/readingEnd`] = null;
     updates[`users/${gameState.userId}/booksSofa`] = null;
 
-    // 2. Increment the user's private book time + keep its display name/cover current
-    //    (the slug alone isn't guaranteed to render back as the exact book name).
-    const bookTotalRef = ref(database, `dashboards/${gameState.userId}/reading/books/${slug}/totalMs`);
-    runTransaction(bookTotalRef, (curr) => (curr || 0) + sessionMs).catch(() => {});
-    update(ref(database), {
-        [`dashboards/${gameState.userId}/reading/books/${slug}/name`]: r.bookName,
-        [`dashboards/${gameState.userId}/reading/books/${slug}/style`]: r.bookStyle,
-    }).catch(() => {});
+    // 2. Commit whatever hasn't been banked yet. Everything up to `r._bankedMs` was
+    //    already credited (book total, leaderboard, book name/cover, local shelf) by
+    //    the periodic bank, so this only ever writes the remaining tail.
+    bankReadingProgress(sessionMs);
 
     // Disarm the disconnect ghost-cleanup — we're clearing these fields right now.
     if (!gameState.isSirajGhost) cancelReadingDisconnect();
 
-    // 3. Increment the user's global reading time (for the leaderboard). Siraj test
-    //    ghosts are ephemeral and must never appear in المتصدرين, so they skip this
-    //    write entirely — their reading sessions are for testing, not competing.
+    // 3. Refresh the leaderboard name/avatar in case this is their first entry.
+    //    (gameState.currentUser is just the username STRING, not an object — pull
+    //    name/avatar from the player entity like everywhere else in the codebase.)
     if (!gameState.isSirajGhost) {
-        const lbRef = ref(database, `${lobbyPath('readingLeaderboard')}/${gameState.userId}/totalMs`);
-        runTransaction(lbRef, (curr) => (curr || 0) + sessionMs).catch(() => {});
-        // Refresh name/avatar in case this is their first entry. (gameState.currentUser
-        // is just the username STRING, not an object — pull name/avatar from the
-        // player entity like everywhere else in the codebase.)
         const meP = gameState.players[gameState.userId] || {};
         updates[`${lobbyPath('readingLeaderboard')}/${gameState.userId}/name`] = meP.username || 'قارئ';
         updates[`${lobbyPath('readingLeaderboard')}/${gameState.userId}/avatar`] = meP.avatar || '';
     }
     update(ref(database), updates).catch(() => {});
-
-    // Keep the local shelf in sync so re-opening the popup shows the new total
-    // without waiting on a round trip.
-    if (gameState._readingBooks && gameState._readingBooks[slug]) {
-        gameState._readingBooks[slug].totalMs = (gameState._readingBooks[slug].totalMs || 0) + sessionMs;
-    }
 
     // Snapshot what the completion card will show BEFORE we tear the state down.
     const cardData = {

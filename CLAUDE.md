@@ -24,11 +24,19 @@
 > the `disabled` attribute, for visual-only locks); always pair `backdrop-filter` with
 > `-webkit-backdrop-filter`; stricter autoplay / AudioContext-resume rules.
 >
-> **Firefox gotcha:** a CSS entrance animation may **never run at all**. Never leave an
-> element at `opacity: 0` and rely on a keyframe to reveal it — a skipped animation then
-> renders the whole panel permanently **empty** (hit twice: the pomodoro settings rows and
-> the settings panel rows). Animate `transform` only and keep opacity at 1; a stalled
-> animation should cost the flourish, never the content.
+> **Firefox gotcha:** a CSS entrance animation may **never run at all**. Never put
+> `opacity: 0` in an element's **base style** and rely on a keyframe to reveal it — a
+> skipped animation then renders the whole panel permanently **empty** (hit twice: the
+> pomodoro settings rows and the settings panel rows).
+>
+> **The fix is `animation-fill-mode: backwards`, not dropping the fade.** Put
+> `opacity: 0 → 1` inside the keyframes, leave the base style opaque, and let
+> `backwards` supply the hidden state during the `animation-delay`. A stalled animation
+> then falls back to the visible base style — it costs the flourish, never the content.
+> (Killing the fade outright was the first attempt; it worked but made every sequenced
+> panel slide in at full opacity, which looks wrong.) Use `backwards`, **never `both`** —
+> `both` pins the 100% keyframe forever and an animated property beats a transitioned
+> one, which kills hover/close effects.
 
 ---
 
@@ -46,7 +54,7 @@ python3 -m http.server 8080
 
 **Pre-commit hook**: besides the build number below, it regenerates `Hats/hats.json` from the PNGs in `Hats/` (see Character Customization).
 
-**Build number**: A `#build-number` div sits below the `#siraj-test-link` button on the login screen showing `Build N · Updated H:MM AM/PM`. The `.git/hooks/pre-commit` hook auto-increments the number and timestamps it on every commit — no manual edits needed. If the hook ever fails to find the pattern, it logs a warning and exits cleanly.
+**Build number**: A `#build-number` div sits below the `#siraj-test-link` button on the login screen showing **`Build N · Updated M/D H:MM AM/PM`** (e.g. `Build 244 · Updated 7/28 1:47 PM`) — the **date is part of the stamp**, so "when did this last ship" is answerable at a glance. The `.git/hooks/pre-commit` hook auto-increments the number and rewrites the date+time on every commit — **never hand-edit it**. Its `sed` pattern treats the `M/D ` part as optional so an older date-less stamp is upgraded in place rather than skipped. If the hook can't find the pattern at all, it logs a warning and exits cleanly. **If the stamp format ever changes, update the hook's `sed` pattern and this line together.**
 
 ---
 
@@ -177,7 +185,13 @@ Each one is a shipped bug (details in Common Bugs & the feature sections):
 18. **`ctx.resume()` is async** — `.then(play)`, never fire-and-forget.
 19. **Sounds that must fire in background tabs** use `focusAudioEngine.playEffect`
     (Web Audio), never `HTMLAudioElement`.
-20. **Git**: never push unless the owner asks; when pushing, straight to `main`
+20. **A sequenced entrance never puts `opacity: 0` in the BASE style** — fade inside
+    the keyframes + `animation-fill-mode: backwards` (never `both`). A skipped
+    animation must leave the content visible, not blank the panel.
+21. **`checkCollision()` lies until the masks decode** (`worldCollision.built`) — it
+    reports everything walkable. Never treat it as authoritative on the login/restore
+    path without a re-check once the masks land (`_unstickLocalPlayer`).
+22. **Git**: never push unless the owner asks; when pushing, straight to `main`
     (`git push origin HEAD:main`); bump `?v=` with every `game.js` change.
 
 ---
@@ -782,10 +796,25 @@ lobbies/{lobby}/readingLeaderboard/{uid}   = { name, avatar, totalMs }  // via l
 users/{uid}/{isReading, readingBook, readingEnd, booksSofa}             // presence only
 ```
 Private book data lives under `dashboards` (one-shot `get()`s, zero fan-out — see the
-cost rules). `_readingSlug()` strips `. # $ [ ] /`. Session end increments `totalMs` with
-`runTransaction`. **Siraj ghosts never touch المتصدرين** — they skip the leaderboard
-write entirely, and `fetchReadingLeaderboard` also filters `uid.startsWith('siraj_')` on
-read so any pre-existing ghost row stays hidden.
+cost rules). `_readingSlug()` strips `. # $ [ ] /`. **Siraj ghosts never touch
+المتصدرين** — they skip the leaderboard write entirely, and `fetchReadingLeaderboard`
+also filters `uid.startsWith('siraj_')` on read so any pre-existing ghost row stays
+hidden.
+
+**Time is banked INCREMENTALLY, not only at انتهيت** (`bankReadingProgress`). Nothing
+used to be written until the session ended, so closing the tab threw the whole session
+away. Now `updateReadingSession` banks every `READING_BANK_INTERVAL_MS` (60 s) and
+`endReadingSession` only commits the tail — a lost tab costs at most a minute. Rules:
+- **`r._bankedMs` is the ledger.** Every write adds `now − _bankedMs`, never a total, so
+  nothing is ever counted twice. Don't add a second call site that writes `sessionMs`
+  directly.
+- Elapsed always goes through **`_readingSessionMsNow()`**, which clamps to the session
+  cap — a backgrounded tab throttles rAF, so a raw `serverNow() − startTime` would bank
+  the whole away period.
+- Book **name/style** and the leaderboard **name/avatar** are written once, on the first
+  bank (`_bankedMeta`) — they can't change mid-session.
+- Cost: two `runTransaction`s a minute on nodes **nobody live-listens to**
+  (`dashboards/…`, `readingLeaderboard` is a one-shot `get()`), so the fan-out is zero.
 
 ### Seat + camera
 The sit-down itself is `startSitAnimation`, so the hop is relayed and **every client
@@ -1300,7 +1329,7 @@ Opens **under the gear button, top-right** on desktop (`top:130px; right:18px`) 
 Open removes `.hidden` (the `settingsPanelIn` keyframe pops it in). Close is **animated, not a snap**: `closeSettingsPanel()` adds `.settings-panel-closing` (runs `settingsPanelOut`), then `.hidden` after ~230 ms. All three close paths (close button, gear re-press, outside-click) go through it. **Closing makes no sound** (see below).
 
 ### Sequenced rows + the cascade blip (sound)
-`@keyframes settingsRowIn` lives in **style.css** (scoped `.settings-panel:not(.hidden):not(.settings-panel-closing) …` so it replays on every open). It animates **`transform` only — the rows are never `opacity: 0`**: in Firefox the sequence could fail to trigger at all, and an opacity-0 base then left the entire panel blank (same failure the pomodoro `.setting-group` rows had). Don't put the fade back. The **`animation-delay`s are assigned in JS**: `_settingsSequenceRows()` indexes `.settings-category-title, .settings-row` in DOM order on every open. They used to be a hardcoded nth-child list in CSS that only covered the **first two rows of each category** — every row added after that inherited the base rule with **no delay** and popped in instantly, ahead of the cascade. **Don't move the delays back into CSS**: the next row added would silently break the sequence again. Do **not** re-add the old `juiceRowIn` settings rule in juice.css either — it double-animates and fights the stagger.
+`@keyframes settingsRowIn` lives in **style.css** (scoped `.settings-panel:not(.hidden):not(.settings-panel-closing) …` so it replays on every open). It fades **and** slides, but the fade lives **entirely inside the keyframes** with **`animation-fill-mode: backwards`** — the rows' own base style stays `opacity: 1`. In Firefox the sequence could fail to trigger at all, and an `opacity: 0` **base** then left the entire panel blank (same failure the pomodoro `.setting-group` rows had); with `backwards`, a skipped animation falls back to the visible base. **Never re-add an `opacity: 0` base, and never use `both`** (it pins the 100% keyframe forever). Same treatment on `settingGroupIn` and `readingRowIn`. The **`animation-delay`s are assigned in JS**: `_settingsSequenceRows()` indexes `.settings-category-title, .settings-row` in DOM order on every open. They used to be a hardcoded nth-child list in CSS that only covered the **first two rows of each category** — every row added after that inherited the base rule with **no delay** and popped in instantly, ahead of the cascade. **Don't move the delays back into CSS**: the next row added would silently break the sequence again. Do **not** re-add the old `juiceRowIn` settings rule in juice.css either — it double-animates and fights the stagger.
 
 ### Avatar working animation (`drawPlayers`, the `suppressWorkAnim` block)
 Two independent suppressions, both gated on `localInWorkPhase()` (pomodoro **or** free-mode work):
@@ -1628,7 +1657,10 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | After-prayer azkar: the focus-sounds panel flashes for a few frames, then vanishes | `body.azkar-active` lifts the compact panel to z-index 10001 — above the prayer overlay (10000) — so it was visible until the azkar overlay (10002) finished fading in over it | `body.azkar-after-prayer .focus-sounds-panel { display: none }` — there's nothing to mix during salah |
 | After-prayer azkar per-prayer colours don't apply | `.azkar-overlay[data-prayer=…] .azkar-count-btn` ties `.azkar-overlay[data-mode="morning"] .azkar-count-btn` on specificity (0,2,1), and the mode rules come later in the file, so source order hands them the win | Prefix the per-prayer rules with `body.azkar-after-prayer` (0,3,1) so they win regardless of order |
 | Race + fig zones play the join sound but no panel ever appears; laptop-boss works fine | `MINIGAMES_ENABLED` was left `false` after the games table was wired. The zone press still ran `joinOrCreateMinigameLobby` (hence the sound) and wrote a lobby session to Firebase — but `listenToRace`/`listenToCoffee` were skipped, so `gameState.race.session` was never populated and `showRaceLobby` never ran. Laptop-boss was unaffected because it's solo: `openBossConfirm` opens its modal locally and needs no listener | `MINIGAMES_ENABLED = true`; the separately-dead old break-room rects moved behind `MINIGAME_LEGACY_ZONES` |
-| Settings panel opens completely empty on Firefox | The rows sat at `opacity: 0` and relied on the `settingsRowIn` keyframe to reveal them; Firefox sometimes never triggered the sequence, so nothing was ever faded in. Same root cause as the earlier pomodoro-settings blank | Animate `transform` only, keep opacity at 1 — a skipped animation costs the flourish, not the content |
+| Settings panel opens completely empty on Firefox | The rows sat at `opacity: 0` and relied on the `settingsRowIn` keyframe to reveal them; Firefox sometimes never triggered the sequence, so nothing was ever faded in. Same root cause as the earlier pomodoro-settings blank | Keep the fade in the keyframes, keep the base style opaque, and hide during the delay with `animation-fill-mode: backwards` — a skipped animation costs the flourish, not the content |
+| Settings/pomodoro rows slide in at full opacity — no fade, looks wrong (every browser) | The Firefox blank-panel fix above was first done by **deleting the fade** (`transform`-only keyframes, base `opacity: 1`), which cured the blank but left the cascade fadeless | `backwards` fill mode gives both: fade restored inside the keyframes, base style still opaque |
+| Reader closes the tab mid-session → the whole reading session is lost | Reading time was only written at انتهيت (`runTransaction` on `books/{slug}/totalMs` + the leaderboard), so nothing at all existed until the session ended | `bankReadingProgress()` commits the delta since the last bank every `READING_BANK_INTERVAL_MS` (60 s); `endReadingSession` just banks the tail. `r._bankedMs` is what stops double-counting |
+| Reader returns after closing the tab and is **frozen** — can't move at all, mezzanine drawn over them; only deleting `users/{uid}/x,y` in Firebase frees them | A seated player's stored `x/y` **IS the sofa cushion**, and the sofas are solid furniture in the collision mask. The login restore guards on `!checkCollision(...)` — but `checkCollision` returns **walkable for everything until the collision masks decode** (`if (!worldCollision.built) return false`), and the restore normally lands first. So the cushion position was accepted, and the masks landing a moment later buried the player inside the couch. The books sofas sit **under the mezzanine footprint**, hence "stuck on floor 1 seeing floor 2" | Three layers: the restore skips the stored position when `data.sitSeatId` is set; `sitSeatId/sitX/sitY` are nulled by `onDisconnect` (armed per-field in the `.info/connected` block) so the seat frees and the stale seat can't be restored; and `_unstickLocalPlayer()` runs the moment `worldCollision.built` flips, spiralling any genuinely-buried free player out to the nearest walkable point |
 | Timer reads `61:00` after an hour of work | Every clock was hand-built as `mm:ss` with no hour rollover | One `formatTime`/`formatTimeMs` that emits `h:mm:ss` past an hour, + `setTimerText()`'s `.has-hours` class so the wider string still fits the HUD |
 | Disconnected user never leaves — others still see their avatar forever | Ending a reading session ran `onDisconnect(ref('users/{uid}')).cancel()` to disarm its own ghost-cleanup. **`cancel()` cancels the queued ops of that location AND all its children**, so it also wiped the presence handlers armed at login (`activeInGame` → false, `activeSession` → null). That user's tab close then cleared nothing, and `listenToPlayers` (which gates purely on `activeInGame === true`) kept rendering them. Only `.info/connected` re-armed it, so it self-healed only if they later had a network blip — hence "sometimes" | Arm/cancel the reading fields **individually on their own child refs** (`armReadingDisconnect` / `cancelReadingDisconnect` + `READING_DISCONNECT_FIELDS`). **Never `onDisconnect(...).cancel()` on `users/{uid}` or any other node that has child ops armed under it** |
 

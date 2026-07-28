@@ -366,17 +366,18 @@ body {
 }
 
 /* Sequential punchy entrance for each setting row when the modal opens.
-   Opacity stays at 1 the whole time (only the slide-up is animated) — if the
-   keyframe animation ever gets skipped/interrupted (e.g. tab backgrounded mid-
-   open on Safari), the row is still fully visible, just without the flourish.
-   An opacity:0 start here previously meant a stuck animation left the whole
+   The fade lives inside the keyframes and the pre-delay hide comes from
+   `animation-fill-mode: backwards` — the row's own base style stays fully opaque.
+   So if the animation is ever skipped/interrupted (Firefox skipping the sequence,
+   or a tab backgrounded mid-open on Safari) the row falls back to visible and only
+   loses the flourish. An `opacity: 0` BASE is what previously left the whole
    pomodoro settings section invisible. */
 @keyframes settingGroupIn {
-    from { transform: translateY(14px); }
-    to   { transform: translateY(0); }
+    from { opacity: 0; transform: translateY(14px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 .modal-overlay.active .setting-group {
-    animation: settingGroupIn 0.5s cubic-bezier(0.34,1.56,0.64,1) forwards;
+    animation: settingGroupIn 0.5s cubic-bezier(0.34,1.56,0.64,1) backwards;
 }
 .modal-overlay.active .setting-group:nth-child(1) { animation-delay: 0.12s; }
 .modal-overlay.active .setting-group:nth-child(2) { animation-delay: 0.20s; }
@@ -2044,18 +2045,24 @@ body.is-mobile .btn-discord { width: 100%; }
     to   { opacity: 0; transform: scale(0.93) translateY(-8px); }
 }
 /* Sequential entrance for each category heading + row (replays on every open).
-   Opacity stays at 1 the whole time (only the slide-up is animated) — same fix as
-   the pomodoro .setting-group rows: an `opacity: 0` base that relied on the
-   keyframe to reveal it meant that if the animation never ran (Firefox skipped
-   the sequence entirely) the whole settings panel rendered EMPTY. Now a stalled
-   animation just costs the flourish, never the content. */
+   The rows fade AND slide, but the fade lives entirely inside the keyframes —
+   the element's own base style is `opacity: 1`, and the pre-delay hide comes from
+   `animation-fill-mode: backwards`. That's the whole trick: an `opacity: 0` BASE
+   that relied on the keyframe to reveal it meant that if the animation never ran
+   (Firefox skipped the sequence entirely — same failure as the pomodoro
+   .setting-group rows) the whole settings panel rendered EMPTY. With `backwards`,
+   a stalled animation falls back to the base style and just costs the flourish,
+   never the content.
+   `backwards`, NOT `both`: `both` pins the 100% keyframe forever, and an animated
+   property beats a transitioned one — which is what kills hover/close effects
+   elsewhere in this file. */
 @keyframes settingsRowIn {
-    from { transform: translateY(9px); }
-    to   { transform: translateY(0); }
+    from { opacity: 0; transform: translateY(9px); }
+    to   { opacity: 1; transform: translateY(0); }
 }
 .settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category-title,
 .settings-panel:not(.hidden):not(.settings-panel-closing) .settings-row {
-    animation: settingsRowIn 0.4s cubic-bezier(0.22,1,0.36,1) forwards;
+    animation: settingsRowIn 0.4s cubic-bezier(0.22,1,0.36,1) backwards;
 }
 /* The stagger itself is assigned in JS (_settingsSequenceRows), in DOM order.
    It used to be a hardcoded nth-child list here, but it only ever covered the
@@ -7403,8 +7410,10 @@ body.is-mobile .reading-newbook-preview { width: 148px; height: 196px; }
 #reading-newbook-modal.active .reading-newbook-preview,
 #reading-newbook-modal.active .setting-group,
 #reading-newbook-modal.active .pomo-launch-row {
-    opacity: 0;
-    animation: readingRowIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) forwards;
+    /* `backwards` (not an `opacity: 0` base + `forwards`) so a skipped animation —
+       the Firefox trap that blanked the settings + pomodoro rows — leaves these
+       rows visible instead of leaving the modal empty. */
+    animation: readingRowIn 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) backwards;
 }
 #reading-modal.active .logo-container { animation-delay: 0.05s; }
 #reading-modal.active .title { animation-delay: 0.12s; }
