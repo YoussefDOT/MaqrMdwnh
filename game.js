@@ -1643,6 +1643,13 @@ class FocusYouTubePlayer {
         this._adStartMs    = 0;
         this._loadedAt     = 0;
         this._wasAutoPlay  = false;
+        // Playback self-heal state (see _scheduleRevive / _reviveNow)
+        this._lastKnownSec = 0;
+        this._playIntent   = false;
+        this._reviveTimer  = null;
+        this._reviving     = false;
+        this._errored      = false;
+        this._gestureRetryArmed = false;
     }
 
     _ensureApiLoaded() {
@@ -1676,7 +1683,29 @@ class FocusYouTubePlayer {
             height: '90', width: '160',
             playerVars: { controls: 0, modestbranding: 1, rel: 0, playsinline: 1 },
             events: {
-                onReady: () => { this.ready = true; this.player.setVolume(this.volume); if (this._playerReadyResolver) this._playerReadyResolver(); },
+                onReady: () => {
+                    this.ready = true;
+                    this.player.setVolume(this.volume);
+                    // The embed is cross-origin: without the autoplay permission
+                    // delegated to it, playVideo() from our code is silently
+                    // ignored by the browser. The API normally sets this itself —
+                    // re-assert it so an older/updated API build can't drop it.
+                    try {
+                        const fr = this.player.getIframe && this.player.getIframe();
+                        if (fr && !/autoplay/i.test(fr.getAttribute('allow') || '')) {
+                            fr.setAttribute('allow', `autoplay; encrypted-media; ${fr.getAttribute('allow') || ''}`.trim());
+                        }
+                    } catch(e) {}
+                    if (this._playerReadyResolver) this._playerReadyResolver();
+                },
+                // No error handler used to exist: a dead embed (error 5/150/…)
+                // just swallowed every later playVideo(), which is the "play
+                // does nothing until I paste the link again" bug.
+                onError: (e) => {
+                    console.warn('YT player error', e?.data);
+                    this._errored = true;
+                    if (this._playIntent) this._scheduleRevive(300);
+                },
                 onStateChange: (e) => {
                     if (e.data === YT.PlayerState.ENDED && this.loop) this.player.playVideo();
                     const isPlaying = e.data === YT.PlayerState.PLAYING;
@@ -1693,6 +1722,9 @@ class FocusYouTubePlayer {
     async loadUrl(url, startSec = 0, saveToFirebase = true, startPaused = false) {
         const id = this.parseVideoId(url);
         if (!id) return false;
+        // Keep the link sitting in the box: if playback ever goes wrong the user
+        // can just press تحميل again instead of hunting the URL down.
+        this._reflectUrlInput(url);
         await this.createPlayer();
         this.videoId = id;
         this.url = url;
@@ -1700,6 +1732,10 @@ class FocusYouTubePlayer {
         this._loadedAt     = Date.now();
         this._isAdPlaying  = false;
         this._wasAutoPlay  = !startPaused;
+        this._lastKnownSec = Math.max(0, startSec);
+        this._errored      = false;
+        this._playIntent   = !startPaused;
+        this._cancelRevive();
         const adOverlay = document.getElementById('yt-ad-overlay');
         if (adOverlay) adOverlay.classList.remove('active');
         try {
@@ -1709,6 +1745,7 @@ class FocusYouTubePlayer {
             } else {
                 this.player.loadVideoById({ videoId: id, startSeconds: Math.max(0, startSec) });
                 try { this.player.playVideo(); } catch(e) {}
+                this._scheduleRevive();
             }
             this._startPoll(); // always run poll so display refreshes immediately
             this.player.setVolume(this.volume);
@@ -1725,14 +1762,86 @@ class FocusYouTubePlayer {
         }
     }
 
+    // ── Playback self-heal ────────────────────────────────────────────────
+    // `playVideo()` is a postMessage into the embed. When the embed is in a
+    // dead state — a cued video whose start was blocked, an error that was
+    // never surfaced, an iframe that lost its autoplay permission — the call
+    // is silently ignored and the player looks frozen. That's why the only
+    // thing that ever fixed it was pasting the link again: a fresh
+    // loadVideoById re-arms the embed. So do that automatically instead.
+    _cancelRevive() {
+        if (this._reviveTimer) { clearTimeout(this._reviveTimer); this._reviveTimer = null; }
+    }
+
+    // Verify a play request actually took; reload the same video if it didn't.
+    _scheduleRevive(delay = 1600) {
+        this._cancelRevive();
+        this._reviveTimer = setTimeout(() => {
+            this._reviveTimer = null;
+            if (this._reviving) return;   // a reload is already in flight
+            if (!this._playIntent || !this.player || !this.videoId) return;
+            let state = -1;
+            try { state = this.player.getPlayerState(); } catch(e) {}
+            if (state === 1 || state === 3) return; // PLAYING / BUFFERING — fine
+            this._reviveNow();
+        }, delay);
+    }
+
+    _reviveNow() {
+        if (this._reviving || !this.player || !this.videoId) return;
+        this._reviving = true;
+        const sec = Math.max(0, Math.floor(this._lastKnownSec || 0));
+        this._setAdMode(false);           // also unmutes if a false ad-detect muted us
+        try {
+            this.player.loadVideoById({ videoId: this.videoId, startSeconds: sec });
+            this.player.setVolume(this.volume);
+            this.player.playVideo();
+            this._loadedAt    = Date.now();
+            this._wasAutoPlay = false;    // don't ad-detect a revive
+            this._startPoll();
+        } catch (e) { console.warn('YT revive failed', e); }
+        this._errored = false;
+        this._armGestureRetry();
+        setTimeout(() => { this._reviving = false; }, 2500);
+    }
+
+    // Last resort: a browser can refuse programmatic playback outright. The
+    // next click anywhere on the page is a real user gesture we can ride.
+    _armGestureRetry() {
+        if (this._gestureRetryArmed) return;
+        this._gestureRetryArmed = true;
+        const retry = () => {
+            this._gestureRetryArmed = false;
+            document.removeEventListener('pointerdown', retry, true);
+            if (!this._playIntent || !this.player || !this.videoId) return;
+            let st = -1;
+            try { st = this.player.getPlayerState(); } catch(e) {}
+            if (st === 1 || st === 3) return;
+            try { this.player.playVideo(); this._startPoll(); } catch(e) {}
+            this._scheduleRevive(1600);
+        };
+        document.addEventListener('pointerdown', retry, true);
+    }
+    // ──────────────────────────────────────────────────────────────────────
+
     async resume() {
         await this._ytReady;
-        if (!this.player) return;
+        // The player can be missing entirely (the container wasn't in the DOM
+        // when the profile restored). We still know the URL — rebuild it.
+        if (!this.player) {
+            if (this.url) { await this.loadUrl(this.url, this._lastKnownSec || 0, false, false); }
+            return;
+        }
         this._fading = false;
+        this._playIntent = true;
+        if (this._errored) { this._reviveNow(); return; }
         try { this.player.playVideo(); this._startPoll(); } catch(e){}
+        this._scheduleRevive();
     }
 
     async pause() {
+        this._playIntent = false;
+        this._cancelRevive();
         if (!this.player) return;
         try { this.player.pauseVideo(); this._stopPoll(); } catch(e){}
     }
@@ -1770,6 +1879,8 @@ class FocusYouTubePlayer {
 
     async fadeOutAndPause(duration = 1500) {
         if (!this.player || this._fading) return;
+        this._playIntent = false;
+        this._cancelRevive();
         this._fading = true;
         const steps = 12;
         const initial = this.volume;
@@ -1787,10 +1898,16 @@ class FocusYouTubePlayer {
 
     async fadeInAndResume(duration = 1500) {
         await this._ytReady;
-        if (!this.player) return;
+        if (!this.player) {
+            if (this.url) { await this.loadUrl(this.url, this._lastKnownSec || 0, false, false); }
+            return;
+        }
         this._fading = true;
+        this._playIntent = true;
         const target = this.volume;
+        if (this._errored) { this._reviveNow(); }
         try { this.player.setVolume(0); this.player.playVideo(); this._startPoll(); } catch(e){}
+        this._scheduleRevive();
         const steps = 12;
         const stepTime = duration / steps;
         for (let i = 1; i <= steps; i++) {
@@ -1821,6 +1938,8 @@ class FocusYouTubePlayer {
 
             const dur = this.player.getDuration() || 0;
             const cur = this.player.getCurrentTime() ?? 0;
+            // Where a revive should pick the video back up.
+            if (cur > 0) this._lastKnownSec = cur;
 
             // ── Ad detection ──────────────────────────────────────────
             // YouTube keeps state = -1 (UNSTARTED) during pre-roll ads
@@ -1974,14 +2093,24 @@ class FocusYouTubePlayer {
         }
     }
 
+    // Mirrors the loaded link back into the URL box so it's always re-loadable.
+    _reflectUrlInput(url) {
+        const input = document.getElementById('yt-url-input');
+        if (input && url) input.value = url;
+    }
+
     // Clears the current video: stops playback, hides the mini player, wipes the
     // saved URL input, and removes the saved profile from Firebase.
     async clear() {
+        this._playIntent = false;
+        this._cancelRevive();
         if (this.player) { try { this.player.stopVideo(); } catch(e) {} }
         this._stopPoll();
         this._stopWaveAnim();
         this.videoId = null;
         this.url = null;
+        this._lastKnownSec = 0;
+        this._errored = false;
         this._isAdPlaying = false;
         const adOverlay = document.getElementById('yt-ad-overlay');
         if (adOverlay) adOverlay.classList.remove('active');
@@ -1993,6 +2122,9 @@ class FocusYouTubePlayer {
 
     async loadFromProfile(profile) {
         if (!profile || !profile.url) return;
+        // Put the link back in the box FIRST — even if the load below fails, the
+        // user only has to press تحميل, not go find the link again.
+        this._reflectUrlInput(profile.url);
         await this.loadUrl(profile.url, profile.timestamp || 0, false, true);
         if (profile.loop) { this.loop = !!profile.loop; const btn = document.getElementById('mini-yt-repeat'); if (btn) btn.classList.toggle('active', this.loop); }
         if (profile.volume !== undefined) {
