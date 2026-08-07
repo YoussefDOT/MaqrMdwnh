@@ -22888,10 +22888,17 @@ function renderReadingShelf() {
         card.className = 'reading-book-card';
         card.dataset.slug = b.slug;
         card.innerHTML = `<div class="reading-book-art">${bookCoverSVG(b.style, b.name)}</div>
+            <button type="button" class="reading-book-edit" aria-label="تعديل">✎</button>
             <button type="button" class="reading-book-del" aria-label="حذف">✕</button>`;
         card.addEventListener('click', (e) => {
-            if (e.target.closest('.reading-book-del')) return;
+            if (e.target.closest('.reading-book-del, .reading-book-edit')) return;
             _readingScrollToCard(card);
+        });
+        // Editing reuses the new-book modal (same name + cover controls), just
+        // prefilled and saving back onto this book.
+        card.querySelector('.reading-book-edit').addEventListener('click', (e) => {
+            e.stopPropagation();
+            openNewBookModal(b);
         });
         card.querySelector('.reading-book-del').addEventListener('click', (e) => {
             e.stopPropagation();
@@ -22957,12 +22964,19 @@ function _readingSyncShelfSelection() {
 
 // ── Add-a-new-book modal (name + one of the 10 premade covers, live preview) ──
 
-function openNewBookModal() {
+// `book` (optional) = the shelf entry being edited; omitted = add a new book.
+function openNewBookModal(book) {
     const modal = document.getElementById('reading-newbook-modal');
     if (!modal) return;
-    gameState._newBookStyle = BOOK_STYLES[Math.floor(Math.random() * BOOK_STYLES.length)].id;
+    gameState._newBookEditSlug = book ? book.slug : null;
+    gameState._newBookStyle = book ? book.style
+        : BOOK_STYLES[Math.floor(Math.random() * BOOK_STYLES.length)].id;
     const nameEl = document.getElementById('reading-newbook-name');
-    if (nameEl) nameEl.value = '';
+    if (nameEl) nameEl.value = book ? book.name : '';
+    const titleEl = document.getElementById('reading-newbook-title');
+    if (titleEl) titleEl.textContent = book ? 'تعديل الكتاب' : 'كتاب جديد';
+    const addBtn = document.getElementById('reading-newbook-add');
+    if (addBtn) addBtn.textContent = book ? 'حفظ' : 'إضافة';
     _renderNewBookStyles();
     _renderNewBookPreview();
     modal.classList.add('active');
@@ -22972,6 +22986,7 @@ function openNewBookModal() {
 
 function closeNewBookModal() {
     document.getElementById('reading-newbook-modal')?.classList.remove('active');
+    gameState._newBookEditSlug = null;
 }
 
 function _renderNewBookStyles() {
@@ -23013,33 +23028,60 @@ function confirmNewBook() {
     if (!name) { nameEl?.focus(); return; }
     const style = gameState._newBookStyle || BOOK_STYLES[0].id;
     const slug = _readingSlug(name);
+    const editSlug = gameState._newBookEditSlug || null;
 
     if (!gameState._readingBooks) gameState._readingBooks = {};
+    const edited = editSlug ? gameState._readingBooks[editSlug] : null;
     const existing = gameState._readingBooks[slug];
+    // The slug comes from the name, so a rename moves the book to a new key —
+    // and can land on a book that already exists. Merge their times rather than
+    // dropping either one.
+    let totalMs = edited ? (edited.totalMs || 0) : 0;
+    if (existing && existing !== edited) totalMs += existing.totalMs || 0;
     const entry = {
         name,
         style,
-        totalMs: existing ? (existing.totalMs || 0) : 0,
-        // Re-adding an existing book bumps it back to the front of the shelf.
-        addedAt: Date.now(),
+        totalMs,
+        // Editing keeps the book where it is on the shelf; re-adding an existing
+        // book bumps it back to the front.
+        addedAt: edited ? (edited.addedAt || Date.now()) : Date.now(),
     };
     gameState._readingBooks[slug] = entry;
-    update(ref(database), {
-        [`dashboards/${gameState.userId}/reading/books/${slug}/name`]: name,
-        [`dashboards/${gameState.userId}/reading/books/${slug}/style`]: style,
-        [`dashboards/${gameState.userId}/reading/books/${slug}/addedAt`]: entry.addedAt,
-    }).catch(() => {});
 
-    // Keep the shelf bounded — drop the oldest beyond the cap.
-    const list = _readingBookList();
-    if (list.length > READING_BOOK_LIMIT) {
-        list.slice(READING_BOOK_LIMIT).forEach(b => {
-            delete gameState._readingBooks[b.slug];
-            remove(ref(database, `dashboards/${gameState.userId}/reading/books/${b.slug}`)).catch(() => {});
-        });
+    const base = `dashboards/${gameState.userId}/reading`;
+    const updates = {
+        [`${base}/books/${slug}/name`]: name,
+        [`${base}/books/${slug}/style`]: style,
+        [`${base}/books/${slug}/addedAt`]: entry.addedAt,
+    };
+    // Only an edit ever writes totalMs (it may have moved key / merged); a plain
+    // add must never touch the banked time.
+    if (edited) updates[`${base}/books/${slug}/totalMs`] = totalMs;
+    if (editSlug && editSlug !== slug) {
+        delete gameState._readingBooks[editSlug];
+        updates[`${base}/books/${editSlug}`] = null;
+        // lastBook is stored by NAME, so a rename has to follow it.
+        if (gameState._readingLastBook === (edited ? edited.name : null)) {
+            updates[`${base}/lastBook`] = name;
+        }
+    }
+    update(ref(database), updates).catch(() => {});
+
+    // Keep the shelf bounded — drop the oldest beyond the cap. An edit can only
+    // keep the count the same or shrink it, so it never needs trimming.
+    if (!editSlug) {
+        const list = _readingBookList();
+        if (list.length > READING_BOOK_LIMIT) {
+            list.slice(READING_BOOK_LIMIT).forEach(b => {
+                delete gameState._readingBooks[b.slug];
+                remove(ref(database, `${base}/books/${b.slug}`)).catch(() => {});
+            });
+        }
     }
 
     closeNewBookModal();
+    // Local only — this is just the "shelf lands here" pointer, so the book you
+    // just added/edited is the one centred when the shelf re-renders.
     gameState._readingLastBook = name;
     renderReadingShelf();
 }

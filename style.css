@@ -6732,12 +6732,12 @@ body.is-mobile .dash-stage.side-todo .inv-peep { transform: translate(calc(-50% 
     height: 100%;
 }
 
-/* Delete ✕ — only reachable on the centred book, so a mis-tap while scrolling
-   can't wipe a book. */
-.reading-book-del {
+/* Delete ✕ + edit ✎ — only reachable on the centred book, so a mis-tap while
+   scrolling can't wipe or rename a book. */
+.reading-book-del,
+.reading-book-edit {
     position: absolute;
     top: 2px;
-    right: -2px;
     width: 24px;
     height: 24px;
     border-radius: 50%;
@@ -6754,8 +6754,12 @@ body.is-mobile .dash-stage.side-todo .inv-peep { transform: translate(calc(-50% 
     -webkit-tap-highlight-color: transparent;
     outline: none;
 }
-.reading-book-card.is-selected .reading-book-del { opacity: 1; pointer-events: auto; }
+.reading-book-del { right: -2px; }
+.reading-book-edit { right: 26px; font-size: 12px; }
+.reading-book-card.is-selected .reading-book-del,
+.reading-book-card.is-selected .reading-book-edit { opacity: 1; pointer-events: auto; }
 .reading-book-del:hover { background: rgba(255, 80, 80, 0.18); color: #ff8888; }
+.reading-book-edit:hover { background: rgba(255, 255, 255, 0.16); color: #ffffff; }
 
 /* "كتاب جديد" card — a dashed slot the same size as a book. */
 .reading-book-add .reading-add-inner {
