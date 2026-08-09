@@ -193,6 +193,12 @@ Each one is a shipped bug (details in Common Bugs & the feature sections):
     path without a re-check once the masks land (`_unstickLocalPlayer`).
 22. **Git**: never push unless the owner asks; when pushing, straight to `main`
     (`git push origin HEAD:main`); bump `?v=` with every `game.js` change.
+23. **Budget images by PIXELS, never by file size** — a 17 KB PNG and a 3.6 MB PNG at
+    2210×3160 both decode to **27.9 MB**. Anything held for the whole session
+    (`keep: true`, a sprite sheet, a cached canvas) must be cropped or downscaled to
+    what is actually drawn. Free it with `.close()` / `src=''` the moment it isn't.
+    A phone near its canvas ceiling GC-thrashes *and* starts silently refusing
+    decodes — lag no graphics tier can fix, plus a black world.
 
 ---
 
@@ -280,6 +286,9 @@ before the game is playable.** The current model:
   builds the alpha collision masks (into `worldCollision`) AND pre-composites the ~9
   ground layers + 3 second-floor layers into **two cached canvases** (`worldCache`) —
   so the per-frame cost is ~2 `drawImage`s, not ~14 (matters on the owner's phone).
+  Layers are then **closed** (`ImageBitmap.close()`), and the four that must stay
+  resident are **shrunk first** — see **The World → Perf notes**, which is the memory
+  budget every new layer has to answer to.
   (The old standalone `buildWorldCollision()`/`buildWorldCache()` functions were
   inlined into this pipeline — grep `worldCollision` / `worldCache`, not those names.)
 - **Race track** (`Art/RaceTrack Var1.png`, 6 MB + CPU-heavy pixel classification):
@@ -434,11 +443,41 @@ reads **"انقر لفتح الأوراق"** (`drawDashboardPrompt`).
 - Wind particles are **soft round dots with a fading trail** (`drawWindParticles`). Off on بطاطس.
 
 ### Perf notes (owner is on a phone — keep it cheap; Safari was OOM-crashing)
-`worldCache` collapses ~14 per-frame `drawImage`s into ~2, and **after the caches +
-collision masks are built the source layer `<img>`s are freed** (`src=''`) — keeping ~12
-decoded 2210×3160 images alive (~340 MB) is what crashed Safari. The overlay-blend layer
-and clouds are gated off on بطاطس; the world cache is rendered at a smaller resolution on
+`worldCache` collapses ~14 per-frame `drawImage`s into ~2, and **every source layer is
+closed the moment it's composited + masked** (`ImageBitmap.close()`) — keeping ~12 decoded
+2210×3160 images alive (~340 MB) is what crashed Safari. The overlay-blend layer and
+clouds are gated off on بطاطس; the world cache is rendered at a smaller resolution on
 reduced tiers.
+
+**Decoded size has nothing to do with file size — budget by pixels, always.** Every layer
+is 2210×3160, so *any* of them decodes to **27.9 MB of RGBA** whether its PNG is 3.6 MB or
+17 KB. This is the trap the whole section exists to avoid, and it bit again through the
+four `keep: true` layers, which were held at full size for the entire session:
+
+| Layer | was | now | how |
+|---|---|---|---|
+| `wLaptopLights` | 27.9 MB | **0.44 MB** | cropped to the union of floor 1's `lightBox`es (204×535) |
+| `wSecondLaptopLights` | 27.9 MB | **0.11 MB** | same, floor 2 (46×602) |
+| `wOverlayDay2` | 27.9 MB | **1.8 MB** | downscaled ÷4 (÷3 on عالية) |
+| `wOverlayDay` | 27.9 MB | **1.8 MB** | same |
+
+The two lights sheets are **99.85% transparent** (~10k painted px each) and only their
+`lightBox` rects are ever sampled; the two overlays are soft lighting gradients whose
+premultiplied error at ÷3 measures **under 1/255** — invisible. Together with a tighter
+`worldCache` (متوسط 0.62, بطاطس 0.50) and Lemo's 24 MB Play sheet no longer pre-warming on
+mobile, a phone went from **~200 MB to ~50 MB** of resident canvas/bitmap memory.
+
+**Rules that follow from this, for any layer added later:**
+- **`keep: true` is expensive — justify it.** Prefer compositing into `worldCache`. If a
+  layer genuinely must stay resident, give it a `shrink` (see `_shrinkResidentLayer`):
+  crop it if it's mostly empty, downscale it if it's soft.
+- **بطاطس gates DRAWING, not HOLDING.** A layer gated off by `_overlaysOn` still costs its
+  full decoded size. That asymmetry is exactly why "lag on بطاطس too" was a memory
+  symptom, not an effects one — reach for the memory ledger before touching draw code.
+- A refused decode is silent and skips the layer, which is how the world came up **black
+  and empty**. `loadWorldArt` now keeps the fetched bytes and **re-decodes failed layers
+  once at the end of the pipeline**, where memory is freest. Keep that pass bounded —
+  collision and `finishBootScreen()` are downstream of it.
 
 > **Cache-busting:** `game.js` is loaded with a manual `?v=N` query in `index.html`. Bump
 > it on every `game.js` change or returning visitors run stale code (this bit us: the
@@ -1662,6 +1701,8 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | Reader closes the tab mid-session → the whole reading session is lost | Reading time was only written at انتهيت (`runTransaction` on `books/{slug}/totalMs` + the leaderboard), so nothing at all existed until the session ended | `bankReadingProgress()` commits the delta since the last bank every `READING_BANK_INTERVAL_MS` (60 s); `endReadingSession` just banks the tail. `r._bankedMs` is what stops double-counting |
 | Reader returns after closing the tab and is **frozen** — can't move at all, mezzanine drawn over them; only deleting `users/{uid}/x,y` in Firebase frees them | A seated player's stored `x/y` **IS the sofa cushion**, and the sofas are solid furniture in the collision mask. The login restore guards on `!checkCollision(...)` — but `checkCollision` returns **walkable for everything until the collision masks decode** (`if (!worldCollision.built) return false`), and the restore normally lands first. So the cushion position was accepted, and the masks landing a moment later buried the player inside the couch. The books sofas sit **under the mezzanine footprint**, hence "stuck on floor 1 seeing floor 2" | Three layers: the restore skips the stored position when `data.sitSeatId` is set; `sitSeatId/sitX/sitY` are nulled by `onDisconnect` (armed per-field in the `.info/connected` block) so the seat frees and the stale seat can't be restored; and `_unstickLocalPlayer()` runs the moment `worldCollision.built` flips, spiralling any genuinely-buried free player out to the nearest walkable point |
 | Timer reads `61:00` after an hour of work | Every clock was hand-built as `mm:ss` with no hour rollover | One `formatTime`/`formatTimeMs` that emits `h:mm:ss` past an hour, + `setTimerText()`'s `.has-hours` class so the wider string still fits the HUD |
+| Phone is laggy **even on بطاطس**, and sometimes opens into a black voided world with no elements at all | One cause, not two: the tab was sitting at ~200 MB of decoded canvas/bitmap memory, so it GC-thrashed constantly (lag no graphics tier could touch, because **بطاطس gates drawing, not holding**) and the browser started **refusing decodes** — silently, skipping that layer, and the layer that loses a memory race is the biggest one, i.e. the background. ~112 MB of it was pure waste: the four `keep: true` world layers were held at full 2210×3160 (27.9 MB each **regardless of file size**) even though two are 99.85% transparent and two are soft gradients | Shrink the resident layers at decode (`shrink` on `WORLD_LAYERS` → `_shrinkResidentLayer`): crop the lights sheets to their `lightBox` union, downscale the day overlays. Plus a tighter `worldCache` on reduced tiers, no speculative Lemo Play warm on mobile, and a bounded **re-decode pass for failed layers** at the end of `loadWorldArt` (memory is freest there). ~200 MB → ~50 MB. See **The World → Perf notes** |
+| World renders soft/blurry-wrong (nearest-neighbour) after playing a minigame | The race/fig/boss renderers set `ctx.imageSmoothingEnabled = false` for their pixel art and never restore it — it's one shared context, so the next world frame inherited it (violating hard invariant #16) | `render()` re-asserts `imageSmoothingEnabled = true` each frame rather than chasing every minigame exit path |
 | Disconnected user never leaves — others still see their avatar forever | Ending a reading session ran `onDisconnect(ref('users/{uid}')).cancel()` to disarm its own ghost-cleanup. **`cancel()` cancels the queued ops of that location AND all its children**, so it also wiped the presence handlers armed at login (`activeInGame` → false, `activeSession` → null). That user's tab close then cleared nothing, and `listenToPlayers` (which gates purely on `activeInGame === true`) kept rendering them. Only `.info/connected` re-armed it, so it self-healed only if they later had a network blip — hence "sometimes" | Arm/cancel the reading fields **individually on their own child refs** (`armReadingDisconnect` / `cancelReadingDisconnect` + `READING_DISCONNECT_FIELDS`). **Never `onDisconnect(...).cancel()` on `users/{uid}` or any other node that has child ops armed under it** |
 
 ---

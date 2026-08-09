@@ -3982,6 +3982,20 @@ const WORLD_FETCH_CONCURRENCY = 4;
 // Paint order, bottom → top. `cache` = which pre-composited canvas it belongs to;
 // `mask` = which collision mask it feeds; `keep` = drawn live every frame, so it
 // must stay decoded (these four are the ONLY resident layers).
+//
+// `shrink` is what keeps those four from costing 112 MB. Every source layer is
+// 2210×3160, which decodes to ~28 MB of RGBA no matter how small its PNG is — and
+// the four resident ones were held at full size for the whole session:
+//   • the two *_Laptop_Lights sheets are 99.85% EMPTY (measured: ~10k non-transparent
+//     px each), and only the per-laptop `lightBox` rects are ever sampled. Cropping
+//     each to the union of its own floor's lightBoxes turns 27.9 MB into ~0.4 MB.
+//   • the two day overlays are soft lighting gradients. Downscaling them is
+//     premultiplied-error < 1/255 at 1/3 scale (measured against the source) —
+//     literally invisible — and turns 27.9 MB into ~3 MB.
+// That is ~105 MB of decoded memory reclaimed. It matters far more than any draw
+// effect: a phone sitting near its per-tab canvas ceiling GC-thrashes constantly
+// (lag that بطاطس can't touch, because بطاطس gates DRAWING, not HOLDING) and starts
+// failing decodes outright — which is the black/empty world users reported.
 const WORLD_LAYERS = [
     { k: 'wBackground',        f: 'Workspace_0014_Background.png',                            cache: 'ground' },
     { k: 'wWalls',             f: 'Workspace_0013_Walls.png',                                 cache: 'ground', mask: 'walls'  },
@@ -3997,11 +4011,76 @@ const WORLD_LAYERS = [
     { k: 'wSecondBg',          f: 'Workspace_0005_Second_Floor_Background.png',               cache: 'second' },
     { k: 'wSecondLaptops',     f: 'Workspace_0004_Second_Floor_Laptops_Table.png',            cache: 'second', mask: 'desks'  },
     { k: 'wSecondPapers',      f: 'Workspace_0003_Second_Floor_Papers_Table.png',             cache: 'second', mask: 'desks'  },
-    { k: 'wLaptopLights',      f: 'Workspace_0008_Laptops_Table_Laptop_Lights.png',           keep: true },
-    { k: 'wSecondLaptopLights',f: 'Workspace_0004_Second_Floor_Laptops_Table_Laptop_Lights.png', keep: true },
-    { k: 'wOverlayDay2',       f: 'Workspace_0002_(Normal)Day-Overlay-2.png',                 keep: true },
-    { k: 'wOverlayDay',        f: 'Workspace_0001_(Overlay)Day-Overlay.png',                  keep: true },
+    { k: 'wLaptopLights',      f: 'Workspace_0008_Laptops_Table_Laptop_Lights.png',           keep: true, shrink: 'lights1' },
+    { k: 'wSecondLaptopLights',f: 'Workspace_0004_Second_Floor_Laptops_Table_Laptop_Lights.png', keep: true, shrink: 'lights2' },
+    { k: 'wOverlayDay2',       f: 'Workspace_0002_(Normal)Day-Overlay-2.png',                 keep: true, shrink: 'overlay' },
+    { k: 'wOverlayDay',        f: 'Workspace_0001_(Overlay)Day-Overlay.png',                  keep: true, shrink: 'overlay' },
 ];
+
+// ── Resident-layer shrinking (see the `shrink` note on WORLD_LAYERS) ────────────
+// Each returns a small <canvas> that replaces the full-size ImageBitmap. Returning
+// null means "couldn't shrink" and the caller keeps the bitmap as-is, so a failure
+// here can only cost memory, never correctness.
+
+// Union of every laptop lightBox on one floor, in SOURCE px. Derived from
+// LAPTOP_DEFS rather than hard-coded so it can never drift from the boxes actually
+// sampled by drawLaptopLights.
+function _lightsUnionBox(floor) {
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const d of LAPTOP_DEFS) {
+        if ((d.floor || 1) !== floor || !d.lightBox) continue;
+        const [a, b, c, e] = d.lightBox;
+        if (a < x0) x0 = a;
+        if (b < y0) y0 = b;
+        if (c > x1) x1 = c;
+        if (e > y1) y1 = e;
+    }
+    if (!isFinite(x0)) return null;
+    const PAD = 4;   // the boxes are hand-measured; a few px of slack costs nothing
+    return [Math.max(0, Math.floor(x0 - PAD)), Math.max(0, Math.floor(y0 - PAD)),
+            Math.min(IMG_W, Math.ceil(x1 + PAD)), Math.min(IMG_H, Math.ceil(y1 + PAD))];
+}
+
+// Crop a lights sheet to its floor's union box. The offset is stashed on the canvas
+// (srcOX/srcOY) because drawLaptopLights addresses it in full-image source coords.
+function _cropLightsSheet(bmp, floor) {
+    const box = _lightsUnionBox(floor);
+    if (!box) return null;
+    const [x0, y0, x1, y1] = box;
+    const w = Math.max(1, x1 - x0), h = Math.max(1, y1 - y0);
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    c.getContext('2d').drawImage(bmp, x0, y0, w, h, 0, 0, w, h);
+    c.srcOX = x0; c.srcOY = y0;
+    return c;
+}
+
+// Downscale a full-world overlay. _drawWorldLayer always stretches to WORLD_W×WORLD_H,
+// so a smaller source needs no call-site change at all.
+const OVERLAY_SHRINK_DIV = () => (isReducedGraphics() ? 4 : 3);
+function _shrinkOverlay(bmp) {
+    const div = OVERLAY_SHRINK_DIV();
+    const w = Math.max(1, Math.round(bmp.width / div));
+    const h = Math.max(1, Math.round(bmp.height / div));
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = true;
+    g.imageSmoothingQuality = 'high';
+    g.drawImage(bmp, 0, 0, w, h);
+    return c;
+}
+
+function _shrinkResidentLayer(kind, bmp) {
+    try {
+        if (kind === 'lights1') return _cropLightsSheet(bmp, 1);
+        if (kind === 'lights2') return _cropLightsSheet(bmp, 2);
+        if (kind === 'overlay') return _shrinkOverlay(bmp);
+    } catch (err) {
+        console.warn('[world-art] shrink failed (' + kind + '), keeping full size:', err);
+    }
+    return null;
+}
 
 // ── World-art manifest (Art/Workspace/manifest.json) ────────────────────────
 // filename → short content hash, regenerated by the pre-commit hook. Layers load
@@ -4042,8 +4121,8 @@ function _layerReady(x) {
 // wedged connection pool. AbortController gives us the hard cutoff <img> never
 // could. Retries append a unique query so they're a brand-new URL to both the
 // service worker and the HTTP cache — no wedged or truncated copy can be reused.
-async function _fetchWorldBlob(src) {
-    for (let attempt = 0; attempt <= WORLD_FETCH_MAX_RETRIES; attempt++) {
+async function _fetchWorldBlob(src, maxRetries = WORLD_FETCH_MAX_RETRIES) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
         const url = attempt === 0
             ? src
             : src + (src.includes('?') ? '&' : '?') + '_retry=' + attempt + '.' + Date.now();
@@ -4067,7 +4146,7 @@ async function _fetchWorldBlob(src) {
             return blob;
         } catch (err) {
             clearTimeout(timer);
-            if (attempt === WORLD_FETCH_MAX_RETRIES) {
+            if (attempt === maxRetries) {
                 console.warn('[world-art] gave up fetching:', src, err);
                 return null;
             }
@@ -4259,8 +4338,17 @@ const worldCollision = { floor1: null, floor2desks: null, stairs: null, built: f
 
 // Rasterise an image into a MASK_W×MASK_H alpha bitmap (1 = solid). `threshold`
 // ignores near-transparent pixels (empty art never collides).
+// Reused across the five masked layers. A fresh canvas + getImageData each time
+// meant five 1105×1580 software canvases and five 7 MB pixel arrays churning
+// through the GC during load — which is precisely the window where decodes are
+// already failing for want of memory. One scratch canvas, cleared between uses.
+let _maskScratch = null;
 function _rasterMask(img, threshold) {
-    const c = document.createElement('canvas'); c.width = MASK_W; c.height = MASK_H;
+    if (!_maskScratch) {
+        _maskScratch = document.createElement('canvas');
+        _maskScratch.width = MASK_W; _maskScratch.height = MASK_H;
+    }
+    const c = _maskScratch;
     const g = c.getContext('2d', { willReadFrequently: true });
     g.clearRect(0, 0, MASK_W, MASK_H);
     g.drawImage(img, 0, 0, MASK_W, MASK_H);
@@ -4335,7 +4423,19 @@ async function loadWorldArt() {
     // visit after the first.
     await _loadWorldManifest();
 
-    const cw = isReducedGraphics() ? Math.round(IMG_W * 0.7) : IMG_W;
+    // Cache resolution. The world only ever occupies WORLD_W (≈1193) logical px, so
+    // what matters is texels-per-world-px = scale * IMG_W / WORLD_W, versus the
+    // zoom×dpr the device can actually show. Reduced tiers cap dpr at 1.5 (1.25 on
+    // بطاطس), so the old 0.7 (1.30 texels/world-px) was already generous and full
+    // res on desktop is 1.85. Trimming the reduced tiers is the main بطاطس win:
+    // with the day overlays and clouds gated off there, these two canvases ARE the
+    // per-frame cost, and a smaller source texture is cheaper to sample every frame
+    // as well as smaller to hold.
+    //   high   1.00 → 27.9 MB each   (1.85 texels/world-px)
+    //   متوسط  0.62 → 10.7 MB each   (1.15)
+    //   بطاطس  0.50 →  7.0 MB each   (0.93)
+    const _cacheScale = isPotato() ? 0.50 : (isReducedGraphics() ? 0.62 : 1);
+    const cw = _cacheScale < 1 ? Math.round(IMG_W * _cacheScale) : IMG_W;
     const ch = Math.round(cw * (IMG_H / IMG_W));
     const mkCanvas = () => {
         const c = document.createElement('canvas'); c.width = cw; c.height = ch;
@@ -4366,30 +4466,65 @@ async function loadWorldArt() {
     // decode loop below awaits them one at a time, in strict paint order.
     const blobs = _pooledMap(WORLD_LAYERS, WORLD_FETCH_CONCURRENCY, (def) => _fetchWorldBlob(_worldSrc(def.f)));
 
-    for (let i = 0; i < WORLD_LAYERS.length; i++) {
-        const def = WORLD_LAYERS[i];
-        const blob = await blobs[i];
-        if (!blob) continue;                     // gave up on it — skip, don't hang the boot
-
+    // Consume one layer: decode → composite → mask → shrink-or-free. Returns false
+    // if it couldn't be decoded, so the caller can queue it for the retry pass.
+    const consume = async (def, blob) => {
+        if (!blob) return false;
         let bmp = null;
         try {
             bmp = await createImageBitmap(blob);
         } catch (err) {
             console.warn('[world-art] decode failed:', def.f, err);
-            continue;
+            def._blob = blob;    // bytes are fine — it's the decode that was refused
+            return false;
         }
 
         if (def.cache) gctx[def.cache].drawImage(bmp, 0, 0, cw, ch);
         if (def.mask)  _orMask(M[def.mask], _rasterMask(bmp, MASK_THRESHOLD[def.mask]));
 
         if (def.keep) {
-            A[def.k] = bmp;          // drawn live every frame — must stay decoded
+            // Shrink first, THEN close the source — the resident layers are the
+            // whole reason peak memory used to stay high all session.
+            const small = def.shrink ? _shrinkResidentLayer(def.shrink, bmp) : null;
+            if (small) { A[def.k] = small; bmp.close(); }
+            else       { A[def.k] = bmp; }   // drawn live every frame — must stay decoded
         } else {
             bmp.close();             // deterministic free; this is what keeps the peak flat
             A[def.k] = null;
         }
-        _worldLayersDone++;          // drives the boot bar (see _bootRealProgress)
+        return true;
+    };
+
+    const failed = [];
+    for (let i = 0; i < WORLD_LAYERS.length; i++) {
+        const def = WORLD_LAYERS[i];
+        const ok = await consume(def, await blobs[i]);
+        if (ok) _worldLayersDone++;   // drives the boot bar (see _bootRealProgress)
+        else failed.push(def);
         // Yield to the event loop so a 16-layer decode chain can't freeze the menu.
+        await new Promise(r => setTimeout(r, 0));
+    }
+
+    // ── Retry pass ──────────────────────────────────────────────────────────────
+    // A layer fails for one of two reasons, and BOTH are recoverable right here:
+    // the fetch gave up, or the decode was refused because the tab was against its
+    // memory ceiling at that moment. The loop above has now closed every transient
+    // bitmap, so this is the point in the whole session where memory is freest —
+    // and the layer that loses a memory race is whichever is biggest, i.e. the
+    // background. Losing it silently is exactly the reported "black voided world
+    // with no elements at all", so it is worth one more honest attempt before the
+    // boot screen hands off.
+    //
+    // Strictly bounded: a refused decode already has its bytes (`_blob`) so it just
+    // re-decodes with no network at all, and a failed fetch gets ONE more try, not
+    // the full ladder. Collision and finishBootScreen() are downstream of this, so
+    // an unbounded retry here would leave the player with no collision masks (and
+    // walking through walls) for as long as it ran.
+    for (const def of failed) {
+        console.warn('[world-art] retrying failed layer:', def.f);
+        const blob = def._blob || await _fetchWorldBlob(_worldSrc(def.f), 1);
+        if (await consume(def, blob)) _worldLayersDone++;
+        def._blob = null;   // after consume — it re-stashes the blob on a second failure
         await new Promise(r => setTimeout(r, 0));
     }
 
@@ -4422,6 +4557,8 @@ async function loadWorldArt() {
     }
     worldCollision.stairs = _st;
     worldCollision.built = true;
+    // Every mask is rasterised — drop the ~7 MB scratch canvas, nothing re-reads it.
+    if (_maskScratch) { _maskScratch.width = _maskScratch.height = 0; _maskScratch = null; }
     // The login restore usually lands BEFORE this point, and checkCollision reports
     // "walkable" until the masks exist — so a stored position that is really inside
     // furniture is accepted and only becomes a trap now. Nudge the player out.
@@ -5228,7 +5365,12 @@ function startGame(userData) {
     window.dispatchEvent(new CustomEvent('pwa:gameStarted'));
     document.getElementById('current-user').textContent = userData.username;
     gameState.canvas = document.getElementById('game-canvas');
-    gameState.ctx = gameState.canvas.getContext('2d');
+    // `alpha: false` — an opaque canvas. Every render path already paints the full
+    // canvas before anything else (render() fills black; each minigame fills its own
+    // background), so nothing was ever showing through. Declaring it lets the
+    // compositor skip per-frame blending of a full-screen surface against the page,
+    // which is free performance on mobile GPUs.
+    gameState.ctx = gameState.canvas.getContext('2d', { alpha: false });
     gameState._lowGfx = isReducedGraphics();
     gameState._potato = isPotato();
     gameState._particlesOn = particlesEnabled();
@@ -9505,6 +9647,12 @@ function render() {
     ctx.save();
     ctx.scale(dpr, dpr);
 
+    // The minigame renderers set imageSmoothingEnabled = false for their pixel art
+    // and never put it back, so the first world frame after a race/fig/boss game
+    // rendered the (smooth, hand-painted) world nearest-neighbour. It's one shared
+    // context — re-assert it here rather than chasing every minigame exit path.
+    ctx.imageSmoothingEnabled = true;
+
     ctx.fillStyle = COLORS.black;
     ctx.fillRect(0, 0, W, H);
 
@@ -9629,6 +9777,11 @@ function drawLaptopLights(floorFilter, groupAlpha) {
     if (groupAlpha < 0.01) return;
     const img = floorFilter === 1 ? gameState.assets.wLaptopLights : gameState.assets.wSecondLaptopLights;
     if (!_layerReady(img)) return;
+    // The sheet is normally cropped to the union of this floor's lightBoxes (see
+    // `shrink` on WORLD_LAYERS — the full sheet is 99.85% empty and cost 28 MB), so
+    // subtract the crop origin. A sheet that failed to crop has no srcOX/srcOY and
+    // falls through as 0, addressing the full image exactly as before.
+    const ox = img.srcOX || 0, oy = img.srcOY || 0;
     const ctx = gameState.ctx;
     for (const laptop of gameState.laptops) {
         if (laptop.floor !== floorFilter || !laptop.lightBox || laptop.lightAlpha <= 0.01) continue;
@@ -9637,7 +9790,7 @@ function drawLaptopLights(floorFilter, groupAlpha) {
         const dw = (sx1 - sx0) * WORLD_SCALE, dh = (sy1 - sy0) * WORLD_SCALE;
         ctx.save();
         ctx.globalAlpha = laptop.lightAlpha * groupAlpha;
-        ctx.drawImage(img, sx0, sy0, sx1 - sx0, sy1 - sy0, dx, dy, dw, dh);
+        ctx.drawImage(img, sx0 - ox, sy0 - oy, sx1 - sx0, sy1 - sy0, dx, dy, dw, dh);
         ctx.restore();
     }
 }
@@ -24096,7 +24249,10 @@ function ensureHatAsset(id) {
     const img = new Image();
     img.decoding = 'async';
     img.onload = () => {
-        entry.img = img;
+        // Deliberately NOT stashing `img` on the entry. The source hats are 1000×1000
+        // (~4 MB decoded each) and nothing ever read it back — only `canvas` and `url`
+        // are used — so holding it kept ~4 MB alive per hat worn by anyone in the
+        // lobby, for nothing. The crop below is the last thing that needs it.
         entry.canvas = _cropHatImage(img) || img;
         // The preview URL used to come from a synchronous toDataURL('image/png') —
         // a full PNG encode on the main thread, per hat, all in the same beat the
@@ -25305,10 +25461,17 @@ function startLemo() {
         _lemoSetAnim('Sleeping', 'sleeping');
     }
 
-    // Play is a rare detour and the heaviest sheet — keep it off the spawn path.
-    const warmPlay = () => ensureLemoSheet('Play');
-    if (window.requestIdleCallback) requestIdleCallback(warmPlay, { timeout: 20000 });
-    else setTimeout(warmPlay, 12000);
+    // Play is a rare detour (LEMO_PLAY_CHANCE, 12%) and by far the heaviest sheet —
+    // 1368×4394, ~24 MB decoded. Warming it is a desktop-only luxury: on a phone
+    // that is 24 MB held speculatively against a tab budget the world art is already
+    // straining, to save a one-off hitch that most sessions never even reach. On the
+    // reduced tiers it loads on first actual Play instead (_lemoSheet self-kicks
+    // ensureLemoSheet and just skips a frame of drawing until it lands).
+    if (!isReducedGraphics()) {
+        const warmPlay = () => ensureLemoSheet('Play');
+        if (window.requestIdleCallback) requestIdleCallback(warmPlay, { timeout: 20000 });
+        else setTimeout(warmPlay, 12000);
+    }
 }
 
 function updateLemo(dt) {
