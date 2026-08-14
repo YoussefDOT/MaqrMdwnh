@@ -88,6 +88,7 @@ Grep anchors for the major systems (all verified to exist):
 | PiP | `openPiPMode`, `renderPiPInto` |
 | Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession` |
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
+| Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
 | Success card | `setupSuccessCardUI` |
@@ -1534,6 +1535,103 @@ Mock data is **no longer seeded**. `dashClearSeedData()` runs once on login (for
 **Siraj free-mode testing**: a Siraj ghost **always** gets the >2h idle-confirm modal on ending a free session (`gameState.isSirajGhost || elapsed > DASH_LONG_FREE_MS`), so the modal is testable without working two real hours. The confirm modal is **dark glassmorphism** (`.dash-lf-card`, not paper); when the user adjusts the time and confirms, that adjusted value is shown on the end card via `_dashFreeOverrideMins` (consumed in `endFreeMode`).
 
 ---
+
+---
+
+## لوحة مهام المكتبة — a window into MdwnhLibrary
+
+The member's **library tasks**, opened from a chevron on the user card, drawn with the
+**library's own pill markup and the library's own CSS**. Code is the `لوحة مهام المكتبة`
+block at the end of `game.js`; markup is `#lib-panel` + the additions inside `#user-card`;
+styles are split on purpose — the **chrome** is in `style.css`, the **mirrored library look**
+is in **`library-tasks.css`** and nowhere else.
+
+**It is NOT maqr's task system, and the two are deliberately unmerged.** The 5-a-day paper
+to-dos (`dashboards/{uid}/todos/{date}`) are dateless, capped and reset every day — "what I
+do today". These are commitments with a deadline, an owner and points. There is **no bridge**
+between them (no "pull into today", nothing writing one from the other); don't add one
+without being asked — that was an explicit product decision.
+
+### Identity — Discord id → slug, off the shared roster
+`members.json` is already fetched for the fireplace; that fetch now also publishes
+**`MDWNH_ROSTER`** (`{list, bySlug, byDiscord}`) and **`_mdwnhRosterReady`**. Library keys all
+per-member data by **`slug`**, maqr logs in with a **Discord id**, and the roster is the join.
+A **Siraj ghost resolves to nobody** (its `siraj_*` id is not in the roster) so the chevron
+never appears for it — deliberate: a test account must never write into real task or points
+data. Same for anyone with no library account; the card looks exactly as it did before.
+
+### The three groups
+`الحريقة 🔥` (mine, ≤2 days — overdue included) → `بقية المهام` (mine, the rest) →
+`قيد إشرافك 👁️` (I supervise it, I'm not on it), which starts **collapsed**. Fire goes
+**first** even though the library puts قيد إشرافك on top: burying the burning task under other
+people's work defeats the whole reason the split exists. Collapse state is session-only
+(`_lib.shut`), like the library's.
+
+**The leader (نواف) never gets a completable pill.** He is never an assignee — the library's
+own people picker excludes him — so `watching` is forced true for him and every pill shows
+the read-only `٢/٥` badge, exactly as it does in the library.
+
+### The one thing it writes — a TWO-DATABASE handshake
+Copied from `completeTask()` + `writeClaim()` in `MdwnhLibrary/js/tasks.js`:
+
+| where | path | value |
+|---|---|---|
+| library RTDB | `library/tasks/<id>/done/<slug>` | timestamp |
+| library RTDB | `library/tasks/<id>/earned/<slug>` | `true` — so re-completing after un-archiving can't pay twice |
+| **points** RTDB | `mdwnhLibrary/claims/<NFC dbKey>/<id>` | `{taskId,title,points,color,ts}` |
+
+The **Points site settles that last one at that exact path**. It is one end of a handshake:
+if any of the three changes in the library, it changes here **in the same commit**. The key is
+NFC-normalised on both ends so أُبي / أبو بندر / ابو مزاحم match.
+
+**No rules change was needed and none should be made.** `library/tasks` is already world
+read+write by design (the site has no login) with every field type-checked and
+`done/$slug`/`earned/$slug` already declared; this writes exactly the fields the library
+writes. Plain REST `fetch` — **no second Firebase SDK app and no listener.**
+
+**Unlike the library, maqr never navigates away on a claim.** The library offers «استلم الآن»
+which sends you to the points site; here it is a toast and nothing else — the player may be
+mid-session, and the claim is already persisted.
+
+### Cost — the reason this is one fetch, not a poll
+`library/tasks` is the **whole tree**, and each cover is a 640×320 base64 JPEG **inside its
+own record**: measured at **1.24 MB for 60 records**. So: **one fetch on idle after spawn**
+(which is what makes the red dot on the chevron honest before the panel is ever opened), then
+only on an explicit refresh or an open older than `LIB_REFETCH_MS` (5 min). **Never poll it,
+and never put it on the login path.** Points are one `players` read at setup, not live.
+Note the leader sees all ~60 pills at once — ~30 MB of decoded covers; the library site does
+the same, but don't add anything that makes that list longer.
+
+### Rank chip = the points site's rule, which is RANK-based not threshold-based
+`players` minus **سراج and نواف**, sorted by `totalPoints` desc, then
+`tier = max(1, 5 - floor(index / 5))` → 🪵 ⚙️ 🥉 🥈 👑 (five per tier from the top). Emoji
+only — the names (الخشبيون…الذهبيون) are the `title`, because the card is too narrow for them.
+**نواف has no `totalPoints` row at all**, so he gets no chip rather than a made-up «٠ نقطة».
+
+### Gotchas
+- **`#lib-panel` is a SIBLING of `#user-card`, not a child.** `body.is-mobile .user-card`
+  carries `will-change: transform`, which makes it the containing block for any
+  `position: fixed` descendant — a child panel would be measured against the card.
+- Desktop position is computed in JS (`_libPositionPanel`) from the card's rect, because the
+  card's height changes with the azkar pill. On mobile it is a full sheet, positioned purely
+  by CSS `inset` — which is why the inline `top/right/maxHeight` are **cleared** there.
+- Enter/exit is `opacity` + `visibility` + a double-rAF `.active` (`display` can't transition).
+- **Outside-press dismissal runs in the CAPTURE phase and eats the event**, plus a ~700 ms
+  swallow window for the `click` that follows the same `pointerdown` — otherwise the
+  dismissing tap also reached the canvas and walked the player.
+- **A pill only opens the library if the pointer moved < 10 px** (`moved`). The list scrolls by
+  dragging and a drag still ends in a `click`; without this a flick opened a tab every time,
+  and a flick starting on the 36 px إتمام circle minted a points claim.
+- `updateLibPanelLifecycle()` (per frame, from `gameLoop`, same shape as `updatePiPLifecycle`)
+  is the **single** guard that closes the panel — azkar/prayer/dashboard/customizer/fireplace/
+  minigame/reading/mobile-focus. The panel is z-index 205, so every one of those covers it;
+  an open panel underneath one would be invisible and still holding movement locked.
+- The busy state on the إتمام button is a **`.busy` class, never the `disabled` attribute**.
+
+### RESYNC
+`library-tasks.css` and `_libTaskPill()` are hand-copies of `MdwnhLibrary/css/tasks.css` and
+`taskPill()`. **Nothing automates the sync.** If the pill changes there, change it in both
+places here — the library's own `CLAUDE.md` carries the matching note.
 
 ---
 

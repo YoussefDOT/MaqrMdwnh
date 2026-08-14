@@ -5406,6 +5406,7 @@ function startGame(userData) {
     setupDashboardUI();
     setupSuccessCardUI();
     setupFireplaceUI();
+    setupLibraryPanel();
     setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
     startTabTitleTicker();
 
@@ -6328,7 +6329,8 @@ function setupControls() {
     window.addEventListener('keydown', (e) => {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || readingEndCardOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || readingEndCardOpen()
+            || libPanelIsOpen()) return;
         gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
@@ -6341,8 +6343,8 @@ function setupControls() {
         }
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
-        // Disable scroll zoom while the dashboard / customization / fireplace overlay is open
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen()) return;
+        // Disable scroll zoom while the dashboard / customization / fireplace / tasks panel is open
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -8814,7 +8816,7 @@ function handleMovement() {
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
     // minigame overlays, locked-in sessions, kidnap anim, prayer, sitting, reading.
     if ((JUICE_ENTRANCE && _entrance.active)
-        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || isMinigameOverlayOpen()
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen() || isMinigameOverlayOpen()
         || gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)
         || readingEndCardOpen()) {
@@ -9551,6 +9553,7 @@ function gameLoop(timestamp) {
         updateReadingCamera();
         updatePomodoro();
         updatePiPLifecycle();
+        updateLibPanelLifecycle();
         updateTeleportAnim();
         updateCoffeeTeleportAnim();
         updateLaptopBossTeleportAnim();
@@ -9636,7 +9639,7 @@ function render() {
     // pass entirely; the DOM panel toggles at the bottom still run every frame.
     const _canvasHidden = gameState.azkar.active ||
         (gameState._isMobile && (gameState.prayer.isOverlayActive
-            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen()));
+            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen()));
     if (_canvasHidden) { _renderPanelToggles(); return; }
 
     const dpr = gameState.dpr || 1;
@@ -25004,13 +25007,28 @@ const FIRE_EXCLUDE_NAMES = new Set(['سراج'].map(_fireNormName));
 // the repo on load (a member added to the roster shows up here with no code edit).
 // dbKey = the exact points-DB spelling; dummy members (سراج) go into the exclude set.
 const MDWNH_ROSTER_BASE = 'https://raw.githubusercontent.com/mdwnstudio/MdwnhMembers/main';
-(async function _hydrateFireRosterFromRepo() {
+// The parsed roster, kept for everyone who needs it — the fireplace wants
+// dbKey→uid, the library task panel wants discordId→slug (library keys all of
+// its per-member data by `slug`). One fetch, one index, two readers.
+// `_mdwnhRosterReady` resolves when it has landed; it NEVER rejects, so an
+// offline start just leaves the maps empty and every reader degrades quietly.
+const MDWNH_ROSTER = { list: [], bySlug: {}, byDiscord: {} };
+const _mdwnhRosterReady = (async function _hydrateFireRosterFromRepo() {
     try {
         const res = await fetch(`${MDWNH_ROSTER_BASE}/members.json`, { cache: 'no-cache' });
-        if (!res.ok) return;
+        if (!res.ok) return MDWNH_ROSTER;
         const data = await res.json();
         const merged = {};
         for (const m of (data.members || [])) {
+            // Index EVERY member, dummy and inactive included, BEFORE the filters
+            // below: a task's assignee list can name someone who has since been
+            // deactivated, and `bySlug` is what puts a name and a face on them.
+            // Who is *offered* anywhere is a separate question, filtered per use.
+            if (m.slug) {
+                MDWNH_ROSTER.list.push(m);
+                MDWNH_ROSTER.bySlug[m.slug] = m;
+                if (m.discordId) MDWNH_ROSTER.byDiscord[String(m.discordId)] = m;
+            }
             if (m.dummy) { if (m.dbKey) FIRE_EXCLUDE_NAMES.add(_fireNormName(m.dbKey)); continue; }
             if (m.discordId && m.dbKey) merged[_fireNormName(m.dbKey)] = String(m.discordId);
         }
@@ -25019,6 +25037,7 @@ const MDWNH_ROSTER_BASE = 'https://raw.githubusercontent.com/mdwnstudio/MdwnhMem
         if (nj) merged[_fireNormName('مجود')] = nj;
         FIRE_NAME_TO_UID = { ...FIRE_NAME_TO_UID, ...merged };
     } catch (_) { /* offline / repo unreachable — keep the hardcoded fallback */ }
+    return MDWNH_ROSTER;
 })();
 
 // The three frames painted into `Art/Fireplace.png`, as fractions of that image
@@ -25573,4 +25592,855 @@ function drawLemo() {
         (by1 - by0) * LEMO_SCALE
     );
     ctx.restore();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  لوحة مهام المكتبة — a small window into MdwnhLibrary
+// ═══════════════════════════════════════════════════════════════════════════
+//  The member's library tasks, rendered with the LIBRARY's own pill markup and
+//  the LIBRARY's own CSS (mirrored into `library-tasks.css`), so the panel reads
+//  as a window into that site rather than as a maqr lookalike. Opened from the
+//  chevron on the user card.
+//
+//  WHAT THIS IS NOT: it is not maqr's own task system. The 5-a-day to-dos on the
+//  paper dashboard (`dashboards/{uid}/todos/{date}`) are a different thing with a
+//  different life — dateless, capped, reset every day. These are commitments with
+//  a deadline, an owner and points. The two are deliberately NOT merged and there
+//  is deliberately no bridge between them; don't add one without being asked.
+//
+//  THREE THINGS THAT MAKE THIS CHEAP, AND MUST STAY TRUE
+//   1. It is plain REST against the library's RTDB — no second Firebase SDK app,
+//      no listener, and not a single byte against maqr's own 10 GB download cap.
+//   2. `library/tasks` is the WHOLE task tree AND every task's 2:1 cover is a
+//      base64 JPEG inside its own record — the library's own notes measure twenty
+//      open tasks at comfortably over a megabyte. So: ONE fetch on idle after
+//      spawn, then only on an explicit refresh or a panel open older than
+//      `LIB_REFETCH_MS`. Never poll it, and never put it on the login path.
+//   3. Points are one read of the points DB, on setup. Not live.
+//
+//  RESYNC: the pill markup below mirrors `taskPill()` in MdwnhLibrary/js/tasks.js
+//  and the styles mirror its css/tasks.css. If the pill changes there, change it
+//  in both places here. Nothing automates it.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const LIB_DB        = 'https://mdwnhlibrary-default-rtdb.europe-west1.firebasedatabase.app';
+const LIB_ROOT      = 'library';
+const LIB_PTS_DB    = 'https://mdwnhpoints-default-rtdb.europe-west1.firebasedatabase.app';
+// The Points site reads and settles claims at exactly this path. It is one end of
+// a handshake — moving it here breaks the other end. Same for the payload shape.
+const LIB_PTS_ROOT  = 'mdwnhLibrary';
+const LIB_SITE_URL  = 'https://mdwnstudio.github.io/MdwnhLibrary';
+
+const LIB_REFETCH_MS = 5 * 60 * 1000;   // an open older than this refetches
+const LIB_DAY_MS     = 864e5;
+const LIB_FIRE_MS    = 2 * LIB_DAY_MS;  // الحريقة = two days or less (overdue included)
+
+// The five ranks of the points site, in its own order (level 1 = lowest). The
+// tier is a function of RANK, not of a score threshold: the board drops سراج and
+// نواف, sorts by total points, and hands out five members per tier from the top.
+// `Math.max(1, 5 - floor(index / 5))` is that rule, copied from MdwnhPoints.
+const LIB_TIERS = [
+    { emoji: '🪵', name: 'الخشبيون',   color: '#c9844a', bg: 'rgba(201,132,74,0.16)',  border: 'rgba(201,132,74,0.5)',   glow: 'rgba(201,132,74,0.35)' },
+    { emoji: '⚙️', name: 'الحديديون',  color: '#7a8fa6', bg: 'rgba(122,143,166,0.16)', border: 'rgba(122,143,166,0.5)',  glow: 'rgba(122,143,166,0.35)' },
+    { emoji: '🥉', name: 'البرونزيون', color: '#cd7f32', bg: 'rgba(205,127,50,0.17)',  border: 'rgba(205,127,50,0.55)',  glow: 'rgba(205,127,50,0.4)' },
+    { emoji: '🥈', name: 'الفضيون',    color: '#a8b8c8', bg: 'rgba(168,184,200,0.16)', border: 'rgba(168,184,200,0.5)',  glow: 'rgba(168,184,200,0.38)' },
+    { emoji: '👑', name: 'الذهبيون',   color: '#f4c82b', bg: 'rgba(244,200,43,0.17)',  border: 'rgba(244,200,43,0.6)',   glow: 'rgba(244,200,43,0.5)' },
+];
+
+// Mirrors TAGS / TAG_ORDER in MdwnhLibrary/js/config.js.
+const LIB_TAGS = {
+    content: { label: 'محتوى', color: '#f3c02b' },
+    prod:    { label: 'إنتاج', color: '#e54b2a' },
+    comm:    { label: 'تواصل', color: '#41b9a6' },
+    coord:   { label: 'تنسيق', color: '#2f8fe0' },
+};
+const LIB_TAG_ORDER = ['content', 'prod', 'comm', 'coord'];
+
+const LIB_ICON = {
+    tri:   '<svg viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M6 8.6 1.2 3.4A.7.7 0 0 1 1.7 2.2h8.6a.7.7 0 0 1 .5 1.2z"/></svg>',
+    check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 12.5l5 5 10-11"/></svg>',
+};
+
+// The library's nudges, verbatim. One is picked per task per panel session (see
+// `_libQuoteFor`) — drawing a new one on every render shuffled the quotes under
+// the reader every time the list refreshed.
+const LIB_NUDGE_CALM = [
+    'لا تتكاسل في أداء هذه المهمة!!',
+    'المهمة لن تُنجز نفسها… جرّبنا، لم تفعل.',
+    'بركة العمل في أوّله، فابدأ الآن.',
+    'من جدّ وجد، ومن كسل… رأى هذا الإشعار مرّة أخرى.',
+    'اجعل نيّتك خالصة، وأتقن عملك.',
+    'التسويف لصٌّ يسرق وقتك بهدوء.',
+    'خطوة صغيرة اليوم خير من قفزة مؤجّلة.',
+    'الإتقان عبادة، فأتقنها.',
+    'لو أنجزتها الآن لارتحت، ولو أجّلتها لطاردتك في المنام.',
+    'الوقت كالسيف… وأنت تمسكه من طرفه الحاد.',
+    'توكّل، وابدأ، والبقيّة تأتي.',
+    'المهمة تنظر إليك الآن. لا تتجاهلها.',
+    'أجرك على قدر نصبك، فلا تبخل على نفسك.',
+    'أنجزها ثم استرح مطمئنًا.',
+    'قليل دائم خير من كثير منقطع.',
+    'المسوّفون يجتمعون في آخر يوم… لا تكن منهم.',
+    'اعمل بإحسان، فالعين التي لا تنام تراك.',
+    'ابدأ بسم الله، وستجد الأمر أهون مما تظن.',
+    'الهمّة العالية لا تعرف كلمة «غدًا».',
+    'لو كانت المهام تُنجز بالتفكير فيها لأنجزتَ ألفًا.',
+    'رتّب وقتك يرتّب الله أمرك.',
+    'لا تجعل مهمتك تصل إلى مجموعة الحريقة 🔥',
+    'صاحب الهمّة لا ينتظر المزاج.',
+    'المهمة سهلة… الصعب أن تبدأ.',
+    'استعن بالله ولا تعجز.',
+    'أنجزها وأرِح ضميرك من ثقلها.',
+    'كل تأجيل يزيدها ثقلًا، وكل بدءٍ يخفّفها.',
+    'الفوز للمجتهد لا للمتحمّس.',
+    'لا تدع الكسل يكتب نهاية قصتك.',
+    'خير العمل أدومه وإن قلّ، فابدأ بشيء.',
+    'تذكّر: من ورائك فريق يعتمد عليك.',
+    'أنت أقرب مما تظن… افتحها وابدأ فقط.',
+    'ساعة عملٍ الآن تُغنيك عن ليلةِ ندم.',
+    'اجعل اليوم أفضل من أمسك.',
+    'الجادّون يبدؤون قبل أن يشعروا بالرغبة.',
+];
+const LIB_NUDGE_URGENT = [
+    'لم يبقَ إلا القليل… أسرِع!',
+    'الوقت ينفد والمهمة تنتظر. الآن!',
+    'غدًا لن يكون هناك غد. أنجزها اليوم.',
+    'تحذير: العدّاد يقترب من الصفر ⏳',
+    'هذه ليست مزحة، الموعد على الأبواب.',
+    'أسرِع قبل أن تصبح المهمة ذكرى مؤلمة.',
+    'بادِر! التأخير الآن لا عذر له.',
+    'آخر فرصة… استغلّها.',
+    'اترك كل شيء وأنجز هذه الآن.',
+    'المهمة في رمقها الأخير، أنقذها!',
+    'لا وقت للتسويف، بقيت ساعات.',
+    'سارِع… فالفرص لا تنتظر أحدًا.',
+    'الآن، أو تندم لاحقًا. اختر.',
+    '🔥 المهمة تحترق، أطفئها بالإنجاز.',
+    'استعجل، بارك الله في وقتك.',
+    'العدّاد لا يرحم، تحرّك!',
+    'أنجزها الآن ونم قرير العين.',
+    'المهلة تكاد تنتهي… لا تتردد.',
+    'خطوة واحدة تفصلك عن الراحة، اخطُها.',
+    'الوقت الضائع لا يُشترى. أسرِع.',
+    'انتبه! الموعد النهائي يطرق الباب.',
+];
+
+const _lib = {
+    me: null,           // this player's roster member ({slug,name,dbKey,admin}) or null
+    tasks: null,        // { id: task } — the whole library/tasks tree, or null
+    error: false,       // last fetch failed AND nothing is cached
+    fetchedAt: 0,
+    loading: null,      // in-flight fetch promise, so two callers share one request
+    open: false,
+    points: null,
+    tier: 0,            // 1..5, or 0 for "no rank" (نواف, or not on the board)
+    tickTimer: 0,
+    quotes: new Map(),
+    shut: {},           // which groups the reader collapsed — session only, like the library's
+    toastTimer: 0,
+    wired: false,
+};
+
+function libPanelIsOpen() { return !!_lib.open; }
+
+/* ── RTDB over REST, exactly as MdwnhLibrary/js/util.js does it ──────────────
+   No SDK and no auth: `library/*` is world read+write by design (the site has
+   no login) and the rules bound WHAT may be written, never WHO. Every write
+   below writes a field the library's own rules already declare — `done/<slug>`
+   as a number and `earned/<slug>` as a boolean — so this needs no rule change
+   and must not be given one. */
+const _libJson = r => { if (!r.ok) throw new Error('LIB ' + r.status); return r.json(); };
+const _libBody = v => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) });
+const libGet    = p      => fetch(`${LIB_DB}/${p}.json`).then(_libJson);
+const libPut    = (p, v) => fetch(`${LIB_DB}/${p}.json`, { method: 'PUT', ..._libBody(v) }).then(_libJson);
+const libPtsGet = p      => fetch(`${LIB_PTS_DB}/${p}.json`).then(_libJson);
+const libPtsPut = (p, v) => fetch(`${LIB_PTS_DB}/${p}.json`, { method: 'PUT', ..._libBody(v) }).then(_libJson);
+
+/* ── small helpers (mirrors of the library's) ─────────────────────────────── */
+const _libEsc = s => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+const _libAr  = n => Number(n || 0).toLocaleString('ar-EG');
+const _libNfc = s => { try { return String(s).normalize('NFC'); } catch (_) { return String(s); } };
+const _libAvatar  = slug => `${MDWNH_ROSTER_BASE}/avatars/${slug}.png`;
+// The point stickers live on the library's own deployment. Loading an <img>
+// cross-origin needs no CORS, and a sticker that 404s is hidden rather than
+// drawn as a broken box — copying 2.8 MB of webp into this repo to avoid one
+// remote image would be the worse trade.
+const _libSticker = v => `${LIB_SITE_URL}/assets/points/${v}.webp`;
+
+function _libQuoteFor(t, ms) {
+    const key = t.id + (ms <= LIB_DAY_MS ? ':u' : ':c');
+    if (!_lib.quotes.has(key)) {
+        const pool = ms <= LIB_DAY_MS ? LIB_NUDGE_URGENT : LIB_NUDGE_CALM;
+        _lib.quotes.set(key, pool[Math.floor(Math.random() * pool.length)]);
+    }
+    return _lib.quotes.get(key);
+}
+
+function _libCountdown(due) {
+    const ms = (Number(due) || 0) - Date.now(), abs = Math.abs(ms);
+    return { ms, late: ms < 0, days: Math.floor(abs / LIB_DAY_MS), hours: Math.floor((abs % LIB_DAY_MS) / 36e5) };
+}
+
+// White text is unreadable on the lighter task colours (gold), so the foreground
+// comes from the colour's perceived luminance.
+function _libReadableOn(hex) {
+    const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || '').trim());
+    if (!m) return '#fff';
+    const n = parseInt(m[1], 16);
+    const lum = (0.299 * ((n >> 16) & 255) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+    return lum > 0.68 ? '#2a2118' : '#fff';
+}
+
+const _libAssignees   = t => Object.keys(t.assignees || {});
+const _libIsDoneFor   = (t, slug) => !!(t.done && t.done[slug]);
+const _libHasEarned   = (t, slug) => !!(t.earned && t.earned[slug]);
+const _libIsFullyDone = t => { const a = _libAssignees(t); return a.length > 0 && a.every(s => _libIsDoneFor(t, s)); };
+const _libSortByDue   = list => list.slice().sort((a, b) => (Number(a.due) || 0) - (Number(b.due) || 0));
+
+/* ── the toast ───────────────────────────────────────────────────────────── */
+function _libToast(msg) {
+    const el = document.getElementById('lib-toast');
+    if (!el) return;
+    clearTimeout(_lib.toastTimer);
+    el.textContent = msg;
+    el.hidden = false;
+    requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('show')));
+    _lib.toastTimer = setTimeout(() => {
+        el.classList.remove('show');
+        setTimeout(() => { el.hidden = true; }, 300);
+    }, 3400);
+}
+
+/* ── who is on the task — the faces cluster ──────────────────────────────────
+   Mirrors `whoHtml()` in the library. Two shapes on purpose: the member on the
+   task sees their own face big at the far (physically left) end with everyone
+   else stacked beside it; someone WATCHING a task they are not on has no "me"
+   to anchor, so every face is the same size in a grid. A task carrying the whole
+   team is neither — «الجميع» is the fact all those faces were standing in for. */
+const LIB_ALL_MIN = 3;
+const _libClusterRows = n => (n <= 4 ? 2 : 3);
+const _libClusterSize = rows => (rows === 2 ? 22 : 16);
+
+function _libIsEveryone(list) {
+    const pool = MDWNH_ROSTER.list.filter(m => !m.admin && !m.dummy && m.active !== false);
+    return pool.length >= LIB_ALL_MIN && pool.every(m => list.indexOf(m.slug) !== -1);
+}
+
+function _libAvImg(t, slug, cls) {
+    const m = MDWNH_ROSTER.bySlug[slug];
+    const name = m ? m.name : slug;
+    const done = _libIsDoneFor(t, slug);
+    return '<span class="av' + (done ? ' done' : '') + (cls ? ' ' + cls : '') +
+        '" title="' + _libEsc(name + (done ? ' — أتمّها' : ' — لم يتمّها بعد')) + '">' +
+        '<img src="' + _libEsc(_libAvatar(slug)) + '" alt="' + _libEsc(name) + '" loading="lazy" decoding="async">' +
+        (done ? '<i class="av-tick" aria-hidden="true">' + LIB_ICON.check + '</i>' : '') +
+        '</span>';
+}
+
+function _libWhoHtml(t, watching) {
+    const list = _libAssignees(t);
+    if (!list.length) return '';
+    if (_libIsEveryone(list)) return '<span class="who-all">الجميع</span>';
+
+    const meSlug = _lib.me && _lib.me.slug;
+    const mine = !watching && meSlug && list.indexOf(meSlug) !== -1;
+    if (mine) {
+        const others = list.filter(s => s !== meSlug);
+        // solo: the pill is already yours, and a lone portrait of yourself is the
+        // one face nobody needs shown
+        if (!others.length) return '';
+        if (others.length === 1) {
+            return '<span class="who pair" style="--av:32px">' +
+                _libAvImg(t, others[0]) + _libAvImg(t, meSlug, 'me') + '</span>';
+        }
+        const rows = _libClusterRows(others.length);
+        return '<span class="who lead" style="--av:38px;--sm:' + _libClusterSize(rows) + 'px;--rows:' + rows + '">' +
+            '<span class="who-rest">' + others.map(s => _libAvImg(t, s)).join('') + '</span>' +
+            _libAvImg(t, meSlug, 'me') + '</span>';
+    }
+
+    if (!watching) return '';
+    if (list.length === 1) return '<span class="who solo" style="--av:38px">' + _libAvImg(t, list[0]) + '</span>';
+    const rows = _libClusterRows(list.length);
+    return '<span class="who grid" style="--sm:' + _libClusterSize(rows) + 'px;--rows:' + rows + '">' +
+        '<span class="who-rest">' + list.map(s => _libAvImg(t, s)).join('') + '</span></span>';
+}
+
+// ONE unit, never two — days until the last day, then hours. «١ يوم ٧ ساعة» is
+// four lines in a 30px column that nobody reads as a number.
+function _libCdHtml(t) {
+    const c = _libCountdown(t.due);
+    if (c.late) return '<span class="pill-cd late" data-due="' + (Number(t.due) || 0) + '">تأخّرت ' + _libAr(c.days) + ' يوم</span>';
+    const big = c.days >= 1;
+    return '<span class="pill-cd" data-due="' + (Number(t.due) || 0) + '">' +
+        '<span class="n">' + _libAr(big ? c.days : c.hours) + '</span>' +
+        '<span class="u">' + (big ? 'يوم' : 'ساعة') + '</span></span>';
+}
+
+function _libTagsHtml(t) {
+    const keys = LIB_TAG_ORDER.filter(k => t.tags && t.tags[k]);
+    if (!keys.length) return '';
+    return '<span class="task-tags">' + keys.map(k =>
+        '<span class="task-tag" style="--tc:' + LIB_TAGS[k].color + '">' + _libEsc(LIB_TAGS[k].label) + '</span>'
+    ).join('') + '</span>';
+}
+
+/* ── one pill ─────────────────────────────────────────────────────────────── */
+function _libTaskPill(t, i, opts) {
+    opts = opts || {};
+    const meSlug = _lib.me ? _lib.me.slug : '';
+    /* "watching" = I can see this task but completing it is not mine to do:
+       either I only supervise it, or I am the leader. The leader is NEVER an
+       assignee (the library's own people picker excludes him), so his whole
+       list is other people's work — he gets the read-only «٢/٥» badge on every
+       pill, exactly as he does in the library, and never a live إتمام button. */
+    const watching = !!opts.watching || !!(_lib.me && _lib.me.admin);
+    const done = _libIsDoneFor(t, meSlug);
+    const full = _libIsFullyDone(t);
+    const c = _libCountdown(t.due);
+    const color = t.color || '#41b9a6';
+
+    const el = document.createElement('article');
+    el.className = 'task' +
+        (done || (watching && full) ? ' done' : '') +
+        (c.late ? ' overdue' : '') +
+        (!c.late && c.ms <= LIB_DAY_MS ? ' urgent' : '');
+    el.style.setProperty('--c', color);
+    el.style.setProperty('--fg', _libReadableOn(color));
+    el.style.setProperty('--d', (i * 0.05) + 's');
+    el.dataset.id = t.id;
+
+    const media = t.img
+        ? '<img class="task-img" src="' + _libEsc(t.img) + '" alt="" loading="lazy" decoding="async">'
+        : '<span class="task-emoji">' + _libEsc(t.emoji || '📌') + '</span>';
+    const pts = (t.points && !done && !(watching && full))
+        ? '<span class="task-pts"><img src="' + _libEsc(_libSticker(t.points)) + '" alt="' + _libAr(t.points) + ' نقطة" loading="lazy" decoding="async"></span>'
+        : '';
+
+    /* The action. A task I am ON gets the real إتمام button; a task I only
+       WATCH gets the library's own read-only badge, because completing it is
+       not mine to do. «٠/١» is not a progress bar — a one-person task gets the
+       tick or nothing. */
+    let action;
+    if (watching) {
+        const who = _libAssignees(t);
+        const n = who.filter(s => _libIsDoneFor(t, s)).length;
+        action = who.length < 2
+            ? (full ? '<span class="pill-check badge">' + LIB_ICON.check + '</span>' : '')
+            : '<span class="pill-check badge">' + (full ? LIB_ICON.check : '') + ' ' + _libAr(n) + '/' + _libAr(who.length) + '</span>';
+    } else if (done) {
+        action = '<span class="pill-check badge">' + LIB_ICON.check + '</span>';
+    } else {
+        action = '<button class="pill-check" type="button" aria-label="إتمام المهمة">' + LIB_ICON.check + '</button>';
+    }
+
+    el.innerHTML = pts + media +
+        '<span class="pill-main">' +
+            '<span class="task-title">' + _libEsc(t.title) + '</span>' +
+            (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
+            '<span class="pill-foot">' +
+                '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>' +
+                _libTagsHtml(t) +
+            '</span>' +
+        '</span>' +
+        _libCdHtml(t) + _libWhoHtml(t, watching) +
+        action;
+
+    const btn = el.querySelector('.pill-check');
+    if (btn && btn.tagName === 'BUTTON') {
+        // `moved` (declared below) also guards this: completing a task mints a
+        // points claim, so a flick-scroll that happens to start on the 36px
+        // circle must not do it by accident.
+        btn.addEventListener('click', (e) => { e.stopPropagation(); if (!moved) _libCompleteTask(t, el); });
+    }
+    /* There is no editor in maqr and no read-only detail card either — pressing
+       the pill opens the library in a NEW TAB. Never navigate THIS tab away:
+       the player may be mid-session, and yanking them out of the world for a
+       task list is not a trade anyone asked for.
+
+       The press has to be a real press. The list scrolls by dragging, and on a
+       phone a drag that starts on a pill still ends in a `click` — so a flick
+       down the list would open a tab every time. Anything that travelled more
+       than `MOVE` is a scroll, not a tap. */
+    const MOVE = 10;
+    let downX = 0, downY = 0, moved = false;
+    el.addEventListener('pointerdown', (e) => { downX = e.clientX; downY = e.clientY; moved = false; });
+    el.addEventListener('pointermove', (e) => {
+        if (Math.abs(e.clientX - downX) > MOVE || Math.abs(e.clientY - downY) > MOVE) moved = true;
+    });
+    const enter = () => window.open(LIB_SITE_URL, '_blank', 'noopener');
+    el.tabIndex = 0;
+    el.setAttribute('role', 'button');
+    el.addEventListener('click', () => { if (!moved) enter(); });
+    el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); enter(); }
+    });
+    return el;
+}
+
+/* ── a collapsible group ──────────────────────────────────────────────────── */
+function _libBlock(id, cls, title, items, opts) {
+    if (!items.length) return null;
+    const sec = document.createElement('section');
+    sec.className = 'subgroup ' + cls + (_lib.shut[id] ? ' collapsed' : '');
+    sec.dataset.group = id;
+    sec.innerHTML =
+        '<button class="sub-head" type="button" aria-expanded="' + (_lib.shut[id] ? 'false' : 'true') + '">' +
+        '<span class="tri">' + LIB_ICON.tri + '</span><h3>' + title + '</h3>' +
+        '<span class="count">' + _libAr(items.length) + '</span><span class="rule"></span></button>' +
+        '<div class="group-body"><div class="task-list"></div></div>';
+    const lst = sec.querySelector('.task-list');
+    items.forEach((t, i) => lst.appendChild(_libTaskPill(t, i, opts)));
+    sec.querySelector('.sub-head').addEventListener('click', () => {
+        const now = sec.classList.toggle('collapsed');
+        _lib.shut[id] = now;                       // session only, like the library's
+        sec.querySelector('.sub-head').setAttribute('aria-expanded', String(!now));
+    });
+    return sec;
+}
+
+/* ── completing a task, and the points claim ─────────────────────────────────
+   This is the ONE thing the panel writes, and it is a two-database handshake
+   copied from `completeTask()` + `writeClaim()` in MdwnhLibrary/js/tasks.js:
+     library DB : tasks/<id>/done/<slug>   = timestamp
+     library DB : tasks/<id>/earned/<slug> = true      (guards against paying twice)
+     points  DB : mdwnhLibrary/claims/<NFC dbKey>/<id> = {taskId,title,points,color,ts}
+   The Points site settles that last one at that exact path. If any of the three
+   ever changes in the library, it has to change here in the same commit. */
+function _libCompleteTask(t, el) {
+    const me = _lib.me;
+    if (!me || _libIsDoneFor(t, me.slug)) return;
+    const btn = el.querySelector('.pill-check');
+    // A class, never the `disabled` attribute — on iOS a disabled button leaks
+    // its touch through to whatever sits under it.
+    if (btn) btn.classList.add('busy');
+    const sec = el.closest ? el.closest('.subgroup') : null;
+
+    /* Sounded and cheered on the PRESS, never in the `then`: the feedback has to
+       land with the gesture, not after a round trip. The failed path puts the
+       pill back — it cannot un-play the sound, which is the cheaper of the two
+       lies. Web Audio (`playEffect`), so it still fires in a background tab. */
+    el.classList.add('done', 'cheer');
+    try { gameState.focusAudioEngine?.playEffect('paperTaskComplete'); } catch (_) {}
+    setTimeout(() => el.classList.remove('cheer'), 600);
+
+    const stamp = Date.now();
+    t.done = t.done || {};
+    t.done[me.slug] = stamp;
+
+    libPut(`${LIB_ROOT}/tasks/${t.id}/done/${me.slug}`, stamp)
+        .then(() => {
+            if (t.points && !_libHasEarned(t, me.slug)) _libWriteClaim(t);
+            else if (t.points) _libToast('أحسنت! تمّت المهمة — نقاطها استُلمت سابقًا');
+            else _libToast('أحسنت! تمّت المهمة 🎉');
+            setTimeout(() => _libDropPill(el, () => _libSettleList(sec)), 520);
+        })
+        .catch(() => {
+            delete t.done[me.slug];
+            el.classList.remove('done');
+            if (btn) btn.classList.remove('busy');
+            _libToast('تعذّر الحفظ، حاول مجددًا');
+        });
+}
+
+function _libWriteClaim(t) {
+    const me = _lib.me;
+    // NFC-normalised, because أُبي / أبو بندر / ابو مزاحم have to match the key
+    // the Points site settles under. Same normalisation both ends.
+    const key = _libNfc(me.dbKey || me.name || '');
+    const payload = { taskId: t.id, title: t.title, points: t.points, color: t.color || '#3bb9ab', ts: Date.now() };
+    libPtsPut(`${LIB_PTS_ROOT}/claims/${encodeURIComponent(key)}/${t.id}`, payload).catch(() => {});
+    // Stamped separately from `done`, which un-completing clears — so pulling a
+    // task back out of the archive and re-finishing it cannot mint a second claim.
+    t.earned = t.earned || {};
+    t.earned[me.slug] = true;
+    libPut(`${LIB_ROOT}/tasks/${t.id}/earned/${me.slug}`, true).catch(() => {});
+    /* The library offers «استلم الآن», which navigates to the points site. Here
+       it is a toast and nothing else: the player may be in the middle of a work
+       session, and the claim is already persisted — they can collect it whenever. */
+    _libToast('أحسنت! +' + _libAr(t.points) + ' نقطة محفوظة — استلمها من صفحة النقاط');
+}
+
+/* A completed pill collapses out and everything under it slides up on the same
+   transition, instead of the list being rebuilt to remove one row. `.task-list`
+   is a flex column with a 10px gap, and a gap is not a margin — a zero-height
+   item still holds one open on each side, so the collapse eats exactly one of
+   them, on whichever side has a sibling to close up against. */
+const LIB_LIST_GAP = 10;
+function _libDropPill(el, after) {
+    const done = () => { if (after) after(); };
+    if (!el || !el.parentNode) { done(); return; }
+    if (window.matchMedia('(prefers-reduced-motion:reduce)').matches) {
+        el.parentNode.removeChild(el); done(); return;
+    }
+    const neg = el.nextElementSibling ? 'marginBlockEnd'
+              : el.previousElementSibling ? 'marginBlockStart' : null;
+    el.style.height = el.offsetHeight + 'px';
+    el.style.overflow = 'hidden';
+    el.style.flex = '0 0 auto';
+    void el.offsetHeight;                       // commit the measured height first
+    el.classList.add('dropping');
+    el.style.height = '0px';
+    el.style.paddingBlock = '0px';
+    el.style.opacity = '0';
+    if (neg) el.style[neg] = (-LIB_LIST_GAP) + 'px';
+
+    let fired = false;
+    const end = () => {
+        if (fired) return;
+        fired = true;
+        if (el.parentNode) el.parentNode.removeChild(el);
+        done();
+    };
+    el.addEventListener('transitionend', (e) => { if (e.propertyName === 'height') end(); });
+    setTimeout(end, 520);                       // a cancelled transition still ends
+}
+
+// The one thing a surgical removal leaves stale: the group's own count.
+function _libSettleList(sec) {
+    if (sec && !sec.querySelector('.task')) { _libRender(true); _libPaintDot(); return; }
+    if (sec) {
+        const c = sec.querySelector('.count');
+        if (c) c.textContent = _libAr(sec.querySelectorAll('.task').length);
+    }
+    _libPaintDot();
+}
+
+/* ── which tasks are whose ────────────────────────────────────────────────── */
+function _libWithIds() {
+    const out = [];
+    for (const id of Object.keys(_lib.tasks || {})) {
+        const t = _lib.tasks[id];
+        if (!t || typeof t !== 'object') continue;
+        t.id = id;
+        out.push(t);
+    }
+    return out;
+}
+// The leader sees every task; everyone else sees the ones they are assigned.
+function _libMyTasks() {
+    const me = _lib.me; if (!me) return [];
+    return _libWithIds().filter(t => me.admin ? true : !!(t.assignees && t.assignees[me.slug]));
+}
+// Tasks I watch over as مشرف. The leader already sees everything, so he has none.
+function _libSupervisedTasks() {
+    const me = _lib.me; if (!me || me.admin) return [];
+    return _libWithIds().filter(t =>
+        !!(t.supervisors && t.supervisors[me.slug]) &&
+        !_libIsFullyDone(t) &&
+        !(t.assignees && t.assignees[me.slug]));      // already in مهامي below
+}
+function _libOpenMine() {
+    const me = _lib.me; if (!me) return [];
+    return _libSortByDue(_libMyTasks())
+        .filter(t => me.admin ? !_libIsFullyDone(t) : !_libIsDoneFor(t, me.slug));
+}
+const _libFireOf = list => list.filter(t => ((Number(t.due) || 0) - Date.now()) <= LIB_FIRE_MS);
+const _libRestOf = list => list.filter(t => ((Number(t.due) || 0) - Date.now()) >  LIB_FIRE_MS);
+
+/* ── render ───────────────────────────────────────────────────────────────── */
+function _libRender(silent) {
+    const host = document.getElementById('lib-panel-body');
+    if (!host) return;
+    // A silent rebuild is the same DOM again — without this it replays the whole
+    // list's entrance animation under the reader.
+    host.classList.toggle('silent', !!silent);
+    host.innerHTML = '';
+
+    if (!_lib.me) {
+        host.innerHTML = '<p class="empty-note">لا يوجد حساب لك في المكتبة.</p>';
+        return;
+    }
+    if (!_lib.tasks) {
+        host.innerHTML = _lib.error
+            ? '<p class="empty-note">تعذّر الوصول إلى المكتبة. جرّب زر التحديث.</p>'
+            : '<div class="lib-skel"></div><div class="lib-skel"></div><div class="lib-skel"></div>';
+        return;
+    }
+
+    const mine = _libOpenMine();
+    const fire = _libFireOf(mine);
+    const rest = _libRestOf(mine);
+    const sup  = _libSortByDue(_libSupervisedTasks());
+
+    /* الحريقة first — it is the whole reason the split exists, and burying it
+       under a supervision list would defeat it. قيد إشرافك goes last and starts
+       COLLAPSED: it is other people's work, and it should not push your own
+       burning task off the first screen. */
+    const a = _libBlock('fire', 'fire', 'الحريقة 🔥', fire, {});
+    const b = _libBlock('rest', '', 'بقية المهام', rest, {});
+    if (a) host.appendChild(a);
+    if (b) host.appendChild(b);
+    if (sup.length && _lib.shut['sup'] === undefined) _lib.shut['sup'] = true;
+    const s = _libBlock('sup', 'supervising', 'قيد إشرافك 👁️', sup, { watching: true });
+    if (s) host.appendChild(s);
+
+    if (!a && !b && !s) {
+        host.innerHTML = '<p class="empty-note">أحسنت! لا مهام مفتوحة عليك الآن.</p>';
+    }
+    _libPaintStamp();
+}
+
+// Numbers only — no re-render, so nothing jumps under the reader. Crossing into
+// the last day is a text swap, not a reason to tear the list down. Crossing into
+// LATE is, so that one rebuilds.
+function _libTickCountdowns() {
+    const host = document.getElementById('lib-panel-body');
+    if (!host) return;
+    let needsRebuild = false;
+    host.querySelectorAll('.pill-cd[data-due]').forEach(cd => {
+        const c = _libCountdown(Number(cd.dataset.due));
+        if (c.late && !cd.classList.contains('late')) { needsRebuild = true; return; }
+        const big = c.days >= 1;
+        const n = cd.querySelector('.n'), u = cd.querySelector('.u');
+        if (n) n.textContent = _libAr(big ? c.days : c.hours);
+        if (u) u.textContent = big ? 'يوم' : 'ساعة';
+    });
+    if (needsRebuild) _libRender(true);
+}
+
+/* ── the points + rank chip on the user card ─────────────────────────────── */
+function _libPaintScore() {
+    const wrap = document.getElementById('user-score');
+    const pts  = document.getElementById('user-score-pts');
+    const rank = document.getElementById('user-score-rank');
+    if (!wrap || !pts || !rank) return;
+    if (_lib.points == null) { wrap.hidden = true; return; }
+    wrap.hidden = false;
+    pts.textContent = _libAr(_lib.points) + ' نقطة';
+    const tier = _lib.tier >= 1 ? LIB_TIERS[_lib.tier - 1] : null;
+    if (!tier) { rank.hidden = true; return; }
+    rank.hidden = false;
+    rank.textContent = tier.emoji;
+    rank.title = tier.name;
+    rank.style.setProperty('--rank-bg', tier.bg);
+    rank.style.setProperty('--rank-border', tier.border);
+    rank.style.setProperty('--rank-glow', tier.glow);
+}
+
+async function _libLoadScore() {
+    const me = _lib.me;
+    if (!me || !me.dbKey) return;
+    let players = null;
+    try { players = await libPtsGet('players'); } catch (_) { return; }
+    if (!players || typeof players !== 'object') return;
+    /* The exact board the Points site builds: سراج is a test account and نواف is
+       the leader — both are off it — then sort by total points and hand out five
+       members per tier from the top. Anyone not on the board (نواف) keeps their
+       score and gets no rank chip, which is what the points site shows too. */
+    const board = Object.keys(players)
+        .filter(name => name !== 'سراج' && name !== 'نواف')
+        .map(name => ({ name, points: (players[name] && players[name].totalPoints) || 0 }))
+        .sort((x, y) => y.points - x.points);
+    const key = _libNfc(me.dbKey);
+    const idx = board.findIndex(p => _libNfc(p.name) === key);
+    if (idx >= 0) {
+        _lib.points = board[idx].points;
+        _lib.tier   = Math.max(1, 5 - Math.floor(idx / 5));
+    } else {
+        /* Off the board. نواف is the real case: he is the leader, he is dropped
+           from the ranking on purpose, and his points row carries no
+           `totalPoints` at all — so «٠ نقطة» would be a made-up number, not a
+           score. No row means no chip; a row means show it with no rank. */
+        const own = players[me.dbKey];
+        _lib.points = (own && typeof own.totalPoints === 'number') ? own.totalPoints : null;
+        _lib.tier   = 0;
+    }
+    _libPaintScore();
+}
+
+/* ── fetching the tasks ──────────────────────────────────────────────────────
+   `library/tasks` is the whole tree and every cover is a base64 JPEG inside its
+   own record, so this is expensive — see the header. ONE in-flight request is
+   shared by every caller, and a fresh-enough tree is reused outright. */
+function _libEnsureTasks(force) {
+    if (_lib.loading) return _lib.loading;
+    if (!force && _lib.tasks && (Date.now() - _lib.fetchedAt) < LIB_REFETCH_MS) {
+        return Promise.resolve(_lib.tasks);
+    }
+    _lib.loading = libGet(`${LIB_ROOT}/tasks`)
+        .then(data => {
+            _lib.tasks = (data && typeof data === 'object') ? data : {};
+            _lib.fetchedAt = Date.now();
+            _lib.error = false;
+            return _lib.tasks;
+        })
+        .catch(() => {
+            // A failed read must not wipe a tree we already have — an offline
+            // blip should leave the last known list on screen, not empty it.
+            // With nothing cached the panel has to SAY so: silently leaving the
+            // skeletons up forever reads as a hang.
+            _lib.error = true;
+            return _lib.tasks;
+        })
+        .finally(() => { _lib.loading = null; });
+    return _lib.loading;
+}
+
+function _libPaintStamp() {
+    const el = document.getElementById('lib-panel-stamp');
+    if (!el) return;
+    if (!_lib.fetchedAt) { el.textContent = ''; return; }
+    const d = new Date(_lib.fetchedAt);
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    el.textContent = `آخر تحديث ${hh}:${mm}`;
+}
+
+// The red dot on the chevron: "you have something burning". It is stateless on
+// purpose — it reflects the list, not whether you have looked at it — and it is
+// suppressed while the panel is open, where the الحريقة group says it better.
+function _libPaintDot() {
+    const dot = document.getElementById('lib-expand-dot');
+    if (!dot) return;
+    const n = (_lib.me && _lib.tasks) ? _libFireOf(_libOpenMine()).length : 0;
+    dot.hidden = !(n > 0) || _lib.open;
+}
+
+/* ── open / close ─────────────────────────────────────────────────────────── */
+function _libPositionPanel() {
+    const panel = document.getElementById('lib-panel');
+    if (!panel) return;
+    if (isMobile()) {
+        // The mobile sheet is positioned entirely by CSS (inset) — an inline
+        // top/right left over from desktop would beat it.
+        panel.style.top = ''; panel.style.right = ''; panel.style.maxHeight = '';
+        return;
+    }
+    const card = document.getElementById('user-card');
+    if (!card) return;
+    const r = card.getBoundingClientRect();
+    panel.style.top = Math.round(r.bottom + 10) + 'px';
+    panel.style.right = Math.round(Math.max(12, window.innerWidth - r.right)) + 'px';
+    panel.style.maxHeight = Math.max(220, Math.round(window.innerHeight - r.bottom - 34)) + 'px';
+}
+
+function openLibPanel() {
+    const panel = document.getElementById('lib-panel');
+    const btn = document.getElementById('lib-expand-btn');
+    if (!panel || !_lib.me || _lib.open) return;
+    _lib.open = true;
+    panel.classList.remove('hidden');
+    document.body.classList.add('lib-panel-open');
+    if (btn) { btn.classList.add('open'); btn.setAttribute('aria-expanded', 'true'); }
+    _libPositionPanel();
+    _libRender(false);
+    _libPaintDot();
+    // `display` can't transition — lay it out first, then let a double rAF flip
+    // `.active` so the fade actually runs (the azkar/prayer/fireplace pattern).
+    requestAnimationFrame(() => requestAnimationFrame(() => panel.classList.add('active')));
+    clearInterval(_lib.tickTimer);
+    _lib.tickTimer = setInterval(_libTickCountdowns, 30000);
+    // Refresh in the background if the tree is stale; the panel is already up.
+    _libEnsureTasks(false).then(() => { if (_lib.open) _libRender(true); _libPaintDot(); });
+}
+
+function closeLibPanel() {
+    const panel = document.getElementById('lib-panel');
+    const btn = document.getElementById('lib-expand-btn');
+    if (!panel || !_lib.open) return;
+    _lib.open = false;
+    panel.classList.remove('active');
+    document.body.classList.remove('lib-panel-open');
+    if (btn) { btn.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); }
+    clearInterval(_lib.tickTimer);
+    _lib.tickTimer = 0;
+    _libPaintDot();
+}
+
+function toggleLibPanel() { _lib.open ? closeLibPanel() : openLibPanel(); }
+
+/* ONE guard, not a close-call scattered through every overlay's entry point.
+   The panel sits at z-index 205 — every real overlay (azkar, prayer, dashboard,
+   customizer, fireplace, minigames) covers it, so an open panel underneath one
+   of them would be invisible AND still be holding movement locked. Called every
+   frame from `gameLoop`, the same shape `updatePiPLifecycle` uses. */
+function updateLibPanelLifecycle() {
+    if (!_lib.open) return;
+    const blocked =
+        gameState.azkar.active || gameState.prayer.isOverlayActive ||
+        dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() ||
+        isMinigameOverlayOpen() || isMinigameActive() ||
+        readingEndCardOpen() || (gameState.reading && gameState.reading.active) ||
+        gameState._dupSessionDetected ||
+        // the card is sliding off-screen in mobile focus mode; its dropdown
+        // must not stay behind on its own
+        !!document.getElementById('user-card')?.classList.contains('focus-hidden');
+    if (blocked) closeLibPanel();
+}
+
+/* ── setup ────────────────────────────────────────────────────────────────── */
+function setupLibraryPanel() {
+    if (_lib.wired) return;
+    _lib.wired = true;
+
+    const btn     = document.getElementById('lib-expand-btn');
+    const panel   = document.getElementById('lib-panel');
+    const closeB  = document.getElementById('lib-close-btn');
+    const refresh = document.getElementById('lib-refresh-btn');
+    if (!btn || !panel) return;
+
+    btn.addEventListener('click', (e) => { e.stopPropagation(); toggleLibPanel(); });
+    if (closeB) closeB.addEventListener('click', (e) => { e.stopPropagation(); closeLibPanel(); });
+    if (refresh) refresh.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (_lib.loading) return;
+        refresh.classList.add('spinning');
+        Promise.all([_libEnsureTasks(true), _libLoadScore()]).then(() => {
+            refresh.classList.remove('spinning');
+            _libRender(true);
+            _libPaintDot();
+        });
+    });
+
+    // The panel owns its own wheel: scrolling the list must never reach the
+    // world's zoom handler underneath.
+    panel.addEventListener('wheel', (e) => { e.stopPropagation(); }, { passive: false });
+
+    /* Outside press closes it — the panel is a dropdown, not a modal, so getting
+       out must be as cheap as getting in. It runs in the CAPTURE phase and eats
+       the event: the world's own canvas tap handler sits under the panel, and a
+       dismissing click that ALSO walked the player somewhere would read as a
+       bug. Presses inside the panel (or on the chevron, which toggles itself)
+       are let through untouched — swallowing those would close the panel a
+       frame before the chevron could reopen it. */
+    let _libSwallowUntil = 0;
+    const _libInside = (e) => !!(e.target && e.target.closest && e.target.closest('#lib-panel, #lib-expand-btn'));
+    document.addEventListener('pointerdown', (e) => {
+        if (!_lib.open || _libInside(e)) return;
+        e.stopPropagation();
+        // The `click` that follows this same press is a SECOND event, and by the
+        // time it arrives the panel is already shut — so without this window it
+        // would sail through to the canvas and walk the player. Same trick the
+        // dashboard uses for its swipe-to-swap ghost click.
+        _libSwallowUntil = Date.now() + 700;
+        closeLibPanel();
+    }, true);
+    document.addEventListener('click', (e) => {
+        if (_libInside(e)) return;
+        if (Date.now() < _libSwallowUntil) { _libSwallowUntil = 0; e.stopPropagation(); e.preventDefault(); return; }
+        if (_lib.open) { e.stopPropagation(); closeLibPanel(); }
+    }, true);
+    window.addEventListener('keydown', (e) => { if (_lib.open && e.key === 'Escape') closeLibPanel(); });
+    window.addEventListener('resize', () => { if (_lib.open) _libPositionPanel(); });
+
+    /* Resolve who this player is in the library. The roster is keyed by Discord
+       id, which is exactly what maqr logs in with. A Siraj ghost has a fabricated
+       `siraj_*` id and so resolves to nobody — deliberately: a test account must
+       never write into real task or points data. */
+    _mdwnhRosterReady.then(() => {
+        const uid = String(gameState.userId || '');
+        _lib.me = MDWNH_ROSTER.byDiscord[uid] || null;
+        if (!_lib.me) return;                        // no library account — no panel, no chip
+        btn.hidden = false;
+        _libLoadScore();
+        /* One task fetch per session, on idle after spawn — never on the login
+           path. It is what makes the red dot honest before the panel is ever
+           opened; after that only an explicit refresh or a stale open refetches. */
+        const kick = () => _libEnsureTasks(false).then(() => { _libPaintDot(); if (_lib.open) _libRender(true); });
+        if (window.requestIdleCallback) requestIdleCallback(kick, { timeout: 8000 });
+        else setTimeout(kick, 4000);
+    });
 }

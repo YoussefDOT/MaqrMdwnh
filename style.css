@@ -8296,3 +8296,196 @@ body.is-mobile .fp-stage {
     width: min(132vw, calc(112dvh * 1500 / 1920));
     transform: translateY(9dvh);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   لوحة مهام المكتبة — الهيكل فقط
+   ═══════════════════════════════════════════════════════════════════════════
+   هذا الملف يحمل "الإطار": النقاط والرتبة في بطاقة المستخدم، ومقبض الفتح،
+   واللوحة المنسدلة نفسها. أما شكل بطاقات المهام بداخلها فهو نسخة طبق الأصل
+   من موقع المكتبة ويعيش في library-tasks.css وحده — لا تخلط بينهما.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── النقاط والرتبة تحت الاسم ─────────────────────────────────────────────── */
+.user-score {
+    display: flex; align-items: center; gap: 6px;
+    min-width: 0; white-space: nowrap;
+}
+.user-score[hidden] { display: none; }
+.user-score-pts {
+    font-size: 0.72rem; font-weight: 700;
+    color: rgba(255, 255, 255, 0.62);
+    font-variant-numeric: tabular-nums;
+}
+/* حبة الرتبة: إيموجي فقط بلون الطبقة — بلا اسم، فالاسم يطول والبطاقة ضيقة */
+.user-score-rank {
+    display: inline-grid; place-items: center;
+    width: 20px; height: 20px; border-radius: 50%;
+    font-size: 0.68rem; line-height: 1;
+    background: var(--rank-bg, rgba(255, 255, 255, 0.08));
+    border: 1px solid var(--rank-border, rgba(255, 255, 255, 0.18));
+    box-shadow: 0 0 8px var(--rank-glow, transparent);
+}
+.user-score-rank[hidden] { display: none; }
+
+/* ── مقبض فتح اللوحة ──────────────────────────────────────────────────────── */
+.lib-expand-btn {
+    position: relative; flex: 0 0 auto;
+    width: 26px; height: 26px; padding: 0;
+    display: grid; place-items: center;
+    border-radius: 50%; border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.72);
+    cursor: pointer;
+    transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s;
+}
+.lib-expand-btn[hidden] { display: none; }
+.lib-expand-btn svg { width: 10px; height: 10px; transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1); }
+.lib-expand-btn:hover { background: rgba(255, 255, 255, 0.11); }
+.lib-expand-btn:active { transform: scale(0.92); }
+.lib-expand-btn.open svg { transform: rotate(180deg); }
+/* نقطة حمراء = عندك مهمة تحترق (يومان أو أقل) وأنت لم تفتح اللوحة بعد */
+.lib-expand-dot {
+    position: absolute; top: -1px; inset-inline-end: -1px;
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #e54b2a; border: 1.5px solid rgba(20, 20, 20, 0.95);
+}
+.lib-expand-dot[hidden] { display: none; }
+
+/* ── اللوحة نفسها ─────────────────────────────────────────────────────────── */
+.lib-panel {
+    position: fixed;
+    z-index: 205;                 /* فوق بطاقة المستخدم (200)، تحت كل تراكب */
+    width: min(430px, calc(100vw - 36px));
+    max-height: 62vh;
+    display: flex; flex-direction: column;
+    background: rgba(13, 13, 13, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 22px;
+    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.55), 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+    /* الفتح والإغلاق بـ opacity + visibility، لأن display لا يمكن تحريكه —
+       نفس نمط تراكبات الأذكار والصلاة والمدفئة. */
+    opacity: 0; visibility: hidden;
+    transform: translateY(-8px) scale(0.985);
+    transform-origin: top center;
+    transition: opacity 0.26s ease, transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1),
+                visibility 0s linear 0.26s;
+    overflow: hidden;
+}
+.lib-panel.active {
+    opacity: 1; visibility: visible;
+    transform: none;
+    transition: opacity 0.26s ease, transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1),
+                visibility 0s linear 0s;
+}
+/* .hidden يبقى للحالة "غير مركّبة أصلًا" (المستخدم ليس عضوًا في المكتبة) */
+.lib-panel.hidden { display: none; }
+/* لا backdrop-filter هنا على الجوال: لوحة مموّهة فوق كانفاس يعمل بستين إطارًا
+   تعيد رسم خلفيتها كل إطار — أغلى تكلفة في الموقع على الهواتف. */
+@media (hover: hover) and (pointer: fine) {
+    .lib-panel {
+        backdrop-filter: blur(22px) saturate(1.5);
+        -webkit-backdrop-filter: blur(22px) saturate(1.5);
+    }
+}
+/* ...and a weak machine that still reports a mouse doesn't want it either */
+body.reduced-gfx .lib-panel {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.lib-panel-head {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 15px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    direction: rtl;
+}
+.lib-panel-title {
+    flex: 1; min-width: 0;
+    font-size: 0.9rem; font-weight: 700;
+    color: rgba(255, 255, 255, 0.92);
+}
+.lib-head-btn {
+    flex: 0 0 auto; width: 26px; height: 26px; padding: 0;
+    display: grid; place-items: center;
+    border: 0; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.6);
+    cursor: pointer;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s, color 0.18s;
+}
+.lib-head-btn svg { width: 13px; height: 13px; }
+.lib-head-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.lib-head-btn:active { transform: scale(0.9); }
+.lib-head-btn.spinning svg { animation: libSpin 0.9s linear infinite; }
+@keyframes libSpin { to { transform: rotate(-360deg); } }
+
+.lib-panel-body {
+    flex: 1 1 auto; min-height: 0;
+    padding: 13px 15px 4px;
+    overflow-y: auto;
+    /* يمنع تمرير القائمة من الهروب إلى الصفحة خلفها — نفس قاعدة قائمة الأذكار */
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+.lib-panel-body::-webkit-scrollbar { width: 7px; }
+.lib-panel-body::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.13); border-radius: 99px;
+}
+.lib-panel-body::-webkit-scrollbar-track { background: transparent; }
+
+.lib-panel-foot {
+    flex: 0 0 auto;
+    display: flex; align-items: center; gap: 10px;
+    padding: 8px 15px 11px;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
+    direction: rtl;
+}
+.lib-panel-stamp {
+    flex: 1; min-width: 0;
+    font-size: 0.66rem; font-weight: 500;
+    color: rgba(255, 255, 255, 0.32);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.lib-panel-link {
+    flex: 0 0 auto;
+    font-size: 0.68rem; font-weight: 700;
+    color: rgba(255, 255, 255, 0.55);
+    text-decoration: none;
+    transition: color 0.18s;
+}
+.lib-panel-link:hover { color: #fff; }
+
+/* ── رسالة قصيرة ─────────────────────────────────────────────────────────── */
+.lib-toast {
+    position: fixed; z-index: 10060;
+    bottom: 26px; left: 50%; transform: translateX(-50%) translateY(10px);
+    max-width: min(440px, calc(100vw - 32px));
+    padding: 10px 18px; border-radius: 50px;
+    background: rgba(18, 18, 18, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    color: rgba(255, 255, 255, 0.92);
+    font-size: 0.8rem; font-weight: 600; text-align: center;
+    direction: rtl; pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.22s ease, transform 0.34s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.lib-toast[hidden] { display: none; }
+.lib-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+/* ── الجوال: اللوحة صحيفة تملأ الشاشة، لا قائمة منسدلة ────────────────────── */
+body.is-mobile .lib-panel {
+    inset: 12px 10px 12px 10px;
+    width: auto; max-height: none;
+    border-radius: 22px;
+    transform: translateY(14px) scale(0.99);
+}
+body.is-mobile .lib-panel.active { transform: none; }
+body.is-mobile .lib-panel-body { padding: 13px 13px 4px; }
+/* الكانفاس يظل يرسم خلف اللوحة على الجوال — نخفيه كما تفعل الأذكار ولوحة الأوراق */
+body.lib-panel-open.is-mobile #game-canvas { visibility: hidden; }
+body.lib-panel-open { overflow: hidden; }
+
+/* الاسم والنقاط يأخذان العرض، فينزاح مقبض الفتح إلى الطرف الخارجي للبطاقة */
+.user-card-top .user-card-info { flex: 1 1 auto; }

@@ -29,6 +29,11 @@
     <link rel="stylesheet" href="juice.css">
     <!-- Jacquard 12 is only used by one reading-mode input — never block the boot on it. -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jacquard+12&display=swap" media="print" onload="this.media='all'">
+    <!-- The library task pills, mirrored 1:1 from MdwnhLibrary. See library-tasks.css. -->
+    <link rel="stylesheet" href="library-tasks.css?v=1">
+    <!-- Baloo Bhaijaan 2 is the library's own face — used ONLY inside #lib-panel, so it
+         must never block the boot. If it never arrives the panel falls back to Rubik. -->
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+Bhaijaan+2:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
 </head>
 
 <body>
@@ -127,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 247 · Updated 8/9 8:06 AM</div>
+    <div id="build-number" class="build-number">Build 248 · Updated 8/14 8:32 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -164,8 +169,21 @@
                 </div>
                 <div class="user-card-info">
                     <span id="current-user" class="user-card-name">جاري التحميل...</span>
+                    <!-- النقاط والرتبة — تُملأ من قاعدة النقاط عند الدخول؛ تبقى مخفية لغير الأعضاء -->
+                    <span id="user-score" class="user-score" hidden>
+                        <span id="user-score-pts" class="user-score-pts"></span>
+                        <span id="user-score-rank" class="user-score-rank" hidden></span>
+                    </span>
                     <span id="player-count" class="user-card-count">0 مستخدمين</span>
                 </div>
+                <!-- مقبض فتح لوحة المهام — يظهر فقط لمن له حساب في المكتبة -->
+                <button id="lib-expand-btn" class="lib-expand-btn" type="button" hidden
+                        aria-expanded="false" aria-controls="lib-panel" aria-label="مهامي">
+                    <span id="lib-expand-dot" class="lib-expand-dot" hidden></span>
+                    <svg viewBox="0 0 12 12" fill="currentColor" aria-hidden="true">
+                        <path d="M6 8.6 1.2 3.4A.7.7 0 0 1 1.7 2.2h8.6a.7.7 0 0 1 .5 1.2z"/>
+                    </svg>
+                </button>
             </div>
             <div class="user-card-bottom">
                 <div class="user-card-actions">
@@ -203,6 +221,33 @@
                 </svg>
             </button>
         </div>
+
+        <!-- ═══ لوحة مهام المكتبة ═══
+             نافذة صغيرة على مكتبة المدونة: نفس بطاقات المهام حرفيًا (انظر library-tasks.css).
+             شقيقة لبطاقة المستخدم لا ابنتها — البطاقة تحمل will-change:transform على الجوال،
+             وهذا يجعل أي ابن position:fixed يُقاس عليها بدل الشاشة. -->
+        <div id="lib-panel" class="lib-panel hidden" role="dialog" aria-modal="false" aria-label="مهامي من المكتبة">
+            <div class="lib-panel-head">
+                <span class="lib-panel-title">مهامي</span>
+                <button id="lib-refresh-btn" class="lib-head-btn" type="button" aria-label="تحديث" title="تحديث">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M20 11a8 8 0 1 0-.7 4.3"/><path d="M20 4.5V11h-6.5"/>
+                    </svg>
+                </button>
+                <button id="lib-close-btn" class="lib-head-btn" type="button" aria-label="إغلاق" title="إغلاق">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true">
+                        <path d="M5 5l14 14M19 5L5 19"/>
+                    </svg>
+                </button>
+            </div>
+            <div id="lib-panel-body" class="lib-panel-body"></div>
+            <div class="lib-panel-foot">
+                <span id="lib-panel-stamp" class="lib-panel-stamp"></span>
+                <a class="lib-panel-link" href="https://mdwnstudio.github.io/MdwnhLibrary" target="_blank" rel="noopener">فتح المكتبة ↗</a>
+            </div>
+        </div>
+        <!-- رسائل قصيرة للوحة المهام فقط (نجاح/فشل الحفظ) -->
+        <div id="lib-toast" class="lib-toast" hidden></div>
 
         <!-- زر الخروج (يسار الشاشة، مستقل عن بطاقة المستخدم) -->
         <button id="logout-btn" class="logout-pill">الخروج من الموقع</button>
@@ -1620,7 +1665,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=239"></script>
+        <script type="module" src="game.js?v=240"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
