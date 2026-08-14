@@ -30,7 +30,7 @@
     <!-- Jacquard 12 is only used by one reading-mode input — never block the boot on it. -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jacquard+12&display=swap" media="print" onload="this.media='all'">
     <!-- The library task pills, mirrored 1:1 from MdwnhLibrary. See library-tasks.css. -->
-    <link rel="stylesheet" href="library-tasks.css?v=2">
+    <link rel="stylesheet" href="library-tasks.css?v=3">
     <!-- Baloo Bhaijaan 2 is the library's own face — used ONLY inside #lib-panel, so it
          must never block the boot. If it never arrives the panel falls back to Rubik. -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+Bhaijaan+2:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 250 · Updated 8/14 9:12 AM</div>
+    <div id="build-number" class="build-number">Build 251 · Updated 8/14 9:26 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1069,10 +1069,14 @@
                     </svg>
                 </button>
             </div>
-            <!-- نفس بطاقات المكتبة، بلا زر الإتمام: الضغط يكتب اسم المهمة في الصندوق -->
-            <div id="task-pick-pop" class="task-pick-pop lib-pills hidden" role="dialog" aria-label="اختر مهمة">
-                <div class="task-pick-head">اختر مهمة من المكتبة</div>
-                <div id="task-pick-body" class="task-pick-body"></div>
+            <!-- نفس بطاقات المكتبة، بلا زر الإتمام: الضغط يكتب اسم المهمة في الصندوق.
+                 جزء من اللوحة نفسها لا طبقة فوقها: اللوحة تتمدد لتكشفه (grid 0fr→1fr)
+                 بدل أن يظهر دفعة واحدة. -->
+            <div id="task-pick-pop" class="task-pick-pop lib-pills" role="region" aria-label="اختر مهمة">
+                <div class="task-pick-inner">
+                    <div class="task-pick-head">اختر مهمة من المكتبة</div>
+                    <div id="task-pick-body" class="task-pick-body"></div>
+                </div>
             </div>
         </div>
 
@@ -1705,7 +1709,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=242"></script>
+        <script type="module" src="game.js?v=243"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

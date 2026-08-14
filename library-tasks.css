@@ -59,6 +59,13 @@
     cursor: pointer; border: 0; font-family: inherit;
 }
 @keyframes libTaskIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+/* Identical motion, DIFFERENT NAME — and that is the whole point. `libTaskIn`
+   is registered in `_JUICE_IN_ANIMS`, so every pill wearing it plays a blip.
+   Past the cascade cap the delays all collapse onto the same frame, and sixty
+   simultaneous blips is noise, not feedback. Those pills wear this instead:
+   same look, silent. */
+.lib-pills .task.quiet { animation-name: libTaskInQuiet; }
+@keyframes libTaskInQuiet { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 /* A silent refresh rebuilds the same DOM; without this it replays the whole
    list's entrance (and every sticker's) every time the panel re-renders. */
 .lib-pills .lib-panel-body.silent,
@@ -208,12 +215,25 @@
 .lib-pills .pill-check.busy { opacity: .55; pointer-events: none; }
 
 /* ── groups ──────────────────────────────────────────────────────────────── */
-.lib-pills .subgroup { margin-bottom: 14px; }
+/* DIVERGENCE FROM THE LIBRARY, on purpose: the library folds a group with
+   `display: none`, which cannot be transitioned and snaps. Here the body is a
+   grid animating `0fr ↔ 1fr` — the only way to animate an AUTO height without
+   measuring it in JS. A browser that can't animate that property just snaps,
+   exactly like the library does today. The `overflow: hidden` that makes it
+   clip is why `.task-list` carries bottom padding: the pill's drop shadow lives
+   below it and would be sliced off. */
+.lib-pills .subgroup { margin-bottom: 6px; }
 .lib-pills .sub-head {
     width: 100%; display: flex; align-items: center; gap: 8px;
     border: 0; background: none; padding: 0 2px 8px; text-align: start;
     color: var(--txt); font-family: inherit; cursor: pointer;
+    /* The head joins the cascade — fade inside the keyframes, base opaque,
+       fill-mode `backwards`, so a skipped animation costs the flourish and
+       never the content. */
+    animation: libHeadIn .42s var(--ease) backwards;
+    animation-delay: var(--d, 0s);
 }
+@keyframes libHeadIn { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: none; } }
 .lib-pills .sub-head h3 { margin: 0; font-size: .94rem; font-weight: 800; }
 .lib-pills .sub-head .count {
     font-size: .7rem; font-weight: 800; color: #111; background: var(--gold);
@@ -223,7 +243,15 @@
 .lib-pills .sub-head .tri { display: grid; place-items: center; color: var(--muted); transition: transform .3s var(--ease); }
 .lib-pills .sub-head .tri svg { width: 11px; height: 11px; }
 .lib-pills .subgroup.collapsed .tri { transform: rotate(-90deg); }
-.lib-pills .subgroup.collapsed .group-body { display: none; }
+.lib-pills .group-body {
+    display: grid;
+    grid-template-rows: 1fr;
+    transition: grid-template-rows .34s var(--ease), opacity .24s ease;
+}
+.lib-pills .subgroup.collapsed .group-body { grid-template-rows: 0fr; opacity: 0; }
+/* `min-height: 0` is what actually lets a grid row collapse to 0fr; the padding
+   holds the pills' drop shadow inside the clip. */
+.lib-pills .group-body > .task-list { overflow: hidden; min-height: 0; padding: 2px 2px 14px; }
 .lib-pills .subgroup.fire .sub-head h3 { color: var(--red); }
 
 /* ── states the panel needs that the library page has elsewhere ──────────── */
@@ -242,5 +270,9 @@
    (that is what repaints every frame and melts a phone). */
 @media (prefers-reduced-motion: reduce) {
     .lib-pills .lib-skel { animation: none; }
-    .lib-pills .task { animation: none; }
+    /* Killing the entrance also kills its blip — the sound is fired by
+       `animationstart`, so there is nothing extra to mute. */
+    .lib-pills .task,
+    .lib-pills .sub-head { animation: none; }
+    .lib-pills .group-body { transition: none; }
 }

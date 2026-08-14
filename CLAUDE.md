@@ -1679,6 +1679,18 @@ A small button beside the task box opens **the same pills with no إتمام but
 (`opts.pick` in `_libTaskPill`); pressing one drops its title into the box. Offering a
 complete button from a box that only says *what you're working on* would be the wrong verb.
 
+**It's part of the panel, not a layer over it.** The popover is an in-flow child whose
+`grid-template-rows` animates `0fr ↔ 1fr` — the only way to animate an **auto** height
+without measuring it in JS. The panel is pinned by its `bottom`, so it grows upward while
+the list unfurls downward from under the input, and the pill cascade plays **through** the
+0.38 s expansion. A browser that can't animate that property just snaps, which is what it
+did before. `.task-pick-inner` needs `overflow: hidden` **and `min-height: 0`** — without
+the latter the row never collapses to `0fr`.
+
+**The input is centred by a ghost.** `.task-panel-row::before` is an empty box the width of
+the picker button on the opposite side; without it the button shoves the field sideways and
+it stops lining up under the «أعمل على» label, which is centred on the panel, not the row.
+
 **It writes nothing of its own.** `_libPickTask` sets `input.value` and dispatches an `input`
 event, so the box's existing debounced save stays the single writer of
 `users/{uid}/currentTask`. A second save path here would race that one.
@@ -1686,6 +1698,28 @@ event, so the box's existing debounced save stays the single writer of
 It shows **my** open tasks only (الحريقة / بقية المهام) — a task I merely supervise is not
 what I'm working on — under their own group ids, so folding here doesn't fold the big
 panel's groups. It closes itself when `#current-task-panel` loses `.active` (session over).
+
+### The entrance cascade + its blip
+Group heads (`libHeadIn`) and pills (`libTaskIn`) sequence in like the settings panel's rows,
+with the same rising pitch sweep — both names are added to **`_JUICE_IN_ANIMS`**, which is
+the whole opt-in for the sound, and every open calls **`_uiSeqReset()`** so the sweep starts
+deep. Both keyframes keep the fade **inside** them with `animation-fill-mode: backwards` and
+an opaque base style (invariant 20 — a skipped animation must never blank the panel).
+
+- **One counter across all groups** (`seq` threaded through `_libBlock`). Per-group indices
+  restart at zero, so the second group's first pill would land under the first group's fifth.
+- **Capped at `LIB_SEQ_MAX` (14).** Past it the delay stops growing and the pill gets
+  `.quiet`, which swaps in **`libTaskInQuiet`** — identical motion, name not registered,
+  therefore silent. The leader's list is ~60 pills; sixty simultaneous blips is noise.
+- **A collapsed group's pills spend no cascade slots** — they're clipped to zero height, so
+  counting them would start the next group mid-run through something nobody can see.
+
+### Group folding is animated, and diverges from the library
+The library folds with `display: none`, which cannot be transitioned. Here `.group-body` is a
+grid animating `0fr ↔ 1fr` plus opacity. That needs `overflow: hidden` on `.task-list`, which
+would slice the pills' drop shadows — hence its bottom padding, and the smaller
+`.subgroup` margin that compensates. **This is the one place the mirror deliberately differs;
+don't "resync" it back to `display: none`.**
 
 ### `.lib-pills` is the CSS scope, NOT `#lib-panel`
 `library-tasks.css` is scoped to a **class**, worn by **both** `#lib-panel` and

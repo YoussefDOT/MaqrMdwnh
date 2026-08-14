@@ -8657,8 +8657,16 @@ body.is-mobile .lib-panel {
 .task-panel-row {
     display: flex;
     align-items: center;
+    justify-content: center;
     gap: 8px;
     direction: rtl;
+}
+/* شبح بعرض الزر على الطرف المقابل. بدونه يدفع الزرُّ الحقلَ جانبًا فيختلّ
+   توسيطه تحت كلمة «أعمل على» — والعنوان يُوسَّط على اللوحة لا على الصف. */
+.task-panel-row::before {
+    content: '';
+    width: 26px;
+    flex: 0 0 auto;
 }
 
 .task-pick-btn {
@@ -8680,72 +8688,60 @@ body.is-mobile .lib-panel {
 .task-pick-btn:active { transform: scale(0.9); }
 .task-pick-btn.open { background: rgba(255, 255, 255, 0.14); color: #fff; }
 
-/* يفتح للأعلى: صندوق «أعمل على» ملتصق بأسفل الشاشة */
+/* القائمة جزء من اللوحة، لا طبقة عائمة فوقها. اللوحة مثبّتة من أسفلها، فهي
+   تنمو للأعلى بينما القائمة تنفرد نازلةً من تحت الحقل — وهذا ما يجعلها تبدو
+   «تتمدد لتكشف المهام» بدل أن تقفز دفعةً واحدة.
+   الحيلة `grid-template-rows: 0fr → 1fr`: الطريقة الوحيدة لتحريك ارتفاعٍ
+   تلقائيٍّ بلا قياس في JS. المتصفح الذي لا يدعم تحريكها يقفز كما كان — تدهور
+   مقبول، لا كسر. */
 .task-pick-pop {
-    position: absolute;
-    bottom: calc(100% + 10px);
-    left: 50%;
-    transform: translateX(-50%) translateY(8px) scale(0.98);
-    transform-origin: bottom center;
-    width: min(380px, calc(100vw - 32px));
-    max-height: min(46vh, 380px);
-    display: flex; flex-direction: column;
-    background: rgba(13, 13, 13, 0.94);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 20px;
-    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.55);
-    opacity: 0; visibility: hidden;
-    transition: opacity 0.24s ease,
-                transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
-                visibility 0s linear 0.24s;
-    overflow: hidden;
+    align-self: stretch;
+    min-width: 0;
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transition: grid-template-rows 0.38s cubic-bezier(0.22, 1, 0.36, 1),
+                opacity 0.26s ease,
+                margin-top 0.38s cubic-bezier(0.22, 1, 0.36, 1);
+    margin-top: 0;
 }
 .task-pick-pop.active {
-    opacity: 1; visibility: visible;
-    transform: translateX(-50%) translateY(0) scale(1);
-    transition: opacity 0.24s ease,
-                transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
-                visibility 0s linear 0s;
+    grid-template-rows: 1fr;
+    opacity: 1;
+    margin-top: 6px;
 }
-.task-pick-pop.hidden { display: none; }
-@media (hover: hover) and (pointer: fine) {
-    .task-pick-pop {
-        backdrop-filter: blur(22px) saturate(1.5);
-        -webkit-backdrop-filter: blur(22px) saturate(1.5);
-    }
-}
-body.reduced-gfx .task-pick-pop,
-body.is-mobile .task-pick-pop {
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
+/* العنصر المقصوص. `min-height:0` شرطٌ لعمل 0fr داخل الشبكة. */
+.task-pick-inner {
+    overflow: hidden;
+    min-height: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.07);
 }
 
 .task-pick-head {
-    flex: 0 0 auto;
-    padding: 12px 15px 9px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
-    font-size: 0.82rem; font-weight: 700;
-    color: rgba(255, 255, 255, 0.9);
+    padding: 10px 2px 8px;
+    font-size: 0.74rem; font-weight: 600;
+    color: rgba(255, 255, 255, 0.4);
     text-align: right;
     font-family: 'Rubik', sans-serif;   /* الترويسة من الموقع، البطاقات من المكتبة */
+    direction: rtl;
 }
 .task-pick-body {
-    flex: 1 1 auto; min-height: 0;
-    padding: 12px 14px;
+    max-height: min(38vh, 320px);
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
+    padding-bottom: 4px;
 }
 .task-pick-body::-webkit-scrollbar { width: 7px; }
 .task-pick-body::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.13); border-radius: 99px; }
 .task-pick-body::-webkit-scrollbar-track { background: transparent; }
-
 /* في وضع الاختيار لا يوجد زر إتمام، فبطاقةٌ بلا فعل يجب أن تُظهر أنها قابلة للضغط */
 .lib-pills .task.pickable:active { transform: scale(0.985); }
 
-body.is-mobile #current-task-input { width: 200px; }
+body.is-mobile #current-task-input { width: 190px; }
 body.is-mobile .task-pick-btn { width: 30px; height: 30px; }
-body.is-mobile .task-pick-pop { max-height: 40vh; }
+body.is-mobile .task-panel-row::before { width: 30px; }
+body.is-mobile .task-pick-body { max-height: 34vh; }
 
 /* ── الكانفاس يتلاشى، لا يقفز إلى السواد ─────────────────────────────────── */
 /* كان `visibility: hidden` يطفئه في إطار واحد بينما اللوحة لم تظهر بعد، فتُرى

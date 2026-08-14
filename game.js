@@ -25653,6 +25653,11 @@ const LIB_POINTS_URL = 'https://youssefdot.github.io/MdwnhPoints/';
 const LIB_REFETCH_MS = 5 * 60 * 1000;   // an open older than this refetches
 const LIB_DAY_MS     = 864e5;
 const LIB_FIRE_MS    = 2 * LIB_DAY_MS;  // الحريقة = two days or less (overdue included)
+// The entrance cascade: one step per element, capped so a long list neither
+// takes three seconds to arrive nor fires sixty blips. Matches the settings
+// panel's feel (`settingsRowIn`).
+const LIB_SEQ_STEP   = 0.05;
+const LIB_SEQ_MAX    = 14;
 
 // The five ranks of the points site, in its own order (level 1 = lowest). The
 // tier is a function of RANK, not of a score threshold: the board drops سراج and
@@ -25941,7 +25946,13 @@ function _libTaskPill(t, i, opts) {
         (!c.late && c.ms <= LIB_DAY_MS ? ' urgent' : '');
     el.style.setProperty('--c', color);
     el.style.setProperty('--fg', _libReadableOn(color));
-    el.style.setProperty('--d', (i * 0.05) + 's');
+    /* `i` is the running index across the WHOLE render, not this group's own —
+       otherwise the second group restarts at zero and its first pill lands
+       under the first group's fifth. Past the cap the delay stops growing and
+       the pill goes silent (see `.task.quiet`): the leader's list is ~60 pills,
+       and a three-second cascade of sixty blips is not a flourish. */
+    el.style.setProperty('--d', (Math.min(i, LIB_SEQ_MAX) * LIB_SEQ_STEP) + 's');
+    if (i > LIB_SEQ_MAX) el.classList.add('quiet');
     el.dataset.id = t.id;
 
     const media = t.img
@@ -26021,8 +26032,9 @@ function _libTaskPill(t, i, opts) {
 }
 
 /* ── a collapsible group ──────────────────────────────────────────────────── */
-function _libBlock(id, cls, title, items, opts) {
+function _libBlock(id, cls, title, items, opts, seq) {
     if (!items.length) return null;
+    seq = seq || { n: 0 };
     const sec = document.createElement('section');
     sec.className = 'subgroup ' + cls + (_lib.shut[id] ? ' collapsed' : '');
     sec.dataset.group = id;
@@ -26031,8 +26043,13 @@ function _libBlock(id, cls, title, items, opts) {
         '<span class="tri">' + LIB_ICON.tri + '</span><h3>' + title + '</h3>' +
         '<span class="count">' + _libAr(items.length) + '</span><span class="rule"></span></button>' +
         '<div class="group-body"><div class="task-list"></div></div>';
+    const head = sec.querySelector('.sub-head');
+    head.style.setProperty('--d', (Math.min(seq.n++, LIB_SEQ_MAX) * LIB_SEQ_STEP) + 's');
     const lst = sec.querySelector('.task-list');
-    items.forEach((t, i) => lst.appendChild(_libTaskPill(t, i, opts)));
+    // A collapsed group's pills are clipped to zero height, so they must not
+    // spend cascade slots — the next group would start its delays halfway
+    // through a run nobody can see.
+    items.forEach(t => lst.appendChild(_libTaskPill(t, _lib.shut[id] ? LIB_SEQ_MAX + 1 : seq.n++, opts)));
     sec.querySelector('.sub-head').addEventListener('click', () => {
         const now = sec.classList.toggle('collapsed');
         _lib.shut[id] = now;                       // session only, like the library's
@@ -26247,12 +26264,16 @@ function _libRender(silent) {
        under a supervision list would defeat it. قيد إشرافك goes last and starts
        COLLAPSED: it is other people's work, and it should not push your own
        burning task off the first screen. */
-    const a = _libBlock('fire', 'fire', 'الحريقة 🔥', fire, {});
-    const b = _libBlock('rest', '', 'بقية المهام', rest, {});
+    // One running counter across every group, so the cascade reads as ONE sweep
+    // down the panel rather than three that restart. `_uiSeqReset` at the call
+    // site is what makes its pitch sweep start deep, as the settings panel does.
+    const seq = { n: 0 };
+    const a = _libBlock('fire', 'fire', 'الحريقة 🔥', fire, {}, seq);
+    const b = _libBlock('rest', '', 'بقية المهام', rest, {}, seq);
     if (a) host.appendChild(a);
     if (b) host.appendChild(b);
     if (sup.length && _lib.shut['sup'] === undefined) _lib.shut['sup'] = true;
-    const s = _libBlock('sup', 'supervising', 'قيد إشرافك 👁️', sup, { watching: true });
+    const s = _libBlock('sup', 'supervising', 'قيد إشرافك 👁️', sup, { watching: true }, seq);
     if (s) host.appendChild(s);
 
     if (!a && !b && !s) {
@@ -26309,8 +26330,9 @@ function _libRenderPicker() {
        supervise is not that. Own group ids so folding here doesn't fold the
        big panel's groups too. */
     const mine = _libOpenMine();
-    const a = _libBlock('pick-fire', 'fire', 'الحريقة 🔥', _libFireOf(mine), { pick: true });
-    const b = _libBlock('pick-rest', '', 'بقية المهام', _libRestOf(mine), { pick: true });
+    const seq = { n: 0 };
+    const a = _libBlock('pick-fire', 'fire', 'الحريقة 🔥', _libFireOf(mine), { pick: true }, seq);
+    const b = _libBlock('pick-rest', '', 'بقية المهام', _libRestOf(mine), { pick: true }, seq);
     if (a) host.appendChild(a);
     if (b) host.appendChild(b);
     if (!a && !b) host.innerHTML = '<p class="empty-note">لا مهام مفتوحة عليك الآن.</p>';
@@ -26321,11 +26343,13 @@ function _libOpenPicker() {
     const btn = document.getElementById('task-pick-btn');
     if (!pop || _lib.pickOpen) return;
     _lib.pickOpen = true;
-    pop.classList.remove('hidden');
     if (btn) { btn.classList.add('open'); btn.setAttribute('aria-expanded', 'true'); }
+    _uiSeqReset();          // start this cascade's pitch sweep deep, like the settings panel
     _libRenderPicker();
-    // Laid out first, then `.active` on the next-next frame — `display` can't
-    // transition (the azkar/prayer pattern).
+    /* The pills' own delays start counting the moment they're in the DOM, and
+       the panel takes 0.38s to unfurl — so the cascade plays THROUGH the
+       expansion rather than after it. `.active` goes on the next-next frame so
+       the grid row has a 0fr to animate from. */
     requestAnimationFrame(() => requestAnimationFrame(() => pop.classList.add('active')));
     /* Only redraw when the list was genuinely empty — the idle fetch means it
        almost never is, and rebuilding it anyway replays every pill's entrance
@@ -26552,6 +26576,7 @@ function openLibPanel() {
     document.body.classList.add('lib-panel-open');
     if (btn) { btn.classList.add('open'); btn.setAttribute('aria-expanded', 'true'); }
     _libPositionPanel();
+    _uiSeqReset();          // fresh pitch sweep, deep → high, as the settings panel does
     _libRender(false);
     _libPaintDot();
     /* The joystick sits right where the sheet lands and would show through it.
@@ -26685,6 +26710,12 @@ function setupLibraryPanel() {
         if (_lib.pickOpen) _libClosePicker();
         if (_lib.open) closeLibPanel();
     });
+
+    /* Give the pills and their group heads the cascade blip. Registering the
+       animation NAME is the whole opt-in — anything not in this set animates
+       silently (which is exactly what `libTaskInQuiet` relies on). */
+    _JUICE_IN_ANIMS.add('libTaskIn');
+    _JUICE_IN_ANIMS.add('libHeadIn');
 
     const pickBtn = document.getElementById('task-pick-btn');
     const pickPop = document.getElementById('task-pick-pop');
