@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 248 · Updated 8/14 8:32 AM</div>
+    <div id="build-number" class="build-number">Build 249 · Updated 8/14 8:49 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -174,7 +174,6 @@
                         <span id="user-score-pts" class="user-score-pts"></span>
                         <span id="user-score-rank" class="user-score-rank" hidden></span>
                     </span>
-                    <span id="player-count" class="user-card-count">0 مستخدمين</span>
                 </div>
                 <!-- مقبض فتح لوحة المهام — يظهر فقط لمن له حساب في المكتبة -->
                 <button id="lib-expand-btn" class="lib-expand-btn" type="button" hidden
@@ -185,24 +184,34 @@
                     </svg>
                 </button>
             </div>
-            <div class="user-card-bottom">
-                <div class="user-card-actions">
-                    <button id="settings-custom-btn" class="custom-pill-btn" type="button" aria-label="تخصيص الشخصية" title="تخصيص الشخصية">
-                        <svg class="custom-pill-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/>
-                            <path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-1.25 1.52-1 2.02.8 1.1 2.24 2.02 3.5 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3.5-3.02z"/>
-                            <path d="M18.5 3.5l.9.9M4 5l.8.8M4 12l.8-.8M20 10l.8.8" stroke-width="1.3"/>
-                        </svg>
-                        <span>تخصيص</span>
-                    </button>
-                    <button id="settings-btn" class="settings-btn" type="button" aria-label="الإعدادات" title="الإعدادات">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                            <circle cx="12" cy="12" r="3"/>
-                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
-                        </svg>
-                    </button>
-                </div>
-            </div>
+        </div>
+
+        <!-- صندوق الأدوات — أزرار دائرية على يسار بطاقة المستخدم.
+             الإعدادات والتخصيص خرجا من البطاقة: البطاقة صارت "من أنا" فقط
+             (صورة، اسم، نقاط، رتبة، مقبض المهام) والأدوات لها صندوقها.
+             موضعه يُحسب في JS من مقاس البطاقة (`_hudPositionDock`) لأن عرض
+             البطاقة يتغيّر بطول الاسم وبظهور النقاط. -->
+        <div id="hud-tools" class="hud-tools">
+            <button id="settings-custom-btn" class="hud-tool-btn" type="button" aria-label="تخصيص الشخصية" title="تخصيص الشخصية">
+                <svg class="hud-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/>
+                    <path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-1.25 1.52-1 2.02.8 1.1 2.24 2.02 3.5 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3.5-3.02z"/>
+                    <path d="M18.5 3.5l.9.9M4 5l.8.8M4 12l.8-.8M20 10l.8.8" stroke-width="1.3"/>
+                </svg>
+            </button>
+            <button id="settings-btn" class="hud-tool-btn" type="button" aria-label="الإعدادات" title="الإعدادات">
+                <svg class="hud-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+                </svg>
+            </button>
+        </div>
+
+        <!-- رصيف الأذكار — تحت بطاقة المستخدم، خارجها تمامًا.
+             الزر نفسه لم يتغيّر: حركة الظهور والاختفاء (azkar-entering /
+             azkar-leaving) تطوي ارتفاعه بنفسه، فهي تعمل هنا كما عملت داخل
+             البطاقة. -->
+        <div id="azkar-dock" class="azkar-dock">
             <!-- زر الأذكار: يظهر فجر→ظهر (الصباح) أو عصر→عشاء (المساء) -->
             <button id="azkar-btn" class="azkar-btn hidden" type="button">
                 <span class="azkar-btn-glow"></span>
@@ -248,6 +257,22 @@
         </div>
         <!-- رسائل قصيرة للوحة المهام فقط (نجاح/فشل الحفظ) -->
         <div id="lib-toast" class="lib-toast" hidden></div>
+
+        <!-- بطاقة استلام النقاط — تظهر بعد إتمام مهمة تحمل نقاطًا.
+             النقاط محفوظة بالفعل قبل ظهور هذه البطاقة، فـ«لاحقًا» لا يضيّع شيئًا. -->
+        <div id="lib-claim-modal" class="lib-claim-modal hidden" role="dialog" aria-modal="true" aria-labelledby="lib-claim-head">
+            <div class="lib-claim-card">
+                <img id="lib-claim-sticker" class="lib-claim-sticker" src="" alt="">
+                <div id="lib-claim-head" class="lib-claim-head">أحسنت!</div>
+                <div id="lib-claim-task" class="lib-claim-task"></div>
+                <div id="lib-claim-pts" class="lib-claim-pts"></div>
+                <div class="lib-claim-actions">
+                    <button id="lib-claim-now" class="lib-claim-btn primary" type="button">استلم الآن</button>
+                    <button id="lib-claim-later" class="lib-claim-btn" type="button">لاحقًا</button>
+                </div>
+                <p class="lib-claim-note">«استلم الآن» ينقلك إلى صفحة النقاط. جلستك محفوظة وتعود إليها عند رجوعك.</p>
+            </div>
+        </div>
 
         <!-- زر الخروج (يسار الشاشة، مستقل عن بطاقة المستخدم) -->
         <button id="logout-btn" class="logout-pill">الخروج من الموقع</button>
@@ -1665,7 +1690,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=240"></script>
+        <script type="module" src="game.js?v=241"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

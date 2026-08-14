@@ -8474,10 +8474,10 @@ body.reduced-gfx .lib-panel {
 .lib-toast[hidden] { display: none; }
 .lib-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-/* ── الجوال: اللوحة صحيفة تملأ الشاشة، لا قائمة منسدلة ────────────────────── */
+/* ── الجوال: اللوحة صحيفة، لا قائمة منسدلة ───────────────────────────────── */
+/* أبعادها الأفقية والسفلية أسفل هذا الملف (مع بقية تعديلات الجوال)، وأعلاها
+   يُحسب في JS تحت البطاقة والأذكار حتى لا تبتلعهما. */
 body.is-mobile .lib-panel {
-    inset: 12px 10px 12px 10px;
-    width: auto; max-height: none;
     border-radius: 22px;
     transform: translateY(14px) scale(0.99);
 }
@@ -8489,3 +8489,161 @@ body.lib-panel-open { overflow: hidden; }
 
 /* الاسم والنقاط يأخذان العرض، فينزاح مقبض الفتح إلى الطرف الخارجي للبطاقة */
 .user-card-top .user-card-info { flex: 1 1 auto; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   صندوق الأدوات + رصيف الأذكار — ما خرج من بطاقة المستخدم
+   ═══════════════════════════════════════════════════════════════════════════
+   بطاقة المستخدم صارت "من أنا" فقط. الإعدادات والتخصيص انتقلا إلى صندوق
+   دائري على يسارها، والأذكار إلى رصيف تحتها. الاثنان مثبّتان بالنسبة للشاشة
+   لكن موضعهما يُحسب في JS من مستطيل البطاقة (`_hudPositionDock`)، لأن عرض
+   البطاقة يتغيّر بطول الاسم وبظهور النقاط — ولا يوجد CSS يقرأ مقاس أخيه.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.hud-tools {
+    position: fixed;
+    z-index: 200;
+    top: 18px; right: 210px;      /* مبدئي فقط — JS يصحّحه فورًا */
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 7px;
+    border-radius: 50px;
+    background: rgba(18, 18, 18, 0.68);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+    /* نفس انزلاق البطاقة في وضع التركيز على الجوال */
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.35s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+    .hud-tools {
+        backdrop-filter: blur(20px) saturate(1.6);
+        -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    }
+}
+body.reduced-gfx .hud-tools,
+body.is-mobile .hud-tools {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+.hud-tool-btn {
+    width: 30px; height: 30px;
+    flex: 0 0 auto;
+    display: grid; place-items: center;
+    padding: 0;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.72);
+    cursor: pointer;
+    transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1),
+                background 0.18s, color 0.18s;
+}
+.hud-tool-btn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.hud-tool-btn:active { transform: scale(0.9); }
+.hud-tool-icon { width: 15px; height: 15px; pointer-events: none; }
+
+body.is-mobile .hud-tools { padding: 6px; gap: 6px; }
+body.is-mobile .hud-tool-btn { width: 32px; height: 32px; }   /* هدف لمس أكبر */
+body.is-mobile .hud-tool-icon { width: 16px; height: 16px; }
+
+/* ── رصيف الأذكار ─────────────────────────────────────────────────────────── */
+.azkar-dock {
+    position: fixed;
+    z-index: 200;
+    top: 100px; right: 18px;      /* مبدئي فقط — JS يصحّحه */
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    pointer-events: none;         /* الرصيف نفسه ليس هدفًا، أبناؤه فقط */
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.35s ease;
+}
+.azkar-dock > * { pointer-events: auto; }
+
+/* ── إخفاء الأدوات والأذكار مع البطاقة في وضع التركيز على الجوال ─────────── */
+body.is-mobile .hud-tools.focus-hidden,
+body.is-mobile .azkar-dock.focus-hidden {
+    transform: translateY(-160%);
+    opacity: 0;
+    pointer-events: none;
+}
+/* أثناء الأذكار لا نخفي شيئًا: هو المخرج الوحيد — نفس استثناء البطاقة */
+body.is-mobile.azkar-active .hud-tools.focus-hidden,
+body.is-mobile.azkar-active .azkar-dock.focus-hidden {
+    transform: none;
+    opacity: 1;
+    pointer-events: none;
+}
+body.is-mobile.azkar-active .azkar-dock.focus-hidden > * { pointer-events: auto; }
+
+/* ── عصا التحكم تتلاشى عند فتح لوحة المهام ───────────────────────────────── */
+/* صنف مستقل عن focus-hidden عمدًا: النظامان يشتغلان معًا، ولو تشاركا صنفًا
+   واحدًا لأعاد إغلاقُ اللوحة إظهارَ العصا وسط جلسة عمل. */
+.mobile-joystick.lib-hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(24px);
+}
+
+/* ── الجوال: اللوحة لا تبتلع الشاشة ──────────────────────────────────────── */
+/* أعلاها يُحسب في JS تحت البطاقة/الأذكار، وأسفلها يترك مساحة لأزرار الشاشة */
+body.is-mobile .lib-panel {
+    inset: auto 12px 74px 12px;
+    width: auto; max-height: none;
+}
+
+/* ═══ بطاقة استلام النقاط ═══ */
+.lib-claim-modal {
+    position: fixed; inset: 0; z-index: 10055;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0, 0, 0, 0.55);
+    direction: rtl;
+}
+.lib-claim-modal.hidden { display: none; }
+.lib-claim-card {
+    width: min(340px, calc(100vw - 44px));
+    padding: 22px 22px 16px;
+    border-radius: 25px;
+    text-align: center;
+    background: rgba(18, 18, 18, 0.94);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.6);
+    animation: libClaimIn 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+@keyframes libClaimIn { from { opacity: 0; transform: scale(0.9) translateY(10px); } to { opacity: 1; transform: none; } }
+.lib-claim-sticker {
+    width: 76px; height: 76px; object-fit: contain;
+    margin: 0 auto 8px; display: block;
+    filter: drop-shadow(0 6px 14px rgba(0, 0, 0, 0.55));
+}
+.lib-claim-head { font-size: 1.05rem; font-weight: 700; color: #fff; }
+.lib-claim-task {
+    margin-top: 4px; font-size: 0.8rem; font-weight: 600;
+    color: rgba(255, 255, 255, 0.55);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.lib-claim-pts {
+    margin-top: 10px; font-size: 1.7rem; font-weight: 900;
+    color: #f4c82b; font-variant-numeric: tabular-nums;
+}
+.lib-claim-actions { display: flex; gap: 9px; margin-top: 16px; }
+.lib-claim-btn {
+    flex: 1; padding: 10px 6px;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    background: transparent;
+    color: rgba(255, 255, 255, 0.72);
+    font-family: inherit; font-size: 0.82rem; font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s, color 0.18s;
+}
+.lib-claim-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.lib-claim-btn:active { transform: scale(0.95); }
+.lib-claim-btn.primary {
+    background: #f4c82b; border-color: #f4c82b; color: #1a1500;
+}
+.lib-claim-btn.primary:hover { background: #ffd747; color: #1a1500; }
+.lib-claim-note {
+    margin-top: 11px; font-size: 0.66rem; font-weight: 500; line-height: 1.6;
+    color: rgba(255, 255, 255, 0.32);
+}

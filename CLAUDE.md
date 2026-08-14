@@ -599,7 +599,7 @@ Android reports **stale** `innerWidth/innerHeight` for up to ~1s after rotating,
 
 **Focus sounds panel**: Mobile has a bottom-sheet pull-up drawer. Hidden during azkar (`body.is-mobile.azkar-active .focus-sounds-panel { display: none !important }`) — do not show it during azkar on mobile.
 
-**Focus mode** (`setMobileFocusMode(active)`): Hides joystick + user card during work phase. Joystick gets `.focus-hidden` class → opacity 0. User card slides off-screen with `transform: translateY(-140%)` + `pointer-events: none`.
+**Focus mode** (`setMobileFocusMode(active)`): Hides joystick + user card during work phase. Joystick gets `.focus-hidden` class → opacity 0. User card slides off-screen with `transform: translateY(-140%)` + `pointer-events: none`. **The `#hud-tools` box and `#azkar-dock` slide with it** — they live outside the card now (see **The HUD stack**), so forgetting one leaves it floating alone on screen. The joystick's *other* hide, `.lib-hidden` (tasks panel open), is a deliberately separate class.
 
 **Mobile azkar float button** (`#azkar-focus-float-btn`): A fixed pill at `top: 14px; right: 14px; z-index: 9500` that appears on mobile when the user card is `.focus-hidden` AND the azkar time window is valid. Tapping it opens the overlay directly (skips confirm — user card is hidden so confirm has no anchor). Visibility driven by `style.display` directly in JS (not class toggle) to avoid CSS specificity issues.
 
@@ -1351,7 +1351,7 @@ Never animate `filter: blur()` or `transform: scale()`/`background-position` on 
 
 ## Settings Panel (`setupSettingsUI`, `#settings-panel`)
 
-Opens **under the gear button, top-right** on desktop (`top:130px; right:18px`) and mobile (`right:10px; top:110px`). Each row is a binary toggle button reflected via a `_reflect*()` helper and persisted in localStorage. Rows are grouped into **categories** (`.settings-category` + `.settings-category-title` header): العرض والأداء / التحكم والعمل / الأذكار والصلاة. Keys & defaults:
+Opens **under the gear button**, which now lives in `#hud-tools` to the left of the user card — so the panel's `top`/`right` are **written by `_hudPositionSettings()` from that box** at open time, overriding the CSS fallbacks (`top:130px; right:18px` desktop, `right:10px; top:110px` mobile). See **The HUD stack**. Each row is a binary toggle button reflected via a `_reflect*()` helper and persisted in localStorage. Rows are grouped into **categories** (`.settings-category` + `.settings-category-title` header): العرض والأداء / التحكم والعمل / الأذكار والصلاة. Keys & defaults:
 
 | Key | Default | Effect |
 |---|---|---|
@@ -1538,6 +1538,44 @@ Mock data is **no longer seeded**. `dashClearSeedData()` runs once on login (for
 
 ---
 
+## The HUD stack (top-right) — card → tools → azkar → tasks panel
+
+Four separate fixed elements, stacked, and **none of them is inside another**:
+
+| element | what it is |
+|---|---|
+| `#user-card` | identity ONLY — avatar, name, points + rank chip, and the tasks chevron. The player count is gone; the gear and تخصيص moved out. |
+| `#hud-tools` | a glass box of **circle buttons** (تخصيص، الإعدادات) to the card's **left** |
+| `#azkar-dock` | the azkar button + the Siraj time-spoof button, on a dock **under** the card |
+| `#lib-panel` | the tasks panel, under the whole stack |
+
+**They're placed by JS, not CSS** (`_hudPositionDock`, `_hudStackBottom`,
+`_hudPositionSettings`, `_libPositionPanel`). No CSS rule can read a sibling's box, and
+the card's width changes with the name and with the points chip arriving — so one function
+measures the card and hangs the rest off it. Re-run by a **`ResizeObserver` on the card**
+(which also fires the first time it gets a size, i.e. when the game screen appears),
+`resize`, and the frame the azkar button appears/disappears.
+
+- **The tools box drops UNDER the card when it would collide with the الخروج pill** — a long
+  name on a narrow phone pushes the card wide enough for that to happen. The azkar dock
+  moves down with it. `offsetParent` is null for a `position: fixed` element, so "is the
+  pill on screen" is a **width test on its rect**, not an offsetParent test.
+- **The settings panel follows its gear** (`_hudPositionSettings`, called from
+  `openSettingsPanel`) instead of staying pinned to the corner the gear used to be in. It
+  can only be measured once open — a hidden panel is `display: none` and measures zero.
+- **The azkar button itself is unchanged.** Its enter/exit animation collapses its OWN
+  `max-height`/`margin`/`padding`, so it animates identically on the dock as it did inside
+  the card. `.azkar-dock` is `pointer-events: none` with `> * { auto }` so the empty dock
+  never eats a click on the world.
+- **Mobile focus mode has to carry all three.** `setMobileFocusMode` toggles `.focus-hidden`
+  on the card, the tools box AND the dock — sliding the card away and leaving its two
+  satellites floating is what happens if you forget one. The `azkar-active` exception
+  (don't hide during azkar — it's the only exit) covers all three too.
+- `#player-count` was **deleted**; the writer at `listenToPlayers` was already `if (countElem)`
+  guarded, so nothing else changed.
+
+---
+
 ## لوحة مهام المكتبة — a window into MdwnhLibrary
 
 The member's **library tasks**, opened from a chevron on the user card, drawn with the
@@ -1589,9 +1627,12 @@ read+write by design (the site has no login) with every field type-checked and
 `done/$slug`/`earned/$slug` already declared; this writes exactly the fields the library
 writes. Plain REST `fetch` — **no second Firebase SDK app and no listener.**
 
-**Unlike the library, maqr never navigates away on a claim.** The library offers «استلم الآن»
-which sends you to the points site; here it is a toast and nothing else — the player may be
-mid-session, and the claim is already persisted.
+**The claim card** (`#lib-claim-modal`, `_libShowClaim`) is the library's own «استلم الآن /
+لاحقًا», rebuilt in maqr's dark glass. **The claim is already written before the card appears**,
+so لاحقًا (and a backdrop press) lose nothing. «استلم الآن» navigates **this tab** to
+`POINTS_URL?claim=1&user=<NFC dbKey>`, same as the library — leaving mid-session is safe by
+design: the disconnect handlers free the laptop and stash the session, and the login reclaim
+puts the player back at it (see **Disconnect / session reclaim**).
 
 ### Cost — the reason this is one fetch, not a poll
 `library/tasks` is the **whole tree**, and each cover is a 640×320 base64 JPEG **inside its
@@ -1612,9 +1653,14 @@ only — the names (الخشبيون…الذهبيون) are the `title`, becaus
 - **`#lib-panel` is a SIBLING of `#user-card`, not a child.** `body.is-mobile .user-card`
   carries `will-change: transform`, which makes it the containing block for any
   `position: fixed` descendant — a child panel would be measured against the card.
-- Desktop position is computed in JS (`_libPositionPanel`) from the card's rect, because the
-  card's height changes with the azkar pill. On mobile it is a full sheet, positioned purely
-  by CSS `inset` — which is why the inline `top/right/maxHeight` are **cleared** there.
+- Its **top is measured on both platforms** (`_hudStackBottom` — see **The HUD stack**), so
+  it always starts under the card + tools + azkar rather than covering them. On desktop the
+  `right`/`max-height` are computed too; on **mobile only the top is inline** and
+  `right/maxHeight` are **cleared**, because the sheet's sides and bottom gap are CSS `inset`
+  and a leftover desktop `right` would beat it.
+- **The joystick fades out while the panel is open** — `.lib-hidden`, a **separate class from
+  `.focus-hidden`**. Sharing one class would mean closing the panel put the joystick back in
+  the middle of a work session.
 - Enter/exit is `opacity` + `visibility` + a double-rAF `.active` (`display` can't transition).
 - **Outside-press dismissal runs in the CAPTURE phase and eats the event**, plus a ~700 ms
   swallow window for the `click` that follows the same `pointerdown` — otherwise the

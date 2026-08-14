@@ -6843,6 +6843,11 @@ function setMobileFocusMode(active) {
     const hideCard = active && isMobile();
     if (card)     card.classList.toggle('focus-hidden', hideCard);
     if (logout)   logout.classList.toggle('focus-hidden', hideCard);
+    // The gear/تخصيص box and the azkar dock live outside the card now, so they
+    // have to be carried off-screen with it — otherwise focus mode slides the
+    // card away and leaves its two satellites floating on their own.
+    document.getElementById('hud-tools')?.classList.toggle('focus-hidden', hideCard);
+    document.getElementById('azkar-dock')?.classList.toggle('focus-hidden', hideCard);
     // The joystick hides during focus on any device where it's actually shown
     // (e.g. iPad landscape, where isMobile() is false but the circle is visible).
     if (joystick) joystick.classList.toggle('focus-hidden', active && joystickShouldShow());
@@ -14646,6 +14651,10 @@ function setupSettingsUI() {
         _settingsSequenceRows();          // before .hidden comes off, so the delays are live
         panel.classList.remove('hidden');
         settingsBtn.classList.add('active');
+        // The gear left the user card for its own box, so the panel follows it
+        // rather than staying pinned to the corner the gear used to sit in.
+        // Measured here, where the panel is finally laid out and has a width.
+        _hudPositionSettings();
         _uiSeqReset();   // start the row cascade's pitch sweep fresh (deep → high)
     }
     function closeSettingsPanel() {
@@ -18251,6 +18260,13 @@ function updateAzkarButton() {
 
     if (!shouldShow) {
         hideAzkarConfirm();
+    }
+
+    /* The button now lives on its own dock UNDER the user card, so it appearing
+       or vanishing changes how far down the HUD stack reaches — and the tasks
+       panel is placed off that. Only on the frame it actually flips. */
+    if (shouldShow !== wasShown && typeof _libPositionPanel === 'function') {
+        if (libPanelIsOpen()) _libPositionPanel();
     }
 
     const label = document.getElementById('azkar-btn-label');
@@ -25630,6 +25646,9 @@ const LIB_PTS_DB    = 'https://mdwnhpoints-default-rtdb.europe-west1.firebasedat
 // a handshake — moving it here breaks the other end. Same for the payload shape.
 const LIB_PTS_ROOT  = 'mdwnhLibrary';
 const LIB_SITE_URL  = 'https://mdwnstudio.github.io/MdwnhLibrary';
+// Where «استلم الآن» goes. `?claim=1&user=<NFC dbKey>` is the library's own
+// hand-off — the Points site opens straight on the claim for that member.
+const LIB_POINTS_URL = 'https://youssefdot.github.io/MdwnhPoints/';
 
 const LIB_REFETCH_MS = 5 * 60 * 1000;   // an open older than this refetches
 const LIB_DAY_MS     = 864e5;
@@ -26057,10 +26076,48 @@ function _libWriteClaim(t) {
     t.earned = t.earned || {};
     t.earned[me.slug] = true;
     libPut(`${LIB_ROOT}/tasks/${t.id}/earned/${me.slug}`, true).catch(() => {});
-    /* The library offers «استلم الآن», which navigates to the points site. Here
-       it is a toast and nothing else: the player may be in the middle of a work
-       session, and the claim is already persisted — they can collect it whenever. */
-    _libToast('أحسنت! +' + _libAr(t.points) + ' نقطة محفوظة — استلمها من صفحة النقاط');
+    _libShowClaim(t);
+}
+
+/* The claim card — the library's own «استلم الآن / لاحقًا», rebuilt in maqr's
+   dark glass. The claim is ALREADY written by the time this appears, so لاحقًا
+   loses nothing: the Points site settles it whenever they get there. */
+function _libShowClaim(t) {
+    const m = document.getElementById('lib-claim-modal');
+    if (!m) { _libToast('أحسنت! +' + _libAr(t.points) + ' نقطة محفوظة — استلمها من صفحة النقاط'); return; }
+    const st = document.getElementById('lib-claim-sticker');
+    if (st) {
+        st.style.display = '';
+        st.onerror = () => { st.style.display = 'none'; };
+        st.src = _libSticker(t.points);
+        st.alt = _libAr(t.points) + ' نقطة';
+    }
+    const head = document.getElementById('lib-claim-head');
+    if (head) head.textContent = 'أحسنت يا ' + ((_lib.me && _lib.me.name) || '') + '!';
+    const task = document.getElementById('lib-claim-task');
+    if (task) task.textContent = t.title || '';
+    const pts = document.getElementById('lib-claim-pts');
+    if (pts) pts.textContent = '+' + _libAr(t.points);
+    m.classList.remove('hidden');
+
+    const later = document.getElementById('lib-claim-later');
+    const now   = document.getElementById('lib-claim-now');
+    const dismiss = () => {
+        m.classList.add('hidden');
+        _libToast('نقاطك محفوظة — استلمها متى شئت');
+    };
+    if (later) later.onclick = dismiss;
+    // The backdrop is a back button, same as every other modal here.
+    m.onclick = (e) => { if (e.target === m) dismiss(); };
+    if (now) now.onclick = () => {
+        m.classList.add('hidden');
+        /* Same-tab navigation, exactly as the library does it — the points site
+           reads `?claim=1&user=` to open straight on the claim. Leaving mid-work
+           is safe by design: the disconnect handlers free the laptop and stash
+           the session, and the reclaim on next login puts them back at it. */
+        const key = _libNfc((_lib.me && _lib.me.dbKey) || '');
+        window.location.href = LIB_POINTS_URL + '?claim=1&user=' + encodeURIComponent(key);
+    };
 }
 
 /* A completed pill collapses out and everything under it slides up on the same
@@ -26299,22 +26356,106 @@ function _libPaintDot() {
     dot.hidden = !(n > 0) || _lib.open;
 }
 
+/* ── the HUD stack: card → tools → azkar dock → panel ────────────────────────
+   The user card is "who I am" and nothing else now. The gear and تخصيص live in
+   their own circle box beside it, and the azkar button on a dock under it. None
+   of that can be expressed in CSS alone: the card's width changes with the name
+   and with the points chip appearing, and no CSS rule can read a sibling's box.
+   So one function measures the card and places the other two off it. */
+const HUD_GAP = 10;
+
+function _hudPositionDock() {
+    const card  = document.getElementById('user-card');
+    const tools = document.getElementById('hud-tools');
+    const dock  = document.getElementById('azkar-dock');
+    if (!card) return;
+    const r = card.getBoundingClientRect();
+    if (!r.width) return;                 // not laid out yet (still on the menu)
+
+    let below = false;
+    if (tools) {
+        const tw = tools.offsetWidth || 84, th = tools.offsetHeight || 44;
+        const right = window.innerWidth - r.left + HUD_GAP;
+        const leftEdge = window.innerWidth - right - tw;
+        /* Beside the card is where it belongs — but on a narrow phone a long
+           name pushes the card wide enough that the box would land under the
+           الخروج pill. Rather than overlap, it drops under the card and the
+           azkar dock moves down with it. `offsetParent` is null for a fixed
+           element, so "is the pill actually on screen" is a width test. */
+        const logout = document.getElementById('logout-btn');
+        const lr = logout ? logout.getBoundingClientRect() : null;
+        below = leftEdge < 8 || !!(lr && lr.width && leftEdge < lr.right + 8);
+        if (below) {
+            tools.style.top = Math.round(r.bottom + HUD_GAP) + 'px';
+            tools.style.right = Math.round(window.innerWidth - r.right) + 'px';
+        } else {
+            tools.style.top = Math.round(r.top + (r.height - th) / 2) + 'px';
+            tools.style.right = Math.round(right) + 'px';
+        }
+    }
+    if (dock) {
+        const base = (below && tools) ? tools.getBoundingClientRect().bottom : r.bottom;
+        dock.style.top = Math.round(base + HUD_GAP) + 'px';
+        dock.style.right = Math.round(window.innerWidth - r.right) + 'px';
+    }
+}
+
+/* Hangs the settings panel off the tools box instead of the screen corner the
+   gear used to occupy. Called from `openSettingsPanel`, where the panel is
+   finally laid out and can be measured — a hidden panel is `display:none` and
+   measures zero, so its width cannot be read any earlier. */
+function _hudPositionSettings() {
+    const panel = document.getElementById('settings-panel');
+    const tools = document.getElementById('hud-tools');
+    if (!panel || !tools) return;
+    const t = tools.getBoundingClientRect();
+    if (!t.width) return;
+    const w = panel.getBoundingClientRect().width || 270;
+    // Right-aligned with the tools box, then pulled back on so a narrow screen
+    // can't push its far edge off the side.
+    const right = Math.min(
+        Math.max(10, window.innerWidth - t.right),
+        Math.max(10, window.innerWidth - w - 10)
+    );
+    panel.style.top = Math.round(t.bottom + HUD_GAP) + 'px';
+    panel.style.right = Math.round(right) + 'px';
+}
+
+// The bottom of whatever the HUD stack currently reaches down to. The azkar dock
+// collapses to nothing when the button is hidden, so it only counts when it has
+// real height — otherwise the panel would sit 10px lower for no reason.
+function _hudStackBottom() {
+    const card = document.getElementById('user-card');
+    if (!card) return 0;
+    let bottom = card.getBoundingClientRect().bottom;
+    for (const id of ['hud-tools', 'azkar-dock']) {
+        const el = document.getElementById(id);
+        if (el && el.offsetHeight > 0) bottom = Math.max(bottom, el.getBoundingClientRect().bottom);
+    }
+    return bottom;
+}
+
 /* ── open / close ─────────────────────────────────────────────────────────── */
 function _libPositionPanel() {
     const panel = document.getElementById('lib-panel');
     if (!panel) return;
-    if (isMobile()) {
-        // The mobile sheet is positioned entirely by CSS (inset) — an inline
-        // top/right left over from desktop would beat it.
-        panel.style.top = ''; panel.style.right = ''; panel.style.maxHeight = '';
-        return;
-    }
+    _hudPositionDock();
     const card = document.getElementById('user-card');
     if (!card) return;
     const r = card.getBoundingClientRect();
-    panel.style.top = Math.round(r.bottom + 10) + 'px';
+    const top = Math.round(_hudStackBottom() + HUD_GAP);
+    panel.style.top = top + 'px';
+    if (isMobile()) {
+        /* The mobile sheet spans the screen except for its top: left/right and
+           the bottom gap are CSS `inset`, so those inline values are CLEARED —
+           a leftover desktop `right` would beat the inset and squeeze the sheet
+           against one edge. Only the top is measured, so the sheet starts under
+           the card + azkar instead of swallowing them. */
+        panel.style.right = ''; panel.style.maxHeight = '';
+        return;
+    }
     panel.style.right = Math.round(Math.max(12, window.innerWidth - r.right)) + 'px';
-    panel.style.maxHeight = Math.max(220, Math.round(window.innerHeight - r.bottom - 34)) + 'px';
+    panel.style.maxHeight = Math.max(220, Math.round(window.innerHeight - top - 24)) + 'px';
 }
 
 function openLibPanel() {
@@ -26328,6 +26469,11 @@ function openLibPanel() {
     _libPositionPanel();
     _libRender(false);
     _libPaintDot();
+    /* The joystick sits right where the sheet lands and would show through it.
+       `.lib-hidden` is a SEPARATE class from `.focus-hidden` on purpose — focus
+       mode owns that one, and sharing it would mean closing the panel put the
+       joystick back mid-work-session. */
+    document.getElementById('mobile-joystick')?.classList.add('lib-hidden');
     // `display` can't transition — lay it out first, then let a double rAF flip
     // `.active` so the fade actually runs (the azkar/prayer/fireplace pattern).
     requestAnimationFrame(() => requestAnimationFrame(() => panel.classList.add('active')));
@@ -26345,6 +26491,7 @@ function closeLibPanel() {
     panel.classList.remove('active');
     document.body.classList.remove('lib-panel-open');
     if (btn) { btn.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); }
+    document.getElementById('mobile-joystick')?.classList.remove('lib-hidden');
     clearInterval(_lib.tickTimer);
     _lib.tickTimer = 0;
     _libPaintDot();
@@ -26407,7 +26554,12 @@ function setupLibraryPanel() {
        are let through untouched — swallowing those would close the panel a
        frame before the chevron could reopen it. */
     let _libSwallowUntil = 0;
-    const _libInside = (e) => !!(e.target && e.target.closest && e.target.closest('#lib-panel, #lib-expand-btn'));
+    /* What the outside-press dismisser must NOT swallow. The claim card is in
+       this list because it opens ON TOP of the still-open panel: without it the
+       capture handler ate the press, closed the panel, and «استلم الآن» never
+       fired at all. */
+    const _libInside = (e) => !!(e.target && e.target.closest &&
+        e.target.closest('#lib-panel, #lib-expand-btn, #lib-claim-modal'));
     document.addEventListener('pointerdown', (e) => {
         if (!_lib.open || _libInside(e)) return;
         e.stopPropagation();
@@ -26424,7 +26576,19 @@ function setupLibraryPanel() {
         if (_lib.open) { e.stopPropagation(); closeLibPanel(); }
     }, true);
     window.addEventListener('keydown', (e) => { if (_lib.open && e.key === 'Escape') closeLibPanel(); });
-    window.addEventListener('resize', () => { if (_lib.open) _libPositionPanel(); });
+    window.addEventListener('resize', () => { _hudPositionDock(); if (_lib.open) _libPositionPanel(); });
+
+    /* The tools box and the azkar dock hang off the card's box, so they have to
+       be replaced whenever it changes size — the name arriving, the points chip
+       appearing, a rotation. A ResizeObserver fires on first observation too,
+       which is also what places them the moment the game screen becomes visible
+       (until then the card measures zero and the positioner bails). */
+    if (window.ResizeObserver) {
+        const card = document.getElementById('user-card');
+        if (card) new ResizeObserver(() => _hudPositionDock()).observe(card);
+    }
+    _hudPositionDock();
+    setTimeout(_hudPositionDock, 400);      // backstop for browsers without RO
 
     /* Resolve who this player is in the library. The roster is keyed by Discord
        id, which is exactly what maqr logs in with. A Siraj ghost has a fabricated
