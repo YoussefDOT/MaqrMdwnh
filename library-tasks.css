@@ -13,13 +13,19 @@
    automates this. Keep the two visually identical — the whole point of the
    panel is that it reads as a window into the library, not a lookalike.
 
-   EVERY rule below is scoped under `#lib-panel`. Do not un-scope one.
-   The panel CHROME (the dropdown itself, its head, the user-card additions)
-   lives in style.css — this file is only the mirrored library look.
+   EVERY rule below is scoped under **`.lib-pills`**. Do not un-scope one — a
+   bare `.task` / `.count` / `.av` here would reach into the whole site.
+   TWO elements wear that class: the tasks panel (`#lib-panel`) and the picker
+   popover beside the «أعمل على» box (`#task-pick-pop`). That is exactly why the
+   scope is a class and not `#lib-panel` — the picker shows the same pills.
+
+   The panel CHROME (the dropdown itself, its head, the picker popover's own
+   box, the user-card additions) lives in style.css — this file is only the
+   mirrored library look.
    ========================================================================== */
 
 /* ── the library's own tokens, local to the panel ────────────────────────── */
-#lib-panel {
+.lib-pills {
     --red: #e54b2a;
     --gold: #f3c02b;
     --teal: #41b9a6;
@@ -40,9 +46,9 @@
 }
 
 /* ── one pill ────────────────────────────────────────────────────────────── */
-#lib-panel .task-list { display: flex; flex-direction: column; gap: 10px; }
+.lib-pills .task-list { display: flex; flex-direction: column; gap: 10px; }
 
-#lib-panel .task {
+.lib-pills .task {
     position: relative; overflow: hidden; isolation: isolate;
     display: flex; flex-direction: row; align-items: center; gap: 8px;
     width: 100%; padding: 9px 11px; border-radius: 18px;
@@ -55,23 +61,23 @@
 @keyframes libTaskIn { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 /* A silent refresh rebuilds the same DOM; without this it replays the whole
    list's entrance (and every sticker's) every time the panel re-renders. */
-#lib-panel .lib-panel-body.silent,
-#lib-panel .lib-panel-body.silent * { animation: none; }
+.lib-pills .lib-panel-body.silent,
+.lib-pills .lib-panel-body.silent * { animation: none; }
 
-#lib-panel .task::before {
+.lib-pills .task::before {
     content: ""; position: absolute; inset: 0; z-index: -1;
     background: linear-gradient(165deg, rgba(255, 255, 255, .17), transparent 58%);
 }
-#lib-panel .task:hover { transform: translateY(-3px) scale(1.012); }
+.lib-pills .task:hover { transform: translateY(-3px) scale(1.012); }
 
-#lib-panel .task.done { filter: saturate(.6) brightness(.86); }
-#lib-panel .task.done::after {
+.lib-pills .task.done { filter: saturate(.6) brightness(.86); }
+.lib-pills .task.done::after {
     content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none;
     background: repeating-linear-gradient(-45deg, rgba(0, 0, 0, .18) 0 11px, transparent 11px 22px);
 }
-#lib-panel .task.overdue { box-shadow: 0 0 0 2px rgba(229, 75, 42, .75), 0 16px 30px -22px #000; }
-#lib-panel .task.urgent  { box-shadow: 0 0 0 2px rgba(243, 192, 43, .6), 0 16px 30px -22px #000; }
-#lib-panel .task.cheer   { animation: libCheer .6s var(--pop); }
+.lib-pills .task.overdue { box-shadow: 0 0 0 2px rgba(229, 75, 42, .75), 0 16px 30px -22px #000; }
+.lib-pills .task.urgent  { box-shadow: 0 0 0 2px rgba(243, 192, 43, .6), 0 16px 30px -22px #000; }
+.lib-pills .task.cheer   { animation: libCheer .6s var(--pop); }
 @keyframes libCheer { 0% { transform: scale(1); } 45% { transform: scale(1.05); } 100% { transform: scale(1); } }
 
 /* A completed pill collapses out and the list slides up on the same transition
@@ -79,152 +85,152 @@
    padding / margin are driven from JS (`_libDropPill`); this is only the
    timing they share. `animation:none` is load-bearing — the pill carries its
    own entrance and would replay it on the way out. */
-#lib-panel .task.dropping {
+.lib-pills .task.dropping {
     animation: none; pointer-events: none; transform: scale(.97);
     transition: height .34s var(--ease), padding .34s var(--ease), margin .34s var(--ease),
                 transform .34s var(--ease), opacity .24s var(--ease);
 }
 
-#lib-panel .task-emoji {
+.lib-pills .task-emoji {
     width: 42px; height: 42px; flex: 0 0 auto; border-radius: 13px;
     display: grid; place-items: center; font-size: 1.3rem; line-height: 1;
     background: rgba(0, 0, 0, .18);
 }
-#lib-panel .task-img {
+.lib-pills .task-img {
     width: 62px; aspect-ratio: 2/1; flex: 0 0 auto; border-radius: 10px; object-fit: cover;
     background: rgba(0, 0, 0, .14);
 }
 /* min-width:0 + nowrap is what stops the title collapsing into one word per
    line when the row runs out of width */
-#lib-panel .pill-main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
-#lib-panel .pill-main > * { max-width: 100%; }
-#lib-panel .task-title {
+.lib-pills .pill-main { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 2px; align-items: flex-start; }
+.lib-pills .pill-main > * { max-width: 100%; }
+.lib-pills .task-title {
     font-size: .88rem; font-weight: 800; line-height: 1.3;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-#lib-panel .task-desc {
+.lib-pills .task-desc {
     font-size: .7rem; font-weight: 600; opacity: .9; line-height: 1.35;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
 }
-#lib-panel .pill-foot { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
-#lib-panel .pill-quote {
+.lib-pills .pill-foot { display: flex; align-items: center; gap: 6px; min-width: 0; max-width: 100%; }
+.lib-pills .pill-quote {
     font-size: .66rem; font-weight: 600; opacity: .8; line-height: 1.35;
     min-width: 0; flex: 0 1 auto;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-#lib-panel .task-tags { display: flex; gap: 4px; overflow: hidden; flex: 0 0 auto; }
-#lib-panel .task-tag {
+.lib-pills .task-tags { display: flex; gap: 4px; overflow: hidden; flex: 0 0 auto; }
+.lib-pills .task-tag {
     font-size: .58rem; font-weight: 800; padding: 1px 6px; border-radius: 999px;
     background: var(--tc); color: #12100c; white-space: nowrap;
 }
 
 /* the sticker sits over the media, which in RTL is the row's start edge */
-#lib-panel .task-pts {
+.lib-pills .task-pts {
     position: absolute; z-index: 3; inset-block-start: 2px; inset-inline-start: 2px;
     width: 32px; height: 32px; pointer-events: none;
     animation: libStickerPop .5s var(--pop) backwards;
 }
-#lib-panel .task-pts img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 4px 8px rgba(0, 0, 0, .5)); }
+.lib-pills .task-pts img { width: 100%; height: 100%; object-fit: contain; filter: drop-shadow(0 4px 8px rgba(0, 0, 0, .5)); }
 @keyframes libStickerPop { from { opacity: 0; transform: scale(.4) rotate(-16deg); } to { opacity: 1; transform: none; } }
 
 /* ── the faces cluster ───────────────────────────────────────────────────── */
 /* `direction` is STATED, not inherited: the reader's own face is the LAST DOM
    child, which under rtl lands it on the physical LEFT — beside the إتمام
    button. One `direction:ltr` anywhere above would silently mirror it. */
-#lib-panel .who { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; direction: rtl; }
-#lib-panel .who .av { position: relative; display: block; flex: 0 0 auto; line-height: 0; }
-#lib-panel .who .av > img {
+.lib-pills .who { display: flex; align-items: center; flex: 0 0 auto; gap: 4px; direction: rtl; }
+.lib-pills .who .av { position: relative; display: block; flex: 0 0 auto; line-height: 0; }
+.lib-pills .who .av > img {
     width: 100%; height: 100%;
     border-radius: 50%; object-fit: cover; display: block;
     border: 1.5px solid rgba(255, 255, 255, .7); background: #1a1a1a;
 }
-#lib-panel .who .av.done > img { border-color: var(--teal); }
-#lib-panel .who.lead > .av,
-#lib-panel .who.solo > .av { width: var(--av, 38px); height: var(--av, 38px); }
-#lib-panel .who.pair > .av { width: var(--av, 32px); height: var(--av, 32px); }
-#lib-panel .who.pair > .av + .av { margin-inline-start: -9px; z-index: 1; }
+.lib-pills .who .av.done > img { border-color: var(--teal); }
+.lib-pills .who.lead > .av,
+.lib-pills .who.solo > .av { width: var(--av, 38px); height: var(--av, 38px); }
+.lib-pills .who.pair > .av { width: var(--av, 32px); height: var(--av, 32px); }
+.lib-pills .who.pair > .av + .av { margin-inline-start: -9px; z-index: 1; }
 
-#lib-panel .av-tick {
+.lib-pills .av-tick {
     position: absolute; inset-inline-end: -1px; bottom: -1px; z-index: 2;
     width: 46%; height: 46%; min-width: 9px; min-height: 9px;
     border-radius: 50%; display: grid; place-items: center;
     background: var(--teal); color: #06231f; border: 1.5px solid var(--ink);
     pointer-events: none;
 }
-#lib-panel .av-tick svg { width: 72%; height: 72%; }
+.lib-pills .av-tick svg { width: 72%; height: 72%; }
 
-#lib-panel .who-rest {
+.lib-pills .who-rest {
     display: grid; grid-auto-flow: column; direction: rtl;
     grid-template-rows: repeat(var(--rows, 2), auto);
     gap: 2px;
 }
-#lib-panel .who-rest .av { width: var(--sm, 22px); height: var(--sm, 22px); }
+.lib-pills .who-rest .av { width: var(--sm, 22px); height: var(--sm, 22px); }
 
-#lib-panel .who-all {
+.lib-pills .who-all {
     flex: 0 0 auto; white-space: nowrap;
     font-size: .62rem; font-weight: 900; color: var(--fg, #fff);
     background: rgba(0, 0, 0, .24); border-radius: 999px; padding: 5px 10px;
 }
 
 /* ── the countdown ───────────────────────────────────────────────────────── */
-#lib-panel .pill-cd {
+.lib-pills .pill-cd {
     flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 0;
     min-width: 40px; font-variant-numeric: tabular-nums;
 }
-#lib-panel .pill-cd .n { font-size: 1.5rem; font-weight: 900; line-height: 1; }
-#lib-panel .pill-cd .u { font-size: .6rem; font-weight: 800; opacity: .82; line-height: 1.2; }
-#lib-panel .pill-cd.late {
+.lib-pills .pill-cd .n { font-size: 1.5rem; font-weight: 900; line-height: 1; }
+.lib-pills .pill-cd .u { font-size: .6rem; font-weight: 800; opacity: .82; line-height: 1.2; }
+.lib-pills .pill-cd.late {
     background: rgba(0, 0, 0, .24); border-radius: 10px; padding: 4px 7px; min-width: 0;
     font-size: .65rem; font-weight: 900; flex-direction: row;
 }
 
 /* ── the action ──────────────────────────────────────────────────────────── */
-#lib-panel .pill-check {
+.lib-pills .pill-check {
     flex: 0 0 auto; width: 36px; height: 36px; border-radius: 50%; border: none; padding: 0;
     display: grid; place-items: center; cursor: pointer; font-family: inherit;
     background: #fff; color: color-mix(in srgb, var(--c) 72%, #111);
     box-shadow: 0 8px 18px -10px rgba(0, 0, 0, .6);
     transition: transform .28s var(--pop);
 }
-#lib-panel .pill-check svg { width: 18px; height: 18px; }
-#lib-panel .pill-check:hover { transform: translateY(-2px) scale(1.08); }
-#lib-panel .pill-check:active { transform: scale(.94); }
-#lib-panel .pill-check.badge {
+.lib-pills .pill-check svg { width: 18px; height: 18px; }
+.lib-pills .pill-check:hover { transform: translateY(-2px) scale(1.08); }
+.lib-pills .pill-check:active { transform: scale(.94); }
+.lib-pills .pill-check.badge {
     width: auto; height: 32px; padding: 0 9px; border-radius: 13px; gap: 4px;
     background: rgba(0, 0, 0, .24); color: var(--fg, #fff);
     font-size: .76rem; font-weight: 900; cursor: default; white-space: nowrap;
     display: flex; align-items: center; justify-content: center;
 }
-#lib-panel .pill-check.badge svg { width: 13px; height: 13px; }
+.lib-pills .pill-check.badge svg { width: 13px; height: 13px; }
 /* A press mid-write must not fire twice. This is a CLASS, never the `disabled`
    attribute — on iOS a disabled button leaks its touch through to whatever is
    under it (the same rule the azkar انتهيت button follows). */
-#lib-panel .pill-check.busy { opacity: .55; pointer-events: none; }
+.lib-pills .pill-check.busy { opacity: .55; pointer-events: none; }
 
 /* ── groups ──────────────────────────────────────────────────────────────── */
-#lib-panel .subgroup { margin-bottom: 14px; }
-#lib-panel .sub-head {
+.lib-pills .subgroup { margin-bottom: 14px; }
+.lib-pills .sub-head {
     width: 100%; display: flex; align-items: center; gap: 8px;
     border: 0; background: none; padding: 0 2px 8px; text-align: start;
     color: var(--txt); font-family: inherit; cursor: pointer;
 }
-#lib-panel .sub-head h3 { margin: 0; font-size: .94rem; font-weight: 800; }
-#lib-panel .sub-head .count {
+.lib-pills .sub-head h3 { margin: 0; font-size: .94rem; font-weight: 800; }
+.lib-pills .sub-head .count {
     font-size: .7rem; font-weight: 800; color: #111; background: var(--gold);
     border-radius: 999px; padding: 1px 8px;
 }
-#lib-panel .sub-head .rule { flex: 1; height: 1px; background: var(--line); }
-#lib-panel .sub-head .tri { display: grid; place-items: center; color: var(--muted); transition: transform .3s var(--ease); }
-#lib-panel .sub-head .tri svg { width: 11px; height: 11px; }
-#lib-panel .subgroup.collapsed .tri { transform: rotate(-90deg); }
-#lib-panel .subgroup.collapsed .group-body { display: none; }
-#lib-panel .subgroup.fire .sub-head h3 { color: var(--red); }
+.lib-pills .sub-head .rule { flex: 1; height: 1px; background: var(--line); }
+.lib-pills .sub-head .tri { display: grid; place-items: center; color: var(--muted); transition: transform .3s var(--ease); }
+.lib-pills .sub-head .tri svg { width: 11px; height: 11px; }
+.lib-pills .subgroup.collapsed .tri { transform: rotate(-90deg); }
+.lib-pills .subgroup.collapsed .group-body { display: none; }
+.lib-pills .subgroup.fire .sub-head h3 { color: var(--red); }
 
 /* ── states the panel needs that the library page has elsewhere ──────────── */
-#lib-panel .empty-note {
+.lib-pills .empty-note {
     margin: 6px 2px; font-size: .8rem; font-weight: 600; color: var(--muted); text-align: center;
 }
-#lib-panel .lib-skel {
+.lib-pills .lib-skel {
     height: 62px; border-radius: 18px; margin-bottom: 10px;
     background: linear-gradient(100deg, rgba(255,255,255,.04) 30%, rgba(255,255,255,.09) 50%, rgba(255,255,255,.04) 70%);
     background-size: 220% 100%;
@@ -235,6 +241,6 @@
    moment the tasks land. It is NOT allowed on anything full-screen or permanent
    (that is what repaints every frame and melts a phone). */
 @media (prefers-reduced-motion: reduce) {
-    #lib-panel .lib-skel { animation: none; }
-    #lib-panel .task { animation: none; }
+    .lib-pills .lib-skel { animation: none; }
+    .lib-pills .task { animation: none; }
 }

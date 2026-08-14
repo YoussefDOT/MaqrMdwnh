@@ -30,7 +30,7 @@
     <!-- Jacquard 12 is only used by one reading-mode input — never block the boot on it. -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jacquard+12&display=swap" media="print" onload="this.media='all'">
     <!-- The library task pills, mirrored 1:1 from MdwnhLibrary. See library-tasks.css. -->
-    <link rel="stylesheet" href="library-tasks.css?v=1">
+    <link rel="stylesheet" href="library-tasks.css?v=2">
     <!-- Baloo Bhaijaan 2 is the library's own face — used ONLY inside #lib-panel, so it
          must never block the boot. If it never arrives the panel falls back to Rubik. -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+Bhaijaan+2:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 249 · Updated 8/14 8:49 AM</div>
+    <div id="build-number" class="build-number">Build 250 · Updated 8/14 9:12 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -235,7 +235,7 @@
              نافذة صغيرة على مكتبة المدونة: نفس بطاقات المهام حرفيًا (انظر library-tasks.css).
              شقيقة لبطاقة المستخدم لا ابنتها — البطاقة تحمل will-change:transform على الجوال،
              وهذا يجعل أي ابن position:fixed يُقاس عليها بدل الشاشة. -->
-        <div id="lib-panel" class="lib-panel hidden" role="dialog" aria-modal="false" aria-label="مهامي من المكتبة">
+        <div id="lib-panel" class="lib-panel lib-pills hidden" role="dialog" aria-modal="false" aria-label="مهامي من المكتبة">
             <div class="lib-panel-head">
                 <span class="lib-panel-title">مهامي</span>
                 <button id="lib-refresh-btn" class="lib-head-btn" type="button" aria-label="تحديث" title="تحديث">
@@ -1058,7 +1058,22 @@
         <!-- لوحة المهمة الحالية -->
         <div id="current-task-panel" class="current-task-panel">
             <div class="task-panel-label">أعمل على</div>
-            <input type="text" id="current-task-input" placeholder="اكتب ما تعمل عليه..." autocomplete="off">
+            <div class="task-panel-row">
+                <input type="text" id="current-task-input" placeholder="اكتب ما تعمل عليه..." autocomplete="off">
+                <!-- اختيار من مهام المكتبة — يظهر فقط لمن له حساب هناك -->
+                <button id="task-pick-btn" class="task-pick-btn" type="button" hidden
+                        aria-label="اختر من مهامي" title="اختر من مهامي" aria-expanded="false">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 6.5l2 2 3.5-3.5"/><path d="M4 15.5l2 2 3.5-3.5"/>
+                        <path d="M13 7h7M13 16h7"/>
+                    </svg>
+                </button>
+            </div>
+            <!-- نفس بطاقات المكتبة، بلا زر الإتمام: الضغط يكتب اسم المهمة في الصندوق -->
+            <div id="task-pick-pop" class="task-pick-pop lib-pills hidden" role="dialog" aria-label="اختر مهمة">
+                <div class="task-pick-head">اختر مهمة من المكتبة</div>
+                <div id="task-pick-body" class="task-pick-body"></div>
+            </div>
         </div>
 
         <!-- لوحة أصوات التركيز -->
@@ -1690,7 +1705,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=241"></script>
+        <script type="module" src="game.js?v=242"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

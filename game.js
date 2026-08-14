@@ -9644,7 +9644,7 @@ function render() {
     // pass entirely; the DOM panel toggles at the bottom still run every frame.
     const _canvasHidden = gameState.azkar.active ||
         (gameState._isMobile && (gameState.prayer.isOverlayActive
-            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen()));
+            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || _lib.canvasOff));
     if (_canvasHidden) { _renderPanelToggles(); return; }
 
     const dpr = gameState.dpr || 1;
@@ -25754,6 +25754,13 @@ const _lib = {
     points: null,
     tier: 0,            // 1..5, or 0 for "no rank" (نواف, or not on the board)
     tickTimer: 0,
+    /* "the canvas has finished fading out, stop drawing it". Kept separate from
+       `open` because the world pass must keep running THROUGH the fade — cutting
+       it on the first frame is what made the background snap to black before the
+       panel had even appeared. */
+    canvasOff: false,
+    canvasTimer: 0,
+    pickOpen: false,
     quotes: new Map(),
     shut: {},           // which groups the reader collapsed — session only, like the library's
     toastTimer: 0,
@@ -25769,7 +25776,13 @@ function libPanelIsOpen() { return !!_lib.open; }
    as a number and `earned/<slug>` as a boolean — so this needs no rule change
    and must not be given one. */
 const _libJson = r => { if (!r.ok) throw new Error('LIB ' + r.status); return r.json(); };
-const _libBody = v => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v) });
+/* `keepalive` matters here: «استلم الآن» navigates this tab to the points site,
+   and a normal in-flight fetch is CANCELLED when the page unloads. Every write
+   this module makes is a few dozen bytes (a timestamp, a boolean, one small
+   claim record), far under the keepalive budget, so they all survive the exit.
+   Without it a fast press on a slow link could complete the task and lose the
+   claim — the one failure mode that costs a member real points. */
+const _libBody = v => ({ headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(v), keepalive: true });
 const libGet    = p      => fetch(`${LIB_DB}/${p}.json`).then(_libJson);
 const libPut    = (p, v) => fetch(`${LIB_DB}/${p}.json`, { method: 'PUT', ..._libBody(v) }).then(_libJson);
 const libPtsGet = p      => fetch(`${LIB_PTS_DB}/${p}.json`).then(_libJson);
@@ -25943,7 +25956,13 @@ function _libTaskPill(t, i, opts) {
        not mine to do. «٠/١» is not a progress bar — a one-person task gets the
        tick or nothing. */
     let action;
-    if (watching) {
+    if (opts.pick) {
+        // Picker mode: the pill is a CHOICE, not a task to finish. No إتمام
+        // button at all — offering one here would complete a task from a box
+        // that is only meant to say what you are working on.
+        action = '';
+        el.classList.add('pickable');
+    } else if (watching) {
         const who = _libAssignees(t);
         const n = who.filter(s => _libIsDoneFor(t, s)).length;
         action = who.length < 2
@@ -25989,7 +26008,9 @@ function _libTaskPill(t, i, opts) {
     el.addEventListener('pointermove', (e) => {
         if (Math.abs(e.clientX - downX) > MOVE || Math.abs(e.clientY - downY) > MOVE) moved = true;
     });
-    const enter = () => window.open(LIB_SITE_URL, '_blank', 'noopener');
+    const enter = opts.pick
+        ? () => _libPickTask(t)
+        : () => window.open(LIB_SITE_URL, '_blank', 'noopener');
     el.tabIndex = 0;
     el.setAttribute('role', 'button');
     el.addEventListener('click', () => { if (!moved) enter(); });
@@ -26258,6 +26279,70 @@ function _libTickCountdowns() {
     if (needsRebuild) _libRender(true);
 }
 
+/* ── the «أعمل على» picker ───────────────────────────────────────────────────
+   A small button beside the box opens the same pills, minus the إتمام button;
+   pressing one drops its title into the box. It writes NOTHING of its own: the
+   value goes in and an `input` event is dispatched, so the box's existing
+   debounced save is the only thing that ever touches `users/{uid}/currentTask`.
+   One writer, one debounce — a second save path here would race that one. */
+function _libPickTask(t) {
+    const input = document.getElementById('current-task-input');
+    if (input) {
+        input.value = t.title || '';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    _libClosePicker();
+}
+
+function _libRenderPicker() {
+    const host = document.getElementById('task-pick-body');
+    if (!host) return;
+    host.innerHTML = '';
+    if (!_lib.me) { host.innerHTML = '<p class="empty-note">لا يوجد حساب لك في المكتبة.</p>'; return; }
+    if (!_lib.tasks) {
+        host.innerHTML = _lib.error
+            ? '<p class="empty-note">تعذّر الوصول إلى المكتبة.</p>'
+            : '<div class="lib-skel"></div><div class="lib-skel"></div>';
+        return;
+    }
+    /* MY open tasks only — «أعمل على» is what I am doing, and a task I merely
+       supervise is not that. Own group ids so folding here doesn't fold the
+       big panel's groups too. */
+    const mine = _libOpenMine();
+    const a = _libBlock('pick-fire', 'fire', 'الحريقة 🔥', _libFireOf(mine), { pick: true });
+    const b = _libBlock('pick-rest', '', 'بقية المهام', _libRestOf(mine), { pick: true });
+    if (a) host.appendChild(a);
+    if (b) host.appendChild(b);
+    if (!a && !b) host.innerHTML = '<p class="empty-note">لا مهام مفتوحة عليك الآن.</p>';
+}
+
+function _libOpenPicker() {
+    const pop = document.getElementById('task-pick-pop');
+    const btn = document.getElementById('task-pick-btn');
+    if (!pop || _lib.pickOpen) return;
+    _lib.pickOpen = true;
+    pop.classList.remove('hidden');
+    if (btn) { btn.classList.add('open'); btn.setAttribute('aria-expanded', 'true'); }
+    _libRenderPicker();
+    // Laid out first, then `.active` on the next-next frame — `display` can't
+    // transition (the azkar/prayer pattern).
+    requestAnimationFrame(() => requestAnimationFrame(() => pop.classList.add('active')));
+    /* Only redraw when the list was genuinely empty — the idle fetch means it
+       almost never is, and rebuilding it anyway replays every pill's entrance
+       a beat after the reader has already started looking at them. */
+    const had = !!_lib.tasks;
+    _libEnsureTasks(false).then(() => { if (_lib.pickOpen && !had) _libRenderPicker(); });
+}
+
+function _libClosePicker() {
+    const pop = document.getElementById('task-pick-pop');
+    const btn = document.getElementById('task-pick-btn');
+    if (!pop || !_lib.pickOpen) return;
+    _lib.pickOpen = false;
+    pop.classList.remove('active');
+    if (btn) { btn.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); }
+}
+
 /* ── the points + rank chip on the user card ─────────────────────────────── */
 function _libPaintScore() {
     const wrap = document.getElementById('user-score');
@@ -26474,6 +26559,12 @@ function openLibPanel() {
        mode owns that one, and sharing it would mean closing the panel put the
        joystick back mid-work-session. */
     document.getElementById('mobile-joystick')?.classList.add('lib-hidden');
+    /* Let the canvas FADE (CSS, 0.3s) and only then stop drawing it. Skipping
+       the world pass on frame one froze it at whatever it last drew while the
+       element was still fully opaque, and `visibility:hidden` on top of that
+       read as an instant black snap. 340ms clears the 300ms transition. */
+    clearTimeout(_lib.canvasTimer);
+    _lib.canvasTimer = setTimeout(() => { _lib.canvasOff = _lib.open; }, 340);
     // `display` can't transition — lay it out first, then let a double rAF flip
     // `.active` so the fade actually runs (the azkar/prayer/fireplace pattern).
     requestAnimationFrame(() => requestAnimationFrame(() => panel.classList.add('active')));
@@ -26492,6 +26583,9 @@ function closeLibPanel() {
     document.body.classList.remove('lib-panel-open');
     if (btn) { btn.classList.remove('open'); btn.setAttribute('aria-expanded', 'false'); }
     document.getElementById('mobile-joystick')?.classList.remove('lib-hidden');
+    // Drawing resumes on THIS frame, so the canvas has live content to fade back in.
+    clearTimeout(_lib.canvasTimer);
+    _lib.canvasOff = false;
     clearInterval(_lib.tickTimer);
     _lib.tickTimer = 0;
     _libPaintDot();
@@ -26505,6 +26599,12 @@ function toggleLibPanel() { _lib.open ? closeLibPanel() : openLibPanel(); }
    of them would be invisible AND still be holding movement locked. Called every
    frame from `gameLoop`, the same shape `updatePiPLifecycle` uses. */
 function updateLibPanelLifecycle() {
+    /* The picker lives inside the «أعمل على» box, which is only laid out during
+       a work session — when that box goes away the popover has to go with it,
+       or it lingers invisible and its next open animates from nowhere. */
+    if (_lib.pickOpen && !document.getElementById('current-task-panel')?.classList.contains('active')) {
+        _libClosePicker();
+    }
     if (!_lib.open) return;
     const blocked =
         gameState.azkar.active || gameState.prayer.isOverlayActive ||
@@ -26559,8 +26659,13 @@ function setupLibraryPanel() {
        capture handler ate the press, closed the panel, and «استلم الآن» never
        fired at all. */
     const _libInside = (e) => !!(e.target && e.target.closest &&
-        e.target.closest('#lib-panel, #lib-expand-btn, #lib-claim-modal'));
+        e.target.closest('#lib-panel, #lib-expand-btn, #lib-claim-modal, #current-task-panel'));
     document.addEventListener('pointerdown', (e) => {
+        // The picker is a plain popover — an outside press just shuts it, with
+        // none of the panel's click-swallowing (nothing is locked behind it).
+        if (_lib.pickOpen && !(e.target && e.target.closest && e.target.closest('#current-task-panel'))) {
+            _libClosePicker();
+        }
         if (!_lib.open || _libInside(e)) return;
         e.stopPropagation();
         // The `click` that follows this same press is a SECOND event, and by the
@@ -26575,7 +26680,20 @@ function setupLibraryPanel() {
         if (Date.now() < _libSwallowUntil) { _libSwallowUntil = 0; e.stopPropagation(); e.preventDefault(); return; }
         if (_lib.open) { e.stopPropagation(); closeLibPanel(); }
     }, true);
-    window.addEventListener('keydown', (e) => { if (_lib.open && e.key === 'Escape') closeLibPanel(); });
+    window.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (_lib.pickOpen) _libClosePicker();
+        if (_lib.open) closeLibPanel();
+    });
+
+    const pickBtn = document.getElementById('task-pick-btn');
+    const pickPop = document.getElementById('task-pick-pop');
+    if (pickBtn) pickBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _lib.pickOpen ? _libClosePicker() : _libOpenPicker();
+    });
+    // Scrolling the picker must not reach the world's zoom handler underneath.
+    if (pickPop) pickPop.addEventListener('wheel', (e) => { e.stopPropagation(); }, { passive: false });
     window.addEventListener('resize', () => { _hudPositionDock(); if (_lib.open) _libPositionPanel(); });
 
     /* The tools box and the azkar dock hang off the card's box, so they have to
@@ -26597,8 +26715,10 @@ function setupLibraryPanel() {
     _mdwnhRosterReady.then(() => {
         const uid = String(gameState.userId || '');
         _lib.me = MDWNH_ROSTER.byDiscord[uid] || null;
-        if (!_lib.me) return;                        // no library account — no panel, no chip
+        if (!_lib.me) return;                        // no library account — no panel, no chip, no picker
         btn.hidden = false;
+        const pb = document.getElementById('task-pick-btn');
+        if (pb) pb.hidden = false;
         _libLoadScore();
         /* One task fetch per session, on idle after spawn — never on the login
            path. It is what makes the red dot honest before the panel is ever

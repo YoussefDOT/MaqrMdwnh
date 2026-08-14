@@ -1674,6 +1674,37 @@ only — the names (الخشبيون…الذهبيون) are the `title`, becaus
   an open panel underneath one would be invisible and still holding movement locked.
 - The busy state on the إتمام button is a **`.busy` class, never the `disabled` attribute**.
 
+### The «أعمل على» picker (`#task-pick-btn` / `#task-pick-pop`)
+A small button beside the task box opens **the same pills with no إتمام button**
+(`opts.pick` in `_libTaskPill`); pressing one drops its title into the box. Offering a
+complete button from a box that only says *what you're working on* would be the wrong verb.
+
+**It writes nothing of its own.** `_libPickTask` sets `input.value` and dispatches an `input`
+event, so the box's existing debounced save stays the single writer of
+`users/{uid}/currentTask`. A second save path here would race that one.
+
+It shows **my** open tasks only (الحريقة / بقية المهام) — a task I merely supervise is not
+what I'm working on — under their own group ids, so folding here doesn't fold the big
+panel's groups. It closes itself when `#current-task-panel` loses `.active` (session over).
+
+### `.lib-pills` is the CSS scope, NOT `#lib-panel`
+`library-tasks.css` is scoped to a **class**, worn by **both** `#lib-panel` and
+`#task-pick-pop`, because both draw the same pills. Everything in that file must stay under
+it — a bare `.task` / `.count` / `.av` would reach into all of `style.css`.
+
+### Writes use `fetch(..., {keepalive: true})`
+«استلم الآن» navigates this tab away, and a normal in-flight `fetch` is **cancelled on
+unload**. Every write here is a few dozen bytes, far under the keepalive budget. Without it,
+a fast press on a slow link completes the task and loses the claim — the one failure that
+costs a member real points.
+
+### The mobile canvas FADES, it doesn't snap
+`_lib.canvasOff` is separate from `_lib.open` on purpose. The world pass keeps running
+**through** the 0.3 s CSS fade and only stops after it (340 ms). Cutting the render on frame
+one froze the canvas while it was still fully opaque, and the old `visibility: hidden` on top
+of that read as an instant black snap. On close, drawing resumes on the same frame so there
+is live content to fade back in. **Don't reintroduce `visibility: hidden` here.**
+
 ### RESYNC
 `library-tasks.css` and `_libTaskPill()` are hand-copies of `MdwnhLibrary/css/tasks.css` and
 `taskPill()`. **Nothing automates the sync.** If the pill changes there, change it in both
