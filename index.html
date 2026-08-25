@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 251 · Updated 8/14 9:26 AM</div>
+    <div id="build-number" class="build-number">Build 253 · Updated 8/25 3:45 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -665,6 +665,15 @@
                     </div>
                     <button id="settings-idle-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="on">
                         <span id="settings-idle-label">مفعّلة</span>
+                    </button>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-row-label">
+                        <span class="settings-row-name">تأكيد مدة الجلسة الحرة</span>
+                        <span class="settings-row-sub">سؤالك «هل عملت هذه المدة فعلًا؟» قبل حفظ جلسة حرة طويلة</span>
+                    </div>
+                    <button id="settings-longfree-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="30">
+                        <span id="settings-longfree-label">بعد ٣٠ دقيقة</span>
                     </button>
                 </div>
             </div>
@@ -1709,7 +1718,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=243"></script>
+        <script type="module" src="game.js?v=245"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

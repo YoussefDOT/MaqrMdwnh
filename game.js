@@ -46,8 +46,18 @@ const SETTINGS_PRAYER_DELAY_KEY = 'mdwnh_prayer_jamaah_delay'; // '1' = +5 min t
 // way. So particles can be forced ON while on بطاطس, and overlays forced OFF on عالية.
 const SETTINGS_PARTICLES_KEY = 'mdwnh_particles';  // 'on' | 'off' | absent = follow tier
 const SETTINGS_OVERLAYS_KEY  = 'mdwnh_overlays';   // 'on' | 'off' | absent = follow tier
+// Free-mode idle-protection confirm ("هل عملت لمدة x فعلًا؟"). Tri-state:
+// 'off' = never ask, absent/'30' = ask past DASH_LONG_FREE_MS (the default),
+// 'always' = ask on every free session however short. This matters more now that
+// a free session keeps counting while the tab is closed — the away time is real
+// clock time, so the confirm is the one place the user can correct it.
+const SETTINGS_LONGFREE_KEY  = 'mdwnh_longfree_check'; // 'off' | '30' | 'always'
 
 function getDisableIdleAnim() { return localStorage.getItem(SETTINGS_NOIDLE_KEY) === '1'; }
+function getLongFreeMode() {
+    const v = localStorage.getItem(SETTINGS_LONGFREE_KEY);
+    return (v === 'off' || v === 'always') ? v : '30';
+}
 function getRandomizeAzkar()  { return localStorage.getItem(SETTINGS_AZKAR_RANDOM_KEY) === '1'; }
 function getPrayerJamaahDelay() { return localStorage.getItem(SETTINGS_PRAYER_DELAY_KEY) === '1'; }
 // Extra minutes added to every prayer time when "صلاة الجماعة" is on (gives mosque-goers
@@ -3599,18 +3609,25 @@ function cleanupAbandonedPomoSessions(pomoData) {
         for (const [laptopId, state] of Object.entries(pomoData)) {
             if (!state?.claimedBy || !offlineUids.has(state.claimedBy)) continue;
 
-            // Free mode sessions: expire after 1 hour away
+            // Free mode: hand the SEAT back after an hour so a doc whose onDisconnect
+            // never landed can't hold a laptop hostage. This stays short on purpose —
+            // it is not the session's lifetime (RECLAIM_WINDOW_MS is), only the point
+            // at which the absent user stops occupying a device.
             if (state.mode === 'free') {
                 const savedAt = state.savedAt || state.createdAt || 0;
                 if (savedAt && now - savedAt > FREE_MODE_EXPIRY_MS) {
                     // Stash a reclaimable snapshot (parity with pomo below) instead of
                     // silently deleting — so a free-mode user whose onDisconnect never
-                    // landed can still reclaim their accumulated work within 4 hours.
+                    // landed can still reclaim their accumulated work.
                     updates[`${dashProfilePath(state.claimedBy)}/lastPomoSession`] = {
                         mode: 'free', laptopId: parseInt(laptopId),
                         claimedBy: state.claimedBy,
                         totalWorkMs: state.totalWorkMs || 0,
                         createdAt: state.createdAt || savedAt,
+                        // Carry the doc's own stamp so the away-time credit runs from
+                        // when THEY vanished, not from whenever another client
+                        // happened to notice — see _freeAwayMs.
+                        savedAt,
                         abandonedAt: now,
                     };
                     updates[lobbyPath(`pomodoro/${laptopId}`)] = null;
@@ -3675,10 +3692,16 @@ function syncLaptopsFromPomodoro(data) {
 // ── Session disconnect / reclaim (solo pomodoro & free mode) ─────────────────
 // On ANY disconnect we (a) free the laptop immediately so others never see a
 // ghost (claimed-but-empty) laptop, and (b) stash the session under
-// dashboards/{uid}/profile/lastPomoSession so the user can reclaim it within 4h on next login
+// dashboards/{uid}/profile/lastPomoSession so the user can reclaim it on next login
 // (their old laptop if it's free, otherwise a random free one). Shared pomo has
 // its own host-promotion path and is intentionally excluded here.
-const RECLAIM_WINDOW_MS = 4 * 60 * 60 * 1000; // 4 hours
+//
+// Closing the tab does NOT end the session — only انهاء الجلسة does. While away the
+// user is invisible and holds no laptop, but a FREE session's clock keeps running:
+// `_freeAwayMs()` credits the time between the stash and the reclaim (see
+// _reclaimFreeTotalMs). Pomodoro deliberately does NOT do this — it counts DOWN in
+// phases, so a reclaimed pomo still restarts its current phase as it always has.
+const RECLAIM_WINDOW_MS = 12 * 60 * 60 * 1000; // 12 hours — covers a night's sleep or a work day
 
 function _sessionIsSolo() {
     // Shared pomo: guests share the host's laptop; the host uses live-doc promotion.
@@ -3763,7 +3786,31 @@ function persistReclaimSnapshot() {
     const snap = _buildReclaimSnapshot();
     if (!snap) return;
     snap.abandonedAt = null; // live, not abandoned
+    // Server-stamped "as of when is totalWorkMs correct". A free session's clock
+    // keeps running while the tab is closed, and the reclaim credits
+    // `now - savedAt` — so this must be the SAME clock `abandonedAt` uses, and it
+    // must sit next to the number it describes (abandonedAt lands up to one
+    // persist interval later, which would silently under-count the gap).
+    snap.savedAt = { '.sv': 'timestamp' };
     update(ref(database), { [`${dashProfilePath()}/lastPomoSession`]: snap });
+}
+
+// How long a stashed session has been away, in server time. Prefers `savedAt`
+// (stamped with totalWorkMs); falls back to `abandonedAt` for stashes written
+// before that field existed, and for the ones cleanupAbandonedPomoSessions
+// writes on another user's behalf. Clamped at both ends: never negative (clock
+// skew), never past the reclaim window (a stash that old is discarded anyway).
+function _freeAwayMs(ls) {
+    const from = ls.savedAt || ls.abandonedAt || 0;
+    if (!from) return 0;
+    return Math.max(0, Math.min(RECLAIM_WINDOW_MS, serverNow() - from));
+}
+
+// Free-mode total on reclaim = the banked work + the time the tab was closed.
+// This is what makes "exiting the site does not exit the session" true: the
+// count-up the user comes back to has kept going the whole time.
+function _reclaimFreeTotalMs(ls) {
+    return (ls.totalWorkMs || 0) + _freeAwayMs(ls);
 }
 
 // Arm the disconnect handlers: free the laptop + stamp `abandonedAt` on the stash.
@@ -5431,12 +5478,15 @@ function startGame(userData) {
         syncLaptopsFromPomodoro(pomoData);
         let activeLaptopId = null;
         let restoringFreeMode = false;
-        const FREE_MODE_EXPIRY_MS = 60 * 60 * 1000; // 1 hour
+        // Our OWN free-mode doc is still on the laptop — i.e. the onDisconnect that
+        // frees it hasn't landed yet (a fast reload races it). Same session, same
+        // rules as the reclaim stash below: it survives the full reclaim window and
+        // its clock kept running while we were gone.
+        const FREE_MODE_EXPIRY_MS = RECLAIM_WINDOW_MS;
         for (const [lapId, state] of Object.entries(pomoData)) {
             if (!state || state.claimedBy !== gameState.userId) continue;
 
             if (state.mode === 'free') {
-                // Free mode save — check if < 1 hour old
                 const savedAt = state.savedAt || state.createdAt || 0;
                 if (!savedAt || Date.now() - savedAt > FREE_MODE_EXPIRY_MS) {
                     // Expired — clean up
@@ -5444,16 +5494,23 @@ function startGame(userData) {
                 } else {
                     activeLaptopId = parseInt(lapId);
                     restoringFreeMode = true;
+                    // Credit the gap since this doc was written. `savedAt` and
+                    // `totalWorkMs` are stamped together by the same device, so a
+                    // plain Date.now() diff is exact here (unlike the stash path,
+                    // which compares server stamps — see _freeAwayMs).
+                    const awayMs = Math.max(0, Date.now() - savedAt);
+                    const resumedTotalMs = (state.totalWorkMs || 0) + awayMs;
                     const fm = gameState.freeMode;
                     fm.active        = true;
                     fm.laptopId      = activeLaptopId;
                     fm.isShared      = false;
                     fm.phase         = 'idle'; // _startFreeModeWork fires via needsResume
                     fm._createdAt    = state.createdAt || Date.now();
-                    fm.totalWorkMs   = state.totalWorkMs || 0;
+                    fm.totalWorkMs   = resumedTotalMs;
                     fm.workStartTime = 0;
                     fm.breakEndTime  = 0;
                     fm.breakPromptShown = false;
+                    fm.workMsAtLastBreak = resumedTotalMs;   // break prompt counts from the resume
                     fm.needsResume   = true;
                     // Restore laptop doc to active state. The unified disconnect
                     // handlers (free laptop + stash) are armed later via
@@ -5563,12 +5620,17 @@ function startGame(userData) {
                 const target = stillValid ? (preferred || gameState.laptops.find(l => !l.claimedBy)) : null;
 
                 if (target && isFree) {
-                    // Restore free mode on the target laptop
+                    // Restore free mode on the target laptop. The clock kept running
+                    // while the tab was closed — _reclaimFreeTotalMs folds that away
+                    // time into the count-up, so the user comes back to a session that
+                    // never stopped. (The «هل عملت هذه المدة فعلًا؟» confirm on انهاء
+                    // الجلسة is where they correct it if the away time wasn't real work.)
+                    const reclaimedTotalMs = _reclaimFreeTotalMs(ls);
                     const freeDoc = {
                         claimedBy: gameState.userId,
                         phase: 'free-work', mode: 'free',
                         createdAt: ls.createdAt || now,
-                        endTime: 0, totalWorkMs: ls.totalWorkMs || 0,
+                        endTime: 0, totalWorkMs: reclaimedTotalMs,
                         breakEndTime: 0, savedAt: 0,
                     };
                     update(ref(database), {
@@ -5584,10 +5646,15 @@ function startGame(userData) {
                     fm.isShared      = false;
                     fm.phase         = 'idle';
                     fm._createdAt    = ls.createdAt || now;
-                    fm.totalWorkMs   = ls.totalWorkMs || 0;
+                    fm.totalWorkMs   = reclaimedTotalMs;
                     fm.workStartTime = 0;
                     fm.breakEndTime  = 0;
                     fm.breakPromptShown = false;
+                    // Measure the next "خذ استراحة؟" prompt from the RESUME, not from
+                    // zero — the away time we just credited is not work they sat
+                    // through, so counting it toward the 25-minute break threshold
+                    // would nag them the instant they walked back in.
+                    fm.workMsAtLastBreak = reclaimedTotalMs;
                     fm.needsResume   = true;
                 } else if (target) {
                     const restoredPhase = ls.phase === 'break' ? 'break' : 'work';
@@ -8283,10 +8350,24 @@ function doLogout() {
                 .catch(() => window.location.reload());
         } else {
             const logoutCleanups = {};
-            // Explicit logout = clean end. Cancel the disconnect handlers + wipe the
-            // reclaim stash so we don't keep a laptop or reload into an old session.
+            // الخروج is LEAVING THE SITE, not ending the session — only انهاء الجلسة
+            // does that. So pressing it produces exactly what a tab close produces:
+            // the laptop is freed (below) so nobody sees a ghost, and the session is
+            // stashed as abandoned for the next login to reclaim. Wiping the stash
+            // here would make the button that means "go away for a bit" silently
+            // destroy a running session, while closing the tab preserved it.
+            const _logoutSnap = ((gameState.pomodoro.active || gameState.freeMode.active) && _sessionIsSolo())
+                ? _buildReclaimSnapshot() : null;
             cancelSessionDisconnect(false);
-            logoutCleanups[`${dashProfilePath()}/lastPomoSession`] = null;
+            if (_logoutSnap) {
+                // Same two server stamps a real disconnect leaves behind, so the
+                // free-mode away-time credit measures from here (see _freeAwayMs).
+                _logoutSnap.savedAt     = { '.sv': 'timestamp' };
+                _logoutSnap.abandonedAt = { '.sv': 'timestamp' };
+                logoutCleanups[`${dashProfilePath()}/lastPomoSession`] = _logoutSnap;
+            } else {
+                logoutCleanups[`${dashProfilePath()}/lastPomoSession`] = null;
+            }
             const _activeLap = _activeSessionLaptopId();
             if (_activeLap != null && _sessionIsSolo()) {
                 onDisconnect(ref(database, lobbyPath(`pomodoro/${_activeLap}`))).cancel();
@@ -14445,6 +14526,8 @@ function setupSettingsUI() {
     const joystickLabel = document.getElementById('settings-joystick-label');
     const idleBtn       = document.getElementById('settings-idle-btn');
     const idleLabel     = document.getElementById('settings-idle-label');
+    const longFreeBtn   = document.getElementById('settings-longfree-btn');
+    const longFreeLabel = document.getElementById('settings-longfree-label');
     const azkarRandBtn  = document.getElementById('settings-azkar-random-btn');
     const azkarRandLabel= document.getElementById('settings-azkar-random-label');
     const prayerDelayBtn   = document.getElementById('settings-prayer-delay-btn');
@@ -14506,6 +14589,17 @@ function setupSettingsUI() {
         idleBtn.dataset.value = disabled ? 'off' : 'on';
         idleBtn.classList.toggle('settings-toggle-on', !disabled);
         idleLabel.textContent = disabled ? 'مغلقة' : 'مفعّلة';
+    }
+
+    // TRI-state like الجسيمات: مغلق → بعد ٣٠ دقيقة → دائمًا. "بعد ٣٠ دقيقة" is the
+    // default and reads as ON, since the confirm is a safety net, not a nag.
+    function _reflectLongFree() {
+        if (!longFreeBtn) return;
+        const mode = getLongFreeMode();
+        longFreeBtn.dataset.value = mode;
+        longFreeBtn.classList.toggle('settings-toggle-on',  mode !== 'off');
+        longFreeBtn.classList.toggle('settings-toggle-low', mode === 'off');
+        longFreeLabel.textContent = mode === 'off' ? 'مغلق' : (mode === 'always' ? 'دائمًا' : 'بعد ٣٠ دقيقة');
     }
 
     function _reflectAzkarRandom() {
@@ -14605,6 +14699,16 @@ function setupSettingsUI() {
         });
     }
 
+    if (longFreeBtn) {
+        longFreeBtn.addEventListener('click', () => {
+            // مغلق → بعد ٣٠ دقيقة → دائمًا. Removing the key restores the default.
+            const next = { off: '30', '30': 'always', always: 'off' }[getLongFreeMode()];
+            if (next === '30') localStorage.removeItem(SETTINGS_LONGFREE_KEY);
+            else               localStorage.setItem(SETTINGS_LONGFREE_KEY, next);
+            _reflectLongFree();
+        });
+    }
+
     if (azkarRandBtn) {
         azkarRandBtn.addEventListener('click', () => {
             const next = getRandomizeAzkar() ? '0' : '1';
@@ -14694,6 +14798,7 @@ function setupSettingsUI() {
     _reflectLemo();
     _reflectJoystick();
     _reflectIdle();
+    _reflectLongFree();
     _reflectAzkarRandom();
     _reflectPrayerDelay();
 }
@@ -16582,12 +16687,12 @@ function setupPomoLeaveBtn() {
         e.stopPropagation();
         resetToBtn();
         if (gameState.freeMode.active) {
-            // Idle-protection: a free session over 2h asks "did you really work that long?"
-            // before saving, so idle browser time isn't logged as real work.
-            // Siraj test ghosts always see the confirm modal (so it's testable without
-            // working a real 2 hours); everyone else only past the 2h threshold.
+            // Idle-protection: a long free session asks "did you really work that long?"
+            // before saving, so idle browser time (and the away time a closed tab now
+            // keeps accumulating) isn't logged as real work. Threshold + on/off is the
+            // user's "تأكيد مدة الجلسة الحرة" setting — see shouldAskLongFreeConfirm.
             const elapsedMs = freeWorkedMsNow();
-            if (gameState.isSirajGhost || elapsedMs > DASH_LONG_FREE_MS) {
+            if (shouldAskLongFreeConfirm(elapsedMs)) {
                 openFreeLongConfirmModal(elapsedMs);   // owns save + endFreeMode
             } else {
                 endFreeMode();
@@ -20755,7 +20860,7 @@ function drawBossResultsPanel(ctx, W, H, outcome) {
 // ============================================================================
 const DASH_TARGET_UID      = '567266235163738112';
 const DASH_MIN_SESSION_MS  = 10 * 60 * 1000;       // sessions under 10 min are never saved
-const DASH_LONG_FREE_MS    = 2 * 60 * 60 * 1000;   // free sessions over 2h trigger the idle-check
+const DASH_LONG_FREE_MS    = 30 * 60 * 1000;       // free sessions over 30min trigger the idle-check
 const DASH_MAX_TODOS       = 5;
 const DASH_JOURNAL_MAX_WORDS = 100;
 const DASH_JOURNAL_PLACEHOLDER = 'يوم مثمر، أنجزت أغلب ما خططت له والحمد لله.';
@@ -20880,7 +20985,18 @@ function dashRecordGameOnce(game, sessionKey, value) {
     }).catch(_dashErr('highscore-read'));
 }
 
-// ── >2h free-mode idle-protection confirm modal ─────────────────────────────
+// Should ending this free session ask "did you really work that long?" first.
+// The user's setting wins over everything, INCLUDING the Siraj always-ask —
+// otherwise 'off' couldn't be tested from a test ghost, which is the only
+// account that can reach the dashboard.
+function shouldAskLongFreeConfirm(elapsedMs) {
+    const mode = getLongFreeMode();
+    if (mode === 'off')    return false;
+    if (mode === 'always') return true;
+    return gameState.isSirajGhost || elapsedMs > DASH_LONG_FREE_MS;
+}
+
+// ── Free-mode idle-protection confirm modal (threshold: DASH_LONG_FREE_MS) ──
 function openFreeLongConfirmModal(elapsedMs) {
     const modal = document.getElementById('dash-longfree-modal');
     if (!modal) { endFreeMode(); return; }   // safety: never trap the user
@@ -24990,7 +25106,7 @@ let FIRE_NAME_TO_UID = (() => {
         'شفق': '1285679602349375564',
         'سحاب': '1357911505479270400',
         'ورقاء': '1466854105363255459',
-        'رجب': '1526564826527174779',
+        'رجب': '494890247008681984',
         'نواف': '292276027823095829',
         'يوسف': '567266235163738112',
         'جمانة': '622102915439525898',
@@ -24999,7 +25115,7 @@ let FIRE_NAME_TO_UID = (() => {
         'خالد حسن': '716650621373251685',
         'فرات': '717209634020130866',
         'منة': '720663992657510472',
-        'أبو بندر': '722125498859258048',
+        'أبو بندر': '1526564826527174779',
         'مجود': '734601933427441704',
         'نجود': '734601933427441704',   // how the points DB spells مجود
         'مصطفى': '792080177177690143',
