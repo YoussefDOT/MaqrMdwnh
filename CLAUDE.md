@@ -89,6 +89,7 @@ Grep anchors for the major systems (all verified to exist):
 | Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession` |
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
+| Work streak challenge | `CHAL`, `updateWorkChallenge`, `_chalBank`, `_chalClaim` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
 | Success card | `setupSuccessCardUI` |
@@ -217,6 +218,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock; optional shuffled order; **after-prayer azkar** reachable from the prayer overlay |
 | **المدفئة / أعضاء الشهر** | Walk to the fireplace → a full-screen look at it with the month's top-3 point scorers framed on the mantel. Points come from a **separate Firebase project**. See **Fireplace / Members of the Month**. |
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
+| **تحدي المثابرة** | A seven-day work streak: ٥٠ دقيقة of work a day (breaks excluded) for ٧ أيام, ٣ → ٩ سبتمبر ٢٠٢٦. A foldable «فعالية» card under the azkar dock, a seven-dot ladder your avatar walks, and a payout claimed on the Points site through the library's own claim handshake. See **تحدي المثابرة**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
 | **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
@@ -1582,6 +1584,109 @@ measures the card and hangs the rest off it. Re-run by a **`ResizeObserver` on t
   (don't hide during azkar — it's the only exit) covers all three too.
 - `#player-count` was **deleted**; the writer at `listenToPlayers` was already `if (countElem)`
   guarded, so nothing else changed.
+
+---
+
+## تحدي المثابرة — the seven-day work streak
+
+**٥٠ دقيقة عمل يوميًا لسبعة أيام**, ٣ → ٩ سبتمبر ٢٠٢٦, paid out of the Points database
+through the claim loop a library task already uses. Code is the `تحدي المثابرة` block at
+the very end of `game.js`; markup is `#chal-dock` + `#chal-modal` in `index.html`; styles
+are the matching block at the foot of `style.css`. Grep anchors: `CHAL`,
+`updateWorkChallenge`, `_chalBank`, `_chalClaim`.
+
+### The state lives in `dashboards`, and that is the whole cost decision
+```
+dashboards/{uid}/challenge/{round}/days/{YYYY-MM-DD} = ms worked that day (capped at the goal)
+dashboards/{uid}/challenge/{round}/claimed           = ms stamp of the claim
+```
+Decision tree §5 case 4: private to one user, persistent, written more than once a day. One
+`get()` at setup, `runTransaction` at most once a minute, **no listener anywhere**. Nobody
+holds a live listener on `dashboards`, so the fan-out is zero. Under `users/{uid}` this
+would re-stream every member's every worked minute to every client in **both** lobbies —
+the single most expensive thing this feature could have been.
+
+**The day value is CAPPED at the goal**, which is what bounds the cost: ~50 tiny
+transactions on a day someone works, and **none at all** once that day is won.
+
+### Counting the minutes — the session's own counters, never a frame timer
+`_chalSessionWorkedMs()` reads `pomoWorkedMsNow()` / `freeWorkedMsNow()`. Both are
+wall-clock and both **freeze during a break**, which is exactly the rule — breaks are not
+counted — and neither needed a line of new bookkeeping. A frame timer would have been
+wrong twice: a backgrounded tab stops rAF entirely (real work, silently discarded) and it
+would have had to learn the break rule by hand.
+
+- **`_chal.liveMs` is the ledger.** Every bank adds a DELTA and zeroes it, never writes a
+  total, so two devices banking the same minute cannot double-count. Same shape as
+  `bankReadingProgress()`.
+- **The per-tick gain is clamped to the WALL time since the last tick (+2s).** Real work
+  advances both equally — a 30-minute backgrounded stretch arrives as ONE tick with a
+  30-minute wall gap and is credited in full. What the clamp catches is the **free-mode
+  reclaim dumping hours of away-credit into `totalWorkMs` in a single frame**: that is a
+  session credit, not fifty minutes spent at the desk, and without the clamp closing the
+  tab overnight would win the day.
+- Banked on `pagehide` and on `visibilitychange`→hidden, so a closed tab costs at most the
+  bank interval.
+
+### The card is the FOURTH rung of the HUD stack
+`#chal-dock` sits under `#azkar-dock` and is placed by `_hudPositionDock()` like its two
+siblings — a sibling of the user card, never a child (`will-change: transform` on the
+mobile card would make it the containing block). It is counted in `_hudStackBottom()`, so
+the tasks panel still starts below everything. Three things follow from that:
+- **`setMobileFocusMode` has to carry it too.** Four elements slide now, not three;
+  forgetting one leaves it floating alone on screen.
+- **It is FOLDED by default on mobile, open by default on desktop** (`_chalMinimized()`),
+  and only an explicit press writes the key — so "never touched it" and "chose the open
+  one" stay two different answers. A full card on a phone pushed the tasks panel down the
+  screen.
+- `_chalPaintCard()` runs ~1/s and only re-measures the stack when its own text changed
+  (`_chal.lastPaintKey`).
+
+### One modal, two headers — the panel AND the celebration
+`#chal-modal` is the seven-dot ladder: stickers over days ٧/٦/٥, the member's avatar riding
+the day they are on, done/missed/now dots. `_chalOpenModal(win)` only swaps the header
+copy. `display` can't transition, so it is always laid out and `.active` lands after a
+double rAF (the azkar/fireplace pattern), and it is z-index **9990 — deliberately BELOW
+prayer and azkar (10000)**, with a lifecycle guard in `updateWorkChallenge` that closes it
+if either fires.
+
+**The celebration waits for a clear screen.** Crossing the goal only ARMS
+`_chal.pendingWin`; `_chalScreenIsClear()` (no session, no overlay, **no end card** — the
+success modal is shown with `.active`, not `.hidden`) is what finally shows it. That is one
+guard in the loop instead of a call at each of the three session-exit paths — the same
+shape `updatePiPLifecycle` uses. `_chal.celebrated[dayKey]` is primed at load from the
+banked value, so a day already won never re-celebrates on the next login.
+
+### The claim is the ecosystem handshake, UNCHANGED
+`mdwnhLibrary/claims/<NFC dbKey>/maqr-streak-<round>` = `{taskId,title,points,color,ts}` —
+byte-for-byte the record a library task writes, at the path the Points site already
+settles. **No rules change and no code change was needed on either other site**: a claim
+was already generic. It reuses `_libShowClaim()` and `libPtsPut()` (`keepalive: true`,
+because «استلم الآن» navigates the tab away mid-write).
+- **A Siraj ghost can never mint one.** The claim is keyed by the member's Points-DB name,
+  which comes from `MDWNH_ROSTER.byDiscord` — a `siraj_*` id resolves to nobody, so the
+  button simply never appears. Same guard the reading leaderboard uses, for free.
+- The `claimed` stamp is written the moment the record lands: «لاحقًا» is still a claim
+  that has been made.
+- **`_chal.rosterDone` gates "this member has no library account".** Judging that before
+  `_mdwnhRosterReady` resolves hides the card from everyone for the first second.
+
+### The calendar
+`_chalMidnights()` counts LOCAL midnights, never a millisecond division — a DST hop is an
+hour and an hour either side of a boundary would move the whole ladder by a day. **The
+opening is a MOMENT** (`Date.now() < CHAL.start`, because the card counts down to it) and
+**the close is a calendar DAY** (`dayIndex > days-1`, because the last column runs to its
+own midnight). Asking both the same way either opens the round a minute before it was
+announced or closes it a minute into an eighth day — the rule صحبة الفجر settled on.
+
+### Starting the next round
+Pick a new `CHAL.round` key, move `start`, deploy. Nothing is migrated and nothing is
+"reset": the old round is still sitting at its own key and the new one is empty because
+nobody has written to it. `CHAL_CLAIM_ID` carries the round, so a second round claims at a
+key of its own and cannot collide with the first.
+
+**The library advertises this on its مقر العمل card and the two wordings have to agree** —
+changing the challenge means changing `MdwnhLibrary/index.html` in the same pass.
 
 ---
 

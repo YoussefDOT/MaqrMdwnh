@@ -8754,3 +8754,387 @@ body.lib-panel-open.is-mobile #game-canvas {
     opacity: 0;
     pointer-events: none;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   تحدي المثابرة — بطاقة الفعالية + لوحة الأيام السبعة
+   ═══════════════════════════════════════════════════════════════════════════
+   الرصيف الثالث في مكدّس الزاوية (بطاقة → أدوات → أذكار → تحدٍّ → لوحة المهام).
+   موضعه يُحسب في JS من مستطيل البطاقة، تمامًا كرصيف الأذكار.
+
+   قاعدتان محفوظتان هنا:
+   • الظهور داخل البطاقة يعيش في الـ keyframes مع `backwards` — والأساس مرئي.
+     أنيميشن لم يعمل (فايرفوكس) يترك المحتوى ظاهرًا، لا لوحةً فارغة.
+   • لا `backdrop-filter` على الجوال فوق اللوحة الحيّة: إعادة رسم كل إطار.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.chal-dock {
+    position: fixed;
+    z-index: 200;
+    top: 150px; right: 18px;      /* مبدئي فقط — JS يصحّحه */
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    pointer-events: none;
+    transition: transform 0.45s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.35s ease;
+}
+.chal-dock > * { pointer-events: auto; }
+.chal-dock[hidden] { display: none; }
+
+/* ── البطاقة ─────────────────────────────────────────────────────────────── */
+.chal-card {
+    width: 252px;
+    padding: 10px 11px 11px;
+    border-radius: 20px;
+    background: rgba(18, 18, 18, 0.72);
+    border: 1px solid rgba(244, 200, 43, 0.18);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30),
+                0 1px 0 rgba(255, 255, 255, 0.06) inset;
+    animation: chalCardIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+    overflow: hidden;
+}
+@keyframes chalCardIn {
+    from { opacity: 0; transform: translateY(-10px) scale(0.96); }
+    to   { opacity: 1; transform: none; }
+}
+@media (hover: hover) and (pointer: fine) {
+    .chal-card {
+        backdrop-filter: blur(20px) saturate(1.6);
+        -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    }
+}
+body.reduced-gfx .chal-card,
+body.is-mobile .chal-card { backdrop-filter: none; -webkit-backdrop-filter: none; }
+.chal-card[hidden] { display: none; }
+
+/* شعاع ذهبي خافت في الزاوية — ثابت لا متحرّك (قاعدة: لا أنيميشن دائم على
+   عنصر ظاهر دائمًا؛ يعيد الرسم كل إطار). */
+.chal-card::before {
+    content: "";
+    position: absolute; inset: -40% -20% auto -20%; height: 120px;
+    background: radial-gradient(60% 70% at 70% 0%, rgba(244, 200, 43, 0.16), transparent 70%);
+    pointer-events: none;
+}
+
+.chal-head {
+    position: relative;
+    display: flex; align-items: center; gap: 7px;
+}
+.chal-head-icon {
+    flex: 0 0 auto;
+    width: 24px; height: 24px;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    color: #f4c82b;
+    background: rgba(244, 200, 43, 0.13);
+    border: 1px solid rgba(244, 200, 43, 0.28);
+}
+.chal-head-icon svg { width: 13px; height: 13px; }
+.chal-head-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.chal-title {
+    font-size: 0.78rem; font-weight: 700; color: #fff; line-height: 1.25;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chal-sub {
+    font-size: 0.6rem; font-weight: 500; color: rgba(255, 255, 255, 0.42);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chal-tag {
+    flex: 0 0 auto;
+    padding: 2px 7px; border-radius: 50px;
+    font-size: 0.56rem; font-weight: 700; letter-spacing: 0.02em;
+    color: #1a1500; background: #f4c82b;
+    box-shadow: 0 3px 10px -4px rgba(244, 200, 43, 0.9);
+}
+.chal-fold {
+    flex: 0 0 auto;
+    width: 20px; height: 20px; padding: 0;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.55);
+    cursor: pointer;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s, color 0.18s;
+}
+.chal-fold:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.chal-fold:active { transform: scale(0.88); }
+.chal-fold svg { width: 11px; height: 11px; }
+
+.chal-body {
+    position: relative;
+    display: flex; flex-direction: column; gap: 6px;
+    width: 100%; margin-top: 9px; padding: 0;
+    background: none; border: 0;
+    font-family: inherit; text-align: inherit; color: inherit;
+    cursor: pointer;
+    transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chal-body:active { transform: scale(0.975); }
+.chal-row { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.chal-day {
+    font-size: 0.72rem; font-weight: 700; color: rgba(255, 255, 255, 0.85);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.chal-state {
+    font-size: 0.66rem; font-weight: 600; color: rgba(255, 255, 255, 0.5);
+    font-variant-numeric: tabular-nums;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.chal-card.is-done .chal-state { color: #7fdc9a; }
+
+.chal-bar {
+    display: block; height: 5px; border-radius: 50px; overflow: hidden;
+    background: rgba(255, 255, 255, 0.09);
+}
+.chal-fill {
+    display: block; height: 100%; width: 0%;
+    border-radius: 50px;
+    background: linear-gradient(90deg, #e08b1f, #f4c82b);
+    transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chal-card.is-done .chal-fill { background: linear-gradient(90deg, #35a35f, #7fdc9a); }
+.chal-note {
+    font-size: 0.58rem; font-weight: 500; color: rgba(255, 255, 255, 0.34);
+    line-height: 1.5;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
+/* ── الشكل المطويّ ────────────────────────────────────────────────────────── */
+.chal-mini {
+    position: relative;
+    display: flex; align-items: center; gap: 5px;
+    padding: 5px 10px 5px 8px;
+    border-radius: 50px;
+    border: 1px solid rgba(244, 200, 43, 0.26);
+    background: rgba(18, 18, 18, 0.72);
+    color: #f4c82b;
+    cursor: pointer;
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.3);
+    animation: chalCardIn 0.42s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+    transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s;
+}
+.chal-mini:hover { background: rgba(30, 30, 30, 0.86); }
+.chal-mini:active { transform: scale(0.93); }
+.chal-mini[hidden] { display: none; }
+.chal-mini-icon { width: 13px; height: 13px; }
+.chal-mini-day {
+    font-size: 0.64rem; font-weight: 700; color: rgba(255, 255, 255, 0.8);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ── وضع التركيز على الجوال: ينزلق مع البطاقة وإخوته ───────────────────────── */
+body.is-mobile .chal-dock.focus-hidden {
+    transform: translateY(-160%);
+    opacity: 0;
+    pointer-events: none;
+}
+body.is-mobile.azkar-active .chal-dock.focus-hidden {
+    transform: none; opacity: 1; pointer-events: none;
+}
+
+/* ── الجوال: أضيق وأقصر ───────────────────────────────────────────────────── */
+body.is-mobile .chal-card { width: 210px; padding: 8px 9px 9px; border-radius: 17px; }
+body.is-mobile .chal-title { font-size: 0.72rem; }
+body.is-mobile .chal-sub { font-size: 0.55rem; }
+body.is-mobile .chal-tag { font-size: 0.52rem; padding: 2px 6px; }
+body.is-mobile .chal-note { display: none; }   /* السطر الأول يكفي على شاشة صغيرة */
+body.is-mobile .chal-head-icon { width: 22px; height: 22px; }
+
+/* ═══ لوحة التحدي / بطاقة التهنئة ═══ */
+.chal-modal {
+    position: fixed; inset: 0; z-index: 9990;   /* تحت الصلاة والأذكار (10000) عمدًا */
+    display: flex; align-items: center; justify-content: center;
+    padding: 18px;
+    background: rgba(0, 0, 0, 0.62);
+    direction: rtl;
+    /* display لا يقبل انتقالًا — الظهور بالشفافية + visibility مثل الأذكار */
+    opacity: 0; visibility: hidden;
+    transition: opacity 0.32s ease, visibility 0s linear 0.32s;
+}
+.chal-modal.active { opacity: 1; visibility: visible; transition: opacity 0.32s ease, visibility 0s; }
+.chal-modal-card {
+    position: relative;
+    width: min(400px, 100%);
+    padding: 26px 22px 16px;
+    border-radius: 25px;
+    text-align: center;
+    background: rgba(18, 18, 18, 0.95);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    box-shadow: 0 18px 46px rgba(0, 0, 0, 0.6);
+    transform: scale(0.92) translateY(12px);
+    transition: transform 0.42s cubic-bezier(0.34, 1.56, 0.64, 1);
+    overflow: hidden;
+}
+.chal-modal.active .chal-modal-card { transform: none; }
+.chal-modal-burst {
+    position: absolute; inset: -60% -20% auto -20%; height: 240px;
+    background: radial-gradient(50% 60% at 50% 0%, rgba(244, 200, 43, 0.20), transparent 70%);
+    pointer-events: none;
+}
+.chal-modal.win .chal-modal-burst {
+    background: radial-gradient(50% 60% at 50% 0%, rgba(127, 220, 154, 0.22), transparent 70%);
+}
+.chal-modal-close {
+    position: absolute; top: 12px; inset-inline-start: 12px;
+    width: 26px; height: 26px; padding: 0;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.55);
+    cursor: pointer;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s, color 0.18s;
+}
+.chal-modal-close:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.chal-modal-close:active { transform: scale(0.88); }
+.chal-modal-close svg { width: 12px; height: 12px; }
+.chal-modal-kicker {
+    position: relative;
+    display: inline-block;
+    padding: 3px 10px; border-radius: 50px;
+    font-size: 0.6rem; font-weight: 700;
+    color: #1a1500; background: #f4c82b;
+}
+.chal-modal.win .chal-modal-kicker { background: #7fdc9a; color: #062b13; }
+.chal-modal-head {
+    position: relative;
+    margin: 10px 0 0; font-size: 1.18rem; font-weight: 800; color: #fff;
+}
+.chal-modal-sub {
+    position: relative;
+    margin: 5px 0 0; font-size: 0.76rem; font-weight: 500; line-height: 1.6;
+    color: rgba(255, 255, 255, 0.52);
+}
+
+/* ── خطّ الأيام السبعة ────────────────────────────────────────────────────── */
+.chal-track {
+    position: relative;
+    display: flex; align-items: flex-end; justify-content: space-between;
+    gap: 2px;
+    margin: 30px 4px 6px;
+}
+/* الخيط الواصل — تحت النقاط تمامًا، ولا يمتدّ خارج أوّلها وآخرها */
+.chal-track::before {
+    content: "";
+    position: absolute; inset-inline: 13px; bottom: 25px; height: 2px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.10);
+}
+.chal-step {
+    position: relative; z-index: 1;
+    flex: 1 1 0; min-width: 0;
+    display: flex; flex-direction: column; align-items: center; gap: 5px;
+}
+.chal-step-sticker {
+    width: 30px; height: 30px; object-fit: contain;
+    margin-bottom: -1px;
+    filter: drop-shadow(0 4px 8px rgba(0, 0, 0, 0.5));
+}
+.chal-step-spacer { height: 29px; }     /* يبقي النقاط على خطّ واحد */
+.chal-step-dot {
+    width: 20px; height: 20px;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    background: #1c1c1c;
+    border: 2px solid rgba(255, 255, 255, 0.16);
+    color: transparent;
+    font-size: 0.55rem; font-weight: 800;
+    transition: background 0.3s, border-color 0.3s, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chal-step.done .chal-step-dot {
+    background: #7fdc9a; border-color: #7fdc9a; color: #062b13;
+}
+.chal-step.miss .chal-step-dot { border-color: rgba(229, 75, 42, 0.55); }
+.chal-step.now .chal-step-dot { border-color: #f4c82b; transform: scale(1.12); }
+.chal-step-num {
+    font-size: 0.58rem; font-weight: 700; color: rgba(255, 255, 255, 0.34);
+    font-variant-numeric: tabular-nums;
+}
+.chal-step.now .chal-step-num { color: #f4c82b; }
+.chal-step.done .chal-step-num { color: rgba(255, 255, 255, 0.6); }
+/* الصورة الرمزية تجلس مكان نقطة اليوم نفسها — لا فوقها. جرّبت فوقها أولًا
+   فاصطدمت بالنقطة في الأيام العادية وبالملصق في أيام السلّم، ولزمها حسابان
+   مختلفان للارتفاع. هنا هي النقطة: مركزها هو مركز النقطة (٢٦px من أسفل
+   الخطّ)، والنقطة تحتها تختفي. مطلقة لا في السياق، حتى لا تدفع الصفّ. */
+.chal-step-me {
+    position: absolute; bottom: 13px; inset-inline-start: 50%;
+    transform: translateX(50%);
+    width: 26px; height: 26px; border-radius: 50%;
+    object-fit: cover;
+    border: 2px solid #f4c82b;
+    background: #1c1c1c;
+    box-shadow: 0 0 0 3px rgba(244, 200, 43, 0.18), 0 6px 14px rgba(0, 0, 0, 0.55);
+    animation: chalMeIn 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+.chal-step.has-me .chal-step-dot { opacity: 0; }
+.chal-step.has-me.done .chal-step-me {
+    border-color: #7fdc9a;
+    box-shadow: 0 0 0 3px rgba(127, 220, 154, 0.18), 0 6px 14px rgba(0, 0, 0, 0.55);
+}
+@keyframes chalMeIn {
+    from { opacity: 0; transform: translateX(50%) translateY(-10px) scale(0.7); }
+    to   { opacity: 1; transform: translateX(50%); }
+}
+
+.chal-tally {
+    margin-top: 16px; padding-top: 13px;
+    border-top: 1px dashed rgba(255, 255, 255, 0.10);
+    font-size: 0.76rem; font-weight: 600; line-height: 1.9;
+    color: rgba(255, 255, 255, 0.62);
+}
+.chal-tally b { color: #f4c82b; font-weight: 800; font-variant-numeric: tabular-nums; }
+.chal-tally .ok { color: #7fdc9a; }
+/* ── السلّم ───────────────────────────────────────────────────────────────
+   كل درجة صندوقها الخاص، وداخلها الرقم والعبارة صندوقان منفصلان. هذا ليس
+   تزيينًا: «٧ أيام → ٣٠ · ٦ → ٢٠» في سطر واحد يخلط أرقامًا (AN) بأسهم وفواصل
+   محايدة الاتجاه، فيعيد محرّك الـ bidi ترتيب الأزواج ويصير السلّم كذبًا. صناديق
+   منفصلة لا تحتوي أي محرف محايد بينها، فلا موضع للالتباس أصلًا. */
+.chal-rungs {
+    display: flex; flex-wrap: wrap; justify-content: center; gap: 6px;
+    margin-top: 10px;
+}
+.chal-rung {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 9px; border-radius: 50px;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    font-size: 0.68rem; font-weight: 600; line-height: 1;
+    color: rgba(255, 255, 255, 0.55);
+}
+.chal-rung b {
+    color: #f4c82b; font-weight: 800; font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+}
+
+.chal-modal-actions { display: flex; gap: 9px; margin-top: 16px; }
+.chal-modal-btn {
+    flex: 1; padding: 10px 6px;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 255, 255, 0.13);
+    background: transparent;
+    color: rgba(255, 255, 255, 0.72);
+    font-family: inherit; font-size: 0.82rem; font-weight: 700;
+    cursor: pointer;
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s, color 0.18s;
+}
+.chal-modal-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.chal-modal-btn:active { transform: scale(0.95); }
+.chal-modal-btn[hidden] { display: none; }
+.chal-modal-btn.primary { background: #f4c82b; border-color: #f4c82b; color: #1a1500; }
+.chal-modal-btn.primary:hover { background: #ffd747; color: #1a1500; }
+.chal-modal-note {
+    margin-top: 11px; font-size: 0.64rem; font-weight: 500; line-height: 1.6;
+    color: rgba(255, 255, 255, 0.3);
+}
+
+body.is-mobile .chal-modal-card { padding: 24px 15px 14px; border-radius: 22px; }
+body.is-mobile .chal-track { margin-inline: 0; }
+body.is-mobile .chal-step-sticker { width: 25px; height: 25px; }
+body.is-mobile .chal-step-spacer { height: 24px; }
+body.is-mobile .chal-step-me { width: 26px; height: 26px; bottom: 32px; }
+body.is-mobile .chal-step.has-sticker .chal-step-me { bottom: 58px; }
+body.is-mobile .chal-modal-head { font-size: 1.05rem; }
+
+/* اللوحة تغطّي الشاشة على الجوال، فاللوحة الحيّة خلفها لا داعي لرسمها */
+body.chal-modal-open { overflow: hidden; }
+body.chal-modal-open.is-mobile #game-canvas { opacity: 0; pointer-events: none; }

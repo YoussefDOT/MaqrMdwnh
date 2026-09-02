@@ -5454,6 +5454,7 @@ function startGame(userData) {
     setupSuccessCardUI();
     setupFireplaceUI();
     setupLibraryPanel();
+    setupWorkChallenge();
     setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
     startTabTitleTicker();
 
@@ -6397,7 +6398,7 @@ function setupControls() {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
         if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || readingEndCardOpen()
-            || libPanelIsOpen()) return;
+            || libPanelIsOpen() || chalModalIsOpen()) return;
         gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
@@ -6411,7 +6412,7 @@ function setupControls() {
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
         // Disable scroll zoom while the dashboard / customization / fireplace / tasks panel is open
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen() || chalModalIsOpen()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -6915,6 +6916,7 @@ function setMobileFocusMode(active) {
     // card away and leaves its two satellites floating on their own.
     document.getElementById('hud-tools')?.classList.toggle('focus-hidden', hideCard);
     document.getElementById('azkar-dock')?.classList.toggle('focus-hidden', hideCard);
+    document.getElementById('chal-dock')?.classList.toggle('focus-hidden', hideCard);
     // The joystick hides during focus on any device where it's actually shown
     // (e.g. iPad landscape, where isMobile() is false but the circle is visible).
     if (joystick) joystick.classList.toggle('focus-hidden', active && joystickShouldShow());
@@ -8902,7 +8904,7 @@ function handleMovement() {
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
     // minigame overlays, locked-in sessions, kidnap anim, prayer, sitting, reading.
     if ((JUICE_ENTRANCE && _entrance.active)
-        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen() || isMinigameOverlayOpen()
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen() || chalModalIsOpen() || isMinigameOverlayOpen()
         || gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)
         || readingEndCardOpen()) {
@@ -9640,6 +9642,7 @@ function gameLoop(timestamp) {
         updatePomodoro();
         updatePiPLifecycle();
         updateLibPanelLifecycle();
+        updateWorkChallenge();
         updateTeleportAnim();
         updateCoffeeTeleportAnim();
         updateLaptopBossTeleportAnim();
@@ -26618,10 +26621,22 @@ function _hudPositionDock() {
             tools.style.right = Math.round(right) + 'px';
         }
     }
+    let base = (below && tools) ? tools.getBoundingClientRect().bottom : r.bottom;
     if (dock) {
-        const base = (below && tools) ? tools.getBoundingClientRect().bottom : r.bottom;
         dock.style.top = Math.round(base + HUD_GAP) + 'px';
         dock.style.right = Math.round(window.innerWidth - r.right) + 'px';
+        // The azkar dock collapses to nothing when its button is hidden, so it
+        // only pushes the challenge card down when it actually has height.
+        if (dock.offsetHeight > 0) base = dock.getBoundingClientRect().bottom;
+    }
+    /* تحدي المثابرة sits on the fourth rung. It is a SIBLING of the other two,
+       not a child, for the same reason the tasks panel is: on mobile the user
+       card carries `will-change: transform`, which makes it the containing
+       block for any fixed descendant. */
+    const chal = document.getElementById('chal-dock');
+    if (chal && !chal.hidden) {
+        chal.style.top = Math.round(base + HUD_GAP) + 'px';
+        chal.style.right = Math.round(window.innerWidth - r.right) + 'px';
     }
 }
 
@@ -26653,7 +26668,7 @@ function _hudStackBottom() {
     const card = document.getElementById('user-card');
     if (!card) return 0;
     let bottom = card.getBoundingClientRect().bottom;
-    for (const id of ['hud-tools', 'azkar-dock']) {
+    for (const id of ['hud-tools', 'azkar-dock', 'chal-dock']) {
         const el = document.getElementById(id);
         if (el && el.offsetHeight > 0) bottom = Math.max(bottom, el.getBoundingClientRect().bottom);
     }
@@ -26749,7 +26764,7 @@ function updateLibPanelLifecycle() {
     if (!_lib.open) return;
     const blocked =
         gameState.azkar.active || gameState.prayer.isOverlayActive ||
-        dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() ||
+        dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || chalModalIsOpen() ||
         isMinigameOverlayOpen() || isMinigameActive() ||
         readingEndCardOpen() || (gameState.reading && gameState.reading.active) ||
         gameState._dupSessionDetected ||
@@ -26874,4 +26889,544 @@ function setupLibraryPanel() {
         if (window.requestIdleCallback) requestIdleCallback(kick, { timeout: 8000 });
         else setTimeout(kick, 4000);
     });
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   تحدي المثابرة — the seven-day work streak
+   ═══════════════════════════════════════════════════════════════════════════
+   Fifty minutes of WORK a day (breaks excluded) for seven days, paid out of
+   the Points database through the same claim loop a library task uses.
+
+   WHERE THE STATE LIVES — walk the decision tree in CLAUDE.md §5 and this is
+   case 4: private to one user, persistent, written more than once a day. So it
+   is `dashboards/{uid}/…`, read with ONE `get()` at spawn and written with a
+   `runTransaction` at most once a minute. Nobody holds a live listener on
+   `dashboards`, so the fan-out is zero. It must NEVER go under `users/{uid}` —
+   the global users listener would re-stream it to every client in both lobbies
+   on every minute of every member's work.
+
+     dashboards/{uid}/challenge/{round}/days/{YYYY-MM-DD} = ms worked that day
+     dashboards/{uid}/challenge/{round}/claimed           = ms stamp of the claim
+
+   THE PAYOUT is the leader's ladder: 7 days → 30, 6 → 20, 5 → 10, and 5 for
+   taking part at all (at least one completed day). A member is paid for what
+   they DID, so two people on six days are simply on the same rung.
+
+   COST: the day value is CAPPED at the goal, so a member writes at most ~50
+   transactions on a day they work and none at all once the day is won.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+const CHAL = {
+    round: 's1',
+    // The MOMENT the challenge opens — ١٢:٠١ ص of day one, not a bare date,
+    // because the card counts down to it and a countdown needs a clock. Month
+    // 8 = September. Day one is ٣ سبتمبر ٢٠٢٦.
+    start: new Date(2026, 8, 3, 0, 1, 0),
+    days: 7,
+    goalMs: 50 * 60000,
+    // days completed → points. Walked top-down, first match wins.
+    tiers: [
+        { days: 7, pts: 30 },
+        { days: 6, pts: 20 },
+        { days: 5, pts: 10 },
+        { days: 1, pts: 5 },
+    ],
+};
+const CHAL_BANK_MS   = 60000;    // at most one transaction a minute, like reading
+const CHAL_MIN_KEY   = 'mdwnh_chal_minimized';
+const CHAL_CLAIM_ID  = 'maqr-streak-' + CHAL.round;
+
+const _chal = {
+    ready: false,       // the one-shot get() has landed (or failed)
+    days: {},           // { 'YYYY-MM-DD': ms } — the banked mirror
+    claimed: 0,
+    dayKey: '',         // the day the live counters below belong to
+    liveMs: 0,          // unbanked ms accumulated for `dayKey`
+    lastWorked: 0,      // the session's own worked-ms at the previous tick
+    tickAt: 0,
+    lastBankAt: 0,
+    primed: false,
+    pendingWin: false,  // the goal was crossed; celebrate once the session ends
+    celebrated: {},     // { dayKey: true } — one celebration per day, per session
+    paintAt: 0,
+    lastPaintKey: '',
+    rosterDone: false,  // the members roster has resolved (so "no library account" is honest)
+    modalOpen: false,
+    wired: false,
+    claiming: false,
+};
+
+/* ── the calendar ─────────────────────────────────────────────────────────── */
+// A count of LOCAL midnights, never a millisecond division: a DST hop is an
+// hour, and an hour either side of a boundary would move the whole board a day.
+function _chalMidnights(a, b) {
+    const A = new Date(a.getFullYear(), a.getMonth(), a.getDate());
+    const B = new Date(b.getFullYear(), b.getMonth(), b.getDate());
+    return Math.round((B - A) / 864e5);
+}
+// 0-based index of today within the round. Negative before it starts.
+function _chalDayIndex(now) {
+    return _chalMidnights(CHAL.start, now || new Date());
+}
+function _chalDateKey(idx) {
+    const d = new Date(CHAL.start.getFullYear(), CHAL.start.getMonth(), CHAL.start.getDate() + idx);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+/* The opening is a MOMENT (a clock can reach it) and the close is a calendar
+   DAY (the last column runs to its own midnight). Asking both the same way
+   either opens the round a minute before it was announced or closes it a
+   minute into an eighth day — the same rule صحبة الفجر settled on. */
+function _chalState() {
+    if (Date.now() < CHAL.start.getTime()) return 'soon';
+    return _chalDayIndex() > CHAL.days - 1 ? 'over' : 'live';
+}
+function _chalDayMs(key) { return Math.max(0, _chal.days[key] || 0); }
+// The banked value plus whatever this tab has accumulated since the last bank.
+function _chalTodayMs() {
+    const key = _todayDateStr();
+    return Math.min(CHAL.goalMs, _chalDayMs(key) + (_chal.dayKey === key ? _chal.liveMs : 0));
+}
+function _chalDoneCount() {
+    let n = 0;
+    for (let i = 0; i < CHAL.days; i++) if (_chalDayMs(_chalDateKey(i)) >= CHAL.goalMs) n++;
+    return n;
+}
+function _chalPointsFor(done) {
+    for (const t of CHAL.tiers) if (done >= t.days) return t.pts;
+    return 0;
+}
+
+/* ── counting the minutes ─────────────────────────────────────────────────────
+   The session's OWN worked-ms counters are the source, never a frame timer:
+   both are wall-clock (`pomoWorkedMsNow` accumulates from `_workStartMs`,
+   `freeWorkedMsNow` from `workStartTime`) and both FREEZE during a break, which
+   is exactly the rule — breaks are not counted. A backgrounded tab stops
+   rAF entirely, so a frame timer would silently throw away real work. */
+function _chalSessionWorkedMs() {
+    if (gameState.pomodoro.active) return pomoWorkedMsNow();
+    if (gameState.freeMode.active) return freeWorkedMsNow();
+    return 0;
+}
+
+function _chalAccumulate(now) {
+    const worked = _chalSessionWorkedMs();
+    // A new session restarts its counter near zero — re-anchor rather than
+    // treating the drop as negative progress.
+    if (worked < _chal.lastWorked) _chal.lastWorked = worked;
+
+    if (!_chal.primed) { _chal.primed = true; _chal.lastWorked = worked; _chal.tickAt = now; return; }
+
+    /* The gain is clamped to the WALL time since the last tick (+2s slack).
+       Real work advances both equally — including across a 30-minute
+       backgrounded stretch, which arrives as one tick with a 30-minute wall
+       gap and is credited in full. What the clamp catches is the free-mode
+       reclaim dumping hours of away-credit into `totalWorkMs` in one frame;
+       that is a session credit, not thirty minutes spent at the desk. */
+    const wall = Math.max(0, now - (_chal.tickAt || now));
+    const gain = Math.min(Math.max(0, worked - _chal.lastWorked), wall + 2000);
+    _chal.lastWorked = worked;
+    _chal.tickAt = now;
+    if (gain <= 0) return;
+
+    const key = _todayDateStr();
+    if (_chal.dayKey !== key) { _chalBank(true); _chal.dayKey = key; _chal.liveMs = 0; }
+    // Capped at the goal: past it there is nothing left to measure, and it is
+    // what keeps this to ~50 writes on a day worked and none on a day won.
+    if (_chalDayMs(key) + _chal.liveMs >= CHAL.goalMs) return;
+    _chal.liveMs += gain;
+}
+
+/* One transaction that ADDS the delta — never a write of a total, so nothing is
+   double-counted if two devices bank the same minute. Mirrors
+   `bankReadingProgress()`; `_chal.liveMs` is the ledger and is zeroed only once
+   the write is handed off. */
+function _chalBank(force) {
+    if (!gameState.userId || !_chal.ready) return;
+    const key = _chal.dayKey;
+    const delta = Math.round(_chal.liveMs);
+    if (!key || delta <= 0) return;
+    if (!force && Date.now() - _chal.lastBankAt < CHAL_BANK_MS) return;
+    _chal.liveMs = 0;
+    _chal.lastBankAt = Date.now();
+    _chal.days[key] = Math.min(CHAL.goalMs, _chalDayMs(key) + delta);
+    runTransaction(ref(database, `dashboards/${gameState.userId}/challenge/${CHAL.round}/days/${key}`),
+        (curr) => Math.min(CHAL.goalMs, (curr || 0) + delta)).catch(() => {});
+}
+
+/* ── per-frame ────────────────────────────────────────────────────────────── */
+function updateWorkChallenge() {
+    if (!_chal.ready || !gameState.userId) return;
+    const now = Date.now();
+    const state = _chalState();
+    const key = _todayDateStr();
+    if (_chal.dayKey !== key) { _chalBank(true); _chal.dayKey = key; _chal.liveMs = 0; }
+
+    if (state === 'live') {
+        _chalAccumulate(now);
+        _chalBank(false);
+        // Crossing the goal only ARMS the celebration; it is shown when the
+        // session ends, which is what the brief asks for.
+        if (_chalTodayMs() >= CHAL.goalMs && !_chal.celebrated[key]) _chal.pendingWin = true;
+    } else if (_chal.liveMs > 0) {
+        _chalBank(true);
+    }
+
+    /* The prayer and azkar overlays outrank everything, and a prayer can fire
+       while this card is up. Closing it here — one guard, in the loop — is the
+       same shape `updateLibPanelLifecycle` uses, and it also means the z-index
+       below theirs is never the only thing keeping them on top. */
+    if (_chal.modalOpen && (gameState.azkar.active || gameState.prayer.isOverlayActive
+        || isMinigameOverlayOpen() || isMinigameActive() || gameState._dupSessionDetected)) {
+        _chalCloseModal();
+    }
+
+    /* The celebration waits for a clear screen: no session, no overlay, no end
+       card. One guard in the loop instead of a call at every one of the three
+       session-exit paths — the same shape as `updatePiPLifecycle`. */
+    if (_chal.pendingWin && !_chal.modalOpen && _chalScreenIsClear()) {
+        _chal.pendingWin = false;
+        _chal.celebrated[key] = true;
+        _chalOpenModal(true);
+    }
+
+    if (now - _chal.paintAt > 950) { _chal.paintAt = now; _chalPaintCard(); }
+}
+
+function _chalScreenIsClear() {
+    if (gameState.pomodoro.active || gameState.freeMode.active) return false;
+    if (gameState.azkar.active || gameState.prayer.isOverlayActive) return false;
+    if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen()) return false;
+    if (isMinigameOverlayOpen() || isMinigameActive()) return false;
+    if (gameState.reading && gameState.reading.active) return false;
+    if (readingEndCardOpen()) return false;
+    if (gameState._dupSessionDetected) return false;
+    // The end card is shown with `.active` (a `.modal-overlay`), not `.hidden`.
+    const success = document.getElementById('success-modal');
+    if (success && success.classList.contains('active')) return false;
+    const screen = document.getElementById('game-screen');
+    return !!(screen && screen.classList.contains('active'));
+}
+
+/* ── the card ─────────────────────────────────────────────────────────────── */
+/* Folded by DEFAULT on a phone, open by default on a desktop — and an explicit
+   press is what writes the key, so "never touched it" and "chose the open one"
+   stay two different answers. The stack under the user card is four rungs deep
+   now and the tasks panel starts below all of it; a full card there would push
+   the panel down the screen on every phone. */
+function _chalMinimized() {
+    let v = null;
+    try { v = localStorage.getItem(CHAL_MIN_KEY); } catch (_) {}
+    if (v === '1') return true;
+    if (v === '0') return false;
+    return isMobile();
+}
+function _chalSetMinimized(v) { try { localStorage.setItem(CHAL_MIN_KEY, v ? '1' : '0'); } catch (_) {} }
+
+// mm:ss, rolling into h:mm:ss past an hour — the same shape every other clock
+// on the site takes (see formatTimeMs).
+function _chalCountdown() {
+    return formatTimeMs(Math.max(0, CHAL.start.getTime() - Date.now()));
+}
+
+function _chalPaintCard() {
+    const dock = document.getElementById('chal-dock');
+    if (!dock) return;
+    const state = _chalState();
+    const done  = _chalDoneCount();
+    const pts   = _chalPointsFor(done);
+
+    // Once the round is over AND there is nothing left to take, the card goes
+    // away rather than sitting there as a monument.
+    const finished = state === 'over' && (_chal.claimed > 0 || pts <= 0 || (_chal.rosterDone && !_lib.me));
+    const show = !!gameState.userId && !finished;
+    dock.hidden = !show;
+    if (!show) return;
+
+    const card = document.getElementById('chal-card');
+    const mini = document.getElementById('chal-mini');
+    const min  = _chalMinimized();
+    if (card) card.hidden = min;
+    if (mini) mini.hidden = !min;
+
+    const todayMs = _chalTodayMs();
+    const dayIdx  = _chalDayIndex();
+    const todayOk = todayMs >= CHAL.goalMs;
+    if (card) card.classList.toggle('is-done', state === 'live' && todayOk);
+
+    const dayEl   = document.getElementById('chal-day');
+    const stateEl = document.getElementById('chal-state');
+    const fillEl  = document.getElementById('chal-fill');
+    const noteEl  = document.getElementById('chal-note');
+    const miniDay = document.getElementById('chal-mini-day');
+
+    if (state === 'soon') {
+        if (dayEl)   dayEl.textContent = 'قريبًا';
+        if (stateEl) stateEl.textContent = 'يبدأ بعد ' + _chalCountdown();
+        if (fillEl)  fillEl.style.width = '0%';
+        if (noteEl)  noteEl.textContent = 'يبدأ غدًا — ٣٠ نقطة لمن أتمّ الأيام السبعة';
+        if (miniDay) miniDay.textContent = 'قريبًا';
+    } else if (state === 'live') {
+        const n = Math.min(CHAL.days, dayIdx + 1);
+        if (dayEl)   dayEl.textContent = `اليوم ${_libAr(n)} من ${_libAr(CHAL.days)}`;
+        if (stateEl) stateEl.textContent = todayOk
+            ? 'أنجزت يومك ✓'
+            : 'المتبقي اليوم: ' + _libAr(Math.ceil((CHAL.goalMs - todayMs) / 60000)) + ' دقيقة';
+        if (fillEl)  fillEl.style.width = Math.round((todayMs / CHAL.goalMs) * 100) + '%';
+        if (noteEl)  noteEl.textContent = `أتممت ${_libAr(done)} من ${_libAr(CHAL.days)} أيام`;
+        if (miniDay) miniDay.textContent = `${_libAr(n)}/${_libAr(CHAL.days)}`;
+    } else {
+        if (dayEl)   dayEl.textContent = 'انتهى التحدي';
+        if (stateEl) stateEl.textContent = `أتممت ${_libAr(done)} من ${_libAr(CHAL.days)}`;
+        if (fillEl)  fillEl.style.width = Math.round((done / CHAL.days) * 100) + '%';
+        if (noteEl)  noteEl.textContent = pts > 0 ? `لك ${_libAr(pts)} نقطة — اضغط للاستلام` : 'لم تُنجز أي يوم';
+        if (miniDay) miniDay.textContent = pts > 0 ? '+' + _libAr(pts) : '—';
+    }
+
+    // The card is the fourth rung of the HUD stack, so its height is part of
+    // where the tasks panel starts. Only re-measure when the text changed.
+    const paintKey = state + '|' + (dayEl ? dayEl.textContent : '') + '|' + min;
+    if (paintKey !== _chal.lastPaintKey) {
+        _chal.lastPaintKey = paintKey;
+        _hudPositionDock();
+        if (libPanelIsOpen()) _libPositionPanel();
+    }
+}
+
+/* ── the panel / the celebration (one modal, two headers) ──────────────────── */
+function _chalMyAvatar() {
+    const me = gameState.players[gameState.userId];
+    if (me && me.avatar) return me.avatar;
+    const img = document.getElementById('hud-avatar');
+    return (img && img.getAttribute('src')) || '';
+}
+
+function _chalBuildTrack() {
+    const track = document.getElementById('chal-track');
+    if (!track) return;
+    const state = _chalState();
+    const idx   = _chalDayIndex();
+    const avatar = _chalMyAvatar();
+    // Which day the marker sits on: before the round it waits on day one, after
+    // it, it rests on the last one.
+    const hereIdx = state === 'soon' ? 0 : Math.min(CHAL.days - 1, Math.max(0, idx));
+    // The rungs that carry a sticker — the ladder, drawn where it is earned.
+    const stickerAt = {};
+    for (const t of CHAL.tiers) if (t.days >= 5) stickerAt[t.days - 1] = t.pts;
+
+    let html = '';
+    for (let i = 0; i < CHAL.days; i++) {
+        const key  = _chalDateKey(i);
+        const ok   = _chalDayMs(key) >= CHAL.goalMs;
+        const past = state === 'over' ? true : i < idx;
+        const cls  = ['chal-step'];
+        if (ok) cls.push('done');
+        else if (past) cls.push('miss');
+        if (i === hereIdx && state !== 'over') cls.push('now');
+        if (stickerAt[i]) cls.push('has-sticker');
+        const wearsMe = i === hereIdx && !!avatar;
+        if (wearsMe) cls.push('has-me');
+
+        html += `<div class="${cls.join(' ')}">`;
+        if (stickerAt[i]) {
+            html += `<img class="chal-step-sticker" src="${_libSticker(stickerAt[i])}" alt="${_libAr(stickerAt[i])} نقطة" `
+                  + `onerror="this.style.visibility='hidden'">`;
+        } else {
+            html += '<span class="chal-step-spacer"></span>';
+        }
+        if (wearsMe) {
+            /* If the picture fails, the dot has to come back — it is hidden by
+               `.has-me`, so a broken avatar would otherwise leave a hole on the
+               line where the member is supposed to be standing. */
+            html += `<img class="chal-step-me" src="${_libEsc(avatar)}" alt="أنت" `
+                  + `onerror="this.style.display='none';this.parentNode.classList.remove('has-me')">`;
+        }
+        html += '<span class="chal-step-dot">✓</span>';
+        html += `<span class="chal-step-num">${_libAr(i + 1)}</span>`;
+        html += '</div>';
+    }
+    track.innerHTML = html;
+}
+
+function _chalPaintModal(win) {
+    const state = _chalState();
+    const done  = _chalDoneCount();
+    const pts   = _chalPointsFor(done);
+    const modal = document.getElementById('chal-modal');
+    if (modal) modal.classList.toggle('win', !!win);
+
+    const kicker = document.getElementById('chal-modal-kicker');
+    const head   = document.getElementById('chal-modal-head');
+    const sub    = document.getElementById('chal-modal-sub');
+    if (win) {
+        if (kicker) kicker.textContent = 'أحسنت!';
+        if (head)   head.textContent = 'أتممت خمسين دقيقة اليوم';
+        if (sub)    sub.textContent = 'يومك محفوظ في التحدي — عُد غدًا وأكمل الطريق.';
+    } else if (state === 'soon') {
+        if (kicker) kicker.textContent = 'فعالية الأسبوع';
+        if (head)   head.textContent = 'تحدي المثابرة';
+        if (sub)    sub.textContent = 'يبدأ غدًا: ٥٠ دقيقة عمل يوميًا لسبعة أيام.';
+    } else if (state === 'live') {
+        if (kicker) kicker.textContent = 'فعالية الأسبوع';
+        if (head)   head.textContent = 'تحدي المثابرة';
+        if (sub)    sub.textContent = '٥٠ دقيقة عمل يوميًا لسبعة أيام.';
+    } else {
+        if (kicker) kicker.textContent = 'انتهى التحدي';
+        if (head)   head.textContent = 'شكرًا على مثابرتك';
+        if (sub)    sub.textContent = 'هذه حصيلة أسبوعك.';
+    }
+
+    _chalBuildTrack();
+
+    const tally = document.getElementById('chal-tally');
+    if (tally) {
+        /* Each rung is its OWN box, and the number inside it is another —
+           never one inline run. `٧ أيام → ٣٠ · ٦ → ٢٠` mixes Arabic-Indic
+           digits with direction-neutral arrows and separators, and the bidi
+           algorithm happily reorders the pairs; the ladder then reads as a
+           different (wrong) promise. Boxes have no neutrals between them. */
+        const rungs = '<div class="chal-rungs">' + CHAL.tiers.map(t =>
+            `<span class="chal-rung"><span>${_libAr(t.days)}${t.days === 1 ? ' يوم فأكثر' : ' أيام'}</span><b>${_libAr(t.pts)}</b></span>`
+        ).join('') + '</div>';
+        if (state === 'soon') {
+            tally.innerHTML = rungs;
+        } else {
+            const line = `<div>أتممت <b>${_libAr(done)}</b> من ${_libAr(CHAL.days)} أيام</div>`;
+            const earn = pts > 0
+                ? `<div class="ok">تستحق <b>${_libAr(pts)}</b> نقطة</div>`
+                : '<div>أكمل يومًا واحدًا على الأقل لتستحق نقاطًا</div>';
+            tally.innerHTML = line + earn + rungs;
+        }
+    }
+
+    /* The claim only appears once the round is closed, once there is something
+       to take, once it has not already been taken — and only for a member the
+       roster knows, because the claim is keyed by their Points-DB name. A Siraj
+       ghost resolves to nobody and so can never mint one. */
+    const claimBtn = document.getElementById('chal-claim-btn');
+    if (claimBtn) {
+        const can = state === 'over' && pts > 0 && !_chal.claimed && !!(_lib.me && _lib.me.dbKey);
+        claimBtn.hidden = !can;
+        claimBtn.textContent = `استلم ${_libAr(pts)} نقطة`;
+    }
+}
+
+function _chalOpenModal(win) {
+    const modal = document.getElementById('chal-modal');
+    if (!modal || _chal.modalOpen) return;
+    _chal.modalOpen = true;
+    _chalPaintModal(!!win);
+    document.body.classList.add('chal-modal-open');
+    // display can't transition — the element is always laid out and `.active`
+    // lands after a double rAF, the same pattern the azkar/fireplace overlays use.
+    requestAnimationFrame(() => requestAnimationFrame(() => modal.classList.add('active')));
+    if (win) { try { gameState.focusAudioEngine?.playEffect('paperTaskComplete'); } catch (_) {} }
+}
+
+function _chalCloseModal() {
+    const modal = document.getElementById('chal-modal');
+    if (!modal || !_chal.modalOpen) return;
+    _chal.modalOpen = false;
+    modal.classList.remove('active');
+    document.body.classList.remove('chal-modal-open');
+}
+
+function chalModalIsOpen() { return !!_chal.modalOpen; }
+
+/* ── the claim — the ecosystem handshake, unchanged ───────────────────────────
+   ONE write on the Points database at exactly the path the Points site settles:
+     mdwnhLibrary/claims/<NFC dbKey>/<id> = {taskId,title,points,color,ts}
+   Same shape a library task uses, so no change was needed on the Points site.
+   The `claimed` stamp goes on our OWN private node, and is written the moment
+   the record lands — «لاحقًا» is still a claim that has been made. */
+function _chalClaim() {
+    const me = _lib.me;
+    const done = _chalDoneCount();
+    const pts  = _chalPointsFor(done);
+    if (!me || !me.dbKey || pts <= 0 || _chal.claimed || _chal.claiming) return;
+    _chal.claiming = true;
+
+    const key = _libNfc(me.dbKey);
+    const payload = {
+        taskId: CHAL_CLAIM_ID,
+        title: `تحدي المثابرة — ${_libAr(done)} من ${_libAr(CHAL.days)} أيام`,
+        points: pts,
+        color: '#f4c82b',
+        ts: Date.now(),
+    };
+    // `keepalive`, because «استلم الآن» navigates this tab away mid-write.
+    libPtsPut(`${LIB_PTS_ROOT}/claims/${encodeURIComponent(key)}/${CHAL_CLAIM_ID}`, payload).catch(() => {});
+
+    _chal.claimed = Date.now();
+    if (gameState.userId) {
+        update(ref(database), {
+            [`dashboards/${gameState.userId}/challenge/${CHAL.round}/claimed`]: _chal.claimed,
+        }).catch(() => {});
+    }
+
+    _chalCloseModal();
+    // The claim record already exists, so «لاحقًا» loses nothing: the Points
+    // site settles it whenever they get there.
+    _libShowClaim({ id: CHAL_CLAIM_ID, title: payload.title, points: pts, color: payload.color });
+    _chal.claiming = false;
+    _chal.lastPaintKey = '';
+    _chalPaintCard();
+}
+
+/* ── setup ────────────────────────────────────────────────────────────────── */
+function setupWorkChallenge() {
+    if (_chal.wired) return;
+    _chal.wired = true;
+
+    document.getElementById('chal-fold')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _chalSetMinimized(true);
+        _chal.lastPaintKey = '';
+        _chalPaintCard();
+    });
+    document.getElementById('chal-mini')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _chalSetMinimized(false);
+        _chal.lastPaintKey = '';
+        _chalPaintCard();
+    });
+    document.getElementById('chal-body')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _chalOpenModal(false);
+    });
+    document.getElementById('chal-modal-close')?.addEventListener('click', _chalCloseModal);
+    document.getElementById('chal-ok-btn')?.addEventListener('click', _chalCloseModal);
+    document.getElementById('chal-claim-btn')?.addEventListener('click', _chalClaim);
+    // The backdrop is a back button, same as every other modal here.
+    document.getElementById('chal-modal')?.addEventListener('click', (e) => {
+        if (e.target && e.target.id === 'chal-modal') _chalCloseModal();
+    });
+
+    // Bank whatever is in hand before the tab goes away — a closed tab would
+    // otherwise cost up to one bank interval of real work.
+    const flush = () => { if (_chal.liveMs > 0) _chalBank(true); };
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+
+    _mdwnhRosterReady.then(() => { _chal.rosterDone = true; _chal.lastPaintKey = ''; });
+    window.addEventListener('resize', () => { if (_chal.ready) { _chal.lastPaintKey = ''; _chalPaintCard(); } });
+
+    /* ONE read, and deliberately NOT inside startGame's Promise.all: the login
+       path must not wait on it. The card simply stays hidden until it lands. */
+    if (!gameState.userId) return;
+    get(ref(database, `dashboards/${gameState.userId}/challenge/${CHAL.round}`))
+        .then(snap => {
+            const v = snap.val() || {};
+            _chal.days = v.days || {};
+            _chal.claimed = v.claimed || 0;
+        })
+        .catch(() => {})
+        .finally(() => {
+            _chal.ready = true;
+            _chal.dayKey = _todayDateStr();
+            // A day already won before this tab opened must not celebrate again.
+            if (_chalDayMs(_chal.dayKey) >= CHAL.goalMs) _chal.celebrated[_chal.dayKey] = true;
+            _chal.lastPaintKey = '';
+            _chalPaintCard();
+        });
 }
