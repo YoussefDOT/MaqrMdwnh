@@ -1175,18 +1175,29 @@ box is always laid out and enter/exit is `opacity` + `visibility` + `.active`.
 - The outside-press dismissal **ignores a press on your own character** — the canvas
   handler reads that as "open the chat box", so closing first would close-then-reopen and
   wipe whatever was half-typed.
-- **Raising the mobile keyboard took three things, not one**, and the fiddly one is the
-  reason the box used to need a second tap by hand:
-  1. `focus()` runs inside the original gesture — a deferred focus never raises it.
+- **Raising the mobile keyboard took FIVE things.** It failed twice before this list
+  was complete — first not appearing at all, then flashing up and dropping straight
+  back down — so treat the whole list as load-bearing:
+  1. `focus()` runs inside the original gesture. A deferred focus never raises it.
   2. The tap `touchend` on the canvas is **`{ passive: false }`** and the chat branch
      **`preventDefault()`s** it. A touch is followed by *synthesized* mouse events, and
-     that synthesized `mousedown` lands on the canvas and moves focus off the input we
-     just focused — so the keyboard never appeared. Cancelling the touchend suppresses
-     the whole set. **Only the chat branch cancels it**; every other path still needs
-     its `click` (the results buttons are wired to `click`).
-  3. A capture-phase `mousedown` guard on the canvas, live for **600 ms after the open**,
-     in case an engine ignores (2). It cancels only the focus change — `preventDefault`
-     is not `stopPropagation`, so the normal handler still runs.
+     that synthesized `mousedown` lands on the canvas and moves focus off the input —
+     so the keyboard never appeared at all. **Only the chat branch cancels**; every
+     other path still needs its `click` (the results buttons are wired to `click`).
+  3. **Cancel FIRST, focus SECOND** — hence `chatWantsSelfPress()` being split out of
+     `chatSelfPress()`. Focusing and *then* cancelling the tap that caused it is what
+     made the keyboard flash up and vanish.
+  4. **`updateChatInputPos` stops following after 500 ms** (`force` still repositions).
+     Movement is locked while the box is open, so there is nothing left to follow — and
+     continuously rewriting the `top`/`left` of a fixed element holding the focused
+     input is a known way to make a mobile keyboard pack up and leave. The anchor also
+     **drops `bobOffset`**: letting the box breathe with the idle animation meant a
+     style write on literally every frame.
+  5. Two safety nets: a capture-phase `mousedown` guard on the canvas live for 600 ms
+     after the open (cancels the focus change only — `preventDefault` is not
+     `stopPropagation`, so the normal handler still runs), and a `blur` listener that
+     takes focus back, **at most twice, inside 900 ms**, so a device that simply
+     refuses to focus can never spin.
   Plus a forced reflow (`void wrap.offsetHeight`) before `focus()`, so the input isn't
   still computed as `visibility: hidden` when focus is requested, and `#chat-input` is
   **16px on mobile** so iOS doesn't zoom the page on focus.

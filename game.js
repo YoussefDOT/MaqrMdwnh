@@ -7135,15 +7135,16 @@ function initMobileControls() {
             // BEFORE handleClickOffSofa: while seated, a press on yourself lands ON the
             // sofa, and that helper swallows the click.
             //
-            // preventDefault() here is what actually raises the keyboard. A touch is
-            // followed by SYNTHESIZED mouse events (mousedown/mouseup/click) a moment
-            // after touchend, and the default action of that mousedown moves focus to
-            // whatever it lands on — the canvas — which blurred the input we had just
-            // focused, so the keyboard never appeared and the box had to be tapped a
-            // second time by hand. Cancelling the touchend suppresses the whole
-            // synthesized set. This is the ONLY branch that cancels it; every other
-            // path still needs its click (the results buttons are wired to `click`).
-            if (chatSelfPress(clickWorld)) { e.preventDefault(); return; }
+            // preventDefault() here is what raises the keyboard, and it must come
+            // BEFORE the focus(). A touch is followed by SYNTHESIZED mouse events a
+            // moment after touchend, and the default action of that mousedown moves
+            // focus to whatever it lands on — the canvas — which blurs the input.
+            // Cancelling the touchend suppresses the whole synthesized set. Cancel
+            // first, take focus second: focusing and *then* cancelling the tap that
+            // caused it is what made the keyboard flash up and drop straight back
+            // down. This is the ONLY branch that cancels; every other path still
+            // needs its click (the results buttons are wired to `click`).
+            if (chatWantsSelfPress(clickWorld)) { e.preventDefault(); openChatBox(); return; }
             // ...and tapping anywhere off the sofa does the same thing.
             if (handleClickOffSofa(clickWorld)) return;
 
@@ -27521,7 +27522,7 @@ let _chatSelfLift = 0;
 const _chatUi = {
     wrap: null, input: null, count: null, send: null,
     open: false, lastSentAt: 0,
-    lastX: -1e9, lastY: -1e9, w: 240, h: 54, openedAt: 0,
+    lastX: -1e9, lastY: -1e9, w: 240, h: 54, openedAt: 0, refocus: 0,
     cl: 0, ct: 0,   // cached canvas rect origin — see updateChatInputPos
 };
 
@@ -27621,6 +27622,7 @@ function openChatBox() {
     if (_chatUi.open || !_chatUi.wrap) return;
     _chatUi.open = true;
     _chatUi.openedAt = Date.now();
+    _chatUi.refocus = 0;
     // A key still held when the box opens would otherwise stay "down" forever —
     // handleMovement stops reading them the moment chatIsOpen() goes true.
     gameState.keys = {};
@@ -27649,16 +27651,23 @@ function closeChatBox() {
     try { _chatUi.input?.blur(); } catch (_) {}
 }
 
-// Pressing your own character opens the box. Returns true when it handled the
-// press so the caller stops walking down its hit-test chain.
-function chatSelfPress(world) {
+// Did this press land on my own character, with the box closed and openable? Split
+// from the open so the mobile tap handler can cancel the event FIRST and only then
+// take focus — see the keyboard notes in setupChatUI.
+function chatWantsSelfPress(world) {
     if (_chatUi.open) return false;
     const me = gameState.players[gameState.userId];
     if (!me || !world) return false;
     const p = getPlayerRenderPos(me);
     const r = PLAYER_SIZE * 0.62 * (me.renderScale || 1);
     if (Math.hypot(world.x - p.x, world.y - p.y) > r) return false;
-    if (!chatCanOpen()) return false;
+    return chatCanOpen();
+}
+
+// Desktop convenience wrapper: test and open. Returns true when it handled the press
+// so the caller stops walking down its hit-test chain.
+function chatSelfPress(world) {
+    if (!chatWantsSelfPress(world)) return false;
     openChatBox();
     return true;
 }
@@ -27678,6 +27687,12 @@ function updateChatInputPos(force) {
     const me = gameState.players[gameState.userId];
     const canvas = gameState.canvas;
     if (!me || !canvas || !_chatUi.wrap) return;
+    // Movement is locked while the box is open, so after the camera has settled there
+    // is nothing left to follow — and continuously rewriting the top/left of a fixed
+    // element that holds the focused input is a known way to make a mobile keyboard
+    // pack up and leave. Follow for the first half second, then pin. `force` (open /
+    // viewport resize) always repositions.
+    if (!force && Date.now() - _chatUi.openedAt > 500) return;
     const dpr = gameState.dpr || 1;
     const W = canvas.width / dpr, H = canvas.height / dpr;
     // The canvas rect is re-measured only on `force` (open / viewport resize). Reading
@@ -27688,7 +27703,9 @@ function updateChatInputPos(force) {
         _chatUi.cl = r.left; _chatUi.ct = r.top;
     }
     const pos = getPlayerRenderPos(me);
-    const headY = pos.y - (me.bobOffset || 0) - (PLAYER_SIZE / 2) * (me.renderScale || 1) - 10;
+    // No bobOffset: the box is UI, not part of the avatar, and letting it breathe
+    // with the idle animation means a style write on every single frame.
+    const headY = pos.y - (PLAYER_SIZE / 2) * (me.renderScale || 1) - 10;
 
     let sx = _chatUi.cl + (pos.x + gameState.camera.x) * gameState.zoom + W / 2;
     let sy = _chatUi.ct + (headY + gameState.camera.y) * gameState.zoom + H / 2;
@@ -27902,6 +27919,19 @@ function setupChatUI() {
             }
         }
         closeChatBox();
+    });
+
+    // Last line of defence. If something still pulls focus in the first moment after
+    // opening — a synthesized mouse event an engine refused to suppress, a relayout
+    // from the keyboard resizing the viewport — take it straight back. Bounded to two
+    // attempts inside a 900 ms window so a device that simply refuses to focus can
+    // never spin here, and only while the box is genuinely open.
+    _chatUi.input.addEventListener('blur', () => {
+        if (!_chatUi.open) return;
+        if (Date.now() - _chatUi.openedAt > 900) return;
+        if (_chatUi.refocus >= 2) return;
+        _chatUi.refocus++;
+        try { _chatUi.input.focus({ preventScroll: true }); } catch (_) {}
     });
 
     // Belt and braces for the mobile keyboard. Cancelling the touchend (see the tap
