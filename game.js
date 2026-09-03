@@ -41,7 +41,6 @@ const SETTINGS_NOIDLE_KEY   = 'mdwnh_disable_idle_anim'; // '1' = disable idle a
 const SETTINGS_AZKAR_RANDOM_KEY = 'mdwnh_randomize_azkar'; // '1' = shuffle azkar order
 const SETTINGS_LEMO_KEY     = 'mdwnh_hide_lemo';        // '1' = hide Lemo entirely
 const SETTINGS_PRAYER_DELAY_KEY = 'mdwnh_prayer_jamaah_delay'; // '1' = +5 min to each prayer (mosque mode)
-const SETTINGS_CHATVOICE_KEY = 'mdwnh_chat_voice';      // '0' = mute the chat text-to-speech ('on' by default)
 // Particle / overlay OVERRIDES. These deliberately sit ON TOP of the graphics tier:
 // absent = follow the tier (the historical behaviour), 'on'/'off' = force it either
 // way. So particles can be forced ON while on بطاطس, and overlays forced OFF on عالية.
@@ -7135,7 +7134,16 @@ function initMobileControls() {
             // Pressing your OWN character opens the chat box above your head. Checked
             // BEFORE handleClickOffSofa: while seated, a press on yourself lands ON the
             // sofa, and that helper swallows the click.
-            if (chatSelfPress(clickWorld)) return;
+            //
+            // preventDefault() here is what actually raises the keyboard. A touch is
+            // followed by SYNTHESIZED mouse events (mousedown/mouseup/click) a moment
+            // after touchend, and the default action of that mousedown moves focus to
+            // whatever it lands on — the canvas — which blurred the input we had just
+            // focused, so the keyboard never appeared and the box had to be tapped a
+            // second time by hand. Cancelling the touchend suppresses the whole
+            // synthesized set. This is the ONLY branch that cancels it; every other
+            // path still needs its click (the results buttons are wired to `click`).
+            if (chatSelfPress(clickWorld)) { e.preventDefault(); return; }
             // ...and tapping anywhere off the sofa does the same thing.
             if (handleClickOffSofa(clickWorld)) return;
 
@@ -7211,7 +7219,7 @@ function initMobileControls() {
                 if (gameState.activeLaptop.claimedBy) return;
                 showLaptopModeSelect();
             }
-        }, { passive: true });
+        }, { passive: false });   // non-passive so the chat branch above can preventDefault
     }
 
     // ── Focus sounds drawer (drag handle) ─────────────────────────────
@@ -8333,7 +8341,6 @@ function listenToPomodoro() {
 function doLogout() {
     _azkarFakeHour = null;
     _azkarFakeMin  = null;
-    _ttsStop();                   // don't leave a chat line being read out over the reload
     disconnectPresenceSocket();   // close the live-position relay; don't reconnect
     // Explicit logout — don't auto-resume on the next load.
     try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
@@ -14524,11 +14531,6 @@ function getHideLemo() {
     return localStorage.getItem(SETTINGS_LEMO_KEY) === '1';
 }
 
-// نطق رسائل الدردشة (TTS). مفعّل افتراضيًا؛ '0' وحده يُسكته.
-function getChatVoice() {
-    return localStorage.getItem(SETTINGS_CHATVOICE_KEY) !== '0';
-}
-
 function getHideNames() {
     return localStorage.getItem(SETTINGS_NAMES_KEY) === '1';
 }
@@ -14561,8 +14563,6 @@ function setupSettingsUI() {
     const azkarRandLabel= document.getElementById('settings-azkar-random-label');
     const prayerDelayBtn   = document.getElementById('settings-prayer-delay-btn');
     const prayerDelayLabel = document.getElementById('settings-prayer-delay-label');
-    const chatVoiceBtn     = document.getElementById('settings-chatvoice-btn');
-    const chatVoiceLabel   = document.getElementById('settings-chatvoice-label');
     if (!settingsBtn || !panel) return;
 
     function _reflectJoystick() {
@@ -14649,15 +14649,6 @@ function setupSettingsUI() {
         prayerDelayLabel.textContent = on ? 'مفعّل' : 'مغلق';
     }
 
-    function _reflectChatVoice() {
-        if (!chatVoiceBtn) return;
-        const on = getChatVoice();
-        chatVoiceBtn.dataset.value = on ? 'on' : 'off';
-        chatVoiceBtn.classList.toggle('settings-toggle-on',  on);
-        chatVoiceBtn.classList.toggle('settings-toggle-low', !on);
-        chatVoiceLabel.textContent = on ? 'مفعّل' : 'مغلق';
-    }
-
     function _applyGraphicsSetting() {
         // Bokeh (live backdrop-filter blur): hide on reduced tiers (low + potato).
         const bokeh = document.getElementById('edge-bokeh');
@@ -14719,16 +14710,6 @@ function setupSettingsUI() {
             localStorage.setItem(SETTINGS_LEMO_KEY, getHideLemo() ? '0' : '1');
             gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
             _reflectLemo();
-        });
-    }
-
-    if (chatVoiceBtn) {
-        chatVoiceBtn.addEventListener('click', () => {
-            const next = getChatVoice() ? '0' : '1';
-            localStorage.setItem(SETTINGS_CHATVOICE_KEY, next);
-            gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
-            if (next === '0') _ttsStop();     // cut anything already mid-sentence
-            _reflectChatVoice();
         });
     }
 
@@ -14851,7 +14832,6 @@ function setupSettingsUI() {
     _reflectLongFree();
     _reflectAzkarRandom();
     _reflectPrayerDelay();
-    _reflectChatVoice();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -27496,9 +27476,9 @@ function setupWorkChallenge() {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  الدردشة القريبة — proximity chat
 //  ---------------------------------------------------------------------------
-//  A 25-character message that floats over your head, stacks upward when you send
-//  another, and is read aloud by the browser's own text-to-speech to anyone
-//  standing near you.
+//  A 25-character message that floats over your head and stacks upward when you
+//  send another. Someone standing near you gets a soft cue with it; someone across
+//  the building, or in a work session, gets nothing.
 //
 //  COST: **zero Firebase.** A chat line is the textbook case for decision-tree
 //  rule 1 — high-frequency, ephemeral, and worthless to a late joiner — so it
@@ -27510,7 +27490,7 @@ function setupWorkChallenge() {
 //  something that expires in seconds.
 //
 //  Grep anchors: CHAT_, updateChatSystem, drawChatBubbles, receiveChatMessage,
-//  sendChatWS, _ttsSpeak.
+//  sendChatWS.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const CHAT_MAX_LEN      = 25;     // hard cap, enforced on send AND on receive
@@ -27521,7 +27501,7 @@ const CHAT_FADE_MS      = 620;
 const CHAT_COOLDOWN_MS  = 700;    // local anti-spam between sends
 // Radii in WORLD units, for scale: the shared-pomo "standing together" threshold
 // is 200 and the whole world is 1193 × 1706.
-const CHAT_HEAR_R       = 430;    // voice + cue: past this you hear nothing
+const CHAT_HEAR_R       = 430;    // arrival cue: past this a message is silent
 const CHAT_SEE_R        = 760;    // bubbles are fully readable inside this…
 const CHAT_SEE_FADE     = 260;    // …and fade to nothing over this much more
 const CHAT_BUB_H        = 30;
@@ -27541,7 +27521,7 @@ let _chatSelfLift = 0;
 const _chatUi = {
     wrap: null, input: null, count: null, send: null,
     open: false, lastSentAt: 0,
-    lastX: -1e9, lastY: -1e9, w: 240, h: 54,
+    lastX: -1e9, lastY: -1e9, w: 240, h: 54, openedAt: 0,
     cl: 0, ct: 0,   // cached canvas rect origin — see updateChatInputPos
 };
 
@@ -27559,116 +27539,6 @@ function _chatClean(t) {
         .slice(0, CHAT_MAX_LEN);
 }
 
-// FNV-1a → [0,1). Used to give each speaker a fixed pitch: a *hash* rather than a
-// random draw so the same person sounds the same to everybody and on every login,
-// which a per-session random number would not.
-function _chatHash01(str) {
-    let h = 2166136261;
-    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
-    return ((h >>> 0) % 100003) / 100003;
-}
-
-// ─── Text-to-speech ──────────────────────────────────────────────────────────
-// The browser's built-in speechSynthesis: free, offline, no server, no Firebase.
-// What it can't promise is a voice — Arabic ships on macOS/iOS and Android, but on
-// Windows only if the user installed the language pack. With no Arabic voice we
-// stay SILENT rather than hand Arabic text to an English voice, which reads as
-// noise. The bubble is always there, so nothing is actually lost.
-//
-// Gender: the lobbies are already split, so everyone you can hear is your own
-// gender — we pick from the voices matching THIS lobby. Where the platform ships
-// no gendered pair (macOS has one Arabic voice), the lobby sets the base pitch
-// instead, and each speaker's hash nudges it ±0.13 from there.
-const TTS_MALE_NAMES = ['maged', 'majed', 'tarik', 'tariq', 'hamed', 'naayf', 'shakir',
-    'hamdan', 'saleh', 'bassel', 'laith', 'moaz', 'hedi', 'fahed', 'hamza', 'karim'];
-const TTS_FEMALE_NAMES = ['laila', 'layla', 'salma', 'zariyah', 'amany', 'sana', 'fatima',
-    'noura', 'hala', 'iman', 'rana', 'zeina', 'maryam', 'hessa', 'amina', 'aysha', 'hoda'];
-const _TTS_MALE_RE   = new RegExp('\\b(' + TTS_MALE_NAMES.join('|') + ')\\b', 'i');
-const _TTS_FEMALE_RE = new RegExp('\\b(' + TTS_FEMALE_NAMES.join('|') + ')\\b', 'i');
-
-const _tts = { count: -1, male: [], female: [], any: [], inflight: 0, mine: 0, bound: false };
-
-function _ttsSynth() {
-    return (typeof window !== 'undefined' && window.speechSynthesis) ? window.speechSynthesis : null;
-}
-
-// Idempotent. Voice lists arrive asynchronously in Chrome (the first call returns
-// an empty array), hence the `voiceschanged` rebind and the length check.
-function _ttsEnsureVoices() {
-    const synth = _ttsSynth();
-    if (!synth) return false;
-    if (!_tts.bound) {
-        _tts.bound = true;
-        try { synth.addEventListener('voiceschanged', () => { _tts.count = -1; }); } catch (_) {}
-    }
-    let vs;
-    try { vs = synth.getVoices() || []; } catch (_) { return false; }
-    if (vs.length === _tts.count) return _tts.any.length > 0;
-    _tts.count = vs.length;
-    _tts.male = []; _tts.female = []; _tts.any = [];
-    for (const v of vs) {
-        if (!v || !v.lang || v.lang.toLowerCase().indexOf('ar') !== 0) continue;
-        _tts.any.push(v);
-        const n = v.name || '';
-        if (_TTS_FEMALE_RE.test(n)) _tts.female.push(v);
-        else if (_TTS_MALE_RE.test(n)) _tts.male.push(v);
-    }
-    return _tts.any.length > 0;
-}
-
-// Returns true only if it actually queued speech, so the caller knows whether the
-// message got a voice or only the soft arrival cue.
-function _ttsSpeak(text, uid, dist) {
-    const synth = _ttsSynth();
-    if (!synth || !_ttsEnsureVoices()) return false;
-    if (_tts.inflight >= 2) return false;   // a busy room must not queue a monologue
-
-    const female = gameState.selectedLobby === 'female';
-    const pool   = female ? _tts.female : _tts.male;
-    const voice  = pool.length ? pool[0] : _tts.any[0];
-    if (!voice) return false;
-
-    const h1 = _chatHash01(uid || '');
-    const h2 = _chatHash01((uid || '') + '#r');
-    // A real gendered voice needs no pitch shove; a single shared voice does.
-    const base  = pool.length ? 1.0 : (female ? 1.22 : 0.82);
-    const pitch = Math.max(0.5, Math.min(2, base + (h1 - 0.5) * 0.26));
-    const rate  = Math.max(0.6, Math.min(1.4, 0.97 + (h2 - 0.5) * 0.10));
-    // Proximity is audible, not just a cut-off: nearer speakers are louder.
-    const vol   = 0.25 + 0.75 * Math.max(0, 1 - (dist / CHAT_HEAR_R));
-
-    const mine = uid === gameState.userId;
-    let settled = false;
-    const done = () => {
-        if (settled) return;
-        settled = true;
-        _tts.inflight = Math.max(0, _tts.inflight - 1);
-        if (mine) _tts.mine = Math.max(0, _tts.mine - 1);
-    };
-    try {
-        const u = new SpeechSynthesisUtterance(text);
-        u.voice = voice;
-        u.lang  = voice.lang || 'ar';
-        u.pitch = pitch; u.rate = rate; u.volume = vol;
-        u.onend = done; u.onerror = done;
-        _tts.inflight++;
-        if (mine) _tts.mine++;
-        // Some engines never fire onend — without this backstop `inflight` would
-        // creep up and silence every later message.
-        setTimeout(done, 12000);
-        synth.speak(u);
-        return true;
-    } catch (_) { done(); return false; }
-}
-
-function _ttsStop() {
-    const synth = _ttsSynth();
-    if (!synth) return;
-    try { synth.cancel(); } catch (_) {}
-    _tts.inflight = 0;
-    _tts.mine = 0;
-}
-
 // ─── Receiving ───────────────────────────────────────────────────────────────
 function receiveChatMessage(player, raw) {
     if (!player) return;
@@ -27683,30 +27553,25 @@ function receiveChatMessage(player, raw) {
         a: 1, w: 0,           // w = cached measured text width
     });
     while (list.length > CHAT_STACK_MAX) list.shift();
-    _chatHear(player, text);
+    // Only someone ELSE's message makes a sound. My own needs no cue — I pressed send.
+    if (player.userId !== gameState.userId) _chatArrivalCue(player);
 }
 
-// Everything that decides whether this message makes a SOUND. Seeing a bubble and
-// hearing it are deliberately separate: someone in a work session never hears.
-function _chatHear(player, text) {
+// Everything that decides whether an incoming message makes a SOUND. Seeing a bubble
+// and hearing it are deliberately separate — that separation is what makes this
+// proximity chat: someone across the building, and anyone in a work session, gets the
+// bubble's silence and nothing else.
+function _chatArrivalCue(player) {
     const me = gameState.players[gameState.userId];
     if (!me) return;
-    const mine = player.userId === gameState.userId;
-    const dist = mine ? 0 : Math.hypot((player.x || 0) - (me.x || 0), (player.y || 0) - (me.y || 0));
+    const dist = Math.hypot((player.x || 0) - (me.x || 0), (player.y || 0) - (me.y || 0));
+    if (dist > CHAT_HEAR_R) return;                       // too far — proximity chat
+    if (localInWorkPhase()) return;                       // never interrupt a work session
     if (gameState.azkar.active || gameState.prayer.isOverlayActive) return;
     if (gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active) return;
-    // MY OWN message is always read back — I typed it on purpose, so neither the
-    // hearing radius nor the work-session mute applies to it. Both of those exist to
-    // stop OTHER people reaching me; they were never meant to gag me to myself.
-    if (!mine) {
-        if (dist > CHAT_HEAR_R) return;                   // too far — proximity chat
-        if (localInWorkPhase()) return;                   // never interrupt a work session
-        // A soft arrival cue, so a message still registers when the voice is muted or
-        // the device has no Arabic voice at all. Skipped for my own line: I just
-        // pressed send, I don't need telling that something arrived.
-        try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.22, 0.055); } catch (_) {}
-    }
-    if (getChatVoice()) _ttsSpeak(text, player.userId, dist);
+    // Pitched down slightly with distance, so a far-off message reads as far off.
+    const near = Math.max(0, 1 - dist / CHAT_HEAR_R);
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.05 + near * 0.22, 0.03 + near * 0.035); } catch (_) {}
 }
 
 // ─── Sending ─────────────────────────────────────────────────────────────────
@@ -27755,6 +27620,7 @@ function _chatMustClose() {
 function openChatBox() {
     if (_chatUi.open || !_chatUi.wrap) return;
     _chatUi.open = true;
+    _chatUi.openedAt = Date.now();
     // A key still held when the box opens would otherwise stay "down" forever —
     // handleMovement stops reading them the moment chatIsOpen() goes true.
     gameState.keys = {};
@@ -27767,9 +27633,12 @@ function openChatBox() {
     updateChatInputPos(true);            // place it BEFORE it becomes visible
     _chatUi.wrap.classList.add('active');
     document.getElementById('mobile-joystick')?.classList.add('chat-hidden');
+    // Flush the class so the input is computed-visible BEFORE focus() runs — a browser
+    // may refuse to focus (and so refuse to raise the keyboard for) an element it still
+    // thinks is `visibility: hidden`.
+    void _chatUi.wrap.offsetHeight;
     // Focus inside the original gesture — that's what raises the mobile keyboard.
     try { _chatUi.input.focus({ preventScroll: true }); } catch (_) { _chatUi.input.focus(); }
-    _ttsEnsureVoices();   // warm the voice list on a real user gesture (iOS wants one)
 }
 
 function closeChatBox() {
@@ -27843,16 +27712,6 @@ function updateChatSystem() {
     if (_chatUi.open) {
         if (_chatMustClose()) closeChatBox();
         else updateChatInputPos(false);
-    }
-
-    // Cut a sentence that's still mid-word when the adhan/azkar arrives, or when a
-    // work phase starts. Speech is queued by _chatHear, which can only judge the
-    // moment the message landed; this is the running check. The work-phase cut is
-    // skipped while one of MY OWN lines is in flight — same reason _chatHear lets it
-    // through: it was typed on purpose.
-    if (_tts.inflight > 0) {
-        const hardStop = gameState.azkar.active || gameState.prayer.isOverlayActive || !getChatVoice();
-        if (hardStop || (localInWorkPhase() && _tts.mine === 0)) _ttsStop();
     }
 
     const dt = gameState.dtFactor || 1;
@@ -28010,6 +27869,10 @@ function setupChatUI() {
         else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeChatBox(); }
     });
     _chatUi.send?.addEventListener('click', (e) => { e.preventDefault(); _chatSend(); });
+    // A press anywhere in the box (the send button, the counter, the padding) must not
+    // pull focus off the input — losing it drops the mobile keyboard mid-message.
+    // The input itself is excluded so tapping it can still place the caret.
+    _chatUi.wrap.addEventListener('mousedown', (e) => { if (e.target !== _chatUi.input) e.preventDefault(); });
 
     // Enter opens the box — but only when nothing else is being typed into.
     // Escape closes it from here too: the input's own handler only fires while the
@@ -28040,6 +27903,17 @@ function setupChatUI() {
         }
         closeChatBox();
     });
+
+    // Belt and braces for the mobile keyboard. Cancelling the touchend (see the tap
+    // handler) should suppress the synthesized mouse events outright, but not every
+    // engine honours that, and a synthesized mousedown landing on the canvas moves
+    // focus off the input we just focused — which is exactly what stopped the keyboard
+    // appearing. Cancelling that mousedown blocks only the focus change; the handler
+    // itself still runs (preventDefault is not stopPropagation), and the window is
+    // 600 ms from the open, so a genuine later click still dismisses the box normally.
+    gameState.canvas?.addEventListener('mousedown', (e) => {
+        if (_chatUi.open && Date.now() - _chatUi.openedAt < 600) e.preventDefault();
+    }, true);
 
     // The keyboard opening/closing resizes the visual viewport, not the layout one.
     // Both paths pass force:true so the cached canvas rect is re-measured.
