@@ -1635,6 +1635,14 @@ mobile card would make it the containing block). It is counted in `_hudStackBott
 the tasks panel still starts below everything. Three things follow from that:
 - **`setMobileFocusMode` has to carry it too.** Four elements slide now, not three;
   forgetting one leaves it floating alone on screen.
+- **Every rung of the stack is `ResizeObserver`d, not just the user card.** The azkar
+  button animates its OWN `max-height` from 0 to 80px over 0.44s (`azkarBtnEnter`), so the
+  dock above this card grows across ~26 frames. Placing the card once, on the frame the
+  button flips, reads a height of nearly zero and drops the card **on top of the azkar
+  button** — where it stays until something else re-measures, which is why folding and
+  unfolding the card appeared to "fix" it. Observing `user-card`, `hud-tools` AND
+  `azkar-dock` follows every frame of that growth for free. No loop: `_hudPositionDock`
+  writes only `top`/`right`, never a size.
 - **It is FOLDED by default on mobile, open by default on desktop** (`_chalMinimized()`),
   and only an explicit press writes the key — so "never touched it" and "chose the open
   one" stay two different answers. A full card on a phone pushed the tasks panel down the

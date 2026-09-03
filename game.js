@@ -18371,10 +18371,13 @@ function updateAzkarButton() {
     }
 
     /* The button now lives on its own dock UNDER the user card, so it appearing
-       or vanishing changes how far down the HUD stack reaches — and the tasks
-       panel is placed off that. Only on the frame it actually flips. */
-    if (shouldShow !== wasShown && typeof _libPositionPanel === 'function') {
-        if (libPanelIsOpen()) _libPositionPanel();
+       or vanishing changes how far down the HUD stack reaches — and the challenge
+       card and the tasks panel are both placed off that. Only on the frame it
+       actually flips; the ResizeObserver in `setupLibraryPanel` is what follows
+       the button's own ~0.4s height animation the rest of the way down. */
+    if (shouldShow !== wasShown) {
+        if (typeof _hudPositionDock === 'function') _hudPositionDock();
+        if (typeof _libPositionPanel === 'function' && libPanelIsOpen()) _libPositionPanel();
     }
 
     const label = document.getElementById('azkar-btn-label');
@@ -26858,14 +26861,25 @@ function setupLibraryPanel() {
     if (pickPop) pickPop.addEventListener('wheel', (e) => { e.stopPropagation(); }, { passive: false });
     window.addEventListener('resize', () => { _hudPositionDock(); if (_lib.open) _libPositionPanel(); });
 
-    /* The tools box and the azkar dock hang off the card's box, so they have to
-       be replaced whenever it changes size — the name arriving, the points chip
-       appearing, a rotation. A ResizeObserver fires on first observation too,
-       which is also what places them the moment the game screen becomes visible
-       (until then the card measures zero and the positioner bails). */
+    /* The stack hangs off the boxes ABOVE each rung, so it has to be replaced
+       whenever ANY of them changes size — the name arriving, the points chip
+       appearing, a rotation, and (this is the one that bit) the azkar button
+       animating itself in. That button collapses its own max-height over ~0.4s,
+       so the dock under it grows over many frames; a single reposition on the
+       frame the button flips reads a mid-animation height, and the challenge
+       card lands on top of the azkar button until something else re-measures —
+       which is exactly why folding and unfolding the card "fixed" it.
+       Observing every rung catches every frame of that growth for free.
+       A ResizeObserver fires on first observation too, which is also what
+       places them the moment the game screen becomes visible (until then the
+       card measures zero and the positioner bails).
+       No loop: `_hudPositionDock` writes only `top`/`right`, never a size. */
     if (window.ResizeObserver) {
-        const card = document.getElementById('user-card');
-        if (card) new ResizeObserver(() => _hudPositionDock()).observe(card);
+        const ro = new ResizeObserver(() => _hudPositionDock());
+        for (const id of ['user-card', 'hud-tools', 'azkar-dock']) {
+            const el = document.getElementById(id);
+            if (el) ro.observe(el);
+        }
     }
     _hudPositionDock();
     setTimeout(_hudPositionDock, 400);      // backstop for browsers without RO
