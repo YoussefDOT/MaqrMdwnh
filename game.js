@@ -27526,11 +27526,17 @@ const CHAT_SEE_R        = 760;    // bubbles are fully readable inside this…
 const CHAT_SEE_FADE     = 260;    // …and fade to nothing over this much more
 const CHAT_BUB_H        = 30;
 const CHAT_BUB_GAP      = 5;
-const CHAT_HEAD_GAP     = 44;     // clearance above the head (hats live in there)
+const CHAT_HEAD_GAP     = 30;     // clearance above the head — the tail tucks INTO
+                                  // the hair a little, the way a speech bubble should
 // Bubble springs. Damping < 1 on purpose: the stack overshoots a hair as it
 // settles, which is what gives it the iPad-ish bounce instead of a linear slide.
 const CHAT_OFF_K   = 0.21, CHAT_OFF_D  = 0.72;
 const CHAT_SCL_K   = 0.28, CHAT_SCL_D  = 0.68;
+
+// How far MY OWN bubble stack is pushed up, in world units, so the type box floating
+// over my head never lands on top of it. Purely local — nobody else's client knows or
+// cares that I have a box open, so this is never relayed.
+let _chatSelfLift = 0;
 
 const _chatUi = {
     wrap: null, input: null, count: null, send: null,
@@ -27580,7 +27586,7 @@ const TTS_FEMALE_NAMES = ['laila', 'layla', 'salma', 'zariyah', 'amany', 'sana',
 const _TTS_MALE_RE   = new RegExp('\\b(' + TTS_MALE_NAMES.join('|') + ')\\b', 'i');
 const _TTS_FEMALE_RE = new RegExp('\\b(' + TTS_FEMALE_NAMES.join('|') + ')\\b', 'i');
 
-const _tts = { count: -1, male: [], female: [], any: [], inflight: 0, bound: false };
+const _tts = { count: -1, male: [], female: [], any: [], inflight: 0, mine: 0, bound: false };
 
 function _ttsSynth() {
     return (typeof window !== 'undefined' && window.speechSynthesis) ? window.speechSynthesis : null;
@@ -27631,8 +27637,14 @@ function _ttsSpeak(text, uid, dist) {
     // Proximity is audible, not just a cut-off: nearer speakers are louder.
     const vol   = 0.25 + 0.75 * Math.max(0, 1 - (dist / CHAT_HEAR_R));
 
+    const mine = uid === gameState.userId;
     let settled = false;
-    const done = () => { if (settled) return; settled = true; _tts.inflight = Math.max(0, _tts.inflight - 1); };
+    const done = () => {
+        if (settled) return;
+        settled = true;
+        _tts.inflight = Math.max(0, _tts.inflight - 1);
+        if (mine) _tts.mine = Math.max(0, _tts.mine - 1);
+    };
     try {
         const u = new SpeechSynthesisUtterance(text);
         u.voice = voice;
@@ -27640,6 +27652,7 @@ function _ttsSpeak(text, uid, dist) {
         u.pitch = pitch; u.rate = rate; u.volume = vol;
         u.onend = done; u.onerror = done;
         _tts.inflight++;
+        if (mine) _tts.mine++;
         // Some engines never fire onend — without this backstop `inflight` would
         // creep up and silence every later message.
         setTimeout(done, 12000);
@@ -27653,6 +27666,7 @@ function _ttsStop() {
     if (!synth) return;
     try { synth.cancel(); } catch (_) {}
     _tts.inflight = 0;
+    _tts.mine = 0;
 }
 
 // ─── Receiving ───────────────────────────────────────────────────────────────
@@ -27669,7 +27683,7 @@ function receiveChatMessage(player, raw) {
         a: 1, w: 0,           // w = cached measured text width
     });
     while (list.length > CHAT_STACK_MAX) list.shift();
-    if (player.userId !== gameState.userId) _chatHear(player, text);
+    _chatHear(player, text);
 }
 
 // Everything that decides whether this message makes a SOUND. Seeing a bubble and
@@ -27677,14 +27691,21 @@ function receiveChatMessage(player, raw) {
 function _chatHear(player, text) {
     const me = gameState.players[gameState.userId];
     if (!me) return;
-    const dist = Math.hypot((player.x || 0) - (me.x || 0), (player.y || 0) - (me.y || 0));
-    if (dist > CHAT_HEAR_R) return;                       // too far — proximity chat
-    if (localInWorkPhase()) return;                       // never interrupt a work session
+    const mine = player.userId === gameState.userId;
+    const dist = mine ? 0 : Math.hypot((player.x || 0) - (me.x || 0), (player.y || 0) - (me.y || 0));
     if (gameState.azkar.active || gameState.prayer.isOverlayActive) return;
     if (gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active) return;
-    // A soft arrival cue, so a message still registers when the voice is muted or
-    // the device has no Arabic voice at all.
-    try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.22, 0.055); } catch (_) {}
+    // MY OWN message is always read back — I typed it on purpose, so neither the
+    // hearing radius nor the work-session mute applies to it. Both of those exist to
+    // stop OTHER people reaching me; they were never meant to gag me to myself.
+    if (!mine) {
+        if (dist > CHAT_HEAR_R) return;                   // too far — proximity chat
+        if (localInWorkPhase()) return;                   // never interrupt a work session
+        // A soft arrival cue, so a message still registers when the voice is muted or
+        // the device has no Arabic voice at all. Skipped for my own line: I just
+        // pressed send, I don't need telling that something arrived.
+        try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.22, 0.055); } catch (_) {}
+    }
     if (getChatVoice()) _ttsSpeak(text, player.userId, dist);
 }
 
@@ -27826,13 +27847,24 @@ function updateChatSystem() {
 
     // Cut a sentence that's still mid-word when the adhan/azkar arrives, or when a
     // work phase starts. Speech is queued by _chatHear, which can only judge the
-    // moment the message landed; this is the running check.
-    if (_tts.inflight > 0 && (localInWorkPhase() || gameState.azkar.active
-        || gameState.prayer.isOverlayActive || !getChatVoice())) {
-        _ttsStop();
+    // moment the message landed; this is the running check. The work-phase cut is
+    // skipped while one of MY OWN lines is in flight — same reason _chatHear lets it
+    // through: it was typed on purpose.
+    if (_tts.inflight > 0) {
+        const hardStop = gameState.azkar.active || gameState.prayer.isOverlayActive || !getChatVoice();
+        if (hardStop || (localInWorkPhase() && _tts.mine === 0)) _ttsStop();
     }
 
     const dt = gameState.dtFactor || 1;
+
+    // Push MY OWN stack up out of the way while the type box is open, and let it
+    // settle back down when it closes. The box is a fixed number of SCREEN pixels
+    // tall, so the world-space lift has to be divided by the zoom or it would clear
+    // the box zoomed out and sit far too high zoomed in.
+    const liftTarget = _chatUi.open ? ((_chatUi.h + 14) / Math.max(0.2, gameState.zoom)) : 0;
+    _chatSelfLift += (liftTarget - _chatSelfLift) * 0.18 * dt;
+    if (Math.abs(liftTarget - _chatSelfLift) < 0.05) _chatSelfLift = liftTarget;
+
     const now = Date.now();
     const step = CHAT_BUB_H + CHAT_BUB_GAP;
     for (const player of Object.values(gameState.players)) {
@@ -27906,7 +27938,9 @@ function drawChatBubbles(floorFilter = null) {
 
         const rScale = player.renderScale || 1;
         const pos = getPlayerRenderPos(player);
-        const baseY = pos.y - (player.bobOffset || 0) - (PLAYER_SIZE / 2) * rScale - CHAT_HEAD_GAP;
+        let baseY = pos.y - (player.bobOffset || 0) - (PLAYER_SIZE / 2) * rScale - CHAT_HEAD_GAP;
+        // Only my own stack lifts, and only on my own screen — see _chatSelfLift.
+        if (me && player === me) baseY -= _chatSelfLift;
 
         for (let i = 0; i < list.length; i++) {
             const b = list[i];

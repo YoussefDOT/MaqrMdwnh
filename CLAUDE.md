@@ -1125,6 +1125,13 @@ nor during azkar/prayer/a minigame. `updateChatSystem` re-checks that every fram
 **cancels a sentence mid-word** when the adhan lands — `_chatHear` can only judge the
 moment the message arrived.
 
+**Your OWN line is the exception, and is always read back**: neither the hearing radius
+nor the work-session mute applies to it, and the running cut in `updateChatSystem` skips
+the work-phase branch while `_tts.mine > 0`. Both of those rules exist to stop *other*
+people reaching you; they were never meant to gag you to yourself. The arrival blip *is*
+skipped for your own line — you just pressed send. Azkar/prayer/minigame still stop it
+(the box can't even open then).
+
 ### TTS — `speechSynthesis`, and what it can't promise
 Free, offline, client-side, no server. What varies is the **voice**: Arabic ships on
 macOS/iOS and Android, but on Windows only with the language pack installed. With no
@@ -1155,6 +1162,13 @@ message springs in from just under its slot while the older ones slide up.
 - **Two springs per bubble**, both damped **below 1 on purpose**: the stack overshoots a
   hair as it settles (scale peaks at ~1.13, off settles in ~25 frames) — that overshoot
   is the whole iPad feel. A linear slide reads as dead.
+- **`CHAT_HEAD_GAP` is deliberately small enough that the tail tucks INTO the hair.** A
+  bubble floating clear above the head reads as a label, not as speech.
+- **`_chatSelfLift` eases MY OWN stack up while the type box is open** so the box never
+  lands on it, and eases it back down on close. Purely local — nobody else's client
+  knows I have a box open, so it is never relayed. The lift is **divided by the zoom**:
+  the box is a fixed number of SCREEN pixels tall, so a world-space constant would clear
+  it zoomed out and sit absurdly high zoomed in.
 - **Weak devices**: the bubble's only expensive property is `ctx.shadowBlur`, which
   `installLowGfxShadowGuard` already forces to 0 on متوسط/بطاطس; `drawChatBubbles` also
   gates it on `gameState._lowGfx` so the intent is readable locally. There is **no CSS
