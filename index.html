@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 255 · Updated 9/3 7:39 AM</div>
+    <div id="build-number" class="build-number">Build 256 · Updated 9/3 10:41 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -366,6 +366,27 @@
         <!-- عصا التحكم للجوال (تظهر على الجوال فقط) -->
         <div id="mobile-joystick" class="mobile-joystick">
             <div id="joystick-knob" class="joystick-knob"></div>
+        </div>
+
+        <!-- ═══ الدردشة القريبة ═══
+             صندوق كتابة يطفو فوق شخصيتك. يُفتح بالضغط على شخصيتك أو بمفتاح Enter.
+             موضعه يُكتب من JS كل إطار (شاشة لا عالم)، ويُقصّ فوق لوحة مفاتيح الجوال
+             عبر visualViewport. الرسالة نفسها تُرسم على الكانفس لا هنا. -->
+        <div id="chat-input-wrap" class="chat-input-wrap">
+            <div class="chat-input-box">
+                <input type="text" id="chat-input" maxlength="25" autocomplete="off"
+                       autocapitalize="off" autocorrect="off" spellcheck="false"
+                       enterkeyhint="send" placeholder="اكتب رسالة قصيرة..."
+                       aria-label="اكتب رسالة قصيرة">
+                <span id="chat-input-count" class="chat-input-count">25</span>
+                <button id="chat-input-send" class="chat-input-send" type="button" aria-label="إرسال">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+                         stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M20 12L4 5l3 7-3 7z"/>
+                    </svg>
+                </button>
+            </div>
+            <div class="chat-input-tail" aria-hidden="true"></div>
         </div>
 
         <!-- أزرار قتال الحاسوب للجوال (يسار / يمين / قفز) -->
@@ -744,6 +765,15 @@
                     </div>
                     <button id="settings-longfree-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="30">
                         <span id="settings-longfree-label">بعد ٣٠ دقيقة</span>
+                    </button>
+                </div>
+                <div class="settings-row">
+                    <div class="settings-row-label">
+                        <span class="settings-row-name">نطق الرسائل</span>
+                        <span class="settings-row-sub">قراءة رسائل من حولك بصوت مسموع. الرسائل تظهر مكتوبة دائمًا</span>
+                    </div>
+                    <button id="settings-chatvoice-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="on">
+                        <span id="settings-chatvoice-label">مفعّل</span>
                     </button>
                 </div>
             </div>
@@ -1788,7 +1818,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=247"></script>
+        <script type="module" src="game.js?v=248"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

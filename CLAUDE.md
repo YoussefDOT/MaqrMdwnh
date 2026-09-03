@@ -90,6 +90,7 @@ Grep anchors for the major systems (all verified to exist):
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
 | Work streak challenge | `CHAL`, `updateWorkChallenge`, `_chalBank`, `_chalClaim` |
+| Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `_ttsSpeak` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
 | Success card | `setupSuccessCardUI` |
@@ -219,6 +220,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **المدفئة / أعضاء الشهر** | Walk to the fireplace → a full-screen look at it with the month's top-3 point scorers framed on the mantel. Points come from a **separate Firebase project**. See **Fireplace / Members of the Month**. |
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
 | **تحدي المثابرة** | A seven-day work streak: ٥٠ دقيقة of work a day (breaks excluded) for ٧ أيام, ٣ → ٩ سبتمبر ٢٠٢٦. A foldable «فعالية» card under the azkar dock, a seven-dot ladder your avatar walks, and a payout claimed on the Points site through the library's own claim handshake. See **تحدي المثابرة**. |
+| **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٢٥ حرفًا, no more. The message becomes a bubble; a second one pushes the first up on a spring. Anyone standing near hears it read aloud by the browser's own TTS at a pitch fixed to that person. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
 | **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
@@ -1087,6 +1089,120 @@ and a rare detour, so it warms on idle, not at spawn.
 
 ---
 
+## الدردشة القريبة — proximity chat
+
+A **25-character** message that floats over your head and is **read aloud** to whoever
+is standing near you. Code is the `الدردشة القريبة` block at the very end of `game.js`;
+markup is `#chat-input-wrap` in `index.html`; styles are the matching block at the foot
+of `style.css`. Grep anchors: `CHAT_`, `updateChatSystem`, `drawChatBubbles`,
+`receiveChatMessage`, `_ttsSpeak`.
+
+### It costs ZERO Firebase, and that is the whole design
+Decision-tree §5 case 1: high-frequency, ephemeral, worthless to a late joiner. So a
+message is a **one-off event on the existing WebSocket relay** — `{t:'chat',uid,m}` —
+exactly like the sofa hop (`sendSitWS`). **Nothing is written, nothing is read back, no
+listener is added, and the Worker needed no change** (it forwards raw bytes without
+parsing). Under `users/{uid}` this would have re-streamed every message to every client
+in both lobbies; it would have been the most expensive feature in the app.
+
+The trade is stated once and accepted: **socket down = message not delivered.** That is
+the same fallback contract live positions already live under, and it is the right one
+for something that expires in seconds. Don't "fix" it with a Firebase mirror.
+
+### Seeing and hearing are two different radii — on purpose
+| | radius (world units) | what happens past it |
+|---|---|---|
+| `CHAT_SEE_R` 760 (+`CHAT_SEE_FADE` 260) | bubble | fades out — a bubble across the building is not readable |
+| `CHAT_HEAR_R` 430 | voice + arrival cue | silent |
+
+For scale: the shared-pomo "standing together" threshold is **200** and the world is
+1193 × 1706. Volume also **scales with distance inside** the hearing radius, so
+proximity is audible rather than a hard cut-off. **Your own bubbles never fade** — you
+always see what you said.
+
+**Nobody in a work session ever hears** (`localInWorkPhase()`, so free mode counts too),
+nor during azkar/prayer/a minigame. `updateChatSystem` re-checks that every frame and
+**cancels a sentence mid-word** when the adhan lands — `_chatHear` can only judge the
+moment the message arrived.
+
+### TTS — `speechSynthesis`, and what it can't promise
+Free, offline, client-side, no server. What varies is the **voice**: Arabic ships on
+macOS/iOS and Android, but on Windows only with the language pack installed. With no
+Arabic voice we stay **silent** rather than hand Arabic text to an English voice, which
+reads as noise — the bubble is always there, so nothing is lost. The soft `uiBlip` cue
+fires either way, so a message still registers when the voice is muted or missing.
+
+- **Gender comes from the lobby, not from the speaker.** The lobbies are already split,
+  so everyone you can hear is your own gender — `_ttsSpeak` picks from the voices whose
+  *name* matches this lobby (`TTS_MALE_NAMES` / `TTS_FEMALE_NAMES`, matched on word
+  boundaries so a substring can't grab the wrong voice). Where the platform ships **no
+  gendered pair** (macOS has a single Arabic voice), the lobby sets the **base pitch**
+  instead — 0.82 vs 1.22.
+- **Each speaker's pitch is a HASH of their uid, never a random draw** (`_chatHash01`,
+  FNV-1a). A random one would make the same person sound different to each listener and
+  different after every login. The jitter is **±0.13 pitch and ±0.05 rate** — measured
+  at 0.876–1.073 across real uids, which is "a bit different", not a cartoon.
+- `_tts.inflight` caps concurrency at **2** so a busy room can't queue a monologue, and
+  every utterance carries a **12s `setTimeout` backstop** — some engines never fire
+  `onend`, and without it the counter creeps up and silences everything after.
+
+### The bubbles
+Drawn on the canvas (never DOM), **per floor, right after that floor's timers** — same
+split as the avatars, so a ground bubble stays under the mezzanine and a mezzanine one
+fades with it. Newest sits **lowest** (nearest the head) and carries the tail; a new
+message springs in from just under its slot while the older ones slide up.
+
+- **Two springs per bubble**, both damped **below 1 on purpose**: the stack overshoots a
+  hair as it settles (scale peaks at ~1.13, off settles in ~25 frames) — that overshoot
+  is the whole iPad feel. A linear slide reads as dead.
+- **Weak devices**: the bubble's only expensive property is `ctx.shadowBlur`, which
+  `installLowGfxShadowGuard` already forces to 0 on متوسط/بطاطس; `drawChatBubbles` also
+  gates it on `gameState._lowGfx` so the intent is readable locally. There is **no CSS
+  `backdrop-filter` on the bubbles at all** (they're canvas), and the input box drops its
+  blur entirely on `body.is-mobile` — invariant 10.
+- `drawChatBubbles` also runs in the **PiP pass**; `updateChatSystem` is called only from
+  `gameLoop`, so the springs are never advanced twice (same rule as Lemo and the hats).
+
+### The input box
+`#chat-input-wrap` is a fixed DOM element whose `left`/`top` are written per frame by
+`updateChatInputPos`; its own transform is a constant `translate(-50%,-100%)`, so **`top`
+is its bottom edge** — which is what the **`visualViewport` clamp** works against, and
+that is what lifts it clear of the mobile keyboard. `display` can't transition, so the
+box is always laid out and enter/exit is `opacity` + `visibility` + `.active`.
+
+- **The canvas rect is cached** (`_chatUi.cl/ct`, re-measured only on open and on
+  resize). Reading `getBoundingClientRect()` every frame immediately before writing
+  `left`/`top` thrashes layout for an origin that never moves. Same for the box's own
+  size, measured once on open — `visibility: hidden` still lays out, which is exactly
+  why it isn't `display: none`.
+- **Opening zeroes `gameState.keys`.** `handleMovement` stops reading them the instant
+  `chatIsOpen()` goes true, so a key held at that moment would stay "down" forever.
+- `chatIsOpen()` joins the standard guard list in the window `keydown`, the wheel-zoom
+  handler and `handleMovement`.
+- **`chatSelfPress` is checked BEFORE `handleClickOffSofa`** in both the desktop and
+  mobile hit-test chains: while seated, a press on yourself lands ON the sofa, and that
+  helper swallows the click.
+- The outside-press dismissal **ignores a press on your own character** — the canvas
+  handler reads that as "open the chat box", so closing first would close-then-reopen and
+  wipe whatever was half-typed.
+- `focus()` runs inside the original gesture (that's what raises the mobile keyboard),
+  and `#chat-input` is **16px on mobile** so iOS doesn't zoom the page on focus.
+
+### Sanitising is done on BOTH ends
+`_chatClean` strips control and **bidi-override** characters (an override scrambles the
+whole line), collapses whitespace and caps at `CHAT_MAX_LEN`. It runs on send **and on
+receive** — a relayed payload is data from another client and is never trusted to have
+been clamped. The `uid` in a relay payload is client-claimed and spoofable, the same
+known limit the position relay already carries.
+
+### The setting
+**نطق الرسائل** (`SETTINGS_CHATVOICE_KEY`), in التحكم والعمل, on by default. It mutes the
+**voice only** — the bubbles are the feature and always show. `getChatVoice()` is only
+read on message arrival and (short-circuited) when speech is actually in flight, never
+per frame from draw code.
+
+---
+
 ## Dismissing panels — the backdrop is a back button
 
 Every laptop/reading modal closes on a **backdrop click**, not just its رجوع button:
@@ -1374,6 +1490,7 @@ Opens **under the gear button**, which now lives in `#hud-tools` to the left of 
 | `SETTINGS_PARTICLES_KEY` | absent = follow tier | الجسيمات — tri-state **تلقائي → مفعّلة → مغلقة**. **Overrides the graphics tier** (see Graphics Tiers → Effect overrides) |
 | `SETTINGS_OVERLAYS_KEY` | absent = follow tier | الطبقات الجوية — tri-state, same override semantics |
 | `SETTINGS_LONGFREE_KEY` | absent = بعد ٣٠ دقيقة | تأكيد مدة الجلسة الحرة — tri-state **مغلق → بعد ٣٠ دقيقة → دائمًا** (`getLongFreeMode()`). Gates the free-mode idle-confirm via `shouldAskLongFreeConfirm()`; the user's `off` beats even the Siraj always-ask |
+| `SETTINGS_CHATVOICE_KEY` | on (`getChatVoice()`) | نطق الرسائل — read nearby chat messages aloud. Mutes the **voice only**; bubbles always show (see **الدردشة القريبة**) |
 | `SETTINGS_PRAYER_DELAY_KEY` | off (`getPrayerJamaahDelay()`) | "صلاة الجماعة" — when **on**, adds **+5 min** to every prayer time (`prayerJamaahExtraMin()`, applied in `computeNextPrayer`/`updatePrayerPanelDOM`). **Per-USER, not per-device**: source of truth is Firebase `users/{uid}/prayerJamaahDelay`, read on login and **mirrored into localStorage** so the getter stays a cheap sync read; the toggle writes both. |
 
 ### Open / close animation

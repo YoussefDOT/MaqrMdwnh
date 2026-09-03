@@ -9138,3 +9138,119 @@ body.is-mobile .chal-modal-head { font-size: 1.05rem; }
 /* اللوحة تغطّي الشاشة على الجوال، فاللوحة الحيّة خلفها لا داعي لرسمها */
 body.chal-modal-open { overflow: hidden; }
 body.chal-modal-open.is-mobile #game-canvas { opacity: 0; pointer-events: none; }
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   الدردشة القريبة — صندوق الكتابة
+   ---------------------------------------------------------------------------
+   يطفو فوق شخصية اللاعب. الموضع (left/top) يُكتب من JS كل إطار وهو في فضاء
+   الشاشة لا العالم، فالتحويل هنا ثابت: translate(-50%,-100%). حركة الظهور على
+   الصندوق الداخلي حتى لا تتصادم مع ذلك التحويل.
+   الظهور بـ opacity + visibility لأن display لا يقبل الانتقال.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.chat-input-wrap {
+    position: fixed;
+    left: 0; top: 0;
+    z-index: 210;
+    transform: translate(-50%, -100%);
+    direction: rtl;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .2s ease, visibility 0s linear .2s;
+}
+.chat-input-wrap.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity .2s ease, visibility 0s;
+}
+
+.chat-input-box {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px 6px 14px;
+    border-radius: 50px;
+    background: rgba(18, 18, 18, 0.68);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30);
+    transform: scale(0.86);
+    transition: transform .34s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chat-input-wrap.active .chat-input-box { transform: scale(1); }
+
+#chat-input {
+    width: 190px;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    outline: none;
+    color: rgba(255, 255, 255, 0.92);
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    direction: rtl;
+    text-align: right;
+    padding: 3px 6px;
+}
+#chat-input::placeholder { color: rgba(255, 255, 255, 0.34); font-weight: 400; }
+
+.chat-input-count {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.30);
+    font-variant-numeric: tabular-nums;
+    min-width: 16px;
+    text-align: center;
+    transition: color .2s;
+}
+.chat-input-count.low { color: rgba(225, 53, 46, 0.85); }
+
+.chat-input-send {
+    flex: 0 0 auto;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    background: rgba(255, 255, 255, 0.10);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    color: rgba(255, 255, 255, 0.85);
+    transition: background .2s, transform .25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chat-input-send:hover { background: rgba(255, 255, 255, 0.18); transform: scale(1.06); }
+.chat-input-send:active { transform: scale(0.94); }
+/* السهم مرسوم لليمين، والاتجاه هنا RTL */
+.chat-input-send svg { width: 15px; height: 15px; transform: scaleX(-1); }
+
+/* ذيل صغير يشير إلى رأس الشخصية */
+.chat-input-tail {
+    width: 10px; height: 10px;
+    margin: -5px auto 0;
+    background: rgba(18, 18, 18, 0.68);
+    border-right: 1px solid rgba(255, 255, 255, 0.09);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+    border-bottom-right-radius: 3px;
+    transform: rotate(45deg);
+}
+
+/* الجوال: لا backdrop-filter فوق الكانفس الحيّة (يُعاد رسم الخلفية كل إطار)،
+   و16px لخانة الإدخال حتى لا يُقرّب iOS الشاشة عند التركيز. */
+body.is-mobile .chat-input-box {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(18, 18, 18, 0.93);
+}
+body.is-mobile .chat-input-tail { background: rgba(18, 18, 18, 0.93); }
+body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; }
+
+/* عصا التحكم تتوارى أثناء الكتابة — صنف مستقل عن focus-hidden و lib-hidden
+   عمدًا، فالثلاثة أنظمة تعمل معًا وإغلاق أحدها يجب ألّا يُظهرها وسط الآخر. */
+.mobile-joystick.chat-hidden {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(24px);
+}
