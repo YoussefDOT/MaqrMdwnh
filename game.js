@@ -26007,9 +26007,13 @@ function _libToast(msg) {
    else stacked beside it; someone WATCHING a task they are not on has no "me"
    to anchor, so every face is the same size in a grid. A task carrying the whole
    team is neither — «الجميع» is the fact all those faces were standing in for. */
+/* The cluster is CAPPED at six cells — five faces and a «+N» disc — because a
+   task carrying twenty-three of the twenty-eight assignable members is not
+   «الجميع» and so drew twenty-two faces as eight columns, which pushed the
+   countdown and the إتمام button out through the pill's own `overflow:hidden`.
+   Mirrors `WHO_MAX` / `restHtml()` in the library; resync both together. */
 const LIB_ALL_MIN = 3;
-const _libClusterRows = n => (n <= 4 ? 2 : 3);
-const _libClusterSize = rows => (rows === 2 ? 22 : 16);
+const LIB_WHO_MAX = 5;
 
 function _libIsEveryone(list) {
     const pool = MDWNH_ROSTER.list.filter(m => !m.admin && !m.dummy && m.active !== false);
@@ -26024,6 +26028,20 @@ function _libAvImg(t, slug, cls) {
         '" title="' + _libEsc(name + (done ? ' — أتمّها' : ' — لم يتمّها بعد')) + '">' +
         '<img src="' + _libEsc(_libAvatar(slug)) + '" alt="' + _libEsc(name) + '" loading="lazy" decoding="async">' +
         (done ? '<i class="av-tick" aria-hidden="true">' + LIB_ICON.check + '</i>' : '') +
+        '</span>';
+}
+
+/* The stack, capped: five faces then a disc carrying the rest, which opens a
+   popup of everybody on the task. Two rows of three, whatever the head-count. */
+function _libRestHtml(t, list) {
+    const over = list.length - LIB_WHO_MAX;
+    const show = over > 0 ? list.slice(0, LIB_WHO_MAX) : list;
+    return '<span class="who-rest">' +
+        show.map(s => _libAvImg(t, s)).join('') +
+        (over > 0
+            ? '<button class="av more" type="button" data-libtask="' + _libEsc(t.id) + '" ' +
+              'title="كل المكلَّفين" aria-label="عرض كل المكلَّفين">+' + _libAr(over) + '</button>'
+            : '') +
         '</span>';
 }
 
@@ -26043,18 +26061,66 @@ function _libWhoHtml(t, watching) {
             return '<span class="who pair" style="--av:32px">' +
                 _libAvImg(t, others[0]) + _libAvImg(t, meSlug, 'me') + '</span>';
         }
-        const rows = _libClusterRows(others.length);
-        return '<span class="who lead" style="--av:38px;--sm:' + _libClusterSize(rows) + 'px;--rows:' + rows + '">' +
-            '<span class="who-rest">' + others.map(s => _libAvImg(t, s)).join('') + '</span>' +
-            _libAvImg(t, meSlug, 'me') + '</span>';
+        return '<span class="who lead" style="--av:38px">' +
+            _libRestHtml(t, others) + _libAvImg(t, meSlug, 'me') + '</span>';
     }
 
     if (!watching) return '';
     if (list.length === 1) return '<span class="who solo" style="--av:38px">' + _libAvImg(t, list[0]) + '</span>';
-    const rows = _libClusterRows(list.length);
-    return '<span class="who grid" style="--sm:' + _libClusterSize(rows) + 'px;--rows:' + rows + '">' +
-        '<span class="who-rest">' + list.map(s => _libAvImg(t, s)).join('') + '</span></span>';
+    return '<span class="who grid">' + _libRestHtml(t, list) + '</span>';
 }
+
+/* ── «+N» — the rest of the team ─────────────────────────────────────────────
+   The disc sits inside a pill that opens the library in a new tab, so the
+   listener is on the document in the CAPTURE phase: a bubbling one runs after
+   the pill's own, i.e. after the tab has already been opened. Hover on a
+   mouse, press on a finger — and `position:fixed` on <body>, because the pill
+   is `overflow:hidden` inside a panel that scrolls. */
+let _libPop = null, _libPopFor = null;
+function _libHideWhoPop() {
+    if (!_libPop) return;
+    _libPop.remove(); _libPop = null; _libPopFor = null;
+}
+function _libShowWhoPop(btn) {
+    const t = _lib.tasks && _lib.tasks[btn.dataset.libtask]; if (!t) return;
+    const list = _libAssignees(t); if (!list.length) return;
+    _libHideWhoPop();
+
+    const p = document.createElement('div');
+    p.className = 'lib-who-pop';
+    p.innerHTML = list.map(s => {
+        const m = MDWNH_ROSTER.bySlug[s], name = m ? m.name : s, done = _libIsDoneFor(t, s);
+        return '<span class="wp' + (done ? ' done' : '') + '">' +
+            '<img src="' + _libEsc(_libAvatar(s)) + '" alt="" loading="lazy" decoding="async">' +
+            '<b>' + _libEsc(name) + '</b></span>';
+    }).join('');
+    document.body.appendChild(p);
+
+    const r = btn.getBoundingClientRect(), b = p.getBoundingClientRect(), pad = 8;
+    let x = r.left + r.width / 2 - b.width / 2;
+    x = Math.max(pad, Math.min(x, innerWidth - b.width - pad));
+    let y = r.bottom + 8;
+    if (y + b.height > innerHeight - pad) y = Math.max(pad, r.top - b.height - 8);
+    p.style.left = x + 'px'; p.style.top = y + 'px';
+
+    _libPop = p; _libPopFor = btn;
+}
+document.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('.av.more[data-libtask]');
+    if (btn) {
+        e.preventDefault(); e.stopPropagation();      // never open the library tab under it
+        if (_libPopFor === btn) _libHideWhoPop(); else _libShowWhoPop(btn);
+        return;
+    }
+    if (_libPop && !e.target.closest('.lib-who-pop')) _libHideWhoPop();
+}, true);
+document.addEventListener('mouseover', (e) => {
+    if (!matchMedia('(hover:hover)').matches) return;
+    const btn = e.target.closest && e.target.closest('.av.more[data-libtask]');
+    if (btn && _libPopFor !== btn) _libShowWhoPop(btn);
+    else if (!btn && _libPop && !e.target.closest('.lib-who-pop')) _libHideWhoPop();
+}, true);
+document.addEventListener('scroll', _libHideWhoPop, true);
 
 // ONE unit, never two — days until the last day, then hours. «١ يوم ٧ ساعة» is
 // four lines in a 30px column that nobody reads as a number.

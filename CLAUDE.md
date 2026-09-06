@@ -1985,10 +1985,28 @@ one froze the canvas while it was still fully opaque, and the old `visibility: h
 of that read as an instant black snap. On close, drawing resumes on the same frame so there
 is live content to fade back in. **Don't reintroduce `visibility: hidden` here.**
 
+### The faces cluster is CAPPED at six
+Five faces then a **«+N» disc**, two rows of three, whatever the head-count. A task carrying
+twenty-three of the twenty-eight assignable members is not «الجميع», so it drew twenty-two
+faces as eight columns and pushed the countdown and the **إتمام button out through the pill's
+own `overflow:hidden`** — the button is the only thing on that row that is not decoration.
+`LIB_WHO_MAX` / `_libRestHtml()`, mirroring the library's `WHO_MAX` / `restHtml()`.
+- The disc opens `.lib-who-pop` — every member on the task, face and name — **`position:fixed`
+  on `<body>`**, because the pill is `overflow:hidden` inside a panel that scrolls.
+- **Its click listener is on the document in the CAPTURE phase.** A bubbling one runs AFTER
+  the pill's own, i.e. after `window.open` has already thrown a library tab up over it.
+- The faces stay 22px. The library draws them 2.5× bigger in its read-only detail CARD, which
+  maqr has not got — in the pill they are a marker, not the row's subject.
+- `.who` is `flex:0 1 auto;min-width:0` and `.who-rest` clips: the net under the cap is that
+  the stack gives before the button does.
+
 ### RESYNC
 `library-tasks.css` and `_libTaskPill()` are hand-copies of `MdwnhLibrary/css/tasks.css` and
 `taskPill()`. **Nothing automates the sync.** If the pill changes there, change it in both
 places here — the library's own `CLAUDE.md` carries the matching note.
+**Still drifted: the COVER.** A task carries `pic` (a version) and the bytes live at
+`library/taskimg/<id>`; `_libTaskPill` still reads `t.img`, so every pill falls back to 📌.
+The library's `CLAUDE.md` carries the four lines that fix it.
 
 ---
 
