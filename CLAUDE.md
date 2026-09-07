@@ -1893,6 +1893,15 @@ judging "this member has no library account" while the roster is still in flight
 mark the trophy taken and silently drop the points — the one failure here that costs a
 member something real. A Siraj ghost resolves to nobody, so it can never mint one.
 
+**How the other end settles it** (`MdwnhPoints/index.html`): arriving at
+`?claim=1&user=<NFC dbKey>` logs the member straight in (`resolveMemberName`, no
+password — the caller already authenticated them), then it reads their whole
+`mdwnhLibrary/claims/<key>` node and lists every pending record, whatever the id.
+`claimNow` **deletes the record first and then awards** `points` with `title` as the
+note. So a replay cannot double-pay — but a *second* record written at the same id
+after a settle would, which is why `_troClaim` re-reads `claimed` from the server
+before minting.
+
 ### Progress is visible from OUTSIDE — the gold fills the trophy
 Each slot draws the art **twice**: a grayscale/dimmed copy, and a full-colour copy
 clipped `inset(100%-p 0 0 0)` so it fills bottom-up with progress. Under it: the name, a
@@ -2009,16 +2018,23 @@ interaction point, so the art and the hitbox can never drift apart. No collision
 dilated bottom wall already stops the player ~50 source px short of it.
 
 ### Gotchas
-- **Youssef and Siraj ghosts see every trophy full and claimable** (`TROPHY_TEST_UIDS` /
-  `_troTestUnlocked`) so the ceremony and the claim are testable without waiting
-  sixty-seven hours. It is a **local display override** — nothing is written, the real
-  counters keep accumulating underneath, and deleting that one constant restores the
-  honest shelf.
-- **To hand the test accounts a clean shelf again, bump `TROPHY_RESET_TAG`.** Their
-  `claimed` map is wiped on the next login. It is gated on `_troTestUnlocked()`, so
-  editing it can never reset a real member. The claim records already written to the
-  Points DB are left alone on purpose — re-claiming PUTs the same key, so nothing
-  duplicates.
+- **Only a Siraj ghost sees every trophy full and claimable** (`_troTestUnlocked`), so
+  the ceremony is walkable without waiting sixty-seven hours. A ghost resolves to
+  nobody in `MDWNH_ROSTER` and therefore **cannot mint a claim** — which is exactly
+  what makes it the safe account to test with. It is a local display override; nothing
+  is written, and the real counters keep accumulating underneath.
+- **To hand a named account a clean shelf, bump `TROPHY_RESET_TAG`** — its `claimed`
+  map is wiped on next login. `TROPHY_RESET_UIDS` is a deliberately **separate** list
+  from `_troTestUnlocked()`, so a real member can be reset without also being handed
+  every trophy.
+- **`_troClaim` re-reads `claimed` from the server before minting.** `_tro.claimed` is
+  a login-time snapshot, so a second tab opened before the first one claimed would
+  still think the trophy is free — and since the Points site **deletes** a claim when
+  it settles, a second record really would pay twice. One tiny read on a
+  once-per-trophy action closes it.
+- **`_troSeed` must not stamp `seeded` on a failed read.** Burning the one shot on a
+  dropped request would lose that member's whole history; unmarked, it just runs again
+  next login.
 - The complete button locks with a **`.unlocked` class, never the `disabled` attribute**
   (iOS touch leak — see azkar), so the handler has to re-check the class.
 - Enter/exit everywhere is `opacity` + `visibility` + a double-rAF `.active` — `display`

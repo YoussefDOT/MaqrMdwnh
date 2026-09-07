@@ -28245,20 +28245,20 @@ function trophyHoldsCamera() { return !!_tro.camFrozen; }
 function _troCount(map) { return map ? Object.keys(map).length : 0; }
 function _troPath() { return `dashboards/${gameState.userId}/trophies`; }
 
-/* Youssef and the Siraj test ghosts see every trophy full and claimable, so the
-   whole ceremony + claim path is testable without waiting sixty-seven hours. It is
-   a LOCAL override — nothing is written, so his real counters keep accumulating
-   underneath and deleting this one constant restores the honest shelf. */
-const TROPHY_TEST_UIDS = new Set([DASH_TARGET_UID]);
+/* Only a Siraj ghost sees every trophy full and claimable, so the ceremony is
+   walkable without waiting sixty-seven hours. A ghost resolves to nobody in
+   MDWNH_ROSTER, so it can never mint a claim — which is exactly what makes it the
+   safe account to test with. It is a LOCAL override; nothing is written, so the
+   real counters keep accumulating underneath. */
 function _troTestUnlocked() {
-    return gameState.isSirajGhost || TROPHY_TEST_UIDS.has(gameState.userId);
+    return !!gameState.isSirajGhost;
 }
-/* BUMP THIS to hand every test account a clean shelf again: it wipes their
-   `claimed` map on next login so the whole ceremony is re-runnable. It only ever
-   touches accounts _troTestUnlocked() covers, so a real member can never be reset
-   by editing this. The claim RECORDS already written to the Points DB are left
-   alone — re-claiming PUTs the same key, so nothing duplicates. */
-const TROPHY_RESET_TAG = 4;
+/* A one-shot wipe of `claimed` for the accounts named below — a clean shelf for
+   whoever needs to re-walk the flow. BUMP THE TAG to run it again. It is a
+   deliberately separate list from _troTestUnlocked() so a real member (Youssef is
+   one now) can still be reset without also being handed every trophy. */
+const TROPHY_RESET_TAG  = 5;
+const TROPHY_RESET_UIDS = new Set([DASH_TARGET_UID]);
 
 /* ── progress ─────────────────────────────────────────────────────────────── */
 // One shape for every caller: the shelf caption, the detail bar, and the claim gate.
@@ -28408,6 +28408,7 @@ function _troRefreshReading() {
 async function _troSeed(prog) {
     const uid = gameState.userId;
     const out = { workMs: 0, sessions: 0, workDays: {} };
+    let ok = true;
     try {
         const [statSnap, sessSnap] = await Promise.all([
             get(ref(database, `dashboards/${uid}/stats/totalWorkMs`)),
@@ -28427,7 +28428,13 @@ async function _troSeed(prog) {
         }
         out.sessions = Math.min(TRO_SESS_CAP, n);
         for (const k of [...days].slice(0, TRO_DAYS_CAP)) out.workDays[k] = 1;
-    } catch (_) { /* seed is a courtesy — a failure just means starting at zero */ }
+    } catch (_) {
+        /* Do NOT stamp `seeded` on a failed read — that would burn the one shot and
+           lose the member's whole history to a dropped request. Leave it unmarked and
+           it simply runs again next login. */
+        ok = false;
+    }
+    if (!ok) return;
 
     Object.assign(prog, out);
     const base = `${_troPath()}/prog`;
@@ -28652,6 +28659,17 @@ async function _troClaim(id) {
        never rejects, and it is almost always already resolved by now. */
     await _mdwnhRosterReady.catch(() => {});
     const me = _lib.me;
+
+    /* Re-read `claimed` from the server first. `_tro.claimed` is a login-time
+       snapshot, so a second tab (or a second device) opened before the first one
+       claimed would still think the trophy is unclaimed — and because the Points
+       site DELETES a claim when it settles it, a second record really would pay
+       twice. One tiny read on a once-per-trophy action closes that. */
+    try {
+        const fresh = await get(ref(database, `${_troPath()}/claimed`));
+        _tro.claimed = fresh.val() || _tro.claimed;
+        if (_tro.claimed[id]) { _tro.claiming = false; _troRenderShelves(); return; }
+    } catch (_) { /* offline — the local snapshot is the best we have */ }
 
     if (me && me.dbKey) {
         const key = _libNfc(me.dbKey);
@@ -29014,8 +29032,9 @@ function setupTrophyUI() {
         _tro.claimed = v.claimed || {};
         _tro.granted = v.granted || {};
         _tro.dayKey = _todayDateStr();
-        // Test accounts get a clean shelf whenever TROPHY_RESET_TAG moves.
-        if (_troTestUnlocked() && v.resetTag !== TROPHY_RESET_TAG) {
+        // A clean shelf for the named accounts whenever TROPHY_RESET_TAG moves.
+        if ((TROPHY_RESET_UIDS.has(gameState.userId) || _troTestUnlocked())
+            && v.resetTag !== TROPHY_RESET_TAG) {
             _tro.claimed = {};
             update(ref(database), {
                 [`${_troPath()}/claimed`]: null,
