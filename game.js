@@ -28258,7 +28258,7 @@ function _troTestUnlocked() {
    touches accounts _troTestUnlocked() covers, so a real member can never be reset
    by editing this. The claim RECORDS already written to the Points DB are left
    alone — re-claiming PUTs the same key, so nothing duplicates. */
-const TROPHY_RESET_TAG = 3;
+const TROPHY_RESET_TAG = 4;
 
 /* ── progress ─────────────────────────────────────────────────────────────── */
 // One shape for every caller: the shelf caption, the detail bar, and the claim gate.
