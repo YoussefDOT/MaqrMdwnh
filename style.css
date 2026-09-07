@@ -9254,3 +9254,749 @@ body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; }
     pointer-events: none;
     transform: translateY(24px);
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   رف الجوائز — the trophy room, its detail panel, and the award ceremony.
+   The room is a lit display case rather than another dark-glass sheet: two
+   wooden planks floating in a warm near-black room, each trophy under its own
+   pool of light. Progress is the gold FILLING the trophy from the base, so the
+   shelf answers "how far am I" before anything is clicked.
+   ════════════════════════════════════════════════════════════════════════════ */
+.tro-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Warm near-black, lit from above — the same room the shelf hangs in. */
+    background:
+        radial-gradient(120% 80% at 50% -10%, rgba(226, 169, 43, 0.13), transparent 62%),
+        #0d0a07;
+    z-index: 9000;            /* below prayer/azkar (10000) — those must cover it */
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.42s ease, visibility 0s linear 0.42s;
+    /* Tuned once here; every offset below is derived from it. Fluid on height so
+       two shelves + captions always fit without a stack of breakpoints — the plank
+       overlap is a percentage of WIDTH, so it stays correct at any figure height. */
+    --tro-fig: clamp(88px, 15vh, 168px);
+    --tro-gold: #e2a92b;
+    --tro-gold-hi: #ffdf87;
+    --tro-cream: #f3e7d2;
+    --tro-dim: rgba(243, 231, 210, 0.44);
+}
+.tro-overlay.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 0.42s ease, visibility 0s linear 0s;
+}
+
+/* ── the room ─────────────────────────────────────────────────────────────── */
+.tro-room {
+    position: relative;
+    width: min(940px, 94vw);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 26px;
+    /* Materialize rather than fade: the case arrives as a real object. */
+    transform: scale(0.94);
+    opacity: 0;
+    transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.34s ease;
+}
+.tro-overlay.active .tro-room { transform: scale(1); opacity: 1; }
+/* Pushed back and dimmed while the detail / list sits on top of it. */
+.tro-overlay.tro-focus .tro-room {
+    transform: scale(0.9) translateY(-8px);
+    opacity: 0;
+    pointer-events: none;
+}
+
+.tro-head { text-align: center; }
+.tro-title {
+    margin: 0;
+    font-size: 2rem;
+    font-weight: 800;
+    letter-spacing: -0.02em;     /* large text reads too loose at default tracking */
+    line-height: 1.1;
+    color: var(--tro-cream);
+}
+.tro-sub {
+    margin: 6px 0 0;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--tro-dim);
+}
+
+.tro-shelves {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 34px;
+}
+
+/* One plank, in normal flow between the trophies and their captions. The pull-up
+   is a PERCENTAGE margin, which resolves against the container's WIDTH — and the
+   plank's height is a fixed fraction of its width (264/1956), so -5.8% lands the
+   trophy feet on the plank's top face at any size, with no JS measuring and no
+   hard-coded height. The captions then sit under it by themselves. */
+.tro-shelf { position: relative; }
+.tro-plank {
+    position: relative;
+    z-index: 0;
+    display: block;
+    width: 103%;
+    margin: -5.8% -1.5% 0;
+    pointer-events: none;
+    filter: drop-shadow(0 16px 22px rgba(0, 0, 0, 0.55));
+}
+.tro-row {
+    display: flex;
+    align-items: flex-end;
+}
+.tro-row > * { flex: 1 1 0; min-width: 0; }
+.tro-figs { position: relative; z-index: 1; }
+.tro-caps { margin-top: 10px; align-items: flex-start; }
+
+.tro-slot {
+    display: block;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    color: inherit;
+    font: inherit;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.tro-slot:hover  { transform: translateY(-5px); }
+.tro-slot:active { transform: translateY(-1px) scale(0.97); }
+.tro-slot:focus-visible { outline: 2px solid var(--tro-gold-hi); outline-offset: 6px; border-radius: 14px; }
+
+/* The pool of light each trophy stands in. */
+.tro-fig {
+    position: relative;
+    height: var(--tro-fig);
+    width: 100%;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+}
+.tro-fig::before {
+    content: '';
+    position: absolute;
+    left: 50%; bottom: -6%;
+    width: 128%; height: 150%;
+    transform: translateX(-50%);
+    background: radial-gradient(50% 62% at 50% 78%, rgba(255, 223, 135, 0.16), transparent 70%);
+    pointer-events: none;
+}
+.tro-fig img {
+    position: absolute;
+    bottom: 0;
+    height: 100%;
+    width: auto;
+    max-width: none;
+}
+/* Base layer: the trophy, unlit. */
+.tro-fig .tro-img-dim { filter: grayscale(1) brightness(0.42) contrast(0.9); }
+/* Fill layer: the same art in full colour, revealed bottom-up by progress. */
+.tro-fig .tro-img-lit {
+    clip-path: inset(calc(100% - var(--tro-p, 0%)) 0 0 0);
+    transition: clip-path 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+/* Earned but not yet taken — its pool of light breathes. Opacity on the pool, NOT
+   an infinite filter/scale animation: those repaint every frame (invariant 12). */
+.tro-slot.is-ready .tro-fig img { filter: none; }
+.tro-slot.is-ready .tro-fig::before {
+    background: radial-gradient(50% 62% at 50% 78%, rgba(255, 223, 135, 0.42), transparent 72%);
+    animation: troReady 2.8s ease-in-out infinite;
+}
+@keyframes troReady {
+    0%, 100% { opacity: 0.45; }
+    50%      { opacity: 1; }
+}
+/* Taken — the slot keeps its ghost so the shelf never reads as broken. */
+.tro-slot.is-taken .tro-fig img { filter: grayscale(1) brightness(0.55); opacity: 0.14; }
+.tro-slot.is-taken .tro-fig::after {
+    content: '✓';
+    position: absolute;
+    left: 50%; top: 44%;
+    transform: translate(-50%, -50%);
+    font-size: 1.5rem;
+    color: rgba(255, 223, 135, 0.6);
+}
+
+.tro-cap {
+    padding: 0 6px;
+    text-align: center;
+    cursor: pointer;
+}
+.tro-name {
+    display: block;
+    font-size: 0.84rem;
+    font-weight: 700;
+    color: var(--tro-cream);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.tro-bar {
+    display: block;
+    margin: 7px auto 0;
+    width: 74%;
+    height: 3px;
+    border-radius: 50px;
+    background: rgba(243, 231, 210, 0.14);
+    overflow: hidden;
+}
+.tro-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 50px;
+    background: linear-gradient(90deg, var(--tro-gold), var(--tro-gold-hi));
+    transition: width 0.6s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tro-pct {
+    display: block;
+    margin-top: 5px;
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: var(--tro-dim);
+}
+/* The caption is its own row element, so it carries the state class too. */
+.tro-cap.is-ready .tro-pct  { color: var(--tro-gold-hi); }
+.tro-cap.is-taken .tro-name { color: var(--tro-dim); }
+.tro-cap.is-taken .tro-bar  { visibility: hidden; }
+
+.tro-collected-btn {
+    position: absolute;
+    inset-inline-start: 0;
+    bottom: -54px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 14px;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(255, 255, 255, 0.05);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    color: var(--tro-cream);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s;
+}
+.tro-collected-btn:hover  { background: rgba(255, 255, 255, 0.11); }
+.tro-collected-btn:active { transform: scale(0.94); }
+.tro-collected-count {
+    min-width: 20px;
+    padding: 1px 6px;
+    border-radius: 50px;
+    background: rgba(226, 169, 43, 0.22);
+    color: var(--tro-gold-hi);
+    font-size: 0.72rem;
+}
+
+.tro-close {
+    position: absolute;
+    top: 20px; inset-inline-end: 20px;
+    width: 38px; height: 38px;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 15px;
+    cursor: pointer;
+    z-index: 6;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s, color 0.18s;
+}
+.tro-close:hover  { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.tro-close:active { transform: scale(0.88); }
+
+/* ── detail: trophy left, panel right (matches the reference) ─────────────── */
+.tro-detail, .tro-collected {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.3s ease, visibility 0s linear 0.3s;
+}
+.tro-detail.active, .tro-collected.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 0.3s ease, visibility 0s linear 0s;
+}
+.tro-detail-inner {
+    display: flex;
+    align-items: center;
+    gap: 30px;
+    width: min(860px, 92vw);
+}
+.tro-detail-fig {
+    position: relative;
+    flex: 0 0 auto;
+    width: min(240px, 30vw);
+    display: grid;
+    place-items: center;
+    /* Enters from the left and scales up — the panel then slides in beside it. */
+    transform: translateX(-46px) scale(0.62);
+    opacity: 0;
+    transition: transform 0.62s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.3s ease;
+}
+.tro-detail.active .tro-detail-fig { transform: none; opacity: 1; }
+.tro-detail-fig img {
+    position: relative;
+    width: 100%;
+    height: auto;
+    filter: drop-shadow(0 22px 34px rgba(0, 0, 0, 0.6));
+}
+.tro-detail-glow {
+    position: absolute;
+    inset: -22% -18%;
+    background: radial-gradient(50% 50% at 50% 50%, rgba(255, 223, 135, 0.20), transparent 70%);
+    pointer-events: none;
+}
+.tro-detail-panel {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 26px 28px;
+    border-radius: 25px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(18, 18, 18, 0.68);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30);
+    transform: translateX(34px);
+    opacity: 0;
+    transition: transform 0.5s cubic-bezier(0.34, 1.56, 0.64, 1) 0.06s, opacity 0.3s ease 0.06s;
+}
+.tro-detail.active .tro-detail-panel { transform: none; opacity: 1; }
+.tro-detail-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+}
+.tro-detail-name {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 800;
+    letter-spacing: -0.015em;
+    line-height: 1.15;
+    color: #fff;
+}
+.tro-detail-sticker { width: 52px; height: auto; flex: 0 0 auto; }
+.tro-detail-desc {
+    margin: 12px 0 0;
+    font-size: 0.9rem;
+    font-weight: 500;
+    line-height: 1.75;
+    color: rgba(255, 255, 255, 0.62);
+}
+.tro-detail-prog { margin-top: 20px; }
+.tro-detail-bar {
+    height: 6px;
+    border-radius: 50px;
+    background: rgba(255, 255, 255, 0.09);
+    overflow: hidden;
+}
+.tro-detail-bar i {
+    display: block;
+    height: 100%;
+    width: 0;
+    border-radius: 50px;
+    background: linear-gradient(90deg, var(--tro-gold), var(--tro-gold-hi));
+    transition: width 0.7s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.tro-detail-count {
+    margin-top: 9px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+}
+
+.tro-complete-btn {
+    margin-top: 20px;
+    width: 100%;
+    padding: 13px 20px;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 0.95rem;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: not-allowed;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.2s, color 0.2s, box-shadow 0.2s;
+}
+/* Visual-only lock is a CLASS, never the `disabled` attribute — iOS leaks touch
+   events straight through a disabled button to whatever is under it. */
+.tro-complete-btn.unlocked {
+    border-color: rgba(226, 169, 43, 0.45);
+    background: linear-gradient(180deg, #f0bb3c, #d5941c);
+    color: #2a1c04;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(226, 169, 43, 0.26);
+}
+.tro-complete-btn.unlocked:hover  { box-shadow: 0 8px 26px rgba(226, 169, 43, 0.38); }
+.tro-complete-btn.unlocked:active { transform: scale(0.97); }
+
+.tro-back {
+    position: absolute;
+    inset-inline-start: 26px;
+    bottom: 26px;
+    padding: 9px 18px;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.72);
+    font-size: 0.82rem;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s;
+}
+.tro-back:hover  { background: rgba(255, 255, 255, 0.12); }
+.tro-back:active { transform: scale(0.94); }
+
+/* ── collected list ───────────────────────────────────────────────────────── */
+.tro-collected { flex-direction: column; gap: 18px; }
+.tro-collected-title {
+    margin: 0;
+    font-size: 1.4rem;
+    font-weight: 800;
+    letter-spacing: -0.015em;
+    color: var(--tro-cream);
+}
+.tro-collected-list {
+    width: min(520px, 90vw);
+    max-height: 58vh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 4px;
+}
+.tro-col-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 12px 16px;
+    border-radius: 18px;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgba(255, 255, 255, 0.045);
+}
+.tro-col-row img { width: 40px; height: auto; flex: 0 0 auto; }
+.tro-col-txt { flex: 1 1 auto; min-width: 0; }
+.tro-col-name { display: block; font-size: 0.92rem; font-weight: 700; color: #fff; }
+.tro-col-date { display: block; margin-top: 3px; font-size: 0.75rem; color: rgba(255, 255, 255, 0.45); }
+.tro-col-pts  { flex: 0 0 auto; width: 40px; height: auto; }
+.tro-col-empty {
+    padding: 30px 10px;
+    text-align: center;
+    font-size: 0.86rem;
+    color: rgba(255, 255, 255, 0.4);
+}
+
+/* ════════════════════════════════════════════════════════════════════════════
+   The ceremony. Everything here is transform/opacity only so the shake, the
+   dash and the slow-motion tail stay on the compositor.
+   ════════════════════════════════════════════════════════════════════════════ */
+.tro-cer {
+    position: fixed;
+    inset: 0;
+    background: #000;
+    z-index: 9400;            /* above the shelf (9000), below prayer/azkar (10000) */
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.26s ease, visibility 0s linear 0.26s;
+    --tro-ground: 70%;
+    --tro-spot-x: 32%;
+    /* One height for the whole stage. Clamped against WIDTH as well as height —
+       34vh alone makes the trophy 55vw wide on a phone, i.e. already touching the
+       avatar before it has moved. */
+    --tro-cer-h: clamp(150px, min(34vh, 40vw), 360px);
+}
+.tro-cer.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 0.26s ease, visibility 0s linear 0s;
+}
+.tro-cer-stage { position: absolute; inset: 0; }
+.tro-cer-stage.shake { animation: troShake 0.62s cubic-bezier(0.36, 0.07, 0.19, 0.97); }
+@keyframes troShake {
+    0%   { transform: translate3d(0, 0, 0); }
+    8%   { transform: translate3d(-26px, 12px, 0); }
+    18%  { transform: translate3d(22px, -14px, 0); }
+    30%  { transform: translate3d(-17px, -9px, 0); }
+    44%  { transform: translate3d(13px, 10px, 0); }
+    58%  { transform: translate3d(-9px, -6px, 0); }
+    72%  { transform: translate3d(6px, 4px, 0); }
+    86%  { transform: translate3d(-3px, -2px, 0); }
+    100% { transform: translate3d(0, 0, 0); }
+}
+
+/* The cone from above and the pool it lands in — one light, two halves. */
+.tro-spot, .tro-spot-pool {
+    position: absolute;
+    opacity: 0;
+    transition: opacity 0.55s ease;
+    pointer-events: none;
+}
+.tro-spot {
+    left: var(--tro-spot-x);
+    top: -6%;
+    width: min(62vh, 76vw);
+    height: calc(var(--tro-ground) + 8%);
+    transform: translateX(-50%);
+    background: linear-gradient(180deg, rgba(255, 240, 205, 0.24), rgba(255, 236, 190, 0.05) 62%, transparent);
+    clip-path: polygon(40% 0%, 60% 0%, 100% 100%, 0% 100%);
+}
+.tro-spot-pool {
+    left: var(--tro-spot-x);
+    top: var(--tro-ground);
+    width: min(56vh, 70vw);
+    height: 15vh;
+    transform: translate(-50%, -46%);
+    background: radial-gradient(50% 50% at 50% 50%, rgba(255, 235, 185, 0.34), rgba(255, 226, 160, 0.08) 55%, transparent 74%);
+}
+.tro-cer.lit .tro-spot, .tro-cer.lit .tro-spot-pool { opacity: 1; }
+
+.tro-cer-trophy {
+    position: absolute;
+    left: var(--tro-spot-x);
+    top: var(--tro-ground);
+    height: var(--tro-cer-h);
+    width: auto;
+    transform: translate(-50%, -100%) scale(0.86);
+    opacity: 0;
+    transition: opacity 0.5s ease 0.12s, transform 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 0.12s;
+    filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.7));
+}
+.tro-cer.lit .tro-cer-trophy { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+.tro-cer.hit  .tro-cer-trophy { opacity: 0; transform: translate(-50%, -100%) scale(1.35); transition: opacity 0.12s linear, transform 0.12s ease-out; }
+
+/* The avatar. `left` is written by JS each phase; the drop/bounce/dash all ride
+   its own transform so the two never fight. */
+.tro-cer-avatar {
+    position: absolute;
+    top: var(--tro-ground);
+    left: 68%;
+    height: calc(var(--tro-cer-h) * 0.7);   /* 70% of the trophy, per the brief */
+    aspect-ratio: 1;
+    transform: translate(-50%, -100%);
+    opacity: 0;
+}
+.tro-cer-avatar.in { opacity: 1; }
+.tro-cer-av {
+    display: block;
+    width: 100%; height: 100%;
+    border-radius: 50%;
+    background-size: cover;
+    background-position: center;
+    background-color: #2b2b2b;
+    box-shadow: 0 0 0 4px var(--tro-ring, #4c9bff), 0 14px 26px rgba(0, 0, 0, 0.6);
+    transform-origin: 50% 100%;   /* squash lands on the feet */
+}
+
+.tro-flash {
+    position: absolute;
+    inset: 0;
+    background: #fff;
+    opacity: 0;
+    pointer-events: none;
+}
+.tro-flash.go { animation: troFlash 1s ease-out forwards; }
+@keyframes troFlash {
+    0%   { opacity: 0; }
+    6%   { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* ── completion card ──────────────────────────────────────────────────────── */
+.tro-card {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(6, 4, 2, 0.86);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.4s ease, visibility 0s linear 0.4s;
+}
+.tro-card.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 0.4s ease, visibility 0s linear 0s;
+}
+.tro-card-inner {
+    position: relative;
+    width: min(460px, 92vw);
+    padding: 30px 28px 26px;
+    text-align: center;
+    transform: scale(0.9);
+    transition: transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.tro-card.active .tro-card-inner { transform: scale(1); }
+/* Sunburst. Transform-only rotation, and the element only exists while the card
+   is open — never an always-on full-screen animation. */
+.tro-card-burst {
+    position: absolute;
+    left: 50%; top: 34%;
+    width: 120vmin; height: 120vmin;
+    transform: translate(-50%, -50%);
+    will-change: transform;
+    background: repeating-conic-gradient(
+        from 0deg,
+        rgba(255, 223, 135, 0.16) 0deg 7deg,
+        transparent 7deg 18deg);
+    -webkit-mask-image: radial-gradient(50% 50% at 50% 50%, #000 8%, transparent 62%);
+    mask-image: radial-gradient(50% 50% at 50% 50%, #000 8%, transparent 62%);
+    animation: troSpin 26s linear infinite;
+    pointer-events: none;
+}
+@keyframes troSpin { to { transform: translate(-50%, -50%) rotate(360deg); } }
+.tro-card-trophy {
+    position: relative;
+    height: clamp(180px, 32vh, 320px);
+    width: auto;
+    filter: drop-shadow(0 22px 40px rgba(0, 0, 0, 0.7));
+}
+.tro-card-name {
+    position: relative;
+    margin: 14px 0 0;
+    font-size: 1.9rem;
+    font-weight: 900;
+    letter-spacing: -0.025em;
+    line-height: 1.1;
+    color: #fff;
+}
+.tro-card-date {
+    position: relative;
+    margin: 6px 0 0;
+    font-size: 0.85rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.48);
+}
+.tro-card-sticker { position: relative; margin-top: 14px; width: 68px; height: auto; }
+.tro-card-doc {
+    position: relative;
+    margin: 16px auto 0;
+    max-width: 300px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    line-height: 1.7;
+    color: rgba(255, 223, 135, 0.82);
+}
+.tro-card-actions {
+    position: relative;
+    margin-top: 20px;
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+}
+.tro-card-btn {
+    padding: 12px 24px;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: 0.9rem;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s;
+}
+.tro-card-btn:hover  { background: rgba(255, 255, 255, 0.13); }
+.tro-card-btn:active { transform: scale(0.96); }
+.tro-card-btn.primary {
+    border-color: rgba(226, 169, 43, 0.45);
+    background: linear-gradient(180deg, #f0bb3c, #d5941c);
+    color: #2a1c04;
+    box-shadow: 0 6px 20px rgba(226, 169, 43, 0.26);
+}
+
+/* ── mobile ───────────────────────────────────────────────────────────────── */
+body.trophy-active { overflow: hidden; }
+/* The game loop keeps running behind the overlay — a blurred panel over a live
+   60fps canvas re-rasterises its backdrop every frame (invariant 10). */
+body.is-mobile .tro-collected-btn,
+body.is-mobile .tro-detail-panel {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(18, 18, 18, 0.93);
+}
+body.is-mobile .tro-overlay { --tro-fig: clamp(72px, 11vh, 112px); }
+body.is-mobile .tro-title { font-size: 1.5rem; }
+body.is-mobile .tro-shelves { gap: 24px; }
+body.is-mobile .tro-name { font-size: 0.68rem; }
+body.is-mobile .tro-pct  { font-size: 0.6rem; }
+body.is-mobile .tro-cap  { padding: 0 2px; }
+body.is-mobile .tro-detail-inner { flex-direction: column; gap: 14px; }
+body.is-mobile .tro-detail-fig { width: min(150px, 34vw); }
+body.is-mobile .tro-detail-panel { width: 100%; padding: 20px 18px; }
+body.is-mobile .tro-detail-name { font-size: 1.2rem; }
+body.is-mobile .tro-card-name { font-size: 1.5rem; }
+body.is-mobile .tro-cer { --tro-spot-x: 30%; }
+body.is-mobile .tro-back { inset-inline-start: 50%; transform: translateX(-50%); bottom: 18px; }
+body.is-mobile .tro-back:active { transform: translateX(-50%) scale(0.94); }
+
+@media (max-height: 700px) {
+    .tro-shelves { gap: 20px; }
+    .tro-head { display: none; }   /* the room is self-explanatory; the shelves aren't */
+}
+
+/* Reduced motion: keep the information, drop the vestibular parts. Cross-fades
+   replace the springs, and the flash stops being a brightness jump. */
+@media (prefers-reduced-motion: reduce) {
+    .tro-cer-stage.shake { animation: none; }
+    .tro-card-burst { animation: none; }
+    .tro-slot.is-ready .tro-fig::before { animation: none; opacity: 0.8; }
+    .tro-room, .tro-detail-fig, .tro-detail-panel, .tro-card-inner { transform: none; }
+    .tro-overlay.active .tro-room,
+    .tro-detail.active .tro-detail-fig,
+    .tro-detail.active .tro-detail-panel,
+    .tro-card.active .tro-card-inner { transform: none; }
+    .tro-flash.go { animation-name: troFlashSoft; }
+    @keyframes troFlashSoft { 0% { opacity: 0; } 8% { opacity: 0.28; } 100% { opacity: 0; } }
+}
+
+/* The drop. Vertical + squash live on the INNER span so the outer element keeps
+   `left` to itself — the two never fight over one transform. */
+.tro-cer-av.drop { animation: troDrop 1s cubic-bezier(0.33, 0, 0.67, 1) backwards; }
+@keyframes troDrop {
+    0%   { transform: translateY(-78vh) scaleY(1.18) scaleX(0.88); }
+    38%  { transform: translateY(0)     scaleY(1.14) scaleX(0.9); }   /* impact frame */
+    46%  { transform: translateY(0)     scaleY(0.72) scaleX(1.26); }  /* squash */
+    58%  { transform: translateY(-13%)  scaleY(1.08) scaleX(0.95); }
+    70%  { transform: translateY(0)     scaleY(0.86) scaleX(1.12); }
+    80%  { transform: translateY(-5%)   scaleY(1.03) scaleX(0.98); }
+    90%  { transform: translateY(0)     scaleY(0.95) scaleX(1.04); }
+    100% { transform: translateY(0)     scaleY(1)    scaleX(1); }
+}
+/* Anticipation: lean back and compress before the dash. */
+.tro-cer-av.wind { transform: scaleX(0.86) scaleY(1.08) rotate(7deg); transition: transform 0.18s ease-out; }
+/* The dash itself — stretched along travel, which is what reads as speed. */
+.tro-cer-av.dash { transform: scaleX(1.3) scaleY(0.82) rotate(-10deg); transition: transform 0.13s linear; }
+/* Slow motion after the hit: the stretch relaxes over the whole tail. */
+.tro-cer-av.slow { transform: scaleX(1.06) scaleY(0.96) rotate(-3deg); transition: transform 2.4s linear; }
+@media (prefers-reduced-motion: reduce) {
+    .tro-cer-av.drop { animation: none; }
+    .tro-cer-av.wind, .tro-cer-av.dash, .tro-cer-av.slow { transform: none; }
+}

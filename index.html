@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 260 · Updated 9/6 11:24 AM</div>
+    <div id="build-number" class="build-number">Build 261 · Updated 9/7 4:43 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1459,6 +1459,80 @@
         <button id="fireplace-close" class="fp-close" aria-label="إغلاق">✕</button>
     </div>
 
+    <!-- رف الجوائز. The two planks and every slot inside them are built by
+         setupTrophyUI from the TROPHIES array, so the ids, goals, art numbers and
+         point values live in game.js only — nothing here needs editing to add one. -->
+    <div id="trophy-overlay" class="tro-overlay" aria-hidden="true">
+        <div class="tro-room">
+            <header class="tro-head">
+                <h2 class="tro-title">رف الجوائز</h2>
+                <p class="tro-sub">اضغط على أي جائزة لترى شرطها</p>
+            </header>
+            <div id="tro-shelves" class="tro-shelves"></div>
+            <button id="tro-collected-btn" class="tro-collected-btn" type="button">
+                <span>الجوائز المستلمة</span>
+                <span id="tro-collected-count" class="tro-collected-count">٠</span>
+            </button>
+        </div>
+
+        <!-- Detail: the trophy slides in from the left and scales up beside the panel. -->
+        <div id="tro-detail" class="tro-detail" aria-hidden="true">
+            <div class="tro-detail-inner">
+                <div class="tro-detail-fig">
+                    <span class="tro-detail-glow" aria-hidden="true"></span>
+                    <img id="tro-detail-img" alt="">
+                </div>
+                <div class="tro-detail-panel">
+                    <div class="tro-detail-top">
+                        <h3 id="tro-detail-name" class="tro-detail-name"></h3>
+                        <img id="tro-detail-sticker" class="tro-detail-sticker" alt="">
+                    </div>
+                    <p id="tro-detail-desc" class="tro-detail-desc"></p>
+                    <div class="tro-detail-prog">
+                        <div class="tro-detail-bar"><i id="tro-detail-fill"></i></div>
+                        <div id="tro-detail-count" class="tro-detail-count"></div>
+                    </div>
+                    <button id="tro-complete-btn" class="tro-complete-btn" type="button">استلام الجائزة</button>
+                </div>
+            </div>
+            <button id="tro-detail-back" class="tro-back" type="button">رجوع</button>
+        </div>
+
+        <div id="tro-collected" class="tro-collected" aria-hidden="true">
+            <h3 class="tro-collected-title">الجوائز المستلمة</h3>
+            <div id="tro-collected-list" class="tro-collected-list"></div>
+            <button id="tro-collected-back" class="tro-back" type="button">رجوع</button>
+        </div>
+
+        <button id="trophy-close" class="tro-close" aria-label="إغلاق">✕</button>
+    </div>
+
+    <!-- The award ceremony. Its own top-level layer (z above the shelf) so the shelf
+         stays laid out underneath and is exactly where you left it on «تم». -->
+    <div id="tro-cer" class="tro-cer" aria-hidden="true">
+        <div id="tro-cer-stage" class="tro-cer-stage">
+            <div class="tro-spot" aria-hidden="true"></div>
+            <div class="tro-spot-pool" aria-hidden="true"></div>
+            <img id="tro-cer-trophy" class="tro-cer-trophy" alt="">
+            <div id="tro-cer-avatar" class="tro-cer-avatar"><span id="tro-cer-av" class="tro-cer-av"></span></div>
+        </div>
+        <div id="tro-flash" class="tro-flash" aria-hidden="true"></div>
+        <div id="tro-card" class="tro-card" aria-hidden="true">
+            <div class="tro-card-inner">
+                <div class="tro-card-burst" aria-hidden="true"></div>
+                <img id="tro-card-trophy" class="tro-card-trophy" alt="">
+                <h3 id="tro-card-name" class="tro-card-name"></h3>
+                <p id="tro-card-date" class="tro-card-date"></p>
+                <img id="tro-card-sticker" class="tro-card-sticker" alt="">
+                <p class="tro-card-doc">التقط الشاشة وأرسلها في التوثيق</p>
+                <div class="tro-card-actions">
+                    <button id="tro-card-claim" class="tro-card-btn primary" type="button">استلم النقاط</button>
+                    <button id="tro-card-done" class="tro-card-btn" type="button">تم</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div id="reading-modal" class="modal-overlay">
         <div class="modal-content reading-content">
             <div class="logo-container">
@@ -1809,7 +1883,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=251"></script>
+        <script type="module" src="game.js?v=252"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

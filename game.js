@@ -889,6 +889,11 @@ class FocusAudioEngine {
             // Sofa relax seating
             sofaSit: null,
             sofaStand: null,
+            // رف الجوائز — the award ceremony. Loaded lazily (ensureTrophySounds)
+            // the moment the player walks up to the shelf, never on the login path:
+            // Trophy_Collect alone is 400 KB.
+            trophyCollect: null,
+            spotlight: null,
             // Laptop boss fight
             bossAnticipate: null,
             bossAttackInitiate: null,
@@ -1025,6 +1030,69 @@ class FocusAudioEngine {
         } else {
             setTimeout(() => this.ensureBossSounds(), 2500);
         }
+    }
+
+    // ── رف الجوائز ──────────────────────────────────────────────────────────────
+    // Same deferral as the boss set: two files nobody who never walks to the shelf
+    // should pay for. Idempotent, and it resolves even if a file fails — a silent
+    // ceremony beats a stuck one.
+    ensureTrophySounds() {
+        if (this._trophySounds) return this._trophySounds;
+        if (!this.ctx) this.init();
+        if (!this.ctx) return Promise.resolve();
+        const loadBuffer = async (url) => {
+            const response = await fetch(url);
+            const arrayBuffer = await response.arrayBuffer();
+            return await this.ctx.decodeAudioData(arrayBuffer);
+        };
+        this._trophySounds = Promise.all([
+            ['trophyCollect', 'Sound/Trophy_Collect.mp3'],
+            ['spotlight',     'Sound/spotlight.mp3'],
+        ].map(async ([key, url]) => {
+            try { this.buffers[key] = await loadBuffer(url); }
+            catch (e) { console.log(`Trophy sound load failed [${key}]:`, e); }
+        }));
+        return this._trophySounds;
+    }
+
+    /* A one-shot that hands BACK its nodes, so the caller can fade it out later
+       («تم» fades the collect cue over 2s). playEffect() deliberately keeps no
+       handle, which is why this exists rather than a flag on it. */
+    playHandled(name, rate = 1, peak = 0.85) {
+        if (!this.ctx) this.init();
+        const buf = this.buffers[name];
+        if (!buf || !this.ctx) return null;
+        const start = () => {
+            try {
+                const src = this.ctx.createBufferSource();
+                src.buffer = buf;
+                src.playbackRate.value = rate;
+                const g = this.ctx.createGain();
+                g.gain.setValueAtTime(peak, this.ctx.currentTime);
+                src.connect(g); g.connect(this.ctx.destination);
+                src.onended = () => { try { src.disconnect(); g.disconnect(); } catch (_) {} };
+                src.start(0);
+                h.src = src; h.gain = g;
+            } catch (_) {}
+        };
+        const h = { src: null, gain: null };
+        // ctx.resume() is async — never fire-and-forget.
+        if (this.ctx.state === 'suspended') this.ctx.resume().then(start).catch(() => {});
+        else start();
+        return h;
+    }
+
+    fadeOutHandle(h, seconds = 2) {
+        if (!h || !this.ctx) return;
+        const stop = () => { try { h.src && h.src.stop(); } catch (_) {} };
+        if (!h.gain) { stop(); return; }
+        try {
+            const t = this.ctx.currentTime;
+            h.gain.gain.cancelScheduledValues(t);
+            h.gain.gain.setValueAtTime(Math.max(0.0001, h.gain.gain.value), t);
+            h.gain.gain.exponentialRampToValueAtTime(0.0001, t + seconds);
+            setTimeout(stop, seconds * 1000 + 60);
+        } catch (_) { stop(); }
     }
 
     ensureBossSounds() {
@@ -2281,6 +2349,11 @@ const gameState = {
         crowdShock:         _lazyAudio('Sound/LaptopMinigame/Crowd_Shock.mp3'),
         sofaSit:                 _lazyAudio('Sound/Sofa_Sit.mp3'),
         sofaStand:               _lazyAudio('Sound/Sofa_Stand.mp3'),
+        // رف الجوائز — HTMLAudio fallbacks only; the ceremony itself always runs on
+        // the Web Audio buffers (ensureTrophySounds) because it needs pitch control
+        // and a handle to fade out.
+        trophyCollect:           _lazyAudio('Sound/Trophy_Collect.mp3'),
+        spotlight:               _lazyAudio('Sound/spotlight.mp3'),
         prayerCall:              _lazyAudio('Sound/Prayer_CallToPrayer.mp3'),
         inviteSent:              _lazyAudio('Sound/Invite_Sent.mp3'),
         inviteAccepted:          _lazyAudio('Sound/Invite_Accepted.mp3'),
@@ -2583,8 +2656,12 @@ function warmGameSounds() {
      'minigameReady', 'inviteSent', 'inviteAccepted', 'sofaSit', 'sofaStand'].forEach(warm);
     // Priority 2 — everything else, on idle (minigames + dashboard papers live
     // behind explicit user actions, so a few seconds of delay is invisible).
+    // The trophy pair is half a megabyte and only ever plays inside the award
+    // ceremony, which the Web Audio path (ensureTrophySounds) already covers on
+    // walking up to the shelf — warming them here would download it for everyone.
+    const NEVER_WARM = new Set(['trophyCollect', 'spotlight']);
     const warmRest = () => {
-        for (const key of Object.keys(gameState.sounds)) warm(key);
+        for (const key of Object.keys(gameState.sounds)) if (!NEVER_WARM.has(key)) warm(key);
     };
     if (window.requestIdleCallback) requestIdleCallback(warmRest, { timeout: 8000 });
     else setTimeout(warmRest, 3500);
@@ -2838,6 +2915,18 @@ const FIRE_FAR  = 380;   // silent beyond this radius
 const FIRE_MAX_VOL = 0.7;
 const FIRE_SELECT_R = 220;   // proximity: show the "انقر للنظر الى المدفئة" prompt
 const FIRE_CLICK_R  = 150;   // a click/tap must land near the fireplace itself
+
+// ── رف الجوائز — the trophy shelf, bottom-left of the break room ───────────────
+// The bbox of the painted shelf in SOURCE px. It is BOTH where the cropped world
+// layer is pasted back (WORLD_LAYERS `box`) and where the interaction sits, so the
+// art and the hitbox can never drift apart.
+const TROPHY_SHELF_BOX = [168, 3030, 596, 3101];
+const TROPHY_X = sx2w((TROPHY_SHELF_BOX[0] + TROPHY_SHELF_BOX[2]) / 2);
+const TROPHY_Y = sy2w((TROPHY_SHELF_BOX[1] + TROPHY_SHELF_BOX[3]) / 2);
+// The dilated bottom wall already stops the player ~50 source px short of the
+// shelf, so both radii are measured from a stand-off, not from touching distance.
+const TROPHY_SELECT_R = 230;
+const TROPHY_CLICK_R  = 190;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  SEATING — sofas (floor 1 only)
@@ -4046,6 +4135,11 @@ const WORLD_FETCH_CONCURRENCY = 4;
 const WORLD_LAYERS = [
     { k: 'wBackground',        f: 'Workspace_0014_Background.png',                            cache: 'ground' },
     { k: 'wWalls',             f: 'Workspace_0013_Walls.png',                                 cache: 'ground', mask: 'walls'  },
+    // رف الجوائز. The only layer that is NOT a full 2210×3160 canvas: it is cropped
+    // to its own painted bbox, so `box` says where to put it back. It sits on the
+    // bottom wall, which is why it is drawn straight after the walls. No mask —
+    // the dilated wall already stops the player ~50 src px short of it.
+    { k: 'wTrophyShelf',       f: 'Workspace_0013b_Trophy_Shelf.png',                         cache: 'ground', box: TROPHY_SHELF_BOX },
     { k: 'wFireplace',         f: 'Workspace_0012_Fireplace.png',                             cache: 'ground', mask: 'fire'   },
     { k: 'wBooksSofas',        f: 'Workspace_0011_Books_Sofas.png',                           cache: 'ground', mask: 'furn'   },
     { k: 'wBooksLibrary',      f: 'Workspace_0010_Books_Library.png',                         cache: 'ground', mask: 'furn'   },
@@ -4526,7 +4620,19 @@ async function loadWorldArt() {
             return false;
         }
 
-        if (def.cache) gctx[def.cache].drawImage(bmp, 0, 0, cw, ch);
+        // A `box` layer ships cropped to its painted bbox (SOURCE px), so it is
+        // pasted back at that rect rather than stretched over the whole canvas.
+        if (def.cache) {
+            if (def.box) {
+                // Separate x/y scales: `ch` is rounded independently of `cw`, so at a
+                // reduced cache resolution one shared factor is a fraction of a px out.
+                const sx = cw / IMG_W, sy = ch / IMG_H;
+                const [bx0, by0, bx1, by1] = def.box;
+                gctx[def.cache].drawImage(bmp, bx0 * sx, by0 * sy, (bx1 - bx0) * sx, (by1 - by0) * sy);
+            } else {
+                gctx[def.cache].drawImage(bmp, 0, 0, cw, ch);
+            }
+        }
         if (def.mask)  _orMask(M[def.mask], _rasterMask(bmp, MASK_THRESHOLD[def.mask]));
 
         if (def.keep) {
@@ -5453,6 +5559,7 @@ function startGame(userData) {
     setupDashboardUI();
     setupSuccessCardUI();
     setupFireplaceUI();
+    setupTrophyUI();
     setupLibraryPanel();
     setupWorkChallenge();
     setupChatUI();
@@ -6398,7 +6505,7 @@ function setupControls() {
     window.addEventListener('keydown', (e) => {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || readingEndCardOpen()
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || readingEndCardOpen()
             || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen()) return;
         gameState.keys[e.code] = true;
     });
@@ -6413,7 +6520,7 @@ function setupControls() {
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
         // Disable scroll zoom while the dashboard / customization / fireplace / tasks panel is open
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -6481,6 +6588,12 @@ function setupControls() {
         if (gameState.nearFireplace &&
             Math.hypot(clickWorld.x - FIRE_X, clickWorld.y - FIRE_Y) < FIRE_CLICK_R) {
             openFireplaceOverlay();
+            return;
+        }
+        // رف الجوائز — same "tap the thing itself" rule as the fireplace.
+        if (gameState.nearTrophyShelf &&
+            Math.hypot(clickWorld.x - TROPHY_X, clickWorld.y - TROPHY_Y) < TROPHY_CLICK_R) {
+            openTrophyShelf();
             return;
         }
         // Sofa seating: sofa1 uses the CLICKED y (clamped to the strip + nudged off
@@ -7193,6 +7306,12 @@ function initMobileControls() {
             if (gameState.nearFireplace &&
                 Math.hypot(clickWorld.x - FIRE_X, clickWorld.y - FIRE_Y) < FIRE_CLICK_R) {
                 openFireplaceOverlay();
+                return;
+            }
+            // رف الجوائز — same rule again.
+            if (gameState.nearTrophyShelf &&
+                Math.hypot(clickWorld.x - TROPHY_X, clickWorld.y - TROPHY_Y) < TROPHY_CLICK_R) {
+                openTrophyShelf();
                 return;
             }
             // Sofa seating (proximity-based tap, same as the dashboard/laptop zones above)
@@ -8901,7 +9020,7 @@ function updateCamera() {
 
     // المدفئة overlay: hold the framing so the world is untouched underneath and
     // closing the overlay reveals exactly the view you left (see _fireFreezeCamera).
-    if (fireplaceHoldsCamera()) return;
+    if (fireplaceHoldsCamera() || trophyHoldsCamera()) return;
 
     // Reading cinematic camera override — also covers the 'exiting' zoom-out tail
     // after reading.active flips false, otherwise this normal camera fights it.
@@ -8926,7 +9045,7 @@ function handleMovement() {
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
     // minigame overlays, locked-in sessions, kidnap anim, prayer, sitting, reading.
     if ((JUICE_ENTRANCE && _entrance.active)
-        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || isMinigameOverlayOpen()
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || isMinigameOverlayOpen()
         || gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)
         || readingEndCardOpen()) {
@@ -9130,6 +9249,14 @@ function updateInteractions() {
     // flame frames start downloading here rather than on the click — by the time the
     // overlay has faded in they're decoded. Idempotent, and never on the login path.
     if (gameState.nearFireplace && !_flame.frames) _fireEnsureFrames();
+
+    // رف الجوائز — floor 1 only. Same shape as the fireplace.
+    gameState.nearTrophyShelf = pFloor === 1 && !gameState.isLockedIn && !gameState.anim.active
+        && !sessionBlocksInteraction() && !trophyShelfIsOpen()
+        && Math.hypot(player.x - TROPHY_X, player.y - TROPHY_Y) < TROPHY_SELECT_R;
+    // Walking up is the earliest honest signal you're about to open it, so the art
+    // and the (half-megabyte) ceremony audio start here rather than on the click.
+    if (gameState.nearTrophyShelf) _troEnsureAssets();
 
     // Games table (race / boss / coffee triggers) — floor 1 only, one big room now
     // (no more separate break room), so proximity alone shows the prompt; whether
@@ -9668,6 +9795,7 @@ function gameLoop(timestamp) {
                                      // Before the minigame early-returns, so entering a
                                      // race/fig/boss game still closes an open chat box.
         updateWorkChallenge();
+        updateTrophies();            // trophy progress: accumulate + bank (see رف الجوائز)
         updateTeleportAnim();
         updateCoffeeTeleportAnim();
         updateLaptopBossTeleportAnim();
@@ -9753,7 +9881,7 @@ function render() {
     // pass entirely; the DOM panel toggles at the bottom still run every frame.
     const _canvasHidden = gameState.azkar.active ||
         (gameState._isMobile && (gameState.prayer.isOverlayActive
-            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || _lib.canvasOff));
+            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || _lib.canvasOff));
     if (_canvasHidden) { _renderPanelToggles(); return; }
 
     const dpr = gameState.dpr || 1;
@@ -9825,6 +9953,7 @@ function render() {
     drawDashboardPrompt();      // "انقر لفتح الأوراق" over the papers desk
     drawBooksLibraryPrompt();    // "ابدأ القراءة" near books library
     drawFireplacePrompt();       // "انقر للنظر الى المدفئة" near the fireplace
+    drawTrophyShelfPrompt();     // "انقر لرؤية رف الجوائز" near the trophy shelf
     drawSeatPrompt();            // "اضغط للجلوس" near a sofa
     drawStandUpButton();         // وقوف — floats above the local player while seated
     drawGameZonePrompt();        // games-table trigger prompt / locked notice
@@ -18458,6 +18587,9 @@ function markAzkarCompleted(type) {
     }
     gameState.azkar._lastButtonRefresh = 0;   // bypass the 1/s throttle so the fade-out fires now
     updateAzkarButton();
+    // مثابر الأذكار counts a day only once BOTH lists are done — this is the only
+    // moment either of them can become true, so it is the only hook it needs.
+    troNoteAzkarDay();
 }
 
 function loadAzkarCompletedFromFirebase() {
@@ -26862,7 +26994,7 @@ function updateLibPanelLifecycle() {
     if (!_lib.open) return;
     const blocked =
         gameState.azkar.active || gameState.prayer.isOverlayActive ||
-        dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || chalModalIsOpen() ||
+        dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || chalModalIsOpen() ||
         isMinigameOverlayOpen() || isMinigameActive() ||
         readingEndCardOpen() || (gameState.reading && gameState.reading.active) ||
         gameState._dupSessionDetected ||
@@ -27205,7 +27337,7 @@ function updateWorkChallenge() {
 function _chalScreenIsClear() {
     if (gameState.pomodoro.active || gameState.freeMode.active) return false;
     if (gameState.azkar.active || gameState.prayer.isOverlayActive) return false;
-    if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen()) return false;
+    if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen()) return false;
     if (isMinigameOverlayOpen() || isMinigameActive()) return false;
     if (gameState.reading && gameState.reading.active) return false;
     if (readingEndCardOpen()) return false;
@@ -27676,7 +27808,7 @@ function chatCanOpen() {
 // The cheap per-frame half of the guard above (no document-wide query).
 function _chatMustClose() {
     return gameState.azkar.active || gameState.prayer.isOverlayActive
-        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen()
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen()
         || libPanelIsOpen() || chalModalIsOpen() || readingEndCardOpen()
         || isMinigameOverlayOpen()
         || gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active
@@ -28017,4 +28149,709 @@ function setupChatUI() {
     window.addEventListener('resize', () => { if (_chatUi.open) updateChatInputPos(true); });
 
     _chatRefreshCount();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   رف الجوائز — seven trophies on two planks in the break room
+   ═══════════════════════════════════════════════════════════════════════════════
+   Grep anchors: TROPHIES, updateTrophies, _troBank, _troClaim, _troCeremony.
+
+   COST. Every counter this feature keeps lives under `dashboards/{uid}/trophies`
+   (decision tree §5 case 4: private to one member, persistent, written more than
+   once a day). ONE `get()` on idle after spawn, `runTransaction` at most once a
+   minute while working, and NO listener anywhere — nobody holds a live listener on
+   `dashboards`, so the fan-out is zero. Under `users/{uid}` this would re-stream
+   every member's every worked minute to every client in BOTH lobbies.
+
+   Every counter is CAPPED at its own goal, which is what bounds the writes: once a
+   trophy is won it costs nothing at all, forever.
+
+   THE CLAIM is the same ecosystem handshake تحدي المثابرة uses — a record at
+   `mdwnhLibrary/claims/<NFC dbKey>/maqr-trophy-<id>` that the Points site settles.
+   No rules change and no change on either other site: a claim was already generic.
+   A Siraj ghost resolves to nobody in MDWNH_ROSTER, so it can never mint one.
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+const TRO_HOUR = 3600000;
+const TRO_BANK_MS   = 60000;   // at most one transaction a minute, like the reading bank
+const TRO_SESSION_MS = 10 * 60000;   // "a work session" per شغوف — the dashboard's own floor
+const TRO_ART = n => `Art/trophies/${n}.webp`;
+
+/* The seven. `shelf` 0 = top plank (four, ٣٠ نقطة each), 1 = bottom plank (three,
+   the hard ones, ٦٠ نقطة each). `img` is the file number in Art/trophies.
+   `read(p)` pulls the current value out of the progress mirror; `goal` is what it
+   has to reach. `granted` means there is nothing to measure — the leader awards it
+   by writing `dashboards/{uid}/trophies/granted/diamond = true` by hand. */
+const TROPHIES = [
+    { id: 'dawn', img: 1, shelf: 0, pts: 30, name: 'باكر',
+      desc: 'اعمل ١٠ ساعات في ما بين الفجر والظهر، على مدار جلسات متعددة.',
+      goal: 10 * TRO_HOUR, unit: 'hours', read: p => p.dawnMs },
+    { id: 'azkar', img: 2, shelf: 0, pts: 30, name: 'مثابر الأذكار',
+      desc: 'اقرأ أذكار الصباح والمساء يوميًا لمدة ١٠ أيام من خلال الموقع.',
+      goal: 10, unit: 'days', read: p => _troCount(p.azkarDays) },
+    { id: 'reader', img: 3, shelf: 0, pts: 30, name: 'قارئ',
+      desc: 'اقرأ لمدة ٥ ساعات في المكتبة، على مدار جلسات متعددة.',
+      goal: 5 * TRO_HOUR, unit: 'hours', read: p => p.readMs },
+    { id: 'thirty', img: 4, shelf: 0, pts: 30, name: 'ثلاثون يومًا',
+      desc: 'اعمل في المقر في ٣٠ يومًا مختلفًا.',
+      goal: 30, unit: 'days', read: p => _troCount(p.workDays) },
+    { id: 'brainrot', img: 5, shelf: 1, pts: 60, name: 'برينروت',
+      desc: 'اعمل ٦٧ ساعة كاملة، على مدار جلسات متعددة.',
+      goal: 67 * TRO_HOUR, unit: 'hours', read: p => p.workMs },
+    { id: 'devoted', img: 6, shelf: 1, pts: 60, name: 'شغوف',
+      desc: 'ابدأ ١٠٠ جلسة عمل، كل واحدة منها تتجاوز ١٠ دقائق.',
+      goal: 100, unit: 'sessions', read: p => p.sessions },
+    { id: 'diamond', img: 7, shelf: 1, pts: 60, name: 'النقطة الماسية',
+      desc: 'لا شروط لها — يمنحها القائد متى شاء.',
+      granted: true },
+];
+const TROPHY_BY_ID = Object.fromEntries(TROPHIES.map(t => [t.id, t]));
+const TRO_CLAIM_ID = id => `maqr-trophy-${id}`;
+
+/* The caps the accumulator stops writing at. Derived from TROPHIES so a changed
+   goal can never leave a counter climbing past the point anyone reads it. */
+const TRO_WORK_CAP = TROPHY_BY_ID.brainrot.goal;
+const TRO_DAWN_CAP = TROPHY_BY_ID.dawn.goal;
+const TRO_SESS_CAP = TROPHY_BY_ID.devoted.goal;
+const TRO_DAYS_CAP = TROPHY_BY_ID.thirty.goal;
+const TRO_AZK_CAP  = TROPHY_BY_ID.azkar.goal;
+
+const _tro = {
+    open: false, wired: false, ready: false, camFrozen: null,
+    prog: { workMs: 0, dawnMs: 0, sessions: 0, workDays: {}, azkarDays: {}, readMs: 0 },
+    claimed: {},        // id → ms claimed
+    granted: {},        // id → truthy (leader-awarded)
+    // Unbanked deltas. The ledger is ALWAYS a delta, never a total, so two devices
+    // banking the same minute cannot double-count (same shape as bankReadingProgress).
+    pending: { workMs: 0, dawnMs: 0, sessions: 0, days: [], azkar: [] },
+    lastBankAt: 0,
+    lastWorked: 0, tickAt: 0, primed: false, dayKey: '', sessionCounted: false,
+    readAt: 0,
+    detailId: null, claiming: false,
+    assets: null,
+    cer: { running: false, timers: [], collect: null, id: null },
+};
+
+function trophyShelfIsOpen() { return !!_tro.open; }
+function trophyHoldsCamera() { return !!_tro.camFrozen; }
+function _troCount(map) { return map ? Object.keys(map).length : 0; }
+function _troPath() { return `dashboards/${gameState.userId}/trophies`; }
+
+/* Youssef and the Siraj test ghosts see every trophy full and claimable, so the
+   whole ceremony + claim path is testable without waiting sixty-seven hours. It is
+   a LOCAL override — nothing is written, so his real counters keep accumulating
+   underneath and deleting this one constant restores the honest shelf. */
+const TROPHY_TEST_UIDS = new Set([DASH_TARGET_UID]);
+function _troTestUnlocked() {
+    return gameState.isSirajGhost || TROPHY_TEST_UIDS.has(gameState.userId);
+}
+
+/* ── progress ─────────────────────────────────────────────────────────────── */
+// One shape for every caller: the shelf caption, the detail bar, and the claim gate.
+function _troProgress(t) {
+    const test = _troTestUnlocked();
+    if (t.granted) {
+        const has = !!_tro.granted[t.id] || test;
+        return { cur: has ? 1 : 0, goal: 1, pct: has ? 100 : 0, done: has,
+                 label: has ? 'مُنحت لك' : 'بيد القائد' };
+    }
+    const cur = test ? t.goal : Math.max(0, t.read(_tro.prog) || 0);
+    const pct = Math.max(0, Math.min(100, (cur / t.goal) * 100));
+    let label;
+    if (t.unit === 'hours') {
+        label = `${_libAr(Math.floor(cur / TRO_HOUR))} من ${_libAr(Math.round(t.goal / TRO_HOUR))} ساعة`;
+    } else if (t.unit === 'days') {
+        label = `${_libAr(Math.min(cur, t.goal))} من ${_libAr(t.goal)} يوم`;
+    } else {
+        label = `${_libAr(Math.min(cur, t.goal))} من ${_libAr(t.goal)} جلسة`;
+    }
+    return { cur, goal: t.goal, pct, done: cur >= t.goal, label };
+}
+
+/* ── counting ─────────────────────────────────────────────────────────────────
+   The session's OWN worked-ms counters are the source, never a frame timer: both
+   are wall-clock and both FREEZE during a break, which is exactly the rule, and a
+   backgrounded tab (which stops rAF) still gets credited in full. Identical
+   reasoning to _chalSessionWorkedMs — and the same clamp, for the same reason. */
+function updateTrophies() {
+    if (!_tro.ready || !gameState.userId) return;
+    const now = Date.now();
+    const key = _todayDateStr();
+    if (_tro.dayKey !== key) { _troBank(true); _tro.dayKey = key; }
+
+    const worked = (gameState.pomodoro.active ? pomoWorkedMsNow()
+                  : gameState.freeMode.active ? freeWorkedMsNow() : 0);
+
+    // A new session restarts its counter near zero — re-anchor, and let شغوف count
+    // this one again once it passes the ten-minute floor.
+    if (worked < _tro.lastWorked) { _tro.lastWorked = worked; _tro.sessionCounted = false; }
+    if (worked <= 0) _tro.sessionCounted = false;
+
+    if (!_tro.primed) { _tro.primed = true; _tro.lastWorked = worked; _tro.tickAt = now; return; }
+    // ~1 Hz is plenty: the gain is measured against WALL time, not against how often
+    // this runs, so a slower tick changes nothing except the work it costs.
+    if (now - _tro.tickAt < 1000) return;
+
+    /* Clamped to the WALL time since the last tick (+2s slack). Real work advances
+       both equally, so a half-hour backgrounded stretch arrives as one tick with a
+       half-hour wall gap and is credited whole. What the clamp catches is the
+       free-mode reclaim dumping HOURS of away-credit into totalWorkMs in a single
+       frame — that is a session credit, not time spent at the desk. */
+    const wall = Math.max(0, now - (_tro.tickAt || now));
+    const gain = Math.min(Math.max(0, worked - _tro.lastWorked), wall + 2000);
+    _tro.lastWorked = worked;
+    _tro.tickAt = now;
+
+    if (gain > 0) {
+        const P = _tro.prog, D = _tro.pending;
+        // برينروت
+        if (P.workMs < TRO_WORK_CAP) { P.workMs = Math.min(TRO_WORK_CAP, P.workMs + gain); D.workMs += gain; }
+        // باكر — the Fajr→Dhuhr window is exactly the morning-azkar window.
+        if (P.dawnMs < TRO_DAWN_CAP && getCurrentAzkarType() === 'morning') {
+            P.dawnMs = Math.min(TRO_DAWN_CAP, P.dawnMs + gain); D.dawnMs += gain;
+        }
+        // ثلاثون يومًا — a day counts the moment any work lands in it.
+        if (_troCount(P.workDays) < TRO_DAYS_CAP && !P.workDays[key]) {
+            P.workDays[key] = 1; D.days.push(key);
+        }
+    }
+
+    // شغوف — one per session, the instant it passes the floor.
+    if (!_tro.sessionCounted && worked >= TRO_SESSION_MS) {
+        _tro.sessionCounted = true;
+        if (_tro.prog.sessions < TRO_SESS_CAP) { _tro.prog.sessions++; _tro.pending.sessions++; }
+    }
+
+    _troBank(false);
+}
+
+/* Every write ADDS a delta (or sets a day key, which is idempotent). Nothing here
+   ever writes a total. */
+function _troBank(force) {
+    if (!_tro.ready || !gameState.userId) return;
+    const D = _tro.pending;
+    const has = D.workMs >= 1 || D.dawnMs >= 1 || D.sessions > 0 || D.days.length || D.azkar.length;
+    if (!has) return;
+    if (!force && Date.now() - _tro.lastBankAt < TRO_BANK_MS) return;
+    _tro.lastBankAt = Date.now();
+    const base = `${_troPath()}/prog`;
+
+    const addMs = (field, cap) => {
+        const d = Math.round(D[field]);
+        if (d < 1) return;
+        D[field] = 0;
+        runTransaction(ref(database, `${base}/${field}`), c => Math.min(cap, (c || 0) + d)).catch(() => {});
+    };
+    addMs('workMs', TRO_WORK_CAP);
+    addMs('dawnMs', TRO_DAWN_CAP);
+    if (D.sessions > 0) {
+        const d = D.sessions; D.sessions = 0;
+        runTransaction(ref(database, `${base}/sessions`), c => Math.min(TRO_SESS_CAP, (c || 0) + d)).catch(() => {});
+    }
+    if (D.days.length || D.azkar.length) {
+        const u = {};
+        for (const k of D.days)  u[`${base}/workDays/${k}`]  = 1;
+        for (const k of D.azkar) u[`${base}/azkarDays/${k}`] = 1;
+        D.days = []; D.azkar = [];
+        update(ref(database), u).catch(() => {});
+    }
+}
+
+/* مثابر الأذكار. Called from markAzkarCompleted — the only moment either list can
+   become done — and a day counts only once BOTH are done in it. */
+function troNoteAzkarDay() {
+    if (!_tro.ready || !gameState.userId) return;
+    const c = gameState.azkar.completed || {};
+    const key = _todayDateStr();
+    if (c.morning !== key || c.evening !== key) return;
+    const P = _tro.prog;
+    if (P.azkarDays[key] || _troCount(P.azkarDays) >= TRO_AZK_CAP) return;
+    P.azkarDays[key] = 1;
+    _tro.pending.azkar.push(key);
+    _troBank(true);
+}
+
+/* قارئ reads the reading module's OWN totals rather than keeping a second
+   accumulator — reading already banks `totalMs` per book every minute, so a
+   parallel counter here could only ever disagree with it. One `get()`, memoised. */
+function _troRefreshReading() {
+    if (!gameState.userId) return Promise.resolve();
+    if (Date.now() - _tro.readAt < 120000) return Promise.resolve();
+    _tro.readAt = Date.now();
+    return get(ref(database, `dashboards/${gameState.userId}/reading/books`)).then(snap => {
+        let ms = 0;
+        for (const b of Object.values(snap.val() || {})) ms += Math.max(0, Number(b && b.totalMs) || 0);
+        _tro.prog.readMs = ms;
+    }).catch(() => {});
+}
+
+/* ── one-time retroactive seed ────────────────────────────────────────────────
+   The dashboard has kept total worked ms and a session log all along, so a member
+   who has been here for months should not start this at zero. Runs ONCE (the
+   `seeded` marker), never again, and never on the login path. dawnMs and azkarDays
+   can't be seeded — nothing recorded the time of day or the azkar history — so
+   those two honestly start at zero. */
+async function _troSeed(prog) {
+    const uid = gameState.userId;
+    const out = { workMs: 0, sessions: 0, workDays: {} };
+    try {
+        const [statSnap, sessSnap] = await Promise.all([
+            get(ref(database, `dashboards/${uid}/stats/totalWorkMs`)),
+            get(ref(database, `dashboards/${uid}/sessions`)),
+        ]);
+        out.workMs = Math.min(TRO_WORK_CAP, Math.max(0, Number(statSnap.val()) || 0));
+        const sessions = sessSnap.val() || {};
+        const days = new Set();
+        let n = 0;
+        for (const s of Object.values(sessions)) {
+            if (!s || !(Number(s.durMs) >= TRO_SESSION_MS)) continue;
+            n++;
+            const d = new Date(Number(s.finishMs) || 0);
+            if (d.getTime() > 0) {
+                days.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+            }
+        }
+        out.sessions = Math.min(TRO_SESS_CAP, n);
+        for (const k of [...days].slice(0, TRO_DAYS_CAP)) out.workDays[k] = 1;
+    } catch (_) { /* seed is a courtesy — a failure just means starting at zero */ }
+
+    Object.assign(prog, out);
+    const base = `${_troPath()}/prog`;
+    const u = { [`${base}/seeded`]: 1, [`${base}/workMs`]: out.workMs, [`${base}/sessions`]: out.sessions };
+    for (const k in out.workDays) u[`${base}/workDays/${k}`] = 1;
+    update(ref(database), u).catch(() => {});
+}
+
+/* ── assets ───────────────────────────────────────────────────────────────────
+   The eight webp files are ~190 KB all in; the two ceremony sounds are ~550 KB.
+   Both start on WALKING UP to the shelf, never on the login path — the same signal
+   the fireplace flame uses. Idempotent, and a file that fails just resolves. */
+function _troEnsureAssets() {
+    if (_tro.assets) return _tro.assets;
+    const imgs = ['Shelf', 1, 2, 3, 4, 5, 6, 7].map(n => new Promise(res => {
+        const img = new Image();
+        img.decoding = 'async';
+        img.onload = img.onerror = () => res();
+        img.src = n === 'Shelf' ? 'Art/trophies/Shelf.webp' : TRO_ART(n);
+    }));
+    const snd = gameState.focusAudioEngine
+        ? gameState.focusAudioEngine.ensureTrophySounds()
+        : Promise.resolve();
+    _tro.assets = Promise.all([...imgs, snd]);
+    return _tro.assets;
+}
+
+/* ── the world prompt ─────────────────────────────────────────────────────── */
+const _troPrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null };
+function drawTrophyShelfPrompt() {
+    const key = gameState.nearTrophyShelf ? 'tro' : null;
+    if (!_updatePromptCrossfade(_troPrompt, key, TROPHY_X, TROPHY_Y)) return;
+    const ctx = gameState.ctx;
+    const a = _troPrompt.alpha;
+    const bob = Math.sin(Date.now() * 0.004) * 2.5;
+    const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _troPrompt.pop));
+    ctx.save();
+    ctx.translate(_troPrompt.x, _troPrompt.y - 70 - (1 - a) * 10 + bob);
+    ctx.scale(pop, pop);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowBlur = 4; ctx.shadowColor = `rgba(0,0,0,${0.65 * a})`;
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.font = 'bold 16px Rubik';
+    ctx.fillText('انقر لرؤية رف الجوائز', 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+/* ── the room ─────────────────────────────────────────────────────────────── */
+/* The figure and the caption are two elements in two rows, both `flex: 1 1 0` and
+   both generated from the same list — that is what keeps them in the same column,
+   and it is what lets the plank sit BETWEEN them in normal flow (see .tro-plank).
+   Both carry `data-tro`, so the whole column is clickable through one delegated
+   handler, and both carry the state class. */
+function _troState(t) {
+    const p = _troProgress(t);
+    const taken = !!_tro.claimed[t.id];
+    return { p, taken, cls: taken ? 'is-taken' : (p.done ? 'is-ready' : '') };
+}
+
+function _troFigHtml(t) {
+    const { p, cls } = _troState(t);
+    const art = _libEsc(TRO_ART(t.img));
+    return `<button class="tro-slot ${cls}" type="button" data-tro="${_libEsc(t.id)}"
+                    aria-label="${_libEsc(t.name + ' — ' + p.label)}">
+        <span class="tro-fig">
+            <img class="tro-img-dim" src="${art}" alt="" aria-hidden="true">
+            <img class="tro-img-lit" src="${art}" alt="" style="--tro-p:${p.pct.toFixed(1)}%">
+        </span>
+    </button>`;
+}
+
+function _troCapHtml(t) {
+    const { p, taken, cls } = _troState(t);
+    const bottom = taken ? 'مستلمة'
+        : t.granted ? p.label
+        : (p.done ? 'جاهزة للاستلام' : _libAr(Math.floor(p.pct)) + '٪');
+    return `<div class="tro-cap ${cls}" data-tro="${_libEsc(t.id)}">
+        <span class="tro-name">${_libEsc(t.name)}</span>
+        <span class="tro-bar"><i style="width:${p.pct.toFixed(1)}%"></i></span>
+        <span class="tro-pct">${_libEsc(bottom)}</span>
+    </div>`;
+}
+
+function _troRenderShelves() {
+    const host = document.getElementById('tro-shelves');
+    if (!host) return;
+    let html = '';
+    for (const shelf of [0, 1]) {
+        const row = TROPHIES.filter(t => t.shelf === shelf);
+        html += `<section class="tro-shelf">
+            <div class="tro-row tro-figs">${row.map(_troFigHtml).join('')}</div>
+            <img class="tro-plank" src="Art/trophies/Shelf.webp" alt="" aria-hidden="true">
+            <div class="tro-row tro-caps">${row.map(_troCapHtml).join('')}</div>
+        </section>`;
+    }
+    host.innerHTML = html;
+    const n = Object.keys(_tro.claimed).length;
+    const cnt = document.getElementById('tro-collected-count');
+    if (cnt) cnt.textContent = _libAr(n);
+}
+
+function _troOpenDetail(id) {
+    const t = TROPHY_BY_ID[id];
+    if (!t) return;
+    _tro.detailId = id;
+    const p = _troProgress(t);
+    const taken = !!_tro.claimed[id];
+    const set = (el, v) => { const e = document.getElementById(el); if (e) e.textContent = v; };
+    const img = document.getElementById('tro-detail-img');
+    if (img) { img.src = TRO_ART(t.img); img.alt = t.name; }
+    const st = document.getElementById('tro-detail-sticker');
+    if (st) { st.style.display = ''; st.onerror = () => { st.style.display = 'none'; }; st.src = _libSticker(t.pts); st.alt = `${_libAr(t.pts)} نقطة`; }
+    set('tro-detail-name', t.name);
+    set('tro-detail-desc', t.desc);
+    set('tro-detail-count', taken ? 'استُلمت بالفعل' : p.label);
+    const fill = document.getElementById('tro-detail-fill');
+    if (fill) fill.style.width = (taken ? 100 : p.pct).toFixed(1) + '%';
+    const btn = document.getElementById('tro-complete-btn');
+    if (btn) {
+        // Visual-only lock is a CLASS — never the `disabled` attribute (iOS leaks
+        // touch events straight through it to whatever sits below).
+        btn.classList.toggle('unlocked', p.done && !taken);
+        btn.textContent = taken ? 'استُلمت' : (p.done ? 'استلام الجائزة' : 'لم تكتمل بعد');
+    }
+    document.getElementById('trophy-overlay')?.classList.add('tro-focus');
+    const d = document.getElementById('tro-detail');
+    if (d) {
+        d.setAttribute('aria-hidden', 'false');
+        // Two frames: the first commits the pre-fade state, the second flips it.
+        requestAnimationFrame(() => requestAnimationFrame(() => d.classList.add('active')));
+    }
+}
+
+function _troCloseSub() {
+    _tro.detailId = null;
+    for (const id of ['tro-detail', 'tro-collected']) {
+        const el = document.getElementById(id);
+        if (el) { el.classList.remove('active'); el.setAttribute('aria-hidden', 'true'); }
+    }
+    document.getElementById('trophy-overlay')?.classList.remove('tro-focus');
+}
+
+function _troOpenCollected() {
+    const host = document.getElementById('tro-collected-list');
+    if (host) {
+        const rows = TROPHIES.filter(t => _tro.claimed[t.id])
+            .sort((a, b) => _tro.claimed[b.id] - _tro.claimed[a.id])
+            .map(t => `<div class="tro-col-row">
+                <img src="${_libEsc(TRO_ART(t.img))}" alt="">
+                <span class="tro-col-txt">
+                    <span class="tro-col-name">${_libEsc(t.name)}</span>
+                    <span class="tro-col-date">${_libEsc(_troDate(_tro.claimed[t.id]))}</span>
+                </span>
+                <img class="tro-col-pts" src="${_libEsc(_libSticker(t.pts))}" alt="${_libAr(t.pts)} نقطة"
+                     onerror="this.style.display='none'">
+            </div>`).join('');
+        host.innerHTML = rows || '<p class="tro-col-empty">لم تستلم أي جائزة بعد.</p>';
+    }
+    document.getElementById('trophy-overlay')?.classList.add('tro-focus');
+    const c = document.getElementById('tro-collected');
+    if (c) {
+        c.setAttribute('aria-hidden', 'false');
+        requestAnimationFrame(() => requestAnimationFrame(() => c.classList.add('active')));
+    }
+}
+
+function _troDate(ms) {
+    try { return new Date(ms || Date.now()).toLocaleDateString('ar-EG', { day: 'numeric', month: 'long', year: 'numeric' }); }
+    catch (_) { return ''; }
+}
+
+function openTrophyShelf() {
+    if (_tro.open) return;
+    const overlay = document.getElementById('trophy-overlay');
+    if (!overlay) return;
+    _tro.open = true;
+    gameState.keys = {};                  // drop any held movement key
+    _troEnsureAssets();
+    // Park the world camera. The game loop keeps running behind the overlay, so a
+    // still-lerping camera would drift while nobody is looking and the room you
+    // come back to wouldn't be the one you left (see _fireFreezeCamera).
+    _tro.camFrozen = { x: gameState.camera.x, y: gameState.camera.y };
+    document.body.classList.add('trophy-active');
+    overlay.setAttribute('aria-hidden', 'false');
+    _troCloseSub();
+    _troRenderShelves();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (_tro.open) overlay.classList.add('active');
+    }));
+    // قارئ's number comes from the reading module; refresh it in the background and
+    // repaint if it moved. The shelf is already up either way.
+    _troRefreshReading().then(() => { if (_tro.open) _troRenderShelves(); });
+}
+
+function closeTrophyShelf() {
+    if (!_tro.open) return;
+    _tro.open = false;
+    const overlay = document.getElementById('trophy-overlay');
+    if (overlay) { overlay.classList.remove('active'); overlay.setAttribute('aria-hidden', 'true'); }
+    _troCloseSub();
+    document.body.classList.remove('trophy-active');
+    _tro.camFrozen = null;
+}
+
+/* ── the claim ────────────────────────────────────────────────────────────────
+   Byte-for-byte the record a library task writes, at the path the Points site
+   already settles — see تحدي المثابرة. Written BEFORE the ceremony runs, so
+   «تم» (or closing the tab mid-ceremony) can never lose it. */
+async function _troClaim(id) {
+    const t = TROPHY_BY_ID[id];
+    if (!t || _tro.claiming || _tro.claimed[id]) return;
+    if (!_troProgress(t).done) return;
+    _tro.claiming = true;
+
+    /* WAIT for the roster before deciding there is no library account. Judging that
+       while it is still in flight would mark the trophy taken and silently drop the
+       points record — the one failure here that costs a member something real. It
+       never rejects, and it is almost always already resolved by now. */
+    await _mdwnhRosterReady.catch(() => {});
+    const me = _lib.me;
+
+    if (me && me.dbKey) {
+        const key = _libNfc(me.dbKey);
+        const payload = {
+            taskId: TRO_CLAIM_ID(id),
+            title: `جائزة ${t.name}`,
+            points: t.pts,
+            color: '#e2a92b',
+            ts: Date.now(),
+        };
+        // `keepalive`, because «استلم النقاط» navigates this tab away mid-write.
+        libPtsPut(`${LIB_PTS_ROOT}/claims/${encodeURIComponent(key)}/${TRO_CLAIM_ID(id)}`, payload).catch(() => {});
+    }
+
+    _tro.claimed[id] = Date.now();
+    if (gameState.userId) {
+        update(ref(database), { [`${_troPath()}/claimed/${id}`]: _tro.claimed[id] }).catch(() => {});
+    }
+    _tro.claiming = false;
+    _troCeremony(t);
+}
+
+/* ── the ceremony ─────────────────────────────────────────────────────────────
+   Black → spotlight (a second cue, pitched down) → the trophy → the avatar drops
+   and bounces → anticipation, dash, impact (shake + white flash), then the tail
+   runs in slow motion → the card, exactly 3s after the collect cue started.
+   Everything moves on transform/opacity so the whole thing stays on the
+   compositor; the timers are all in one list so a close can cancel them. */
+const TRO_CER = { lit: 420, drop: 1400, collect: 2400, wind: 2400, dash: 2620, card: 3000 };
+
+function _troAfter(ms, fn) { _tro.cer.timers.push(setTimeout(fn, ms)); }
+function _troClearTimers() { for (const t of _tro.cer.timers) clearTimeout(t); _tro.cer.timers = []; }
+
+function _troCeremony(t) {
+    const cer = document.getElementById('tro-cer');
+    if (!cer || _tro.cer.running) return;
+    _tro.cer.running = true;
+    _tro.cer.id = t.id;
+    _troClearTimers();
+
+    const stage  = document.getElementById('tro-cer-stage');
+    const trophy = document.getElementById('tro-cer-trophy');
+    const avWrap = document.getElementById('tro-cer-avatar');
+    const av     = document.getElementById('tro-cer-av');
+    const flash  = document.getElementById('tro-flash');
+    const card   = document.getElementById('tro-card');
+    const fe     = gameState.focusAudioEngine;
+
+    if (trophy) trophy.src = TRO_ART(t.img);
+    // The avatar is the player's own — ring colour included, same as in the world.
+    const me = gameState.players[gameState.userId] || {};
+    if (av) {
+        av.style.backgroundImage = me.avatar ? `url("${me.avatar}")` : '';
+        av.style.setProperty('--tro-ring', me.ringColor || COLORS.blue);
+        av.className = 'tro-cer-av';
+    }
+    /* Where the avatar stands, winds up, lands the hit, and coasts out. A phone is
+       narrow enough that the desktop marks would have the two touching before it
+       moved, so it gets its own set. */
+    const X = gameState._isMobile
+        ? { start: '82%', wind: '92%', hit: '44%', end: '2%' }
+        : { start: '68%', wind: '75%', hit: '43%', end: '11%' };
+    if (avWrap) { avWrap.classList.remove('in'); avWrap.style.transition = 'none'; avWrap.style.left = X.start; }
+    cer.className = 'tro-cer';
+    if (flash) flash.className = 'tro-flash';
+    if (card)  { card.classList.remove('active'); card.setAttribute('aria-hidden', 'true'); }
+    cer.setAttribute('aria-hidden', 'false');
+
+    requestAnimationFrame(() => requestAnimationFrame(() => cer.classList.add('active')));
+    // 1 — the room goes black.
+    try { fe?.playHandled('spotlight', 1, 0.7); } catch (_) {}
+
+    // 2 — the light comes up on the trophy, a fifth lower.
+    _troAfter(TRO_CER.lit, () => {
+        cer.classList.add('lit');
+        try { fe?.playHandled('spotlight', 0.62, 0.6); } catch (_) {}
+    });
+
+    // 3 — the avatar drops in from above and settles.
+    _troAfter(TRO_CER.drop, () => {
+        if (avWrap) { avWrap.classList.add('in'); }
+        if (av) av.classList.add('drop');
+    });
+
+    // 4 — the collect cue, the wind-up, then the dash.
+    _troAfter(TRO_CER.collect, () => {
+        _tro.cer.collect = fe?.playHandled('trophyCollect', 1, 0.9) || null;
+        if (av) { av.classList.remove('drop'); av.classList.add('wind'); }
+        if (avWrap) { avWrap.style.transition = 'left 0.2s cubic-bezier(0.3,0,0.8,0.4)'; avWrap.style.left = X.wind; }
+    });
+    _troAfter(TRO_CER.dash, () => {
+        if (av) { av.classList.remove('wind'); av.classList.add('dash'); }
+        if (avWrap) { avWrap.style.transition = 'left 0.14s cubic-bezier(0.55,0,1,1)'; avWrap.style.left = X.hit; }
+    });
+
+    // 5 — impact: shake, a full-page white flash, the trophy gone, and the tail
+    //     carries on in the SAME direction at a twentieth of the speed.
+    _troAfter(TRO_CER.dash + 140, () => {
+        cer.classList.add('hit');
+        if (flash) { flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go'); }
+        if (stage) { stage.classList.remove('shake'); void stage.offsetWidth; stage.classList.add('shake'); }
+        if (av) { av.classList.remove('dash'); av.classList.add('slow'); }
+        if (avWrap) { avWrap.style.transition = 'left 2.4s cubic-bezier(0.08,0.5,0.3,1)'; avWrap.style.left = X.end; }
+    });
+
+    // 6 — the card, exactly three seconds after the collect cue started.
+    _troAfter(TRO_CER.collect + TRO_CER.card, () => _troShowCard(t));
+}
+
+function _troShowCard(t) {
+    const card = document.getElementById('tro-card');
+    if (!card) return;
+    const img = document.getElementById('tro-card-trophy');
+    if (img) { img.src = TRO_ART(t.img); img.alt = t.name; }
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    set('tro-card-name', t.name);
+    set('tro-card-date', _troDate(_tro.claimed[t.id]));
+    const st = document.getElementById('tro-card-sticker');
+    if (st) { st.style.display = ''; st.onerror = () => { st.style.display = 'none'; }; st.src = _libSticker(t.pts); st.alt = `${_libAr(t.pts)} نقطة`; }
+    // No library account (a Siraj ghost, or a member the roster doesn't know) means
+    // there is nothing to walk over and claim — the card just says well done.
+    const claimBtn = document.getElementById('tro-card-claim');
+    if (claimBtn) claimBtn.style.display = (_lib.me && _lib.me.dbKey) ? '' : 'none';
+    card.setAttribute('aria-hidden', 'false');
+    requestAnimationFrame(() => requestAnimationFrame(() => card.classList.add('active')));
+}
+
+function _troEndCeremony() {
+    const cer = document.getElementById('tro-cer');
+    const card = document.getElementById('tro-card');
+    _troClearTimers();
+    // «تم» fades the collect cue over two seconds rather than cutting it.
+    if (_tro.cer.collect) {
+        try { gameState.focusAudioEngine?.fadeOutHandle(_tro.cer.collect, 2); } catch (_) {}
+        _tro.cer.collect = null;
+    }
+    if (card) { card.classList.remove('active'); card.setAttribute('aria-hidden', 'true'); }
+    if (cer)  { cer.classList.remove('active');  cer.setAttribute('aria-hidden', 'true'); }
+    _tro.cer.running = false;
+    _tro.cer.id = null;
+    // Back to the shelf, with the slot now showing as taken.
+    _troCloseSub();
+    _troRenderShelves();
+}
+
+/* ── setup ────────────────────────────────────────────────────────────────── */
+function setupTrophyUI() {
+    if (_tro.wired) return;
+    _tro.wired = true;
+
+    const overlay = document.getElementById('trophy-overlay');
+    document.getElementById('trophy-close')?.addEventListener('click', closeTrophyShelf);
+    // The backdrop is a back button, same as every other modal here.
+    overlay?.addEventListener('click', (e) => { if (e.target === overlay) closeTrophyShelf(); });
+
+    document.getElementById('tro-shelves')?.addEventListener('click', (e) => {
+        const slot = e.target.closest('[data-tro]');
+        if (slot) _troOpenDetail(slot.dataset.tro);
+    });
+    document.getElementById('tro-detail-back')?.addEventListener('click', _troCloseSub);
+    document.getElementById('tro-collected-back')?.addEventListener('click', _troCloseSub);
+    // The backdrop is a back button here too — these two cover the whole overlay, so
+    // the outer `e.target === overlay` test can never fire while one of them is up.
+    for (const id of ['tro-detail', 'tro-collected']) {
+        const el = document.getElementById(id);
+        el?.addEventListener('click', (e) => { if (e.target === el) _troCloseSub(); });
+    }
+    document.getElementById('tro-collected-btn')?.addEventListener('click', _troOpenCollected);
+    document.getElementById('tro-complete-btn')?.addEventListener('click', (e) => {
+        // Class, not the `disabled` attribute — so the lock has to be checked here.
+        if (!e.currentTarget.classList.contains('unlocked')) return;
+        if (_tro.detailId) _troClaim(_tro.detailId);
+    });
+    document.getElementById('tro-card-done')?.addEventListener('click', _troEndCeremony);
+    document.getElementById('tro-card-claim')?.addEventListener('click', () => {
+        // Same-tab navigation, exactly as the library does it. Leaving mid-session is
+        // safe by design: the disconnect handlers free the laptop and stash the
+        // session, and the login reclaim puts the player back at it.
+        const key = _libNfc((_lib.me && _lib.me.dbKey) || '');
+        if (!key) { _troEndCeremony(); return; }
+        try { gameState.focusAudioEngine?.fadeOutHandle(_tro.cer.collect, 0.4); } catch (_) {}
+        window.location.href = LIB_POINTS_URL + '?claim=1&user=' + encodeURIComponent(key);
+    });
+
+    // Bank whatever is in hand before the tab goes away — a closed tab would
+    // otherwise cost up to one bank interval of real work.
+    const flush = () => _troBank(true);
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+
+    if (!gameState.userId) return;
+    /* ONE read, deliberately off the login path and behind idle — the shelf simply
+       shows nothing until it lands, and nobody can be standing at it that fast. */
+    const load = () => get(ref(database, _troPath())).then(snap => {
+        const v = snap.val() || {};
+        const p = v.prog || {};
+        _tro.prog.workMs   = Math.max(0, Number(p.workMs) || 0);
+        _tro.prog.dawnMs   = Math.max(0, Number(p.dawnMs) || 0);
+        _tro.prog.sessions = Math.max(0, Number(p.sessions) || 0);
+        _tro.prog.workDays  = p.workDays  || {};
+        _tro.prog.azkarDays = p.azkarDays || {};
+        _tro.claimed = v.claimed || {};
+        _tro.granted = v.granted || {};
+        _tro.dayKey = _todayDateStr();
+        const seed = p.seeded ? Promise.resolve() : _troSeed(_tro.prog);
+        return seed.then(() => {
+            _tro.ready = true;
+            // Azkar can be finished in the seconds before this read lands, and
+            // markAzkarCompleted is the only hook مثابر الأذكار has — so ask once
+            // here rather than losing that day.
+            troNoteAzkarDay();
+            _troRefreshReading().then(() => { if (_tro.open) _troRenderShelves(); });
+            if (_tro.open) _troRenderShelves();
+        });
+    }).catch(() => { _tro.ready = true; });
+
+    if (window.requestIdleCallback) requestIdleCallback(load, { timeout: 8000 });
+    else setTimeout(load, 3000);
 }

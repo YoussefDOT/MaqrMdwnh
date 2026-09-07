@@ -13,3 +13,11 @@ Art/Lemo/*.png
 # Fireplace fire source spritesheet (4x8 grid of 1500x1920 cells, ~12 MB) — only the
 # sliced Art/Fire/fire_NN.png sequence (~890 KB) ships. Keep the master out of git.
 Art/Fireplace Fire.png
+
+# Trophy masters. The shipped set is Art/trophies/*.webp (~190 KB) cropped to the
+# painted art out of these 2000² PNGs, and Art/Workspace/Workspace_0013b_Trophy_Shelf.png
+# cropped out of the full-canvas world layer. Keep the masters local, like Lemo's.
+Art/trophies/*.png
+Art/Workspace/رف الجوائز.png
+# Trophy_Collect ships trimmed to 25s (4s fade); this is the untouched 111s master.
+Sound/Trophy_Collect.full.mp3

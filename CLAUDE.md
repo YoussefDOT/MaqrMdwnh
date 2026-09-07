@@ -90,6 +90,7 @@ Grep anchors for the major systems (all verified to exist):
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
 | Work streak challenge | `CHAL`, `updateWorkChallenge`, `_chalBank`, `_chalClaim` |
+| Trophy shelf | `TROPHIES`, `updateTrophies`, `_troBank`, `_troClaim`, `_troCeremony` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
@@ -220,6 +221,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **المدفئة / أعضاء الشهر** | Walk to the fireplace → a full-screen look at it with the month's top-3 point scorers framed on the mantel. Points come from a **separate Firebase project**. See **Fireplace / Members of the Month**. |
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
 | **تحدي المثابرة** | A seven-day work streak: ٥٠ دقيقة of work a day (breaks excluded) for ٧ أيام, ٣ → ٩ سبتمبر ٢٠٢٦. A foldable «فعالية» card under the azkar dock, a seven-dot ladder your avatar walks, and a payout claimed on the Points site through the library's own claim handshake. See **تحدي المثابرة**. |
+| **رف الجوائز** | Seven trophies on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٢٥ حرفًا, no more. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
@@ -241,6 +243,10 @@ Art/Lemo/                    — Lemo. `Sheets/*.webp` ship (~2.4 MB); the 197 M
                                measured. See Lemo.
 Hats/                        — hat PNGs + hats.json (the production manifest; the
                                pre-commit hook regenerates it). See Character Customization.
+Art/trophies/                — the seven trophies + the display shelf plank, as
+                               `*.webp` cropped to their painted art (~190 KB all in).
+                               The 2000² PNG masters are gitignored, like Lemo's.
+                               See رف الجوائز.
 Icon Elements/               — 7 decorative brush icons (masked + brand-tinted in the menu)
 Maqr logo.png                — the brand logo: menu + boot screen
 game.js        ~24000 lines — all game logic, classes, Firebase, rendering
@@ -1821,6 +1827,146 @@ key of its own and cannot collide with the first.
 changing the challenge means changing `MdwnhLibrary/index.html` in the same pass.
 
 ---
+
+## رف الجوائز — seven trophies on two planks
+
+Walk to the shelf on the bottom-left wall of the break room → **«انقر لرؤية رف الجوائز»**
+→ a lit display case. Code is the `رف الجوائز` block at the very end of `game.js`;
+markup is `#trophy-overlay` + `#tro-cer` in `index.html`; styles are the matching block
+at the foot of `style.css`. Grep anchors: `TROPHIES`, `updateTrophies`, `_troBank`,
+`_troClaim`, `_troCeremony`.
+
+### The seven — `TROPHIES` is the ONLY place any of this lives
+`id`, Arabic name, description, art number, plank, goal and point value are all one
+array; the HTML holds no slot markup at all and `setupTrophyUI` builds both rows from
+it. Top plank = four at **٣٠ نقطة**; bottom plank = three hard ones at **٦٠ نقطة**.
+
+| id | name | condition | source |
+|---|---|---|---|
+| `dawn` | باكر | ١٠ ساعات عمل بين الفجر والظهر | own accumulator, gated on `getCurrentAzkarType() === 'morning'` |
+| `azkar` | مثابر الأذكار | صباح ومساء، ١٠ أيام | `troNoteAzkarDay()` from `markAzkarCompleted` |
+| `reader` | قارئ | ٥ ساعات قراءة | **derived** from `dashboards/{uid}/reading/books/*/totalMs` |
+| `thirty` | ثلاثون يومًا | ٣٠ يومًا مختلفًا فيه عمل | a set of date keys |
+| `brainrot` | برينروت | ٦٧ ساعة عمل | own accumulator |
+| `devoted` | شغوف | ١٠٠ جلسة تتجاوز ١٠ دقائق | counted the instant a session passes the floor |
+| `diamond` | النقطة الماسية | لا شروط | the leader writes `dashboards/{uid}/trophies/granted/diamond = true` by hand |
+
+**قارئ deliberately keeps no counter of its own** — reading already banks `totalMs` per
+book every minute, so a parallel accumulator here could only ever disagree with it. It
+is one memoised `get()` on open.
+
+### Cost — the whole design decision
+```
+dashboards/{uid}/trophies/prog     = { workMs, dawnMs, sessions, workDays:{d:1}, azkarDays:{d:1}, seeded }
+dashboards/{uid}/trophies/claimed/{id} = ms
+dashboards/{uid}/trophies/granted/{id} = 1
+```
+Decision tree §5 case 4: private to one member, persistent, written more than once a
+day. **One `get()` on idle after spawn, `runTransaction` at most once a minute while
+working, and no listener anywhere.** Under `users/{uid}` this would re-stream every
+member's every worked minute to every client in **both** lobbies.
+
+- **Every counter is CAPPED at its own goal**, which is what bounds it: a won trophy
+  costs nothing at all, forever. The caps are derived from `TROPHIES`, never retyped.
+- **The ledger is always a DELTA** (`_tro.pending`), never a total, so two devices
+  banking the same minute cannot double-count. Same shape as `bankReadingProgress()`.
+- The per-tick gain is **clamped to the wall time since the last tick (+2s)** — real
+  work advances both equally (a backgrounded half-hour arrives as one tick and is
+  credited whole), but the free-mode reclaim dumping hours of away-credit into
+  `totalWorkMs` in a single frame is not time spent at the desk. Identical to `CHAL`.
+- The accumulator ticks at **~1 Hz**, not per frame: the gain is measured against wall
+  time, so a slower tick changes nothing but the work it costs.
+
+**A one-time retroactive seed** (`_troSeed`, guarded by `prog.seeded`) credits `workMs`,
+`sessions` and `workDays` from `stats/totalWorkMs` and the `sessions` log the dashboard
+has kept all along — a member of six months does not start at zero. `dawnMs` and
+`azkarDays` honestly can't be seeded (nothing recorded the time of day or the azkar
+history) and start empty.
+
+### The claim is the ecosystem handshake, unchanged
+`mdwnhLibrary/claims/<NFC dbKey>/maqr-trophy-<id>` = `{taskId,title,points,color,ts}` —
+the same record a library task writes, at the path the Points site already settles. **No
+rules change and no code change on either other site.** The record is written the moment
+«استلام الجائزة» is pressed, *before* the ceremony runs, so «تم» (or closing the tab
+mid-ceremony) can never lose it. `_troClaim` **awaits `_mdwnhRosterReady`** first:
+judging "this member has no library account" while the roster is still in flight would
+mark the trophy taken and silently drop the points — the one failure here that costs a
+member something real. A Siraj ghost resolves to nobody, so it can never mint one.
+
+### Progress is visible from OUTSIDE — the gold fills the trophy
+Each slot draws the art **twice**: a grayscale/dimmed copy, and a full-colour copy
+clipped `inset(100%-p 0 0 0)` so it fills bottom-up with progress. Under it: the name, a
+hairline bar, and the percentage. Earned-but-unclaimed swaps the caption to «جاهزة
+للاستلام» and **breathes the pool of light under the trophy (opacity)** — never an
+infinite `filter`/`scale` animation (invariant 12). A claimed slot keeps a faint ghost
+with a ✓ so the shelf never reads as broken, and moves into «الجوائز المستلمة».
+
+### The plank sits between two rows, and the pull-up is a percentage of WIDTH
+`.tro-shelf` is three elements: the figures row, the plank `<img>` in normal flow, then
+the captions row. The plank is pulled up with `margin-top: -5.8%` — **percentage margins
+resolve against the container's width**, and the plank's height is a fixed fraction of
+its width (264/1956), so `-5.8%` lands the trophy feet on the plank's top face at *any*
+size with no JS measuring and no hard-coded height. The captions then follow it for
+free. `--tro-fig` is `clamp(88px, 15vh, 168px)`, so two shelves always fit; the plank
+overlap is width-based and therefore unaffected by that.
+**Both rows are generated from the same list and are both `flex: 1 1 0`** — that is the
+only thing keeping a figure and its caption in one column, and both carry `data-tro` so
+one delegated handler covers the whole column.
+
+### The ceremony (`_troCeremony`) — one timer list, transform/opacity only
+Black + `spotlight.mp3` → at 420 ms the light comes up on the trophy with the **same cue
+pitched down to 0.62** → at 1400 ms the avatar (the player's own, ring colour included)
+drops from above and bounces → at 2400 ms `Trophy_Collect.mp3` starts, the avatar winds
+*back* then dashes → impact at 2760 ms: screen shake, a one-second full-page white
+flash, the trophy gone, and the avatar **carries on in the same direction over 2.4 s** —
+so it is very fast up to the hit and slow motion after it → the card at **collect +
+3000 ms exactly**, as briefed.
+
+- **Vertical and horizontal live on different elements.** `.tro-cer-avatar` owns `left`
+  (written inline per phase); `.tro-cer-av` owns the drop/squash/stretch `transform`.
+  One element doing both would have the two fighting over one property.
+- **Every timer goes in `_tro.cer.timers`** so «تم» can cancel the whole tail.
+- **The stage is sized against WIDTH as well as height** (`--tro-cer-h:
+  clamp(150px, min(34vh, 40vw), 360px)`). `34vh` alone makes the trophy 55vw wide on a
+  phone — already touching the avatar before it has moved. The four x-marks have a
+  separate mobile set for the same reason.
+- «تم» **fades the collect cue over 2 s** via `focusAudioEngine.fadeOutHandle`.
+  `playEffect` keeps no handle, which is exactly why `playHandled` exists.
+
+### Assets
+`Art/trophies/*.webp` — the seven trophies (518×687) and the plank (1956×264), cropped
+to their painted art out of 2000² masters and saved **WebP q90, not palette PNG**: the
+gold is baked gradients and a 255-colour palette bands it, the same call the Lemo sheets
+made. 2.4 MB → **190 KB**. `Sound/Trophy_Collect.mp3` ships **trimmed to 25 s with a 4 s
+fade** (111 s master gitignored). All of it — images and the two sounds — starts loading
+on **walking up to the shelf** (`_troEnsureAssets`, the signal the fireplace flame uses),
+never on the login path, and `warmGameSounds` has an explicit `NEVER_WARM` set so the
+half-megabyte of ceremony audio isn't downloaded for everyone.
+
+### The world layer is the only CROPPED one
+`Workspace_0013b_Trophy_Shelf.png` is 428×71, not the full 2210×3160, so `WORLD_LAYERS`
+grew a **`box`** (its bbox in source px) and `loadWorldArt`'s compose step pastes it back
+at that rect instead of stretching it. `TROPHY_SHELF_BOX` is that box **and** the
+interaction point, so the art and the hitbox can never drift apart. No collision mask: the
+dilated bottom wall already stops the player ~50 source px short of it.
+
+### Gotchas
+- **Youssef and Siraj ghosts see every trophy full and claimable** (`TROPHY_TEST_UIDS` /
+  `_troTestUnlocked`) so the ceremony and the claim are testable without waiting
+  sixty-seven hours. It is a **local display override** — nothing is written, the real
+  counters keep accumulating underneath, and deleting that one constant restores the
+  honest shelf.
+- The complete button locks with a **`.unlocked` class, never the `disabled` attribute**
+  (iOS touch leak — see azkar), so the handler has to re-check the class.
+- Enter/exit everywhere is `opacity` + `visibility` + a double-rAF `.active` — `display`
+  can't transition.
+- `trophyShelfIsOpen()` joins the standard guard list (keydown, wheel-zoom,
+  `handleMovement`, the mobile canvas-off test, `updateLibPanelLifecycle`,
+  `_chalScreenIsClear`, `_chatMustClose`) and `trophyHoldsCamera()` pins the camera the
+  way `_fireFreezeCamera` does — the loop keeps running underneath, so the room you come
+  back to must be the one you left.
+- z-index **9000 for the shelf, 9400 for the ceremony — both below prayer/azkar
+  (10000)**, which must cover them.
 
 ## لوحة مهام المكتبة — a window into MdwnhLibrary
 
