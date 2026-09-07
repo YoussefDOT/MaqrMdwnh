@@ -21,3 +21,5 @@ Art/Fireplace Fire.png
 Art/trophies/*.png
 # Trophy_Collect ships trimmed to 25s (4s fade); this is the untouched 111s master.
 Sound/Trophy_Collect.full.mp3
+# player_Fall ships re-encoded at 128k; this is the 242k original.
+Sound/player_Fall.full.mp3

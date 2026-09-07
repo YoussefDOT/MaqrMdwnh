@@ -894,6 +894,7 @@ class FocusAudioEngine {
             // Trophy_Collect alone is 400 KB.
             trophyCollect: null,
             spotlight: null,
+            playerFall: null,
             // Laptop boss fight
             bossAnticipate: null,
             bossAttackInitiate: null,
@@ -1048,6 +1049,7 @@ class FocusAudioEngine {
         this._trophySounds = Promise.all([
             ['trophyCollect', 'Sound/Trophy_Collect.mp3'],
             ['spotlight',     'Sound/spotlight.mp3'],
+            ['playerFall',    'Sound/player_Fall.mp3'],
         ].map(async ([key, url]) => {
             try { this.buffers[key] = await loadBuffer(url); }
             catch (e) { console.log(`Trophy sound load failed [${key}]:`, e); }
@@ -2354,6 +2356,7 @@ const gameState = {
         // and a handle to fade out.
         trophyCollect:           _lazyAudio('Sound/Trophy_Collect.mp3'),
         spotlight:               _lazyAudio('Sound/spotlight.mp3'),
+        playerFall:              _lazyAudio('Sound/player_Fall.mp3'),
         prayerCall:              _lazyAudio('Sound/Prayer_CallToPrayer.mp3'),
         inviteSent:              _lazyAudio('Sound/Invite_Sent.mp3'),
         inviteAccepted:          _lazyAudio('Sound/Invite_Accepted.mp3'),
@@ -2659,7 +2662,7 @@ function warmGameSounds() {
     // The trophy pair is half a megabyte and only ever plays inside the award
     // ceremony, which the Web Audio path (ensureTrophySounds) already covers on
     // walking up to the shelf — warming them here would download it for everyone.
-    const NEVER_WARM = new Set(['trophyCollect', 'spotlight']);
+    const NEVER_WARM = new Set(['trophyCollect', 'spotlight', 'playerFall']);
     const warmRest = () => {
         for (const key of Object.keys(gameState.sounds)) if (!NEVER_WARM.has(key)) warm(key);
     };
@@ -28229,7 +28232,7 @@ const _tro = {
     readAt: 0,
     detailId: null, claiming: false,
     assets: null,
-    cer: { running: false, timers: [], collect: null, id: null },
+    cer: { running: false, timers: [], collect: null, id: null, raf: 0 },
 };
 
 function trophyShelfIsOpen() { return !!_tro.open; }
@@ -28245,6 +28248,12 @@ const TROPHY_TEST_UIDS = new Set([DASH_TARGET_UID]);
 function _troTestUnlocked() {
     return gameState.isSirajGhost || TROPHY_TEST_UIDS.has(gameState.userId);
 }
+/* BUMP THIS to hand every test account a clean shelf again: it wipes their
+   `claimed` map on next login so the whole ceremony is re-runnable. It only ever
+   touches accounts _troTestUnlocked() covers, so a real member can never be reset
+   by editing this. The claim RECORDS already written to the Points DB are left
+   alone — re-claiming PUTs the same key, so nothing duplicates. */
+const TROPHY_RESET_TAG = 2;
 
 /* ── progress ─────────────────────────────────────────────────────────────── */
 // One shape for every caller: the shelf caption, the detail bar, and the claim gate.
@@ -28423,9 +28432,11 @@ async function _troSeed(prog) {
 }
 
 /* ── assets ───────────────────────────────────────────────────────────────────
-   The eight webp files are ~190 KB all in; the two ceremony sounds are ~550 KB.
-   Both start on WALKING UP to the shelf, never on the login path — the same signal
-   the fireplace flame uses. Idempotent, and a file that fails just resolves. */
+   The eight webp files are ~190 KB all in; the three ceremony sounds are ~650 KB.
+   Kicked on IDLE after spawn (see setupTrophyUI) and again on walking up to the
+   shelf — proximity alone left the trophies visibly popping in on the first open,
+   and the spotlight cue has to be decoded before the very first frame of the
+   ceremony. Never on the login path. Idempotent, and a file that fails resolves. */
 function _troEnsureAssets() {
     if (_tro.assets) return _tro.assets;
     const imgs = ['Shelf', 1, 2, 3, 4, 5, 6, 7].map(n => new Promise(res => {
@@ -28507,7 +28518,7 @@ function _troRenderShelves() {
         const row = TROPHIES.filter(t => t.shelf === shelf);
         html += `<section class="tro-shelf">
             <div class="tro-row tro-figs">${row.map(_troFigHtml).join('')}</div>
-            <img class="tro-plank" src="Art/trophies/Shelf.webp" alt="" aria-hidden="true">
+            <div class="tro-plankwrap"><img class="tro-plank" src="Art/trophies/Shelf.webp" alt="" aria-hidden="true"></div>
             <div class="tro-row tro-caps">${row.map(_troCapHtml).join('')}</div>
         </section>`;
     }
@@ -28664,10 +28675,61 @@ async function _troClaim(id) {
    runs in slow motion → the card, exactly 3s after the collect cue started.
    Everything moves on transform/opacity so the whole thing stays on the
    compositor; the timers are all in one list so a close can cancel them. */
-const TRO_CER = { lit: 420, drop: 1400, collect: 2400, wind: 2400, dash: 2620, card: 3000 };
+const TRO_CER = {
+    lit:     1920,   // black holds a beat and a half before the light comes up
+    drop:    2920,   // the avatar falls a second after the trophy is revealed
+    collect: 3900,   // Trophy_Collect starts here; everything after is relative to it
+    dash:    4120,
+    hit:     4260,   // dash + its 140ms travel
+    flash:   4350,   // ~5 frames after the hit, not on it
+    dissolve: 1900,  // how long the trophy takes to come apart and reach the avatar
+    card:    3000,   // AFTER `collect`, exactly, as briefed
+};
 
 function _troAfter(ms, fn) { _tro.cer.timers.push(setTimeout(fn, ms)); }
-function _troClearTimers() { for (const t of _tro.cer.timers) clearTimeout(t); _tro.cer.timers = []; }
+function _troClearTimers() {
+    for (const t of _tro.cer.timers) clearTimeout(t);
+    _tro.cer.timers = [];
+    if (_tro.cer.raf) { cancelAnimationFrame(_tro.cer.raf); _tro.cer.raf = 0; }
+}
+
+/* The trophy doesn't vanish on impact — it turns solid WHITE (brightness(0) keeps
+   the alpha and kills the colour, invert(1) makes what's left white), then comes
+   apart: two out-of-phase sines plus per-frame noise deform it while the blur ramps
+   up, and the whole thing slides into the avatar and fades. The avatar is still
+   coasting, so the target is read LIVE every frame rather than captured at the hit —
+   otherwise the trophy would fly to where the avatar used to be.
+   One rAF, one element, and it is over long before the card. */
+function _troDissolve(el, avatarEl, dur) {
+    if (!el) return;
+    const t0 = performance.now();
+    const r0 = el.getBoundingClientRect();
+    const cx = r0.left + r0.width / 2, cy = r0.top + r0.height / 2;
+    const noise = k => (Math.random() - 0.5) * k * 11;
+    const step = (now) => {
+        const k = Math.min(1, (now - t0) / dur);
+        const e = k * k * (3 - 2 * k);          // smoothstep in, so the slide starts gently
+        let tx = cx, ty = cy;
+        if (avatarEl) {
+            const r = avatarEl.getBoundingClientRect();
+            tx = r.left + r.width / 2; ty = r.top + r.height / 2;
+        }
+        const dx = (tx - cx) * e + noise(k);
+        const dy = (ty - cy) * e + noise(k);
+        const sx = 1 + Math.sin(now * 0.021) * 0.20 * k + k * 0.22;
+        const sy = 1 - Math.sin(now * 0.017) * 0.24 * k - k * 0.12;
+        const rot  = Math.sin(now * 0.013) * 16 * k + noise(k) * 0.5;
+        const skew = Math.sin(now * 0.027) * 18 * k;
+        el.style.transform = `translate(calc(-50% + ${dx.toFixed(1)}px), calc(-100% + ${dy.toFixed(1)}px))`
+            + ` rotate(${rot.toFixed(2)}deg) skewX(${skew.toFixed(2)}deg) scale(${sx.toFixed(3)}, ${sy.toFixed(3)})`;
+        el.style.filter = `brightness(0) invert(1) blur(${(k * k * 22).toFixed(1)}px)`
+            + ` drop-shadow(0 0 ${(26 * k).toFixed(0)}px rgba(255,255,255,${(0.75 * (1 - k)).toFixed(2)}))`;
+        el.style.opacity = Math.max(0, 1 - k * k * 1.15).toFixed(3);
+        _tro.cer.raf = (k < 1) ? requestAnimationFrame(step) : 0;
+        if (k >= 1) el.style.opacity = '0';
+    };
+    _tro.cer.raf = requestAnimationFrame(step);
+}
 
 function _troCeremony(t) {
     const cer = document.getElementById('tro-cer');
@@ -28684,7 +28746,14 @@ function _troCeremony(t) {
     const card   = document.getElementById('tro-card');
     const fe     = gameState.focusAudioEngine;
 
-    if (trophy) trophy.src = TRO_ART(t.img);
+    if (trophy) {
+        // Wipe whatever the last dissolve left inline, or the trophy would come back
+        // white, blurred and halfway across the screen.
+        trophy.style.transform = '';
+        trophy.style.filter = '';
+        trophy.style.opacity = '';
+        trophy.src = TRO_ART(t.img);
+    }
     // The avatar is the player's own — ring colour included, same as in the world.
     const me = gameState.players[gameState.userId] || {};
     if (av) {
@@ -28704,14 +28773,18 @@ function _troCeremony(t) {
     if (card)  { card.classList.remove('active'); card.setAttribute('aria-hidden', 'true'); }
     cer.setAttribute('aria-hidden', 'false');
 
-    requestAnimationFrame(() => requestAnimationFrame(() => cer.classList.add('active')));
-    // 1 — the room goes black.
+    // 1 — the room snaps to black in THIS frame. `.tro-cer.active` carries
+    //     `transition: none`, so there is no fade for the detail panel to show
+    //     through, and the trophy is `visibility: hidden` until the light is on it.
+    cer.classList.add('active');
     try { fe?.playHandled('spotlight', 1, 0.7); } catch (_) {}
 
-    // 2 — the light comes up on the trophy, a fifth lower.
+    // 2 — the light comes up and the trophy snaps on with it (no fade), a fifth
+    //     lower on the cue, and the fall lands on the same beat.
     _troAfter(TRO_CER.lit, () => {
         cer.classList.add('lit');
         try { fe?.playHandled('spotlight', 0.62, 0.6); } catch (_) {}
+        try { fe?.playHandled('playerFall', 1, 0.8); } catch (_) {}
     });
 
     // 3 — the avatar drops in from above and settles.
@@ -28731,14 +28804,19 @@ function _troCeremony(t) {
         if (avWrap) { avWrap.style.transition = 'left 0.14s cubic-bezier(0.55,0,1,1)'; avWrap.style.left = X.hit; }
     });
 
-    // 5 — impact: shake, a full-page white flash, the trophy gone, and the tail
-    //     carries on in the SAME direction at a twentieth of the speed.
-    _troAfter(TRO_CER.dash + 140, () => {
+    // 5 — impact: shake, the trophy goes white and starts coming apart, and the
+    //     tail carries on in the SAME direction at a twentieth of the speed.
+    _troAfter(TRO_CER.hit, () => {
         cer.classList.add('hit');
-        if (flash) { flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go'); }
         if (stage) { stage.classList.remove('shake'); void stage.offsetWidth; stage.classList.add('shake'); }
         if (av) { av.classList.remove('dash'); av.classList.add('slow'); }
         if (avWrap) { avWrap.style.transition = 'left 2.4s cubic-bezier(0.08,0.5,0.3,1)'; avWrap.style.left = X.end; }
+        _troDissolve(trophy, avWrap, TRO_CER.dissolve);
+    });
+
+    // 5b — the flash lands a few frames AFTER the hit, not on it.
+    _troAfter(TRO_CER.flash, () => {
+        if (flash) { flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go'); }
     });
 
     // 6 — the card, exactly three seconds after the collect cue started.
@@ -28840,6 +28918,14 @@ function setupTrophyUI() {
         _tro.claimed = v.claimed || {};
         _tro.granted = v.granted || {};
         _tro.dayKey = _todayDateStr();
+        // Test accounts get a clean shelf whenever TROPHY_RESET_TAG moves.
+        if (_troTestUnlocked() && v.resetTag !== TROPHY_RESET_TAG) {
+            _tro.claimed = {};
+            update(ref(database), {
+                [`${_troPath()}/claimed`]: null,
+                [`${_troPath()}/resetTag`]: TROPHY_RESET_TAG,
+            }).catch(() => {});
+        }
         const seed = p.seeded ? Promise.resolve() : _troSeed(_tro.prog);
         return seed.then(() => {
             _tro.ready = true;
@@ -28854,4 +28940,12 @@ function setupTrophyUI() {
 
     if (window.requestIdleCallback) requestIdleCallback(load, { timeout: 8000 });
     else setTimeout(load, 3000);
+
+    /* Warm the art and the ceremony audio on idle rather than waiting for someone to
+       walk over — ~190 KB of webp and ~650 KB of mp3 is nothing next to the world,
+       and on the first open the trophies were visibly popping in one by one. Still
+       nowhere near the login path; _troEnsureAssets is idempotent, so the proximity
+       call is now just a backstop for a session where idle never fired. */
+    if (window.requestIdleCallback) requestIdleCallback(_troEnsureAssets, { timeout: 12000 });
+    else setTimeout(_troEnsureAssets, 6000);
 }

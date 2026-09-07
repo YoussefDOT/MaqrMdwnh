@@ -1902,29 +1902,55 @@ infinite `filter`/`scale` animation (invariant 12). A claimed slot keeps a faint
 with a ✓ so the shelf never reads as broken, and moves into «الجوائز المستلمة».
 
 ### The plank sits between two rows, and the pull-up is a percentage of WIDTH
-`.tro-shelf` is three elements: the figures row, the plank `<img>` in normal flow, then
-the captions row. The plank is pulled up with `margin-top: -5.8%` — **percentage margins
-resolve against the container's width**, and the plank's height is a fixed fraction of
-its width (264/1956), so `-5.8%` lands the trophy feet on the plank's top face at *any*
-size with no JS measuring and no hard-coded height. The captions then follow it for
-free. `--tro-fig` is `clamp(88px, 15vh, 168px)`, so two shelves always fit; the plank
-overlap is width-based and therefore unaffected by that.
-**Both rows are generated from the same list and are both `flex: 1 1 0`** — that is the
-only thing keeping a figure and its caption in one column, and both carry `data-tro` so
-one delegated handler covers the whole column.
+`.tro-shelf` is three elements: the figures row, the plank in normal flow, then the
+captions row. The plank is pulled up with `margin-top: -5.7%` — **percentage margins
+resolve against the containing block's width**, and the plank's height is a fixed
+fraction of its own width (264/1956), so `-5.7%` lands the trophy feet on its top face
+at *any* size with no JS measuring and no hard-coded height. The captions then follow it
+for free.
 
-### The ceremony (`_troCeremony`) — one timer list, transform/opacity only
-Black + `spotlight.mp3` → at 420 ms the light comes up on the trophy with the **same cue
-pitched down to 0.62** → at 1400 ms the avatar (the player's own, ring colour included)
-drops from above and bounces → at 2400 ms `Trophy_Collect.mp3` starts, the avatar winds
-*back* then dashes → impact at 2760 ms: screen shake, a one-second full-page white
-flash, the trophy gone, and the avatar **carries on in the same direction over 2.4 s** —
-so it is very fast up to the hit and slow motion after it → the card at **collect +
-3000 ms exactly**, as briefed.
+**That is why the plank lives inside `.tro-plankwrap`**, a box of `--tro-deck` width: the
+percentage has to resolve against the DECK, not the whole room. Sizing is one chain off
+`--tro-fig` (`clamp(100px, 17.5vh, 196px)`) — `--tro-col` is *narrower* than the trophy
+art is wide, so the trophies nearly touch, and `--tro-deck` is always the FOUR-column
+width so the top and bottom shelves are the same board.
+**Both rows are generated from the same list and are both `flex: 0 0 var(--tro-col)`** —
+that is the only thing keeping a figure and its caption in one column, and both carry
+`data-tro` so one delegated handler covers the whole column.
+
+**The pool of light under each trophy must not touch its own box edge.** It was
+`radial-gradient(… at 50% 78%)` with a 62% radius — 78 + 62 = 140%, so the glow was cut
+off flat along the bottom. It is `64% ± 34%` now; keep any change inside 0–100%.
+
+### The ceremony (`_troCeremony`) — one timer list, `TRO_CER` is the whole score
+The press **snaps to black in the same frame** — `.tro-cer.active` carries
+`transition: none` (the enter is a cut, the exit still fades), and the trophy is
+`visibility: hidden` until the light is on it. Without both, the detail panel was
+visible fading out underneath and the trophy caught a frame on the way.
+
+`0` black + `spotlight.mp3` → `1920` the light comes up and the trophy **snaps** on with
+it (no fade, no scale-in), on the **same cue pitched to 0.62** plus `player_Fall.mp3` →
+`2920` the avatar (the player's own, ring colour included) drops and settles → `3900`
+`Trophy_Collect.mp3`, the avatar winds *back* then dashes → `4260` impact: shake, the
+trophy dissolves (below), and the avatar **carries on in the same direction over 2.4 s**,
+so it is very fast up to the hit and slow motion after → `4350` the white flash, a few
+frames *after* the hit → the card at **collect + 3000 ms exactly**, as briefed.
+
+**The trophy is never simply hidden.** `_troDissolve` turns it solid white
+(`brightness(0)` keeps the alpha and kills the colour, `invert(1)` makes what is left
+white), then deforms it with two out-of-phase sines plus per-frame noise while the blur
+ramps, slides it into the avatar and fades it — one rAF on one element, done well before
+the card. **The avatar's centre is read live every frame**: it is still coasting, so a
+target captured at the hit would send the trophy to where the avatar used to be. The rAF
+id lives in `_tro.cer.raf` and `_troClearTimers` cancels it; `_troCeremony` wipes the
+inline `transform`/`filter`/`opacity` it leaves behind, or the next run starts white,
+blurred and halfway across the screen.
 
 - **Vertical and horizontal live on different elements.** `.tro-cer-avatar` owns `left`
   (written inline per phase); `.tro-cer-av` owns the drop/squash/stretch `transform`.
   One element doing both would have the two fighting over one property.
+- The drop is deliberately **short and shallow** (0.62 s, one squash, one rebound). The
+  first pass squashed to 0.72/1.26 over three beats and read as rubber, not weight.
 - **Every timer goes in `_tro.cer.timers`** so «تم» can cancel the whole tail.
 - **The stage is sized against WIDTH as well as height** (`--tro-cer-h:
   clamp(150px, min(34vh, 40vw), 360px)`). `34vh` alone makes the trophy 55vw wide on a
@@ -1939,9 +1965,12 @@ to their painted art out of 2000² masters and saved **WebP q90, not palette PNG
 gold is baked gradients and a 255-colour palette bands it, the same call the Lemo sheets
 made. 2.4 MB → **190 KB**. `Sound/Trophy_Collect.mp3` ships **trimmed to 25 s with a 4 s
 fade** (111 s master gitignored). All of it — images and the two sounds — starts loading
-on **walking up to the shelf** (`_troEnsureAssets`, the signal the fireplace flame uses),
-never on the login path, and `warmGameSounds` has an explicit `NEVER_WARM` set so the
-half-megabyte of ceremony audio isn't downloaded for everyone.
+`Sound/player_Fall.mp3` is re-encoded at 128k (masters gitignored). All of it — images
+and the three sounds — warms on **idle after spawn**, with the walk-up call
+(`_troEnsureAssets`) left as a backstop: proximity alone was late enough that the
+trophies visibly popped in on the first open. Never on the login path, and
+`warmGameSounds` has an explicit `NEVER_WARM` set so the HTMLAudio copies of the
+ceremony sounds are not downloaded a second time for everyone.
 
 ### The world layer is the only CROPPED one
 `Workspace_0013b_Trophy_Shelf.png` is 428×71, not the full 2210×3160, so `WORLD_LAYERS`
@@ -1956,6 +1985,11 @@ dilated bottom wall already stops the player ~50 source px short of it.
   sixty-seven hours. It is a **local display override** — nothing is written, the real
   counters keep accumulating underneath, and deleting that one constant restores the
   honest shelf.
+- **To hand the test accounts a clean shelf again, bump `TROPHY_RESET_TAG`.** Their
+  `claimed` map is wiped on the next login. It is gated on `_troTestUnlocked()`, so
+  editing it can never reset a real member. The claim records already written to the
+  Points DB are left alone on purpose — re-claiming PUTs the same key, so nothing
+  duplicates.
 - The complete button locks with a **`.unlocked` class, never the `disabled` attribute**
   (iOS touch leak — see azkar), so the handler has to re-check the class.
 - Enter/exit everywhere is `opacity` + `visibility` + a double-rAF `.active` — `display`
