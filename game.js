@@ -28253,7 +28253,7 @@ function _troTestUnlocked() {
    touches accounts _troTestUnlocked() covers, so a real member can never be reset
    by editing this. The claim RECORDS already written to the Points DB are left
    alone — re-claiming PUTs the same key, so nothing duplicates. */
-const TROPHY_RESET_TAG = 2;
+const TROPHY_RESET_TAG = 3;
 
 /* ── progress ─────────────────────────────────────────────────────────────── */
 // One shape for every caller: the shelf caption, the detail bar, and the claim gate.
@@ -28676,14 +28676,19 @@ async function _troClaim(id) {
    Everything moves on transform/opacity so the whole thing stays on the
    compositor; the timers are all in one list so a close can cancel them. */
 const TRO_CER = {
-    lit:     1920,   // black holds a beat and a half before the light comes up
-    drop:    2920,   // the avatar falls a second after the trophy is revealed
-    collect: 3900,   // Trophy_Collect starts here; everything after is relative to it
-    dash:    4120,
-    hit:     4260,   // dash + its 140ms travel
-    flash:   4350,   // ~5 frames after the hit, not on it
+    lit:      1920,  // black holds a beat and a half before the light comes up
+    drop:     2920,  // the avatar falls a second after the trophy is revealed
+    ground:   3120,  // the floor fades in as it is about to land, not before
+    collect:  3900,  // the wind-up
+    audio:    3950,  // Trophy_Collect itself, three frames behind the wind-up
+    dash:     4120,
+    hit:      4260,  // dash + its 140ms travel
+    flash:    4350,  // ~5 frames after the hit; the impact beat
+    ghost:    4500,  // the duplicate blows outward as the flash fades
+    tail:     2400,  // how long the slow-motion coast runs
     dissolve: 1900,  // how long the trophy takes to come apart and reach the avatar
-    card:    3000,   // AFTER `collect`, exactly, as briefed
+    white:     300,  // fill-to-white, from the flash — done long before the flash ends
+    card:     3000,  // AFTER the audio, exactly, as briefed
 };
 
 function _troAfter(ms, fn) { _tro.cer.timers.push(setTimeout(fn, ms)); }
@@ -28693,40 +28698,68 @@ function _troClearTimers() {
     if (_tro.cer.raf) { cancelAnimationFrame(_tro.cer.raf); _tro.cer.raf = 0; }
 }
 
-/* The trophy doesn't vanish on impact — it turns solid WHITE (brightness(0) keeps
-   the alpha and kills the colour, invert(1) makes what's left white), then comes
-   apart: two out-of-phase sines plus per-frame noise deform it while the blur ramps
-   up, and the whole thing slides into the avatar and fades. The avatar is still
-   coasting, so the target is read LIVE every frame rather than captured at the hit —
-   otherwise the trophy would fly to where the avatar used to be.
-   One rAF, one element, and it is over long before the card. */
-function _troDissolve(el, avatarEl, dur) {
-    if (!el) return;
+/* Horizontal placement is a TRANSFORM in px, never `left`. `left` relayouts the
+   whole stage on every frame of a 2.4s tween, and the dissolve needs to know where
+   the avatar is — a layout-thrashing pair, and the cause of the spike on impact.
+   The element sits at `left: 0`, so translating by X puts its centre at X. */
+function _troSetX(el, px) {
+    if (el) el.style.transform = `translate(calc(-50% + ${px.toFixed(1)}px), -100%)`;
+}
+
+/* ── the tail ─────────────────────────────────────────────────────────────────
+   ONE rAF from the impact to the end of the coast, driving both the avatar's
+   slow-motion travel and the trophy coming apart. Because it owns the avatar's
+   position it can compute the dissolve's target arithmetically — there is not a
+   single DOM read inside the loop, which is the whole point.
+
+   The trophy does not simply vanish: the white copy fades up over the flash (so it
+   is already solid white by the time the flash ends), then two out-of-phase sines
+   plus per-frame noise deform it while the blur ramps, and the box slides into the
+   avatar and fades. */
+function _troTail(els, hitX, endX) {
+    const { box, white, avWrap, av } = els;
+    if (!box) return;
+    // Three reads, once, before the loop — never inside it.
+    const tr = box.getBoundingClientRect();
+    const ar = avWrap ? avWrap.getBoundingClientRect() : tr;
+    const tcx = tr.left + tr.width / 2, tcy = tr.top + tr.height / 2;
+    const acy = ar.top + ar.height / 2;
+    const dissolveFrom = TRO_CER.flash - TRO_CER.hit;   // the deform starts on the flash beat
+    const blurMax = gameState._lowGfx ? 8 : 16;
     const t0 = performance.now();
-    const r0 = el.getBoundingClientRect();
-    const cx = r0.left + r0.width / 2, cy = r0.top + r0.height / 2;
+    let flared = false;
     const noise = k => (Math.random() - 0.5) * k * 11;
+
     const step = (now) => {
-        const k = Math.min(1, (now - t0) / dur);
-        const e = k * k * (3 - 2 * k);          // smoothstep in, so the slide starts gently
-        let tx = cx, ty = cy;
-        if (avatarEl) {
-            const r = avatarEl.getBoundingClientRect();
-            tx = r.left + r.width / 2; ty = r.top + r.height / 2;
+        const el = now - t0;
+
+        // ── the avatar coasts on, slow, in the direction it was already going ──
+        const kt = Math.min(1, el / TRO_CER.tail);
+        const ax = hitX + (endX - hitX) * (1 - Math.pow(1 - kt, 1.6));
+        _troSetX(avWrap, ax);
+
+        // ── the trophy ──
+        const kd = Math.max(0, Math.min(1, (el - dissolveFrom) / TRO_CER.dissolve));
+        if (white) white.style.opacity = Math.min(1, Math.max(0, (el - dissolveFrom) / TRO_CER.white)).toFixed(3);
+        if (kd > 0) {
+            const e = kd * kd * (3 - 2 * kd);           // smoothstep, so the slide starts gently
+            const dx = (ax - tcx) * e + noise(kd);
+            const dy = (acy - tcy) * e + noise(kd);
+            const sx = 1 + Math.sin(now * 0.021) * 0.20 * kd + kd * 0.22;
+            const sy = 1 - Math.sin(now * 0.017) * 0.24 * kd - kd * 0.12;
+            const rot  = Math.sin(now * 0.013) * 16 * kd + noise(kd) * 0.5;
+            const skew = Math.sin(now * 0.027) * 18 * kd;
+            box.style.transform = `translate(calc(-50% + ${dx.toFixed(1)}px), calc(-100% + ${dy.toFixed(1)}px))`
+                + ` rotate(${rot.toFixed(2)}deg) skewX(${skew.toFixed(2)}deg) scale(${sx.toFixed(3)}, ${sy.toFixed(3)})`;
+            box.style.filter = `blur(${(kd * kd * blurMax).toFixed(1)}px)`
+                + ` drop-shadow(0 0 ${(26 * kd).toFixed(0)}px rgba(255,255,255,${(0.75 * (1 - kd)).toFixed(2)}))`;
+            box.style.opacity = Math.max(0, 1 - kd * kd * 1.15).toFixed(3);
         }
-        const dx = (tx - cx) * e + noise(k);
-        const dy = (ty - cy) * e + noise(k);
-        const sx = 1 + Math.sin(now * 0.021) * 0.20 * k + k * 0.22;
-        const sy = 1 - Math.sin(now * 0.017) * 0.24 * k - k * 0.12;
-        const rot  = Math.sin(now * 0.013) * 16 * k + noise(k) * 0.5;
-        const skew = Math.sin(now * 0.027) * 18 * k;
-        el.style.transform = `translate(calc(-50% + ${dx.toFixed(1)}px), calc(-100% + ${dy.toFixed(1)}px))`
-            + ` rotate(${rot.toFixed(2)}deg) skewX(${skew.toFixed(2)}deg) scale(${sx.toFixed(3)}, ${sy.toFixed(3)})`;
-        el.style.filter = `brightness(0) invert(1) blur(${(k * k * 22).toFixed(1)}px)`
-            + ` drop-shadow(0 0 ${(26 * k).toFixed(0)}px rgba(255,255,255,${(0.75 * (1 - k)).toFixed(2)}))`;
-        el.style.opacity = Math.max(0, 1 - k * k * 1.15).toFixed(3);
-        _tro.cer.raf = (k < 1) ? requestAnimationFrame(step) : 0;
-        if (k >= 1) el.style.opacity = '0';
+        // He glows the moment it reaches him.
+        if (!flared && kd > 0.86) { flared = true; if (av) av.classList.add('flare'); }
+
+        _tro.cer.raf = (kt < 1) ? requestAnimationFrame(step) : 0;
+        if (kt >= 1 && box) box.style.opacity = '0';
     };
     _tro.cer.raf = requestAnimationFrame(step);
 }
@@ -28739,21 +28772,35 @@ function _troCeremony(t) {
     _troClearTimers();
 
     const stage  = document.getElementById('tro-cer-stage');
-    const trophy = document.getElementById('tro-cer-trophy');
+    const box    = document.getElementById('tro-cer-trophy');
+    const artA   = document.getElementById('tro-cer-trophy-a');
+    const artW   = document.getElementById('tro-cer-trophy-w');
+    const ghost  = document.getElementById('tro-cer-ghost');
+    const pulse  = document.getElementById('tro-cer-pulse');
     const avWrap = document.getElementById('tro-cer-avatar');
     const av     = document.getElementById('tro-cer-av');
     const flash  = document.getElementById('tro-flash');
     const card   = document.getElementById('tro-card');
     const fe     = gameState.focusAudioEngine;
+    const art    = TRO_ART(t.img);
 
-    if (trophy) {
-        // Wipe whatever the last dissolve left inline, or the trophy would come back
-        // white, blurred and halfway across the screen.
-        trophy.style.transform = '';
-        trophy.style.filter = '';
-        trophy.style.opacity = '';
-        trophy.src = TRO_ART(t.img);
-    }
+    // Wipe whatever the last run left inline, or the trophy comes back white,
+    // blurred and halfway across the screen.
+    if (box) { box.style.transform = ''; box.style.filter = ''; box.style.opacity = ''; }
+    if (artA) artA.src = art;
+    if (artW) { artW.src = art; artW.style.opacity = '0'; }
+    if (ghost) { ghost.src = art; ghost.classList.remove('go'); }
+    if (pulse) pulse.classList.remove('go');
+
+    /* Where the avatar stands, winds up, lands the hit, and coasts out — as a
+       fraction of the viewport. A phone is narrow enough that the desktop marks
+       would have the two touching before it moved, so it gets its own set. */
+    const F = gameState._isMobile
+        ? { start: 0.82, wind: 0.92, hit: 0.44, end: 0.02 }
+        : { start: 0.68, wind: 0.75, hit: 0.43, end: 0.11 };
+    const W = window.innerWidth;
+    const px = f => f * W;
+
     // The avatar is the player's own — ring colour included, same as in the world.
     const me = gameState.players[gameState.userId] || {};
     if (av) {
@@ -28761,13 +28808,7 @@ function _troCeremony(t) {
         av.style.setProperty('--tro-ring', me.ringColor || COLORS.blue);
         av.className = 'tro-cer-av';
     }
-    /* Where the avatar stands, winds up, lands the hit, and coasts out. A phone is
-       narrow enough that the desktop marks would have the two touching before it
-       moved, so it gets its own set. */
-    const X = gameState._isMobile
-        ? { start: '82%', wind: '92%', hit: '44%', end: '2%' }
-        : { start: '68%', wind: '75%', hit: '43%', end: '11%' };
-    if (avWrap) { avWrap.classList.remove('in'); avWrap.style.transition = 'none'; avWrap.style.left = X.start; }
+    if (avWrap) { avWrap.classList.remove('in'); avWrap.style.transition = 'none'; _troSetX(avWrap, px(F.start)); }
     cer.className = 'tro-cer';
     if (flash) flash.className = 'tro-flash';
     if (card)  { card.classList.remove('active'); card.setAttribute('aria-hidden', 'true'); }
@@ -28779,48 +28820,65 @@ function _troCeremony(t) {
     cer.classList.add('active');
     try { fe?.playHandled('spotlight', 1, 0.7); } catch (_) {}
 
-    // 2 — the light comes up and the trophy snaps on with it (no fade), a fifth
-    //     lower on the cue, and the fall lands on the same beat.
+    // 2 — the light and the trophy both SNAP on, a fifth lower on the cue, and the
+    //     fall lands on the same beat.
     _troAfter(TRO_CER.lit, () => {
         cer.classList.add('lit');
         try { fe?.playHandled('spotlight', 0.62, 0.6); } catch (_) {}
         try { fe?.playHandled('playerFall', 1, 0.8); } catch (_) {}
+        /* Promote the layers a full two seconds before they are animated, and touch
+           the blur path once so its filter layer already exists. Doing either for the
+           first time ON the impact frame is what spiked. */
+        if (box) {
+            box.style.willChange = 'transform, opacity, filter';
+            // Same shadow the stylesheet gives it, plus a hair of blur so the filter
+            // layer already exists when the tail starts writing to it.
+            box.style.filter = 'drop-shadow(0 18px 30px rgba(0, 0, 0, 0.7)) blur(0.01px)';
+        }
+        if (ghost) ghost.style.willChange = 'transform, opacity';
+        if (pulse) pulse.style.willChange = 'transform, opacity';
     });
 
-    // 3 — the avatar drops in from above and settles.
+    // 3 — the avatar drops in from above and settles; the floor appears just before
+    //     it lands, so until then there is nothing but the lit trophy.
     _troAfter(TRO_CER.drop, () => {
-        if (avWrap) { avWrap.classList.add('in'); }
+        if (avWrap) avWrap.classList.add('in');
         if (av) av.classList.add('drop');
     });
+    _troAfter(TRO_CER.ground, () => cer.classList.add('grounded'));
 
-    // 4 — the collect cue, the wind-up, then the dash.
+    // 4 — the wind-up, the collect cue three frames behind it, then the dash.
     _troAfter(TRO_CER.collect, () => {
-        _tro.cer.collect = fe?.playHandled('trophyCollect', 1, 0.9) || null;
         if (av) { av.classList.remove('drop'); av.classList.add('wind'); }
-        if (avWrap) { avWrap.style.transition = 'left 0.2s cubic-bezier(0.3,0,0.8,0.4)'; avWrap.style.left = X.wind; }
+        if (avWrap) { avWrap.style.transition = 'transform 0.2s cubic-bezier(0.3,0,0.8,0.4)'; _troSetX(avWrap, px(F.wind)); }
+    });
+    _troAfter(TRO_CER.audio, () => {
+        _tro.cer.collect = fe?.playHandled('trophyCollect', 1, 0.9) || null;
     });
     _troAfter(TRO_CER.dash, () => {
         if (av) { av.classList.remove('wind'); av.classList.add('dash'); }
-        if (avWrap) { avWrap.style.transition = 'left 0.14s cubic-bezier(0.55,0,1,1)'; avWrap.style.left = X.hit; }
+        if (avWrap) { avWrap.style.transition = 'transform 0.14s cubic-bezier(0.55,0,1,1)'; _troSetX(avWrap, px(F.hit)); }
     });
 
-    // 5 — impact: shake, the trophy goes white and starts coming apart, and the
-    //     tail carries on in the SAME direction at a twentieth of the speed.
+    // 5 — impact: the shake, and the tail takes over both the avatar and the trophy.
     _troAfter(TRO_CER.hit, () => {
         cer.classList.add('hit');
         if (stage) { stage.classList.remove('shake'); void stage.offsetWidth; stage.classList.add('shake'); }
         if (av) { av.classList.remove('dash'); av.classList.add('slow'); }
-        if (avWrap) { avWrap.style.transition = 'left 2.4s cubic-bezier(0.08,0.5,0.3,1)'; avWrap.style.left = X.end; }
-        _troDissolve(trophy, avWrap, TRO_CER.dissolve);
+        if (avWrap) avWrap.style.transition = 'none';   // the tail drives it by hand now
+        _troTail({ box, white: artW, avWrap, av }, px(F.hit), px(F.end));
     });
 
-    // 5b — the flash lands a few frames AFTER the hit, not on it.
+    // 5b — the flash and the pulse ring, a few frames AFTER the hit.
     _troAfter(TRO_CER.flash, () => {
         if (flash) { flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go'); }
+        if (pulse) { void pulse.offsetWidth; pulse.classList.add('go'); }
     });
+    // 5c — the ghost blows outward as the flash fades.
+    _troAfter(TRO_CER.ghost, () => { if (ghost) { void ghost.offsetWidth; ghost.classList.add('go'); } });
 
     // 6 — the card, exactly three seconds after the collect cue started.
-    _troAfter(TRO_CER.collect + TRO_CER.card, () => _troShowCard(t));
+    _troAfter(TRO_CER.audio + TRO_CER.card, () => _troShowCard(t));
 }
 
 function _troShowCard(t) {
@@ -28845,6 +28903,19 @@ function _troEndCeremony() {
     const cer = document.getElementById('tro-cer');
     const card = document.getElementById('tro-card');
     _troClearTimers();
+    /* Drop the stage classes AFTER the exit fade, never on the press: `.lit` left on
+       the layer is what made the second ceremony open on a lit stage. With the
+       spotlight's transition gone that is already invisible, but leaving state behind
+       for the next run to trip over is how it happened the first time. */
+    setTimeout(() => {
+        if (!_tro.cer.running) {
+            cer?.classList.remove('lit', 'hit', 'grounded');
+            for (const id of ['tro-cer-trophy', 'tro-cer-ghost', 'tro-cer-pulse']) {
+                const el = document.getElementById(id);
+                if (el) { el.style.willChange = ''; el.classList.remove('go'); }
+            }
+        }
+    }, 360);
     // «تم» fades the collect cue over two seconds rather than cutting it.
     if (_tro.cer.collect) {
         try { gameState.focusAudioEngine?.fadeOutHandle(_tro.cer.collect, 2); } catch (_) {}

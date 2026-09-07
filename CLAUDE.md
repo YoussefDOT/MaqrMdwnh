@@ -1928,27 +1928,43 @@ The press **snaps to black in the same frame** — `.tro-cer.active` carries
 `visibility: hidden` until the light is on it. Without both, the detail panel was
 visible fading out underneath and the trophy caught a frame on the way.
 
-`0` black + `spotlight.mp3` → `1920` the light comes up and the trophy **snaps** on with
-it (no fade, no scale-in), on the **same cue pitched to 0.62** plus `player_Fall.mp3` →
-`2920` the avatar (the player's own, ring colour included) drops and settles → `3900`
-`Trophy_Collect.mp3`, the avatar winds *back* then dashes → `4260` impact: shake, the
-trophy dissolves (below), and the avatar **carries on in the same direction over 2.4 s**,
-so it is very fast up to the hit and slow motion after → `4350` the white flash, a few
-frames *after* the hit → the card at **collect + 3000 ms exactly**, as briefed.
+`0` black + `spotlight.mp3` → `1920` the light **and** the trophy snap on together (no
+fade on either — see below), on the **same cue pitched to 0.62** plus `player_Fall.mp3`
+→ `2920` the avatar (the player's own, ring colour included) drops → `3120` the floor
+fades in, just before he lands, so until then there is nothing but the lit trophy →
+`3900` he winds *back*, `3950` `Trophy_Collect.mp3` (three frames behind the wind-up) →
+`4120` dash → `4260` impact: shake, and `_troTail` takes over → `4350` the flash and the
+pulse ring → `4500` the ghost → the card at **audio + 3000 ms exactly**, as briefed.
 
-**The trophy is never simply hidden.** `_troDissolve` turns it solid white
-(`brightness(0)` keeps the alpha and kills the colour, `invert(1)` makes what is left
-white), then deforms it with two out-of-phase sines plus per-frame noise while the blur
-ramps, slides it into the avatar and fades it — one rAF on one element, done well before
-the card. **The avatar's centre is read live every frame**: it is still coasting, so a
-target captured at the hit would send the trophy to where the avatar used to be. The rAF
-id lives in `_tro.cer.raf` and `_troClearTimers` cancels it; `_troCeremony` wipes the
-inline `transform`/`filter`/`opacity` it leaves behind, or the next run starts white,
-blurred and halfway across the screen.
+**Nothing on this stage fades in.** `.tro-spot` / `.tro-spot-pool` have no transition at
+all, and neither does the trophy. That is not only a look: `.lit` stays on the layer
+after a ceremony, so with a transition there the *second* claim opened on an already-lit
+stage that then visibly faded down the moment استلام was pressed. `_troEndCeremony` also
+drops `lit`/`hit`/`grounded` 360 ms later, once the exit fade is over — belt as well as
+braces.
 
-- **Vertical and horizontal live on different elements.** `.tro-cer-avatar` owns `left`
-  (written inline per phase); `.tro-cer-av` owns the drop/squash/stretch `transform`.
-  One element doing both would have the two fighting over one property.
+**The trophy is never simply hidden.** It is a BOX holding two copies of the art: the
+normal one and a `brightness(0) invert(1)` white one whose opacity ramps up over the
+flash, so it is solid white before the flash ends. (A `filter` cannot be interpolated
+from "normal" to "white" cleanly; two layers can.) Then two out-of-phase sines plus
+per-frame noise deform the box while the blur ramps, and it slides into the avatar and
+fades. A **ghost** — the same art, white, 70% opacity — blows outward fast and settles
+slowly as the flash fades; a **pulse ring** is thrown off on the flash beat; and the
+avatar **flares white** when the trophy reaches him (`kd > 0.86`).
+
+**`_troTail` is ONE rAF for the whole tail, with no DOM read inside it.** It drives the
+avatar's slow-motion coast *and* the dissolve, so it can compute the dissolve's target
+arithmetically instead of measuring. Three `getBoundingClientRect()` calls happen once,
+before the loop.
+
+- **Horizontal travel is a `transform` in px, never `left`** (`_troSetX`). `left`
+  relayouts the stage on every frame of a 2.4 s tween, and the dissolve wants to know
+  where the avatar is — that pair is what produced the lag spike on impact. The layers
+  are also promoted (`will-change`) and the blur filter touched once at `lit`, two
+  seconds early, rather than for the first time on the impact frame.
+- **Vertical and horizontal live on different elements.** `.tro-cer-avatar` owns the
+  travel transform; `.tro-cer-av` owns the drop/squash/stretch. One element doing both
+  would have the two fighting over one property.
 - The drop is deliberately **short and shallow** (0.62 s, one squash, one rebound). The
   first pass squashed to 0.72/1.26 over three beats and read as rubber, not weight.
 - **Every timer goes in `_tro.cer.timers`** so «تم» can cancel the whole tail.
@@ -1965,7 +1981,7 @@ to their painted art out of 2000² masters and saved **WebP q90, not palette PNG
 gold is baked gradients and a 255-colour palette bands it, the same call the Lemo sheets
 made. 2.4 MB → **190 KB**. `Sound/Trophy_Collect.mp3` ships **trimmed to 25 s with a 4 s
 fade** (111 s master gitignored). All of it — images and the two sounds — starts loading
-`Sound/player_Fall.mp3` is re-encoded at 128k (masters gitignored). All of it — images
+`Sound/player_Fall.mp3` is re-encoded 242k → 128k (masters gitignored). All of it — images
 and the three sounds — warms on **idle after spawn**, with the walk-up call
 (`_troEnsureAssets`) left as a backstop: proximity alone was late enough that the
 trophies visibly popped in on the first open. Never on the login path, and

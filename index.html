@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 263 · Updated 9/7 5:15 PM</div>
+    <div id="build-number" class="build-number">Build 264 · Updated 9/7 5:27 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1513,7 +1513,17 @@
         <div id="tro-cer-stage" class="tro-cer-stage">
             <div class="tro-spot" aria-hidden="true"></div>
             <div class="tro-spot-pool" aria-hidden="true"></div>
-            <img id="tro-cer-trophy" class="tro-cer-trophy" alt="">
+            <div id="tro-ground" class="tro-ground" aria-hidden="true"></div>
+            <div id="tro-cer-pulse" class="tro-cer-pulse" aria-hidden="true"></div>
+            <!-- The trophy is a BOX holding two copies of the same art: the normal one
+                 and a pure-white one whose opacity ramps up with the flash. The box is
+                 what _troTail deforms, so the white fill and the deform never fight
+                 over one `filter`. -->
+            <div id="tro-cer-trophy" class="tro-cer-trophy">
+                <img id="tro-cer-trophy-a" alt="">
+                <img id="tro-cer-trophy-w" class="tro-cer-white" alt="" aria-hidden="true">
+            </div>
+            <img id="tro-cer-ghost" class="tro-cer-ghost" alt="" aria-hidden="true">
             <div id="tro-cer-avatar" class="tro-cer-avatar"><span id="tro-cer-av" class="tro-cer-av"></span></div>
         </div>
         <div id="tro-flash" class="tro-flash" aria-hidden="true"></div>
@@ -1883,7 +1893,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=253"></script>
+        <script type="module" src="game.js?v=254"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

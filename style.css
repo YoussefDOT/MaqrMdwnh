@@ -9768,11 +9768,13 @@ body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; }
     100% { transform: translate3d(0, 0, 0); }
 }
 
-/* The cone from above and the pool it lands in — one light, two halves. */
+/* The cone from above and the pool it lands in — one light, two halves. It SNAPS
+   on with its cue; no transition at all. That is also what makes a second ceremony
+   safe: `.lit` is still on the layer from the first run, and with a transition here
+   clearing it played a visible fade-out the instant استلام was pressed. */
 .tro-spot, .tro-spot-pool {
     position: absolute;
     opacity: 0;
-    transition: opacity 0.55s ease;
     pointer-events: none;
 }
 .tro-spot {
@@ -9794,12 +9796,40 @@ body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; }
 }
 .tro-cer.lit .tro-spot, .tro-cer.lit .tro-spot-pool { opacity: 1; }
 
+/* The floor. Same line as the spotlight pool, and it only appears as the avatar is
+   about to reach it — before that there is nothing but the lit trophy. */
+.tro-ground {
+    position: absolute;
+    left: 0; right: 0;
+    top: var(--tro-ground);
+    height: 34vh;
+    opacity: 0;
+    transition: opacity 0.24s ease;
+    pointer-events: none;
+    background:
+        linear-gradient(180deg, rgba(255, 236, 195, 0.16), rgba(255, 230, 180, 0.03) 22%, transparent 60%),
+        radial-gradient(60% 100% at var(--tro-spot-x) 0%, rgba(255, 231, 178, 0.13), transparent 70%);
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+    mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+}
+.tro-ground::before {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(255, 240, 210, 0.55) 30%, rgba(255, 240, 210, 0.55) 70%, transparent);
+}
+.tro-cer.grounded .tro-ground { opacity: 1; }
+
+/* The trophy: a BOX (positioned, transformed by _troTail) holding two copies of the
+   art. The white copy's opacity is what fills it in during the flash — a filter
+   cannot be interpolated from "normal" to "solid white" cleanly, two layers can. */
 .tro-cer-trophy {
     position: absolute;
     left: var(--tro-spot-x);
     top: var(--tro-ground);
     height: var(--tro-cer-h);
-    width: auto;
+    aspect-ratio: 518 / 687;      /* the trophy art's own ratio */
     transform: translate(-50%, -100%);
     /* No fade and no scale-in: it is not there at all, and then the light is on it.
        `visibility` as well as `opacity`, so nothing can catch a frame of it while
@@ -9808,21 +9838,69 @@ body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; }
     visibility: hidden;
     filter: drop-shadow(0 18px 30px rgba(0, 0, 0, 0.7));
 }
+.tro-cer-trophy img {
+    position: absolute;
+    inset: 0;
+    width: 100%; height: 100%;
+}
+.tro-cer-white { filter: brightness(0) invert(1); opacity: 0; }
 .tro-cer.lit .tro-cer-trophy { opacity: 1; visibility: visible; }
-/* After the hit the trophy is driven frame-by-frame by _troDissolve (white,
-   deforming, blurring, sliding into the avatar), so CSS keeps its hands off it. */
+/* After the hit _troTail drives it frame by frame, so CSS keeps its hands off. */
 .tro-cer.hit .tro-cer-trophy { opacity: 1; visibility: visible; }
 
-/* The avatar. `left` is written by JS each phase; the drop/bounce/dash all ride
-   its own transform so the two never fight. */
+/* The ghost: a white duplicate that blows outward fast and settles slowly as the
+   flash fades. Transform + opacity only, and it exists for 750 ms. */
+.tro-cer-ghost {
+    position: absolute;
+    left: var(--tro-spot-x);
+    top: var(--tro-ground);
+    height: var(--tro-cer-h);
+    width: auto;
+    transform: translate(-50%, -100%) scale(1);
+    transform-origin: 50% 100%;
+    filter: brightness(0) invert(1);
+    opacity: 0;
+    pointer-events: none;
+}
+.tro-cer-ghost.go { animation: troGhost 0.75s cubic-bezier(0.09, 0.78, 0.24, 1) forwards; }
+@keyframes troGhost {
+    0%   { opacity: 0.7; transform: translate(-50%, -100%) scale(1); }
+    100% { opacity: 0;   transform: translate(-50%, -100%) scale(2.6); }
+}
+
+/* The impact pulse — a ring thrown off the trophy on the same beat as the flash. */
+.tro-cer-pulse {
+    position: absolute;
+    left: var(--tro-spot-x);
+    top: calc(var(--tro-ground) - var(--tro-cer-h) * 0.5);
+    width: var(--tro-cer-h);
+    height: var(--tro-cer-h);
+    border-radius: 50%;
+    border: 3px solid rgba(255, 255, 255, 0.9);
+    transform: translate(-50%, -50%) scale(0.18);
+    opacity: 0;
+    pointer-events: none;
+}
+.tro-cer-pulse.go { animation: troPulse 0.82s cubic-bezier(0.12, 0.72, 0.2, 1) forwards; }
+@keyframes troPulse {
+    0%   { opacity: 0.95; border-width: 5px; transform: translate(-50%, -50%) scale(0.18); }
+    70%  { opacity: 0.28; }
+    100% { opacity: 0;    border-width: 1px; transform: translate(-50%, -50%) scale(3.1); }
+}
+
+/* The avatar. Horizontal travel is a TRANSFORM in px, never `left`: `left` relayouts
+   the stage on every frame of a 2.4s tween, and the dissolve reads the avatar's
+   position — that pair is what spiked on impact. The drop/squash/dash ride the inner
+   span's own transform so the two never fight over one property. */
 .tro-cer-avatar {
     position: absolute;
     top: var(--tro-ground);
-    left: 68%;
-    height: calc(var(--tro-cer-h) * 0.7);   /* 70% of the trophy, per the brief */
+    left: 0;
+    height: calc(var(--tro-cer-h) * 0.49);   /* 70% of the trophy, then 30% smaller */
     aspect-ratio: 1;
     transform: translate(-50%, -100%);
     opacity: 0;
+    will-change: transform;
 }
 .tro-cer-avatar.in { opacity: 1; }
 .tro-cer-av {
@@ -9832,8 +9910,18 @@ body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; }
     background-size: cover;
     background-position: center;
     background-color: #2b2b2b;
-    box-shadow: 0 0 0 4px var(--tro-ring, #4c9bff), 0 14px 26px rgba(0, 0, 0, 0.6);
+    box-shadow:
+        0 0 0 3px var(--tro-ring, #4c9bff),
+        0 0 0 6px rgba(255, 255, 255, 0.95),
+        0 14px 26px rgba(0, 0, 0, 0.6);
     transform-origin: 50% 100%;   /* squash lands on the feet */
+}
+/* The trophy arrives inside him. */
+.tro-cer-av.flare { animation: troFlare 0.55s cubic-bezier(0.2, 0.9, 0.3, 1); }
+@keyframes troFlare {
+    0%   { box-shadow: 0 0 0 3px var(--tro-ring, #4c9bff), 0 0 0 6px rgba(255,255,255,0.95), 0 14px 26px rgba(0,0,0,0.6); }
+    18%  { box-shadow: 0 0 0 5px #fff, 0 0 0 12px rgba(255,255,255,0.95), 0 0 60px 18px rgba(255,255,255,0.85); }
+    100% { box-shadow: 0 0 0 3px var(--tro-ring, #4c9bff), 0 0 0 6px rgba(255,255,255,0.95), 0 14px 26px rgba(0,0,0,0.6); }
 }
 
 .tro-flash {
@@ -10021,6 +10109,7 @@ body.is-mobile .tro-back:active { transform: translateX(-50%) scale(0.94); }
 /* Slow motion after the hit: the stretch relaxes over the whole tail. */
 .tro-cer-av.slow { transform: scaleX(1.06) scaleY(0.96) rotate(-3deg); transition: transform 2.4s linear; }
 @media (prefers-reduced-motion: reduce) {
-    .tro-cer-av.drop { animation: none; }
+    .tro-cer-av.drop, .tro-cer-av.flare { animation: none; }
+    .tro-cer-ghost.go, .tro-cer-pulse.go { animation: none; opacity: 0; }
     .tro-cer-av.wind, .tro-cer-av.dash, .tro-cer-av.slow { transform: none; }
 }
