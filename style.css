@@ -9796,31 +9796,6 @@ body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; }
 }
 .tro-cer.lit .tro-spot, .tro-cer.lit .tro-spot-pool { opacity: 1; }
 
-/* The floor. Same line as the spotlight pool, and it only appears as the avatar is
-   about to reach it — before that there is nothing but the lit trophy. */
-.tro-ground {
-    position: absolute;
-    left: 0; right: 0;
-    top: var(--tro-ground);
-    height: 34vh;
-    opacity: 0;
-    transition: opacity 0.24s ease;
-    pointer-events: none;
-    background:
-        linear-gradient(180deg, rgba(255, 236, 195, 0.16), rgba(255, 230, 180, 0.03) 22%, transparent 60%),
-        radial-gradient(60% 100% at var(--tro-spot-x) 0%, rgba(255, 231, 178, 0.13), transparent 70%);
-    -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
-    mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
-}
-.tro-ground::before {
-    content: '';
-    position: absolute;
-    left: 0; right: 0; top: 0;
-    height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(255, 240, 210, 0.55) 30%, rgba(255, 240, 210, 0.55) 70%, transparent);
-}
-.tro-cer.grounded .tro-ground { opacity: 1; }
-
 /* The trophy: a BOX (positioned, transformed by _troTail) holding two copies of the
    art. The white copy's opacity is what fills it in during the flash — a filter
    cannot be interpolated from "normal" to "solid white" cleanly, two layers can. */
@@ -10106,8 +10081,11 @@ body.is-mobile .tro-back:active { transform: translateX(-50%) scale(0.94); }
 .tro-cer-av.wind { transform: scaleX(0.86) scaleY(1.08) rotate(7deg); transition: transform 0.18s ease-out; }
 /* The dash itself — stretched along travel, which is what reads as speed. */
 .tro-cer-av.dash { transform: scaleX(1.3) scaleY(0.82) rotate(-10deg); transition: transform 0.13s linear; }
-/* Slow motion after the hit: the stretch relaxes over the whole tail. */
-.tro-cer-av.slow { transform: scaleX(1.06) scaleY(0.96) rotate(-3deg); transition: transform 2.4s linear; }
+/* Slow motion after the hit: the stretch relaxes on the SAME curve and duration as
+   the travel (see TRO_CER.tail / the sine ease in _troTail). A linear 2.4s tween
+   here finished while the avatar was still sliding, which is half of what read as
+   a sudden stop. */
+.tro-cer-av.slow { transform: scaleX(1.06) scaleY(0.96) rotate(-3deg); transition: transform 2.65s cubic-bezier(0.16, 0.62, 0.28, 1); }
 @media (prefers-reduced-motion: reduce) {
     .tro-cer-av.drop, .tro-cer-av.flare { animation: none; }
     .tro-cer-ghost.go, .tro-cer-pulse.go { animation: none; opacity: 0; }

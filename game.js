@@ -9882,7 +9882,7 @@ function render() {
     // prayer/dashboard/customization/fireplace on mobile) — drawing the whole world
     // into a hidden canvas still costs full CPU/GPU time per frame. Skip the world
     // pass entirely; the DOM panel toggles at the bottom still run every frame.
-    const _canvasHidden = gameState.azkar.active ||
+    const _canvasHidden = gameState.azkar.active || troCeremonyIsRunning() ||
         (gameState._isMobile && (gameState.prayer.isOverlayActive
             || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || _lib.canvasOff));
     if (_canvasHidden) { _renderPanelToggles(); return; }
@@ -28236,6 +28236,11 @@ const _tro = {
 };
 
 function trophyShelfIsOpen() { return !!_tro.open; }
+/* The ceremony snaps to opaque black and owns the screen for six seconds. On EVERY
+   platform (not just mobile, which is where the other overlays stop the world pass)
+   the world underneath is pure waste — and it was competing for the frame budget at
+   exactly the moment the impact needed all of it. */
+function troCeremonyIsRunning() { return !!_tro.cer.running; }
 function trophyHoldsCamera() { return !!_tro.camFrozen; }
 function _troCount(map) { return map ? Object.keys(map).length : 0; }
 function _troPath() { return `dashboards/${gameState.userId}/trophies`; }
@@ -28678,14 +28683,13 @@ async function _troClaim(id) {
 const TRO_CER = {
     lit:      1920,  // black holds a beat and a half before the light comes up
     drop:     2920,  // the avatar falls a second after the trophy is revealed
-    ground:   3120,  // the floor fades in as it is about to land, not before
     collect:  3900,  // the wind-up
     audio:    3950,  // Trophy_Collect itself, three frames behind the wind-up
     dash:     4120,
     hit:      4260,  // dash + its 140ms travel
     flash:    4350,  // ~5 frames after the hit; the impact beat
     ghost:    4500,  // the duplicate blows outward as the flash fades
-    tail:     2400,  // how long the slow-motion coast runs
+    tail:     2650,  // the slow-motion coast — ends just before the card
     dissolve: 1900,  // how long the trophy takes to come apart and reach the avatar
     white:     300,  // fill-to-white, from the flash — done long before the flash ends
     card:     3000,  // AFTER the audio, exactly, as briefed
@@ -28733,9 +28737,12 @@ function _troTail(els, hitX, endX) {
     const step = (now) => {
         const el = now - t0;
 
-        // ── the avatar coasts on, slow, in the direction it was already going ──
+        /* ── the avatar coasts on, slow, in the direction it was already going ──
+           sin(k·π/2): velocity is cos(k·π/2), which reaches EXACTLY zero at the end,
+           so it glides to rest. The old (1-k)^1.6 still carried real speed at 83% of
+           the tail and then shed all of it at once — that was the sudden stop. */
         const kt = Math.min(1, el / TRO_CER.tail);
-        const ax = hitX + (endX - hitX) * (1 - Math.pow(1 - kt, 1.6));
+        const ax = hitX + (endX - hitX) * Math.sin(kt * Math.PI / 2);
         _troSetX(avWrap, ax);
 
         // ── the trophy ──
@@ -28789,8 +28796,14 @@ function _troCeremony(t) {
     if (box) { box.style.transform = ''; box.style.filter = ''; box.style.opacity = ''; }
     if (artA) artA.src = art;
     if (artW) { artW.src = art; artW.style.opacity = '0'; }
-    if (ghost) { ghost.src = art; ghost.classList.remove('go'); }
-    if (pulse) pulse.classList.remove('go');
+    if (ghost) { ghost.src = art; ghost.classList.remove('go'); ghost.style.opacity = '0'; }
+    if (pulse) { pulse.classList.remove('go'); pulse.style.opacity = '0'; }
+    if (flash) flash.style.opacity = '';
+    /* Cleared HERE, not at impact: with the class already off, adding it later
+       restarts the animation on its own, so the `void offsetWidth` forced reflows
+       these used to need are gone from the frames that can least afford them. */
+    if (stage) stage.classList.remove('shake');
+    try { artA?.decode?.().catch(() => {}); } catch (_) {}
 
     /* Where the avatar stands, winds up, lands the hit, and coasts out — as a
        fraction of the viewport. A phone is narrow enough that the desktop marks
@@ -28829,14 +28842,26 @@ function _troCeremony(t) {
         /* Promote the layers a full two seconds before they are animated, and touch
            the blur path once so its filter layer already exists. Doing either for the
            first time ON the impact frame is what spiked. */
+        /* Promote and RASTERISE everything that would otherwise appear for the
+           first time on the impact frame. `will-change` alone only reserves a layer;
+           an element at opacity exactly 0 can still skip painting, so each one is
+           nudged to a value that is invisible but non-zero for the two seconds before
+           it is needed. The white copy and the ghost each carry a brightness/invert
+           filter over a full-size image — rasterising those at 4260 ms is expensive. */
         if (box) {
             box.style.willChange = 'transform, opacity, filter';
             // Same shadow the stylesheet gives it, plus a hair of blur so the filter
             // layer already exists when the tail starts writing to it.
             box.style.filter = 'drop-shadow(0 18px 30px rgba(0, 0, 0, 0.7)) blur(0.01px)';
         }
-        if (ghost) ghost.style.willChange = 'transform, opacity';
-        if (pulse) pulse.style.willChange = 'transform, opacity';
+        if (artW)  { artW.style.willChange = 'opacity'; artW.style.opacity = '0.004'; }
+        if (ghost) { ghost.style.willChange = 'transform, opacity'; ghost.style.opacity = '0.004'; }
+        if (pulse) { pulse.style.willChange = 'transform, opacity'; pulse.style.opacity = '0.004'; }
+        if (flash) { flash.style.willChange = 'opacity'; flash.style.opacity = '0.004'; }
+        // The stage is what the shake transforms, and it holds the two big spotlight
+        // gradients — promoting that subtree at impact was a layer allocation on the
+        // one frame that could least afford it.
+        if (stage) stage.style.willChange = 'transform';
     });
 
     // 3 — the avatar drops in from above and settles; the floor appears just before
@@ -28845,7 +28870,6 @@ function _troCeremony(t) {
         if (avWrap) avWrap.classList.add('in');
         if (av) av.classList.add('drop');
     });
-    _troAfter(TRO_CER.ground, () => cer.classList.add('grounded'));
 
     // 4 — the wind-up, the collect cue three frames behind it, then the dash.
     _troAfter(TRO_CER.collect, () => {
@@ -28863,7 +28887,7 @@ function _troCeremony(t) {
     // 5 — impact: the shake, and the tail takes over both the avatar and the trophy.
     _troAfter(TRO_CER.hit, () => {
         cer.classList.add('hit');
-        if (stage) { stage.classList.remove('shake'); void stage.offsetWidth; stage.classList.add('shake'); }
+        if (stage) stage.classList.add('shake');
         if (av) { av.classList.remove('dash'); av.classList.add('slow'); }
         if (avWrap) avWrap.style.transition = 'none';   // the tail drives it by hand now
         _troTail({ box, white: artW, avWrap, av }, px(F.hit), px(F.end));
@@ -28871,11 +28895,11 @@ function _troCeremony(t) {
 
     // 5b — the flash and the pulse ring, a few frames AFTER the hit.
     _troAfter(TRO_CER.flash, () => {
-        if (flash) { flash.classList.remove('go'); void flash.offsetWidth; flash.classList.add('go'); }
-        if (pulse) { void pulse.offsetWidth; pulse.classList.add('go'); }
+        if (flash) flash.classList.add('go');
+        if (pulse) pulse.classList.add('go');
     });
     // 5c — the ghost blows outward as the flash fades.
-    _troAfter(TRO_CER.ghost, () => { if (ghost) { void ghost.offsetWidth; ghost.classList.add('go'); } });
+    _troAfter(TRO_CER.ghost, () => { if (ghost) ghost.classList.add('go'); });
 
     // 6 — the card, exactly three seconds after the collect cue started.
     _troAfter(TRO_CER.audio + TRO_CER.card, () => _troShowCard(t));
@@ -28909,8 +28933,9 @@ function _troEndCeremony() {
        for the next run to trip over is how it happened the first time. */
     setTimeout(() => {
         if (!_tro.cer.running) {
-            cer?.classList.remove('lit', 'hit', 'grounded');
-            for (const id of ['tro-cer-trophy', 'tro-cer-ghost', 'tro-cer-pulse']) {
+            cer?.classList.remove('lit', 'hit');
+            for (const id of ['tro-cer-trophy', 'tro-cer-trophy-w', 'tro-cer-ghost',
+                              'tro-cer-pulse', 'tro-flash', 'tro-cer-stage']) {
                 const el = document.getElementById(id);
                 if (el) { el.style.willChange = ''; el.classList.remove('go'); }
             }

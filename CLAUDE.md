@@ -1930,8 +1930,7 @@ visible fading out underneath and the trophy caught a frame on the way.
 
 `0` black + `spotlight.mp3` → `1920` the light **and** the trophy snap on together (no
 fade on either — see below), on the **same cue pitched to 0.62** plus `player_Fall.mp3`
-→ `2920` the avatar (the player's own, ring colour included) drops → `3120` the floor
-fades in, just before he lands, so until then there is nothing but the lit trophy →
+→ `2920` the avatar (the player's own, ring colour included) drops →
 `3900` he winds *back*, `3950` `Trophy_Collect.mp3` (three frames behind the wind-up) →
 `4120` dash → `4260` impact: shake, and `_troTail` takes over → `4350` the flash and the
 pulse ring → `4500` the ghost → the card at **audio + 3000 ms exactly**, as briefed.
@@ -1940,8 +1939,7 @@ pulse ring → `4500` the ghost → the card at **audio + 3000 ms exactly**, as 
 all, and neither does the trophy. That is not only a look: `.lit` stays on the layer
 after a ceremony, so with a transition there the *second* claim opened on an already-lit
 stage that then visibly faded down the moment استلام was pressed. `_troEndCeremony` also
-drops `lit`/`hit`/`grounded` 360 ms later, once the exit fade is over — belt as well as
-braces.
+drops `lit`/`hit` 360 ms later, once the exit fade is over — belt as well as braces.
 
 **The trophy is never simply hidden.** It is a BOX holding two copies of the art: the
 normal one and a `brightness(0) invert(1)` white one whose opacity ramps up over the
@@ -1958,10 +1956,25 @@ arithmetically instead of measuring. Three `getBoundingClientRect()` calls happe
 before the loop.
 
 - **Horizontal travel is a `transform` in px, never `left`** (`_troSetX`). `left`
-  relayouts the stage on every frame of a 2.4 s tween, and the dissolve wants to know
-  where the avatar is — that pair is what produced the lag spike on impact. The layers
-  are also promoted (`will-change`) and the blur filter touched once at `lit`, two
-  seconds early, rather than for the first time on the impact frame.
+  relayouts the stage on every frame of a 2.6 s tween, and the dissolve wants to know
+  where the avatar is — that pair is half of the lag spike on impact.
+- **The coast eases on `sin(k·π/2)`**, whose velocity reaches exactly zero at the end,
+  so the avatar glides to rest. `(1-k)^1.6` still carried real speed at 83% of the tail
+  and then shed all of it at once, which read as a sudden stop. The `.slow` stretch
+  transition matches that curve and duration — a shorter linear one finishing while the
+  avatar was still sliding was the other half of it.
+- **Everything that would first appear ON the impact frame is warmed at `lit`**, two
+  seconds early: `will-change` on the box, the white copy, the ghost, the pulse, the
+  flash and the *stage* (which the shake transforms and which holds the two big
+  spotlight gradients), the blur filter touched once, and each of those opacities
+  nudged to `0.004` — reserving a layer is not the same as painting one, and an element
+  at exactly 0 can still skip the paint. The `void offsetWidth` reflows those
+  animations used to need are gone too: the classes are cleared at ceremony *start*, so
+  adding them later restarts them on its own.
+- **`troCeremonyIsRunning()` stops the world pass on every platform** while it runs (the
+  other overlays only do that on mobile). The stage is opaque black — rendering the
+  world underneath was pure waste, competing for the frame budget at exactly the moment
+  the impact needed all of it.
 - **Vertical and horizontal live on different elements.** `.tro-cer-avatar` owns the
   travel transform; `.tro-cer-av` owns the drop/squash/stretch. One element doing both
   would have the two fighting over one property.
