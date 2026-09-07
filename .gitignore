@@ -16,8 +16,8 @@ Art/Fireplace Fire.png
 
 # Trophy masters. The shipped set is Art/trophies/*.webp (~190 KB) cropped to the
 # painted art out of these 2000² PNGs, and Art/Workspace/Workspace_0013b_Trophy_Shelf.png
-# cropped out of the full-canvas world layer. Keep the masters local, like Lemo's.
+# cropped out of the full-canvas world master (also parked in Art/trophies, so the
+# pre-commit manifest globber never sees it). Keep them local, like Lemo's.
 Art/trophies/*.png
-Art/Workspace/رف الجوائز.png
 # Trophy_Collect ships trimmed to 25s (4s fade); this is the untouched 111s master.
 Sound/Trophy_Collect.full.mp3
