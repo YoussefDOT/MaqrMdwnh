@@ -28708,10 +28708,22 @@ const TRO_CER = {
     flash:    4350,  // ~5 frames after the hit; the impact beat
     ghost:    4500,  // the duplicate blows outward as the flash fades
     tail:     2650,  // the slow-motion coast — ends just before the card
-    dissolve: 1900,  // how long the trophy takes to come apart and reach the avatar
     white:     300,  // fill-to-white, from the flash — done long before the flash ends
+    shatter:   520,  // the pieces fly apart: fast out of the break, easing to a stop
+    gather:    980,  // then in to him: slow off the hold, fastest as they land
     card:     3000,  // AFTER the audio, exactly, as briefed
 };
+
+/* Where each piece sits inside the trophy box (its centroid, as a fraction of the
+   box) and which way it flies. The four diagonals, so they end up spread AROUND
+   him rather than stacked to one side. `spin` is just a per-piece multiplier so
+   no two tumble alike. */
+const TRO_SHARDS = [
+    { cx: 0.26, cy: 0.22, dx: -0.707, dy: -0.707, spin: -1.00 },
+    { cx: 0.74, cy: 0.24, dx:  0.707, dy: -0.707, spin:  1.15 },
+    { cx: 0.73, cy: 0.72, dx:  0.707, dy:  0.707, spin:  1.40 },
+    { cx: 0.25, cy: 0.71, dx: -0.707, dy:  0.707, spin: -1.30 },
+];
 
 function _troAfter(ms, fn) { _tro.cer.timers.push(setTimeout(fn, ms)); }
 function _troClearTimers() {
@@ -28734,23 +28746,27 @@ function _troSetX(el, px) {
    position it can compute the dissolve's target arithmetically — there is not a
    single DOM read inside the loop, which is the whole point.
 
-   The trophy does not simply vanish: the white copy fades up over the flash (so it
-   is already solid white by the time the flash ends), then two out-of-phase sines
-   plus per-frame noise deform it while the blur ramps, and the box slides into the
-   avatar and fades. */
+   The trophy does not simply vanish. The white copy fades up over the flash and the
+   trophy holds perfectly still while it does; the instant it is SOLID white it
+   breaks into four pieces, which are thrown out around the avatar on an ease-OUT
+   (fast off the break, coasting to a stop) and then pulled into him on an ease-IN
+   (barely moving out of the hold, fastest as they land). */
 function _troTail(els, hitX, endX) {
-    const { box, white, avWrap, av } = els;
+    const { box, white, shards, avWrap, av } = els;
     if (!box) return;
-    // Three reads, once, before the loop — never inside it.
+    // Two reads, once, before the loop — never inside it.
     const tr = box.getBoundingClientRect();
     const ar = avWrap ? avWrap.getBoundingClientRect() : tr;
     const tcx = tr.left + tr.width / 2, tcy = tr.top + tr.height / 2;
+    const tw = tr.width, th = tr.height;
     const acy = ar.top + ar.height / 2;
-    const dissolveFrom = TRO_CER.flash - TRO_CER.hit;   // the deform starts on the flash beat
-    const blurMax = gameState._lowGfx ? 8 : 16;
+    const whiteFrom = TRO_CER.flash - TRO_CER.hit;          // the fill starts on the flash beat
+    const breakAt   = whiteFrom + TRO_CER.white;            // …and it splits the frame it is done
+    const gatherAt  = breakAt + TRO_CER.shatter;
+    const blurMax = gameState._lowGfx ? 5 : 11;
+    const R = th * 0.72;                                    // how far around him they scatter
     const t0 = performance.now();
-    let flared = false;
-    const noise = k => (Math.random() - 0.5) * k * 11;
+    let flared = false, split = false;
 
     const step = (now) => {
         const el = now - t0;
@@ -28763,28 +28779,50 @@ function _troTail(els, hitX, endX) {
         const ax = hitX + (endX - hitX) * Math.sin(kt * Math.PI / 2);
         _troSetX(avWrap, ax);
 
-        // ── the trophy ──
-        const kd = Math.max(0, Math.min(1, (el - dissolveFrom) / TRO_CER.dissolve));
-        if (white) white.style.opacity = Math.min(1, Math.max(0, (el - dissolveFrom) / TRO_CER.white)).toFixed(3);
-        if (kd > 0) {
-            const e = kd * kd * (3 - 2 * kd);           // smoothstep, so the slide starts gently
-            const dx = (ax - tcx) * e + noise(kd);
-            const dy = (acy - tcy) * e + noise(kd);
-            const sx = 1 + Math.sin(now * 0.021) * 0.20 * kd + kd * 0.22;
-            const sy = 1 - Math.sin(now * 0.017) * 0.24 * kd - kd * 0.12;
-            const rot  = Math.sin(now * 0.013) * 16 * kd + noise(kd) * 0.5;
-            const skew = Math.sin(now * 0.027) * 18 * kd;
-            box.style.transform = `translate(calc(-50% + ${dx.toFixed(1)}px), calc(-100% + ${dy.toFixed(1)}px))`
-                + ` rotate(${rot.toFixed(2)}deg) skewX(${skew.toFixed(2)}deg) scale(${sx.toFixed(3)}, ${sy.toFixed(3)})`;
-            box.style.filter = `blur(${(kd * kd * blurMax).toFixed(1)}px)`
-                + ` drop-shadow(0 0 ${(26 * kd).toFixed(0)}px rgba(255,255,255,${(0.75 * (1 - kd)).toFixed(2)}))`;
-            box.style.opacity = Math.max(0, 1 - kd * kd * 1.15).toFixed(3);
+        // ── the trophy fills white, and holds dead still while it does ──
+        if (white) white.style.opacity = Math.min(1, Math.max(0, (el - whiteFrom) / TRO_CER.white)).toFixed(3);
+
+        if (el >= breakAt && shards && shards.length) {
+            // The swap is one frame: the box goes out as the pieces come in, and at
+            // that instant they are pixel-for-pixel the same white silhouette.
+            if (!split) {
+                split = true;
+                box.style.opacity = '0';
+                for (const s of shards) { s.style.visibility = 'visible'; s.style.opacity = '1'; }
+            }
+            /* OUT is ease-out cubic (fast off the break, coasting to a stop) and IN is
+               ease-in cubic (barely moving out of the hold, fastest as it lands). They
+               are composed, not blended: `eo` is already 1 by the time `ei` leaves 0,
+               so the second curve starts exactly where the first one parked. */
+            const ko = Math.max(0, Math.min(1, (el - breakAt)  / TRO_CER.shatter));
+            const ki = Math.max(0, Math.min(1, (el - gatherAt) / TRO_CER.gather));
+            const eo = 1 - Math.pow(1 - ko, 3);
+            const ei = ki * ki * ki;
+            for (let i = 0; i < shards.length; i++) {
+                const s = shards[i], d = TRO_SHARDS[i];
+                // Where this piece actually sits inside the box, and where it is headed.
+                const rx = tcx + (d.cx - 0.5) * tw, ry = tcy + (d.cy - 0.5) * th;
+                const ox = ax + d.dx * R,           oy = acy + d.dy * R;
+                const sx = rx + (ox - rx) * eo,     sy = ry + (oy - ry) * eo;
+                const dx = (sx + (ax  - sx) * ei) - rx;
+                const dy = (sy + (acy - sy) * ei) - ry;
+                const rot = d.spin * (34 * eo + 165 * ei);
+                const sc  = 1 - 0.12 * eo - 0.70 * ei;
+                s.style.transform = `translate(calc(-50% + ${dx.toFixed(1)}px), calc(-100% + ${dy.toFixed(1)}px))`
+                    + ` rotate(${rot.toFixed(2)}deg) scale(${sc.toFixed(3)})`;
+                s.style.filter = `blur(${(ei * blurMax).toFixed(1)}px)`
+                    + ` drop-shadow(0 0 ${(22 * (1 - ei)).toFixed(0)}px rgba(255,255,255,${(0.7 * (1 - ei)).toFixed(2)}))`;
+                s.style.opacity = Math.max(0, 1 - ei * 1.15).toFixed(3);
+            }
+            // He glows the moment they reach him.
+            if (!flared && ei > 0.88) { flared = true; if (av) av.classList.add('flare'); }
         }
-        // He glows the moment it reaches him.
-        if (!flared && kd > 0.86) { flared = true; if (av) av.classList.add('flare'); }
 
         _tro.cer.raf = (kt < 1) ? requestAnimationFrame(step) : 0;
-        if (kt >= 1 && box) box.style.opacity = '0';
+        if (kt >= 1) {
+            box.style.opacity = '0';
+            if (shards) for (const s of shards) s.style.opacity = '0';
+        }
     };
     _tro.cer.raf = requestAnimationFrame(step);
 }
@@ -28801,6 +28839,7 @@ function _troCeremony(t) {
     const artA   = document.getElementById('tro-cer-trophy-a');
     const artW   = document.getElementById('tro-cer-trophy-w');
     const ghost  = document.getElementById('tro-cer-ghost');
+    const shards = Array.from(document.querySelectorAll('#tro-cer-shards .tro-cer-shard'));
     const pulse  = document.getElementById('tro-cer-pulse');
     const avWrap = document.getElementById('tro-cer-avatar');
     const av     = document.getElementById('tro-cer-av');
@@ -28815,6 +28854,15 @@ function _troCeremony(t) {
     if (artA) artA.src = art;
     if (artW) { artW.src = art; artW.style.opacity = '0'; }
     if (ghost) { ghost.src = art; ghost.classList.remove('go'); ghost.style.opacity = '0'; }
+    for (let i = 0; i < shards.length; i++) {
+        const s = shards[i], d = TRO_SHARDS[i];
+        s.style.transform = ''; s.style.filter = '';
+        s.style.opacity = '0'; s.style.visibility = 'hidden';
+        // Spin each piece about its OWN centre, not the box's.
+        if (d) s.style.transformOrigin = `${(d.cx * 100).toFixed(1)}% ${(d.cy * 100).toFixed(1)}%`;
+        const im = s.querySelector('img');
+        if (im) im.src = art;
+    }
     if (pulse) { pulse.classList.remove('go'); pulse.style.opacity = '0'; }
     if (flash) flash.style.opacity = '';
     /* Cleared HERE, not at impact: with the class already off, adding it later
@@ -28876,6 +28924,14 @@ function _troCeremony(t) {
         if (ghost) { ghost.style.willChange = 'transform, opacity'; ghost.style.opacity = '0.004'; }
         if (pulse) { pulse.style.willChange = 'transform, opacity'; pulse.style.opacity = '0.004'; }
         if (flash) { flash.style.willChange = 'opacity'; flash.style.opacity = '0.004'; }
+        /* The pieces are four more full-size filtered images that would otherwise be
+           rasterised on the break frame. Visible-but-invisible for the two seconds
+           before they are needed, exactly like the white copy and the ghost. */
+        for (const s of shards) {
+            s.style.willChange = 'transform, opacity, filter';
+            s.style.visibility = 'visible';
+            s.style.opacity = '0.004';
+        }
         // The stage is what the shake transforms, and it holds the two big spotlight
         // gradients — promoting that subtree at impact was a layer allocation on the
         // one frame that could least afford it.
@@ -28895,7 +28951,7 @@ function _troCeremony(t) {
         if (avWrap) { avWrap.style.transition = 'transform 0.2s cubic-bezier(0.3,0,0.8,0.4)'; _troSetX(avWrap, px(F.wind)); }
     });
     _troAfter(TRO_CER.audio, () => {
-        _tro.cer.collect = fe?.playHandled('trophyCollect', 1, 0.9) || null;
+        _tro.cer.collect = fe?.playHandled('trophyCollect', 1, 0.5) || null;
     });
     _troAfter(TRO_CER.dash, () => {
         if (av) { av.classList.remove('wind'); av.classList.add('dash'); }
@@ -28908,7 +28964,7 @@ function _troCeremony(t) {
         if (stage) stage.classList.add('shake');
         if (av) { av.classList.remove('dash'); av.classList.add('slow'); }
         if (avWrap) avWrap.style.transition = 'none';   // the tail drives it by hand now
-        _troTail({ box, white: artW, avWrap, av }, px(F.hit), px(F.end));
+        _troTail({ box, white: artW, shards, avWrap, av }, px(F.hit), px(F.end));
     });
 
     // 5b — the flash and the pulse ring, a few frames AFTER the hit.
@@ -28956,6 +29012,9 @@ function _troEndCeremony() {
                               'tro-cer-pulse', 'tro-flash', 'tro-cer-stage']) {
                 const el = document.getElementById(id);
                 if (el) { el.style.willChange = ''; el.classList.remove('go'); }
+            }
+            for (const el of document.querySelectorAll('#tro-cer-shards .tro-cer-shard')) {
+                el.style.willChange = ''; el.style.visibility = 'hidden'; el.style.opacity = '0';
             }
         }
     }, 360);

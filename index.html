@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 268 · Updated 9/7 6:02 PM</div>
+    <div id="build-number" class="build-number">Build 269 · Updated 9/7 6:44 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1523,6 +1523,16 @@
                 <img id="tro-cer-trophy-w" class="tro-cer-white" alt="" aria-hidden="true">
             </div>
             <img id="tro-cer-ghost" class="tro-cer-ghost" alt="" aria-hidden="true">
+            <!-- The four pieces. Each one is the WHOLE trophy, clipped to one wedge and
+                 filled solid white, so at rest they still read as the trophy at the exact
+                 instant it goes white — then _troTail throws them apart around him and
+                 pulls them back in. They sit under the avatar so they enter behind him. -->
+            <div id="tro-cer-shards" class="tro-cer-shards" aria-hidden="true">
+                <div class="tro-cer-shard s1"><img alt=""></div>
+                <div class="tro-cer-shard s2"><img alt=""></div>
+                <div class="tro-cer-shard s3"><img alt=""></div>
+                <div class="tro-cer-shard s4"><img alt=""></div>
+            </div>
             <div id="tro-cer-avatar" class="tro-cer-avatar"><span id="tro-cer-av" class="tro-cer-av"></span></div>
         </div>
         <div id="tro-flash" class="tro-flash" aria-hidden="true"></div>
@@ -1892,7 +1902,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=258"></script>
+        <script type="module" src="game.js?v=259"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

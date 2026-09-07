@@ -1953,14 +1953,35 @@ drops `lit`/`hit` 360 ms later, once the exit fade is over — belt as well as b
 **The trophy is never simply hidden.** It is a BOX holding two copies of the art: the
 normal one and a `brightness(0) invert(1)` white one whose opacity ramps up over the
 flash, so it is solid white before the flash ends. (A `filter` cannot be interpolated
-from "normal" to "white" cleanly; two layers can.) Then two out-of-phase sines plus
-per-frame noise deform the box while the blur ramps, and it slides into the avatar and
-fades. A **ghost** — the same art, white, 70% opacity — blows outward fast and settles
-slowly as the flash fades; a **pulse ring** is thrown off on the flash beat; and the
-avatar **flares white** when the trophy reaches him (`kd > 0.86`).
+from "normal" to "white" cleanly; two layers can.) The box holds **dead still** while
+it fills, and the frame it is solid white it **shatters into four pieces** (see below).
+A **ghost** — the same art, white, 70% opacity — blows outward fast and settles slowly
+as the flash fades; a **pulse ring** is thrown off on the flash beat; and the avatar
+**flares white** when the pieces reach him (`ei > 0.88`).
+
+**The four pieces (`TRO_SHARDS`, `.tro-cer-shard`).** Each shard is the **whole trophy
+footprint**, clipped to one wedge by `clip-path` and filled white on its inner `<img>`
+— so at rest the four of them are pixel-for-pixel the silhouette they replace, and the
+hand-off (box `opacity: 0`, shards `opacity: 1`) is invisible in one frame. The cracks
+run from an off-centre point out to the four edges **with a kink in each**, so it reads
+as broken rather than cut; the four polygons tile the box exactly, so changing one means
+changing its two neighbours.
+- **OUT is ease-out cubic** (`TRO_CER.shatter`, fast off the break, coasting to a stop)
+  to a point on the diagonal **around the avatar** (`R = trophy height × 0.72`);
+  **IN is ease-in cubic** (`TRO_CER.gather`, barely moving out of the hold, fastest as
+  it lands) to the avatar's centre. They are **composed, not blended** — `eo` is already
+  1 before `ei` leaves 0, so the second curve starts exactly where the first parked.
+- The scatter target **tracks `ax` every frame**, because the avatar is still coasting
+  underneath; a target captured once would leave the pieces trailing behind him.
+- The white fill lives on the inner `<img>`, which keeps the shard's own `filter` free
+  for the blur + glow the tail writes. Rotation is about **each piece's own centroid**
+  (`transformOrigin` set from `TRO_SHARDS` at ceremony start), not the box's.
+- They are warmed at `lit` like every other impact-frame layer — four more full-size
+  filtered images rasterised on the break frame is exactly the spike this section
+  exists to avoid.
 
 **`_troTail` is ONE rAF for the whole tail, with no DOM read inside it.** It drives the
-avatar's slow-motion coast *and* the dissolve, so it can compute the dissolve's target
+avatar's slow-motion coast *and* the four pieces, so it can compute their target
 arithmetically instead of measuring. Three `getBoundingClientRect()` calls happen once,
 before the loop.
 
