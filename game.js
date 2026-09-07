@@ -29032,9 +29032,13 @@ function setupTrophyUI() {
         _tro.claimed = v.claimed || {};
         _tro.granted = v.granted || {};
         _tro.dayKey = _todayDateStr();
-        // A clean shelf for the named accounts whenever TROPHY_RESET_TAG moves.
-        if ((TROPHY_RESET_UIDS.has(gameState.userId) || _troTestUnlocked())
-            && v.resetTag !== TROPHY_RESET_TAG) {
+        /* A clean shelf for the named accounts whenever TROPHY_RESET_TAG moves —
+           and on EVERY login for a test ghost, tag or no tag, so سراج always walks
+           in with the whole shelf full and claimable however much it claimed last
+           time. A ghost's node is thrown away on disconnect anyway; this also
+           covers a re-login that lands on the same id. */
+        if (_troTestUnlocked()
+            || (TROPHY_RESET_UIDS.has(gameState.userId) && v.resetTag !== TROPHY_RESET_TAG)) {
             _tro.claimed = {};
             update(ref(database), {
                 [`${_troPath()}/claimed`]: null,
