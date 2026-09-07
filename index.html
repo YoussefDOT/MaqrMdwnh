@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 269 · Updated 9/7 6:44 PM</div>
+    <div id="build-number" class="build-number">Build 270 · Updated 9/7 6:53 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1514,24 +1514,23 @@
             <div class="tro-spot" aria-hidden="true"></div>
             <div class="tro-spot-pool" aria-hidden="true"></div>
             <div id="tro-cer-pulse" class="tro-cer-pulse" aria-hidden="true"></div>
-            <!-- The trophy is a BOX holding two copies of the same art: the normal one
-                 and a pure-white one whose opacity ramps up with the flash. The box is
-                 what _troTail deforms, so the white fill and the deform never fight
-                 over one `filter`. -->
+            <!-- The trophy, whole, from the moment the light comes up until the hit.
+                 On impact it is swapped out for the four pieces below, which carry the
+                 white fill themselves. -->
             <div id="tro-cer-trophy" class="tro-cer-trophy">
                 <img id="tro-cer-trophy-a" alt="">
-                <img id="tro-cer-trophy-w" class="tro-cer-white" alt="" aria-hidden="true">
             </div>
             <img id="tro-cer-ghost" class="tro-cer-ghost" alt="" aria-hidden="true">
-            <!-- The four pieces. Each one is the WHOLE trophy, clipped to one wedge and
-                 filled solid white, so at rest they still read as the trophy at the exact
-                 instant it goes white — then _troTail throws them apart around him and
-                 pulls them back in. They sit under the avatar so they enter behind him. -->
+            <!-- The four pieces. Each one is the WHOLE trophy, clipped to one wedge, so
+                 at rest they tile the art exactly and the swap on impact is invisible.
+                 The clip is on the INNER span, never the shard: `clip-path` runs after
+                 `filter`, so glowing the clipped element crops the glow at the break.
+                 They sit under the avatar, so they enter behind him. -->
             <div id="tro-cer-shards" class="tro-cer-shards" aria-hidden="true">
-                <div class="tro-cer-shard s1"><img alt=""></div>
-                <div class="tro-cer-shard s2"><img alt=""></div>
-                <div class="tro-cer-shard s3"><img alt=""></div>
-                <div class="tro-cer-shard s4"><img alt=""></div>
+                <div class="tro-cer-shard s1"><span class="tro-shard-clip"><img alt=""><img class="tro-cer-white" alt=""></span></div>
+                <div class="tro-cer-shard s2"><span class="tro-shard-clip"><img alt=""><img class="tro-cer-white" alt=""></span></div>
+                <div class="tro-cer-shard s3"><span class="tro-shard-clip"><img alt=""><img class="tro-cer-white" alt=""></span></div>
+                <div class="tro-cer-shard s4"><span class="tro-shard-clip"><img alt=""><img class="tro-cer-white" alt=""></span></div>
             </div>
             <div id="tro-cer-avatar" class="tro-cer-avatar"><span id="tro-cer-av" class="tro-cer-av"></span></div>
         </div>
@@ -1902,7 +1901,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=259"></script>
+        <script type="module" src="game.js?v=260"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

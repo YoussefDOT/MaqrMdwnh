@@ -9841,16 +9841,20 @@ body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; }
     visibility: hidden;
     pointer-events: none;
 }
+/* The clip is on an INNER wrapper, NEVER on the shard itself. `clip-path` is applied
+   AFTER `filter`, so a drop-shadow written onto the clipped element is sliced off flat
+   along the break lines — four pieces each wearing a cropped rectangle of glow. Clip
+   the child, glow the parent, and the shadow spreads past the wedge the way it should. */
+.tro-shard-clip { position: absolute; inset: 0; }
 .tro-cer-shard img {
     position: absolute;
     inset: 0;
     width: 100%; height: 100%;
-    filter: brightness(0) invert(1);
 }
-.tro-cer-shard.s1 { clip-path: polygon(0% 44%, 0% 0%, 52% 0%, 55% 24%, 50% 46%, 28% 41%); }
-.tro-cer-shard.s2 { clip-path: polygon(52% 0%, 100% 0%, 100% 48%, 74% 52%, 50% 46%, 55% 24%); }
-.tro-cer-shard.s3 { clip-path: polygon(100% 48%, 100% 100%, 49% 100%, 46% 72%, 50% 46%, 74% 52%); }
-.tro-cer-shard.s4 { clip-path: polygon(49% 100%, 0% 100%, 0% 44%, 28% 41%, 50% 46%, 46% 72%); }
+.tro-cer-shard.s1 .tro-shard-clip { clip-path: polygon(0% 44%, 0% 0%, 52% 0%, 55% 24%, 50% 46%, 28% 41%); }
+.tro-cer-shard.s2 .tro-shard-clip { clip-path: polygon(52% 0%, 100% 0%, 100% 48%, 74% 52%, 50% 46%, 55% 24%); }
+.tro-cer-shard.s3 .tro-shard-clip { clip-path: polygon(100% 48%, 100% 100%, 49% 100%, 46% 72%, 50% 46%, 74% 52%); }
+.tro-cer-shard.s4 .tro-shard-clip { clip-path: polygon(49% 100%, 0% 100%, 0% 44%, 28% 41%, 50% 46%, 46% 72%); }
 
 /* The ghost: a white duplicate that blows outward fast and settles slowly as the
    flash fades. Transform + opacity only, and it exists for 750 ms. */
