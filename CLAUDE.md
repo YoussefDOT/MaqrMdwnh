@@ -223,7 +223,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
 | **تحدي المثابرة** | A seven-day work streak: ٥٠ دقيقة of work a day (breaks excluded) for ٧ أيام, ٣ → ٩ سبتمبر ٢٠٢٦. A foldable «فعالية» card under the azkar dock, a seven-dot ladder your avatar walks, and a payout claimed on the Points site through the library's own claim handshake. See **تحدي المثابرة**. |
 | **رف الجوائز** | Seven trophies on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
-| **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime. All of it is derived from the session log the dashboard has been writing all along. From the same panel he **gifts النقطة الماسية**, which may be given more than once. See **لوحة القائد**. |
+| **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. From the same panel he **gifts النقطة الماسية**, which may be given more than once. See **لوحة القائد**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٢٥ حرفًا, no more. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
@@ -2176,15 +2176,37 @@ nothing new is stored and there is no migration to run.
 division. A DST hop is an hour, and an hour either side of a boundary would drop a whole
 evening of work into the wrong column. Same rule as `_chalMidnights()`.
 
-### Cost — why the whole team is a BUTTON, not what the open does
-One-shot `get()` per member, **on click**, memoised for the session; no listener anywhere
-(nothing in this app live-listens `dashboards`, so the fan-out is zero). «احسب هذا الأسبوع
-للجميع» is ~28 reads in batches of four and is **deliberately explicit** — the leader
-should be the one asking for them. Do not make it automatic on open.
-- `_adm.loading` holds the **in-flight promise**, not a flag: the bulk loader racing a
-  click has to wait for the same read, not resolve early on a stale cache.
+### Cost — the list is automatic because its read is BOUNDED
+Nothing has to be pressed: `_admAutoLoad()` runs on open and fills every row. That is
+affordable only because a row needs **two numbers**, not a history — so `_admFetchWeek()`
+asks for a **key range**, not the node:
+
+```js
+query(ref(db, `dashboards/${uid}/sessions`), orderByKey(), startAt(String(prevWeekStart)))
+```
+
+Session keys are `String(finishMs)` — thirteen digits, all the same length — so **ordering
+by key IS chronological** and that range is exactly the last two weeks. A working member
+has a handful of records in it instead of hundreds. **Keep it bounded**: if a row ever
+needs a third number, move the start back — never drop the range and read the node whole.
+
+The **full** history (twelve weeks, top tasks, lifetime) is still one `get()` of the whole
+`sessions` node, and it stays **lazy — one member, on click**. No listener anywhere;
+nothing in this app live-listens `dashboards`, so the fan-out is zero.
+
+- Two caches, on purpose: `_adm.week` (the slice, `ADM_WEEK_TTL_MS` = 5 min) and
+  `_adm.cache` (the full history). A row reads whichever is present, **the full one
+  first** — and `_admFetchMember` writes back into `_adm.week` so a stale row can't sit
+  beside a fresh detail.
+- Both hold the **in-flight promise**, not a flag: the auto-load racing a click has to
+  wait for the same read, not resolve early on a stale cache.
+- A failed read caches `failed: true` with `at: 0` — a zero must never look like an
+  answer, so the row says «تعذّرت القراءة» and is retried on the next open.
 - The two reads per member are `sessions` and `trophies`. **Never read `dashboards/{uid}`
   whole** — `invoicePhotos` lives under it.
+- «تحديث الأرقام» is the FORCE, not the loader — the open already loaded.
+- `_admAllUids()` is deliberately **not** filtered by the search box: typing must change
+  what is *shown*, never what is *fetched*.
 
 ### The one thing it writes
 `dashboards/{uid}/trophies/grants/diamond/{ts} = ts`. That is all. The member's own shelf
@@ -2203,9 +2225,12 @@ points, and a mis-tap should not.
   `_hudPositionDock()`.
 - The list's entrance cascade is registered as **`admRowIn`** in `_JUICE_IN_ANIMS` (that
   registration is the whole opt-in for the blip); past `ADM_SEQ_MAX` a row goes `.quiet`
-  and swaps to the unregistered `admRowInQuiet`. **A re-render that is not an open —
-  typing, a bulk batch landing — kills the animation entirely** (`.is-still`); replaying
-  it on every keystroke reads as a flicker. Both keyframes keep the fade inside them with
+  and swaps to the unregistered `admRowInQuiet`. **`_admRenderList(animate)` takes the
+  flag explicitly** — a re-render that is not an open (typing, a batch landing) sets
+  `.is-still` and no animation at all. It cannot be inferred: `_admAutoLoad` awaits the
+  roster, and that microtask lands **before the first paint**, so an inferred re-render
+  would swallow the cascade the open just set up — which is why it only animates there
+  when the open itself rendered nothing. Both keyframes keep the fade inside them with
   `animation-fill-mode: backwards` (invariant 20).
 - Enter/exit is `opacity` + `visibility` + a double-rAF `.active` — `display` can't
   transition. z-index **9100 — below prayer/azkar (10000)**, which must cover it.

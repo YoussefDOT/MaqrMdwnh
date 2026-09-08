@@ -1,6 +1,6 @@
 // Firebase configuration
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-import { getDatabase, ref, onValue, update, get, onDisconnect, set, remove, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+import { getDatabase, ref, onValue, update, get, onDisconnect, set, remove, runTransaction, query, orderByKey, startAt } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -36,4 +36,6 @@ const pointsApp = initializeApp({
 }, 'points');
 const pointsDatabase = getDatabase(pointsApp);
 
-export { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, runTransaction };
+// `query`/`orderByKey`/`startAt` are here for BOUNDED reads — لوحة القائد asks each
+// member for the last two weeks of sessions by key range instead of the whole log.
+export { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, runTransaction, query, orderByKey, startAt };

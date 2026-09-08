@@ -1,4 +1,4 @@
-import { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, authReady, runTransaction } from './firebase-config.js';
+import { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, authReady, runTransaction, query, orderByKey, startAt } from './firebase-config.js';
 
 // ─── Mobile detection ────────────────────────────────────────────────────────
 const MOBILE_BREAKPOINT = 1024;
@@ -29328,12 +29328,18 @@ function setupTrophyUI() {
 const ADMIN_UIDS = new Set(['292276027823095829']);
 const ADM_WEEKS = 12;              // how many weeks of history the detail lists
 const ADM_SEQ_MAX = 14;            // rows past this cascade silently (see _admRowHtml)
+const ADM_WEEK_TTL_MS = 5 * 60000; // a list already this fresh is not re-fetched on open
+const ADM_BATCH = 5;               // members fetched at a time by the auto-load
 const ADM_DIAMOND_ID = 'diamond';
 
 const _adm = {
     open: false, wired: false, uid: null,
     q: '', cache: new Map(), loading: new Map(),
-    confirmAt: 0, granting: false, bulk: false,
+    /* The LIST's numbers, kept apart from the full histories in `cache`: a row only
+       needs this week and last week, and asking for those is a two-week key range
+       rather than the member's whole session log (see _admFetchWeek). */
+    week: new Map(), weekLoading: new Map(),
+    confirmAt: 0, granting: false, bulk: false, doneN: 0, totalN: 0,
     btn: null,          // cached — updateAdminLifecycle runs every frame
 };
 
@@ -29437,10 +29443,107 @@ function _admFetchMember(uid, force) {
         }
         const data = { uid, at: Date.now(), diamond: { grants, taken }, ..._admSummarise(sessions) };
         _adm.cache.set(uid, data);
+        // The list reads whichever of the two is present, so the fuller answer has to
+        // replace the slice — otherwise a stale row would sit beside a fresh detail.
+        _adm.week.set(uid, { uid, thisWeek: data.thisWeek, prevWeek: data.prevWeek, last: data.last, at: Date.now() });
         return data;
     }).finally(() => { _adm.loading.delete(uid); });
     _adm.loading.set(uid, job);
     return job;
+}
+
+/* ── the list's numbers: a BOUNDED read, which is what lets it be automatic ───
+   The list only shows this week and last week, so it asks for exactly that: session
+   keys are `String(finishMs)`, all thirteen digits, so ordering by key IS
+   chronological and `startAt(prevWeekStart)` is a two-week slice. A working member
+   has a handful of records in it — a fraction of a whole session log, which is why
+   the panel can afford to fan this out over the team the moment it opens where
+   reading everyone's full history could not.
+
+   Keep it bounded. If a row ever needs a third number, move the start back — never
+   drop the range and read the node whole. */
+function _admFetchWeek(uid, force) {
+    if (!uid) return Promise.resolve(null);
+    const have = _adm.week.get(uid);
+    if (!force && have && Date.now() - have.at < ADM_WEEK_TTL_MS) return Promise.resolve(have);
+    if (_adm.weekLoading.has(uid)) return _adm.weekLoading.get(uid);
+
+    const cur  = _admWeekStart(Date.now());
+    const prev = _admWeekBack(cur, 1);
+    const q = query(ref(database, `dashboards/${uid}/sessions`), orderByKey(), startAt(String(prev)));
+    const job = get(q).then(snap => {
+        let thisWeek = 0, prevWeek = 0, last = 0;
+        for (const rec of Object.values(snap.val() || {})) {
+            const fin = Number(rec && rec.finishMs) || 0;
+            const dur = Math.max(0, Number(rec && rec.durMs) || 0);
+            if (!fin || !dur) continue;
+            const w = _admWeekStart(fin);
+            if (w === cur) thisWeek += dur;
+            else if (w === prev) prevWeek += dur;
+            if (fin > last) last = fin;
+        }
+        const v = { uid, thisWeek, prevWeek, last, at: Date.now() };
+        _adm.week.set(uid, v);
+        return v;
+    }).catch(() => {
+        // A failed read must not cache a zero — leave the row asking to be retried.
+        const v = { uid, thisWeek: 0, prevWeek: 0, last: 0, at: 0, failed: true };
+        _adm.week.set(uid, v);
+        return v;
+    }).finally(() => { _adm.weekLoading.delete(uid); });
+    _adm.weekLoading.set(uid, job);
+    return job;
+}
+
+/* Runs itself the moment the panel opens — the leader should not have to press
+   anything to see who worked this week. It is affordable because of the key range
+   above; it stays in small batches so a slow link doesn't open thirty sockets at
+   once, and it stops the instant the panel closes. */
+async function _admAutoLoad(force) {
+    if (_adm.bulk) return;
+    _adm.bulk = true;
+    _admPaintFoot();
+    // The roster is what the list IS. It never rejects and is almost always already
+    // resolved; on a cold start this is the second the panel spends empty.
+    await _mdwnhRosterReady.catch(() => {});
+    /* Animate ONLY if the open itself rendered nothing (a cold start where the roster
+       had not landed yet) — otherwise this microtask would land before the first paint
+       and swallow the cascade the open just set up. */
+    const host = document.getElementById('adm-members');
+    if (_adm.open) _admRenderList(!host || !host.querySelector('.adm-row'));
+
+    const uids = _admAllUids();
+    const todo = force ? uids : uids.filter(u => {
+        const w = _adm.week.get(u);
+        return !w || Date.now() - w.at >= ADM_WEEK_TTL_MS;
+    });
+    let stopped = false;
+    for (let i = 0; i < todo.length; i += ADM_BATCH) {
+        if (!_adm.open) { stopped = true; break; }   // closed mid-drain — stop spending reads
+        _adm.doneN = i; _adm.totalN = todo.length;
+        _admPaintFoot();
+        await Promise.all(todo.slice(i, i + ADM_BATCH).map(u => _admFetchWeek(u, force)));
+        if (_adm.open) _admRenderList(false);
+    }
+    _adm.bulk = false;
+    _adm.doneN = _adm.totalN = 0;
+    _admPaintFoot();
+    /* Closed and reopened while the previous run was draining: the open's own call
+       found `bulk` still set and no-opped, so finish the job now rather than leaving a
+       half-filled list. It terminates — everything already fetched is inside the TTL,
+       so each pass has strictly less to do. */
+    if (stopped && _adm.open) _admAutoLoad(false);
+}
+
+function _admPaintFoot() {
+    const el = document.getElementById('adm-refresh-all');
+    if (!el) return;
+    // The count only appears once there IS one — the first tick happens before the
+    // roster has been counted, and «٠ / ٠» is worse than no number at all.
+    el.textContent = !_adm.bulk ? 'تحديث الأرقام'
+        : _adm.totalN ? `جارٍ الحساب… ${_libAr(Math.min(_adm.doneN + ADM_BATCH, _adm.totalN))} / ${_libAr(_adm.totalN)}`
+        : 'جارٍ الحساب…';
+    el.classList.toggle('is-busy', _adm.bulk);
 }
 
 /* ── the member list ──────────────────────────────────────────────────────────
@@ -29448,6 +29551,14 @@ function _admFetchMember(uid, force) {
    exactly as the task pills and the fireplace do; the numbers beside them come from
    maqr. A member with no Discord id has no maqr node to join to, so the row says so
    rather than showing a silent zero. */
+// Every member with a maqr node to read — the auto-load's target list, and
+// deliberately NOT filtered by the search box: typing must not change what is fetched.
+function _admAllUids() {
+    return MDWNH_ROSTER.list
+        .filter(m => m.slug && !m.dummy && m.active !== false && m.discordId)
+        .map(m => String(m.discordId));
+}
+
 function _admMembers() {
     const q = _fireNormName(_adm.q || '').trim();
     return MDWNH_ROSTER.list
@@ -29458,11 +29569,14 @@ function _admMembers() {
 
 function _admRowHtml(m, i) {
     const uid = m.discordId ? String(m.discordId) : '';
-    const data = uid ? _adm.cache.get(uid) : null;
+    // The full history wins when it has been read (opening a member refreshes both),
+    // otherwise the two-week slice the auto-load fetched.
+    const data = uid ? (_adm.cache.get(uid) || _adm.week.get(uid)) : null;
     const right = !uid ? '<span class="adm-row-none">لا حساب في المقر</span>'
-        : data ? `<span class="adm-row-ms">${_libEsc(_admDur(data.thisWeek))}</span>
+        : (data && !data.failed) ? `<span class="adm-row-ms">${_libEsc(_admDur(data.thisWeek))}</span>
                   <span class="adm-row-cap">هذا الأسبوع</span>`
-        : '<span class="adm-row-cap">اضغط للعرض</span>';
+        : data ? '<span class="adm-row-cap">تعذّرت القراءة</span>'
+        : '<span class="adm-row-cap">جارٍ الحساب…</span>';
     /* Past ADM_SEQ_MAX the delay stops growing and the row goes `.quiet`, which
        swaps in an identical keyframe whose NAME is not registered for the blip —
        thirty simultaneous chirps is noise (the same cap the task pills use). */
@@ -29477,14 +29591,14 @@ function _admRowHtml(m, i) {
     </button>`;
 }
 
-function _admRenderList() {
+/* `animate` is passed explicitly rather than inferred: the entrance cascade belongs
+   to the OPEN and nothing else. Typing re-renders on every keystroke and the auto-load
+   re-renders once a batch — replaying it there reads as a flicker. */
+function _admRenderList(animate) {
     const host = document.getElementById('adm-members');
     if (!host) return;
     const list = _admMembers();
-    /* The entrance cascade belongs to the OPEN and nothing else. Typing re-renders on
-       every keystroke and the bulk loader re-renders once a batch — replaying it there
-       reads as a flicker, so both switch it off. */
-    host.classList.toggle('is-still', !!_adm.q || _adm.bulk);
+    host.classList.toggle('is-still', !animate);
     host.innerHTML = list.length
         ? list.map(_admRowHtml).join('')
         : '<p class="adm-empty">لا يوجد عضو بهذا الاسم.</p>';
@@ -29583,7 +29697,7 @@ function _admBackToList() {
     _adm.confirmAt = 0;
     document.getElementById('adm-detail-view')?.setAttribute('hidden', '');
     document.getElementById('adm-list-view')?.removeAttribute('hidden');
-    _admRenderList();
+    _admRenderList(true);
 }
 
 /* ── the award ────────────────────────────────────────────────────────────────
@@ -29634,6 +29748,9 @@ function openAdminPanel() {
     overlay.setAttribute('aria-hidden', 'false');
     _admBackToList();
     _uiSeqReset();
+    // Nothing to press: the numbers start arriving as the panel fades in. Cheap
+    // because each member is a two-week key range, not their whole log.
+    _admAutoLoad(false);
     requestAnimationFrame(() => requestAnimationFrame(() => {
         if (_adm.open) overlay.classList.add('active');
     }));
@@ -29701,25 +29818,12 @@ function setupAdminUI() {
     });
 
     const search = document.getElementById('adm-search');
-    search?.addEventListener('input', () => { _adm.q = search.value || ''; _admRenderList(); });
+    search?.addEventListener('input', () => { _adm.q = search.value || ''; _admRenderList(false); });
 
-    /* The whole team at once. Deliberately a BUTTON and not something the open
-       does by itself: it is one read per member, and the leader should be the one
-       asking for them. Sequential-ish (small batches) so a slow link doesn't open
-       thirty sockets at once. */
-    document.getElementById('adm-loadall')?.addEventListener('click', async (e) => {
-        if (_adm.bulk) return;
-        _adm.bulk = true;
-        const btn = e.currentTarget;
-        const uids = _admMembers().map(m => m.discordId && String(m.discordId)).filter(Boolean);
-        for (let i = 0; i < uids.length; i += 4) {
-            if (!_adm.open) break;
-            if (btn) btn.textContent = `جارٍ الحساب… ${_libAr(Math.min(i + 4, uids.length))} / ${_libAr(uids.length)}`;
-            await Promise.all(uids.slice(i, i + 4).map(u => _admFetchMember(u, false)));
-            _admRenderList();
-        }
-        if (btn) btn.textContent = 'احسب هذا الأسبوع للجميع';
-        _adm.bulk = false;
+    /* The open already loads everything (see _admAutoLoad) — this is the FORCE, for
+       when the leader wants a number that is fresher than the five-minute cache. */
+    document.getElementById('adm-refresh-all')?.addEventListener('click', () => {
+        if (!_adm.bulk) _admAutoLoad(true);
     });
 
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && _adm.open) closeAdminPanel(); });

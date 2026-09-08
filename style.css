@@ -10357,6 +10357,10 @@ body.is-mobile .tro-back:active { transform: translateX(-50%) scale(0.94); }
 }
 .adm-loadall:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
 .adm-loadall:active { transform: scale(0.98); }
+/* Busy is a look, not a `disabled` attribute (iOS leaks touches through that) —
+   the handler re-checks `_adm.bulk` itself. */
+.adm-loadall.is-busy { color: rgba(255, 255, 255, 0.4); cursor: default; }
+.adm-loadall.is-busy:hover { background: rgba(255, 255, 255, 0.05); color: rgba(255, 255, 255, 0.4); }
 
 /* ── one member ──────────────────────────────────────────────────────────── */
 .adm-view-detail { min-height: 0; }

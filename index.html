@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 273 · Updated 9/8 3:25 PM</div>
+    <div id="build-number" class="build-number">Build 274 · Updated 9/8 4:03 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1490,7 +1490,8 @@
                     <input id="adm-search" type="search" autocomplete="off" placeholder="اكتب اسم العضو…">
                 </label>
                 <div id="adm-members" class="adm-members"></div>
-                <button id="adm-loadall" class="adm-loadall" type="button">احسب هذا الأسبوع للجميع</button>
+                <!-- الأرقام تُحسب تلقائيًا عند الفتح؛ هذا الزر للتحديث الفوري فقط. -->
+                <button id="adm-refresh-all" class="adm-loadall" type="button">تحديث الأرقام</button>
             </div>
 
             <div id="adm-detail-view" class="adm-view adm-view-detail" hidden>
@@ -1942,7 +1943,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=263"></script>
+        <script type="module" src="game.js?v=264"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
