@@ -28229,7 +28229,9 @@ const _tro = {
     pending: { workMs: 0, dawnMs: 0, sessions: 0, days: [], azkar: [] },
     lastBankAt: 0,
     lastWorked: 0, tickAt: 0, primed: false, dayKey: '', sessionCounted: false,
-    readAt: 0,
+    // قارئ counts only what is read AFTER the epoch, so the reading total the member
+    // already had banked before the shelf existed is subtracted, not credited.
+    readAt: 0, readBase: 0,
     detailId: null, claiming: false,
     assets: null,
     cer: { running: false, timers: [], collect: null, id: null, raf: 0 },
@@ -28395,52 +28397,47 @@ function _troRefreshReading() {
     return get(ref(database, `dashboards/${gameState.userId}/reading/books`)).then(snap => {
         let ms = 0;
         for (const b of Object.values(snap.val() || {})) ms += Math.max(0, Number(b && b.totalMs) || 0);
-        _tro.prog.readMs = ms;
+        _tro.prog.readMs = Math.max(0, ms - _tro.readBase);
     }).catch(() => {});
 }
 
-/* ── one-time retroactive seed ────────────────────────────────────────────────
-   The dashboard has kept total worked ms and a session log all along, so a member
-   who has been here for months should not start this at zero. Runs ONCE (the
-   `seeded` marker), never again, and never on the login path. dawnMs and azkarDays
-   can't be seeded — nothing recorded the time of day or the azkar history — so
-   those two honestly start at zero. */
-async function _troSeed(prog) {
-    const uid = gameState.userId;
-    const out = { workMs: 0, sessions: 0, workDays: {} };
-    let ok = true;
-    try {
-        const [statSnap, sessSnap] = await Promise.all([
-            get(ref(database, `dashboards/${uid}/stats/totalWorkMs`)),
-            get(ref(database, `dashboards/${uid}/sessions`)),
-        ]);
-        out.workMs = Math.min(TRO_WORK_CAP, Math.max(0, Number(statSnap.val()) || 0));
-        const sessions = sessSnap.val() || {};
-        const days = new Set();
-        let n = 0;
-        for (const s of Object.values(sessions)) {
-            if (!s || !(Number(s.durMs) >= TRO_SESSION_MS)) continue;
-            n++;
-            const d = new Date(Number(s.finishMs) || 0);
-            if (d.getTime() > 0) {
-                days.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
-            }
-        }
-        out.sessions = Math.min(TRO_SESS_CAP, n);
-        for (const k of [...days].slice(0, TRO_DAYS_CAP)) out.workDays[k] = 1;
-    } catch (_) {
-        /* Do NOT stamp `seeded` on a failed read — that would burn the one shot and
-           lose the member's whole history to a dropped request. Leave it unmarked and
-           it simply runs again next login. */
-        ok = false;
-    }
-    if (!ok) return;
+/* ── the epoch: every counter starts from zero, on purpose ───────────────────
+   The shelf deliberately does NOT credit old work. An earlier build seeded workMs,
+   sessions and workDays out of the dashboard's history, which handed long-standing
+   members trophies for work they did before the shelf existed. That is gone: this
+   runs ONCE per member (the `epoch` stamp), wipes anything that seed left behind,
+   and takes a BASELINE of their reading total so قارئ measures only hours read from
+   here on. Bump TROPHY_EPOCH_TAG to start everyone over again. */
+const TROPHY_EPOCH_TAG = 1;
 
-    Object.assign(prog, out);
-    const base = `${_troPath()}/prog`;
-    const u = { [`${base}/seeded`]: 1, [`${base}/workMs`]: out.workMs, [`${base}/sessions`]: out.sessions };
-    for (const k in out.workDays) u[`${base}/workDays/${k}`] = 1;
-    update(ref(database), u).catch(() => {});
+async function _troStartEpoch(prog) {
+    const uid = gameState.userId;
+    let base = 0;
+    try {
+        const snap = await get(ref(database, `dashboards/${uid}/reading/books`));
+        for (const b of Object.values(snap.val() || {})) base += Math.max(0, Number(b && b.totalMs) || 0);
+    } catch (_) {
+        /* Do NOT stamp the epoch on a failed read — a dropped request would set the
+           reading baseline to zero and hand the member قارئ for old hours. Leave it
+           unmarked and it simply runs again next login. */
+        return;
+    }
+
+    prog.workMs = 0; prog.dawnMs = 0; prog.sessions = 0;
+    prog.workDays = {}; prog.azkarDays = {}; prog.readMs = 0;
+    _tro.readBase = base;
+
+    const b = `${_troPath()}/prog`;
+    update(ref(database), {
+        [`${b}/epoch`]: TROPHY_EPOCH_TAG,
+        [`${b}/readBase`]: base,
+        [`${b}/workMs`]: 0,
+        [`${b}/dawnMs`]: 0,
+        [`${b}/sessions`]: 0,
+        [`${b}/workDays`]: null,
+        [`${b}/azkarDays`]: null,
+        [`${b}/seeded`]: null,   // drop the retired seed marker
+    }).catch(() => {});
 }
 
 /* ── assets ───────────────────────────────────────────────────────────────────
@@ -29121,8 +29118,9 @@ function setupTrophyUI() {
                 [`${_troPath()}/resetTag`]: TROPHY_RESET_TAG,
             }).catch(() => {});
         }
-        const seed = p.seeded ? Promise.resolve() : _troSeed(_tro.prog);
-        return seed.then(() => {
+        _tro.readBase = Math.max(0, Number(p.readBase) || 0);
+        const epoch = p.epoch === TROPHY_EPOCH_TAG ? Promise.resolve() : _troStartEpoch(_tro.prog);
+        return epoch.then(() => {
             _tro.ready = true;
             // Azkar can be finished in the seconds before this read lands, and
             // markAzkarCompleted is the only hook مثابر الأذكار has — so ask once

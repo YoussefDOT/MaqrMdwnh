@@ -1853,11 +1853,12 @@ it. Top plank = four at **٣٠ نقطة**; bottom plank = three hard ones at **�
 
 **قارئ deliberately keeps no counter of its own** — reading already banks `totalMs` per
 book every minute, so a parallel accumulator here could only ever disagree with it. It
-is one memoised `get()` on open.
+is one memoised `get()` on open, **minus `prog.readBase`** (see the epoch below), so it
+measures only what was read after the shelf started counting.
 
 ### Cost — the whole design decision
 ```
-dashboards/{uid}/trophies/prog     = { workMs, dawnMs, sessions, workDays:{d:1}, azkarDays:{d:1}, seeded }
+dashboards/{uid}/trophies/prog     = { workMs, dawnMs, sessions, workDays:{d:1}, azkarDays:{d:1}, epoch, readBase }
 dashboards/{uid}/trophies/claimed/{id} = ms
 dashboards/{uid}/trophies/granted/{id} = 1
 ```
@@ -1877,11 +1878,20 @@ member's every worked minute to every client in **both** lobbies.
 - The accumulator ticks at **~1 Hz**, not per frame: the gain is measured against wall
   time, so a slower tick changes nothing but the work it costs.
 
-**A one-time retroactive seed** (`_troSeed`, guarded by `prog.seeded`) credits `workMs`,
-`sessions` and `workDays` from `stats/totalWorkMs` and the `sessions` log the dashboard
-has kept all along — a member of six months does not start at zero. `dawnMs` and
-`azkarDays` honestly can't be seeded (nothing recorded the time of day or the azkar
-history) and start empty.
+### The epoch — old work earns NOTHING
+**Every counter starts at zero for everyone.** An earlier build had a retroactive seed
+(`_troSeed`) that credited `workMs`, `sessions` and `workDays` out of the dashboard's
+history, so a long-standing member walked in with trophies already filled for work done
+before the shelf existed. **That was removed on purpose — don't reintroduce it.**
+
+`_troStartEpoch()` runs **once per member** (guarded by `prog.epoch === TROPHY_EPOCH_TAG`),
+wipes whatever that seed left behind, and takes a **baseline of their reading total**
+(`prog.readBase`) so قارئ — which has no counter of its own and reads the reading
+module's lifetime `totalMs` — measures only hours read from the epoch on. **Bump
+`TROPHY_EPOCH_TAG` to start everyone over again.**
+
+It must **not** stamp the epoch on a failed read: a dropped request would set `readBase`
+to zero and hand the member قارئ for old hours. Unmarked, it just runs again next login.
 
 ### The claim is the ecosystem handshake, unchanged
 `mdwnhLibrary/claims/<NFC dbKey>/maqr-trophy-<id>` = `{taskId,title,points,color,ts}` —
@@ -2061,9 +2071,9 @@ dilated bottom wall already stops the player ~50 source px short of it.
   still think the trophy is free — and since the Points site **deletes** a claim when
   it settles, a second record really would pay twice. One tiny read on a
   once-per-trophy action closes it.
-- **`_troSeed` must not stamp `seeded` on a failed read.** Burning the one shot on a
-  dropped request would lose that member's whole history; unmarked, it just runs again
-  next login.
+- **`_troStartEpoch` must not stamp `epoch` on a failed read.** Burning the one shot on
+  a dropped request would leave `readBase` at zero and pay قارئ for old reading;
+  unmarked, it just runs again next login.
 - The complete button locks with a **`.unlocked` class, never the `disabled` attribute**
   (iOS touch leak — see azkar), so the handler has to re-check the class.
 - Enter/exit everywhere is `opacity` + `visibility` + a double-rAF `.active` — `display`
