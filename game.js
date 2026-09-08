@@ -360,6 +360,30 @@ function parseDiscordOauthHash() {
     return true;
 }
 
+// ── Gender is the ROSTER's to decide, not Firebase's ────────────────────────
+// `users/{uid}/lobby` is whatever was written the first time that account was
+// seen — a mis-tap on the old chooser is permanent, and that is how أبو بندر
+// ended up in الأخوات. members.json carries `gender` ('m'/'f') keyed by Discord
+// id (alt accounts included), and it is the single source of truth across all
+// the مدونة sites — so when the roster knows someone, it WINS over the stored
+// lobby and over the localStorage cache. Anyone the roster has never heard of
+// (a guest, a brand-new account) still falls back to the old system below.
+const ROSTER_GENDER_LOBBY = { m: 'male', f: 'female' };
+// Never let an unreachable repo trap someone on the login spinner: past this
+// the old path just runs, exactly as it did before.
+const ROSTER_LOBBY_WAIT_MS = 2500;
+async function rosterLobbyFor(discordId) {
+    if (!discordId) return null;
+    try {
+        await Promise.race([
+            _mdwnhRosterReady,
+            new Promise(r => setTimeout(r, ROSTER_LOBBY_WAIT_MS)),
+        ]);
+    } catch (_) { /* the roster promise never rejects, but don't bet login on it */ }
+    const m = MDWNH_ROSTER.byDiscord[String(discordId)];
+    return (m && ROSTER_GENDER_LOBBY[m.gender]) || null;
+}
+
 // Determine the user's lobby from existing Firebase data.
 // Returns 'male' | 'female' | null (null => caller shows first-time chooser).
 async function resolveUserLobby(discordId) {
@@ -368,6 +392,24 @@ async function resolveUserLobby(discordId) {
     // Cache the snapshot so enterGameAsDiscordUser doesn't re-read the same node
     // seconds later (one less round-trip between pressing الدخول and spawning).
     _lobbyResolveCache = { id: discordId, data };
+
+    // The roster fetch was kicked off at module load and is in flight alongside
+    // the read above, so this is normally already resolved. It has to be awaited
+    // AFTER that read, not before it — `_mdwnhRosterReady` is declared further
+    // down the file and is still in its TDZ on the synchronous part of this call.
+    const rosterLobby = await rosterLobbyFor(discordId);
+    if (rosterLobby) {
+        // Repair a wrong stored lobby in place, so the rest of the app (which
+        // reads `users/{uid}/lobby` for presence and the lobby listeners) agrees
+        // with us. Fire-and-forget: the value we return is what we spawn into.
+        localStorage.setItem(`mdwnh_discord_lobby_${discordId}`, rosterLobby);
+        if (data.lobby !== rosterLobby) {
+            data.lobby = rosterLobby;   // keep the cached snapshot honest too
+            update(ref(database), { [`users/${discordId}/lobby`]: rosterLobby }).catch(() => {});
+        }
+        return rosterLobby;
+    }
+
     if (data.lobby && LOBBY_CONFIG[data.lobby]) return data.lobby;
     // Fallback: localStorage preserves the user's choice across Firebase overwrites.
     const cached = localStorage.getItem(`mdwnh_discord_lobby_${discordId}`);
@@ -25330,6 +25372,14 @@ const _mdwnhRosterReady = (async function _hydrateFireRosterFromRepo() {
                 MDWNH_ROSTER.list.push(m);
                 MDWNH_ROSTER.bySlug[m.slug] = m;
                 if (m.discordId) MDWNH_ROSTER.byDiscord[String(m.discordId)] = m;
+                // A member with more than one Discord account is still ONE member —
+                // index every alt id onto the same record. أبو بندر logs in from his
+                // alt, and without this he resolved to nobody: no library tasks, no
+                // claims, and (the bug this was written for) no gender, so a stale
+                // `users/{uid}/lobby` put him in الأخوات.
+                for (const alt of (m.altDiscordIds || [])) {
+                    if (alt) MDWNH_ROSTER.byDiscord[String(alt)] = m;
+                }
             }
             if (m.dummy) { if (m.dbKey) FIRE_EXCLUDE_NAMES.add(_fireNormName(m.dbKey)); continue; }
             if (m.discordId && m.dbKey) merged[_fireNormName(m.dbKey)] = String(m.discordId);

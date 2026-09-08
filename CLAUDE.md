@@ -517,11 +517,40 @@ Discord is a **login provider and nothing else**. There is no bot listing voice-
 members, no `status: 'in-voice'` users, no `channelName` / `categoryName` on
 `users/{uid}`, no faded low-opacity avatars for "in VC but not in the website", and no
 connection lines drawn between avatars in the same channel. **Don't reintroduce any of
-it.** A user's lobby comes solely from `users/{uid}/lobby`; presence comes solely from
+it.** A user's lobby comes from the **roster's `gender`** when it knows them, else from
+`users/{uid}/lobby` (see **Which lobby a user lands in**); presence comes solely from
 `activeInGame`. `startGame` runs a one-time cleanup that nulls the legacy
 `channelName` / `categoryName` / `status` keys on the signed-in user's own node, so the
 tree drains itself as people log in — leave it in place until every account has been
 seen at least once, then it can go.
+
+### Which lobby a user lands in — the ROSTER decides, not Firebase
+`users/{uid}/lobby` is only ever "whatever was written the first time that account was
+seen". A mis-tap on the old gender chooser was therefore **permanent** — which is how
+**أبو بندر ended up in الأخوات**.
+
+`members.json` (the shared roster — see **لوحة مهام المكتبة → Identity**) carries a
+`gender` field (`'m'` / `'f'`) keyed by Discord id, and it is the single source of truth
+across every مدونة site. So `resolveUserLobby()` asks it **first**:
+
+1. **Roster knows this Discord id** → `gender` wins, over the stored `users/{uid}/lobby`
+   **and** over the localStorage cache. A wrong stored value is **repaired in place**
+   (one fire-and-forget write) so presence and the lobby listeners agree with the spawn.
+2. **Roster has never heard of them** (a guest, a brand-new account) → the old system
+   runs untouched: `users/{uid}/lobby`, else the localStorage cache, else the
+   `#discord-first-lobby-modal` chooser.
+
+Gotchas, all load-bearing:
+- **`altDiscordIds` are indexed into `MDWNH_ROSTER.byDiscord` alongside `discordId`** —
+  one member, several accounts, one record. أبو بندر logs in from his alt; without this
+  he resolves to nobody and gets no gender (and no library tasks and no claims either).
+- **The roster is awaited AFTER the Firebase read, never before it.** `_mdwnhRosterReady`
+  is declared at the foot of `game.js` and is still in its **TDZ** during the synchronous
+  part of `resolveUserLobby` (which `init()` calls during module evaluation). The fetch
+  is already in flight by then, so this costs nothing — it is not a serial round-trip.
+- **`ROSTER_LOBBY_WAIT_MS` (2.5s) caps the wait.** An unreachable GitHub must never trap
+  someone on the login spinner; past it the old path just runs.
+- Siraj ghosts don't go through this at all (`selectedLobby = 'male'`, hardcoded).
 
 ### Login & auto-resume
 Discord OAuth session in localStorage. On load, `initDiscordOAuth()` validates the token and resolves the lobby. **Auto-resume**: `startGame` writes `localStorage[ACTIVE_SESSION_KEY] = userId` while in-game (cleared on explicit logout / menu logout); on load, if that flag matches the resolved user, re-enter the game directly — `startGame` then restores the pomodoro/free-mode session from Firebase. This is what makes an unintended reload (Android discarding a backgrounded tab) seamless. Siraj ghosts never set the flag (ephemeral).
@@ -532,7 +561,7 @@ Discord OAuth session in localStorage. On load, `initDiscordOAuth()` validates t
 
 The site name is **مقر المدونة**. Entry is **Discord-OAuth only** — the male/female
 chooser is **gone** from the menu. The lobby comes from the account
-(`resolveUserLobby` → Firebase `users/{uid}/lobby`, else the localStorage cache).
+(`resolveUserLobby` — see **Which lobby a user lands in** below).
 The only buttons are: Discord login, **وضع التجربة**, and the PWA install button.
 
 - **`#discord-first-lobby-modal` is a rare FALLBACK only** — it shows when
