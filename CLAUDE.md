@@ -91,6 +91,7 @@ Grep anchors for the major systems (all verified to exist):
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
 | Work streak challenge | `CHAL`, `updateWorkChallenge`, `_chalBank`, `_chalClaim` |
 | Trophy shelf | `TROPHIES`, `updateTrophies`, `_troBank`, `_troClaim`, `_troCeremony` |
+| Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admGrantDiamond` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
@@ -222,6 +223,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
 | **تحدي المثابرة** | A seven-day work streak: ٥٠ دقيقة of work a day (breaks excluded) for ٧ أيام, ٣ → ٩ سبتمبر ٢٠٢٦. A foldable «فعالية» card under the azkar dock, a seven-dot ladder your avatar walks, and a payout claimed on the Points site through the library's own claim handshake. See **تحدي المثابرة**. |
 | **رف الجوائز** | Seven trophies on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
+| **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime. All of it is derived from the session log the dashboard has been writing all along. From the same panel he **gifts النقطة الماسية**, which may be given more than once. See **لوحة القائد**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٢٥ حرفًا, no more. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
@@ -1878,18 +1880,50 @@ it. Top plank = four at **٣٠ نقطة**; bottom plank = three hard ones at **�
 | `thirty` | ثلاثون يومًا | ٣٠ يومًا مختلفًا فيه عمل | a set of date keys |
 | `brainrot` | برينروت | ٦٧ ساعة عمل | own accumulator |
 | `devoted` | شغوف | ١٠٠ جلسة تتجاوز ١٠ دقائق | counted the instant a session passes the floor |
-| `diamond` | النقطة الماسية | لا شروط | the leader writes `dashboards/{uid}/trophies/granted/diamond = true` by hand |
+| `diamond` | النقطة الماسية | لا شروط | awarded from **لوحة القائد**, and **repeatable** — see below |
 
 **قارئ deliberately keeps no counter of its own** — reading already banks `totalMs` per
 book every minute, so a parallel accumulator here could only ever disagree with it. It
 is one memoised `get()` on open, **minus `prog.readBase`** (see the epoch below), so it
 measures only what was read after the shelf started counting.
 
+### النقطة الماسية is a LEDGER, not a flag — and it repeats
+It is the only trophy with no condition and the only one that can be won **more than
+once**, so a boolean could not carry it. `repeatable: true` on its `TROPHIES` entry is
+what says "a second award is a second payout", and the state underneath is two maps:
+
+```
+dashboards/{uid}/trophies/grants/diamond/{grantId} = ts    // every award the leader made
+dashboards/{uid}/trophies/taken/diamond/{grantId}  = ms    // the ones already settled
+```
+
+**Pending = the difference**, and `_troPendingGrant()` returns the OLDEST unsettled one,
+so a member is paid in the order the awards were given.
+
+- **The grantId is what keys the points record** — `maqr-trophy-diamond-<grantId>`. A
+  second award writes a second record and pays a second time; a **replay of one award
+  overwrites its own record and cannot pay twice**. That is the whole reason the grant
+  is a timestamped entry rather than a counter: a counter has no stable id to write
+  under, and the Points site **deletes** a claim when it settles it.
+- **The legacy shape is folded in on read, never migrated.** `_troAdoptAwards()` turns an
+  old `granted/{id} = true` into the grant `legacy` and an old `claimed/{id}` into its
+  settlement. Nothing is written back — the old keys keep meaning exactly what they meant,
+  and a member who was awarded before this shipped is neither re-paid nor stranded.
+- `claimed/{id}` still exists and is now "**when it was last claimed**" — it is what
+  الجوائز المستلمة lists and dates. It is no longer the gate for a repeatable trophy;
+  `_troClaim` only consults it for the other six.
+- **`openTrophyShelf` re-reads the ledger** (one small `get()`, no listener). An award
+  can land while the member is already logged in, and the login read would not have
+  seen it.
+- A سراج ghost's reset wipes **`taken` as well as `claimed`**, so the shelf is always
+  walkable however many times it claimed last session.
+
 ### Cost — the whole design decision
 ```
 dashboards/{uid}/trophies/prog     = { workMs, dawnMs, sessions, workDays:{d:1}, azkarDays:{d:1}, epoch, readBase }
-dashboards/{uid}/trophies/claimed/{id} = ms
-dashboards/{uid}/trophies/granted/{id} = 1
+dashboards/{uid}/trophies/claimed/{id} = ms      // when it was LAST claimed
+dashboards/{uid}/trophies/grants/{id}/{grantId} = ts   // leader-awarded (see above)
+dashboards/{uid}/trophies/taken/{id}/{grantId}  = ms
 ```
 Decision tree §5 case 4: private to one member, persistent, written more than once a
 day. **One `get()` on idle after spawn, `runTransaction` at most once a minute while
@@ -2114,6 +2148,74 @@ dilated bottom wall already stops the player ~50 source px short of it.
   back to must be the one you left.
 - z-index **9000 for the shelf, 9400 for the ceremony — both below prayer/azkar
   (10000)**, which must cover them.
+
+## لوحة القائد — the leader's panel
+
+نواف's view of the whole team: who worked, how long, and a way to hand out النقطة الماسية.
+Code is the `لوحة القائد` block at the very end of `game.js`; markup is `#admin-btn` +
+`#admin-overlay` in `index.html`; styles are the matching block at the foot of `style.css`.
+Grep anchors: `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`,
+`_admGrantDiamond`.
+
+### Who
+`adminAllowed()` = the roster's **`admin`** flag (نواف) **or** a **سراج ghost** (so the
+whole thing is walkable without being نواف), with his Discord id in `ADMIN_UIDS` as a
+floor under the roster lookup — the roster arrives over the network and this must hold
+if it never does. The crown button is `hidden` until `updateAdminLifecycle()` says
+otherwise, and **every entry point re-asks**: a hidden button is not a permission check.
+
+### The numbers were ALREADY being recorded — nothing was backfilled
+`dashSaveSession()` has written one record per finished session since the dashboard
+shipped: `dashboards/{uid}/sessions/{finishMs} = { mode, task, finishMs, durMs }`, over
+the ten-minute floor, with `durMs` **excluding breaks** (it comes from `pomoWorkedMsNow()`
+/ `freeWorkedMsNow()`). That log **is** the history — every member's, going back as far
+as they have used the site. `_admSummarise()` derives the weeks from it **on read**;
+nothing new is stored and there is no migration to run.
+
+**A week starts on SUNDAY, local, and is walked with `setDate()`** — never a millisecond
+division. A DST hop is an hour, and an hour either side of a boundary would drop a whole
+evening of work into the wrong column. Same rule as `_chalMidnights()`.
+
+### Cost — why the whole team is a BUTTON, not what the open does
+One-shot `get()` per member, **on click**, memoised for the session; no listener anywhere
+(nothing in this app live-listens `dashboards`, so the fan-out is zero). «احسب هذا الأسبوع
+للجميع» is ~28 reads in batches of four and is **deliberately explicit** — the leader
+should be the one asking for them. Do not make it automatic on open.
+- `_adm.loading` holds the **in-flight promise**, not a flag: the bulk loader racing a
+  click has to wait for the same read, not resolve early on a stale cache.
+- The two reads per member are `sessions` and `trophies`. **Never read `dashboards/{uid}`
+  whole** — `invoicePhotos` lives under it.
+
+### The one thing it writes
+`dashboards/{uid}/trophies/grants/diamond/{ts} = ts`. That is all. The member's own shelf
+settles it through the claim handshake that was already there (see **رف الجوائز →
+النقطة الماسية is a LEDGER**), so **this panel never touches the Points database** and
+needed no rules change on any site — `dashboards` is already `auth !== null` read+write.
+The award is behind a **two-press confirm** on the button itself (no dialog): it pays real
+points, and a mis-tap should not.
+
+### Gotchas
+- **`.hud-tool-btn` sets `display: grid`, which beats the UA's `[hidden]{display:none}`.**
+  Without the explicit `.hud-tool-btn[hidden]` rule the crown shows for everyone. The same
+  trap bites `.adm-view[hidden]`.
+- The button lives **inside `#hud-tools`**, so `setMobileFocusMode` and `_hudPositionDock`
+  carry it for free — but showing it changes the box's width, so the toggle calls
+  `_hudPositionDock()`.
+- The list's entrance cascade is registered as **`admRowIn`** in `_JUICE_IN_ANIMS` (that
+  registration is the whole opt-in for the blip); past `ADM_SEQ_MAX` a row goes `.quiet`
+  and swaps to the unregistered `admRowInQuiet`. **A re-render that is not an open —
+  typing, a bulk batch landing — kills the animation entirely** (`.is-still`); replaying
+  it on every keystroke reads as a flicker. Both keyframes keep the fade inside them with
+  `animation-fill-mode: backwards` (invariant 20).
+- Enter/exit is `opacity` + `visibility` + a double-rAF `.active` — `display` can't
+  transition. z-index **9100 — below prayer/azkar (10000)**, which must cover it.
+- `adminPanelIsOpen()` joins the standard guard list (keydown, wheel-zoom,
+  `handleMovement`, the mobile canvas-off test, `updateLibPanelLifecycle`,
+  `_chalScreenIsClear`, `_chatMustClose`).
+- A member with no `discordId` has no maqr node to join to — the row says so rather than
+  showing a silent zero.
+
+---
 
 ## لوحة مهام المكتبة — a window into MdwnhLibrary
 

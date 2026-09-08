@@ -5606,6 +5606,7 @@ function startGame(userData) {
     setupFireplaceUI();
     setupTrophyUI();
     setupLibraryPanel();
+    setupAdminUI();
     setupWorkChallenge();
     setupChatUI();
     setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
@@ -6551,7 +6552,7 @@ function setupControls() {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
         if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || readingEndCardOpen()
-            || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen()) return;
+            || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen()) return;
         gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
@@ -6565,7 +6566,7 @@ function setupControls() {
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
         // Disable scroll zoom while the dashboard / customization / fireplace / tasks panel is open
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -9090,7 +9091,7 @@ function handleMovement() {
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
     // minigame overlays, locked-in sessions, kidnap anim, prayer, sitting, reading.
     if ((JUICE_ENTRANCE && _entrance.active)
-        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || isMinigameOverlayOpen()
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || isMinigameOverlayOpen()
         || gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)
         || readingEndCardOpen()) {
@@ -9836,6 +9837,7 @@ function gameLoop(timestamp) {
         updatePomodoro();
         updatePiPLifecycle();
         updateLibPanelLifecycle();
+        updateAdminLifecycle();
         updateChatSystem();          // chat bubble springs + the floating input's position.
                                      // Before the minigame early-returns, so entering a
                                      // race/fig/boss game still closes an open chat box.
@@ -9926,7 +9928,7 @@ function render() {
     // pass entirely; the DOM panel toggles at the bottom still run every frame.
     const _canvasHidden = gameState.azkar.active || troCeremonyIsRunning() ||
         (gameState._isMobile && (gameState.prayer.isOverlayActive
-            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || _lib.canvasOff));
+            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen() || _lib.canvasOff));
     if (_canvasHidden) { _renderPanelToggles(); return; }
 
     const dpr = gameState.dpr || 1;
@@ -27047,7 +27049,7 @@ function updateLibPanelLifecycle() {
     if (!_lib.open) return;
     const blocked =
         gameState.azkar.active || gameState.prayer.isOverlayActive ||
-        dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || chalModalIsOpen() ||
+        dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || chalModalIsOpen() || adminPanelIsOpen() ||
         isMinigameOverlayOpen() || isMinigameActive() ||
         readingEndCardOpen() || (gameState.reading && gameState.reading.active) ||
         gameState._dupSessionDetected ||
@@ -27390,7 +27392,7 @@ function updateWorkChallenge() {
 function _chalScreenIsClear() {
     if (gameState.pomodoro.active || gameState.freeMode.active) return false;
     if (gameState.azkar.active || gameState.prayer.isOverlayActive) return false;
-    if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen()) return false;
+    if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen()) return false;
     if (isMinigameOverlayOpen() || isMinigameActive()) return false;
     if (gameState.reading && gameState.reading.active) return false;
     if (readingEndCardOpen()) return false;
@@ -27861,7 +27863,7 @@ function chatCanOpen() {
 // The cheap per-frame half of the guard above (no document-wide query).
 function _chatMustClose() {
     return gameState.azkar.active || gameState.prayer.isOverlayActive
-        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen()
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen()
         || libPanelIsOpen() || chalModalIsOpen() || readingEndCardOpen()
         || isMinigameOverlayOpen()
         || gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active
@@ -28254,9 +28256,12 @@ const TROPHIES = [
     { id: 'devoted', img: 6, shelf: 1, pts: 60, name: 'شغوف',
       desc: 'ابدأ ١٠٠ جلسة عمل، كل واحدة منها تتجاوز ١٠ دقائق.',
       goal: 100, unit: 'sessions', read: p => p.sessions },
+    /* The one trophy with no condition and no ceiling: the leader hands it out
+       from لوحة القائد, and it may be handed out AGAIN. `repeatable` is what says
+       "a second grant is a second payout" — every other trophy is once, forever. */
     { id: 'diamond', img: 7, shelf: 1, pts: 60, name: 'النقطة الماسية',
-      desc: 'لا شروط لها — يمنحها القائد متى شاء.',
-      granted: true },
+      desc: 'لا شروط لها — يمنحها القائد متى شاء، وقد يمنحها أكثر من مرة.',
+      granted: true, repeatable: true },
 ];
 const TROPHY_BY_ID = Object.fromEntries(TROPHIES.map(t => [t.id, t]));
 const TRO_CLAIM_ID = id => `maqr-trophy-${id}`;
@@ -28272,8 +28277,13 @@ const TRO_AZK_CAP  = TROPHY_BY_ID.azkar.goal;
 const _tro = {
     open: false, wired: false, ready: false, camFrozen: null,
     prog: { workMs: 0, dawnMs: 0, sessions: 0, workDays: {}, azkarDays: {}, readMs: 0 },
-    claimed: {},        // id → ms claimed
-    granted: {},        // id → truthy (leader-awarded)
+    claimed: {},        // id → ms of the LAST claim (what الجوائز المستلمة lists)
+    /* Leader-awarded trophies are a LEDGER, not a flag, because النقطة الماسية can
+       be granted more than once: `grants[id][grantId] = ts` is every award, and
+       `taken[id][grantId] = ms` is the ones already settled. Pending = the
+       difference. The grantId is also what makes the points record unique, so a
+       replay of one grant can never pay twice (see _troClaim). */
+    grants: {}, taken: {},
     // Unbanked deltas. The ledger is ALWAYS a delta, never a total, so two devices
     // banking the same minute cannot double-count (same shape as bankReadingProgress).
     pending: { workMs: 0, dawnMs: 0, sessions: 0, days: [], azkar: [] },
@@ -28297,6 +28307,44 @@ function trophyHoldsCamera() { return !!_tro.camFrozen; }
 function _troCount(map) { return map ? Object.keys(map).length : 0; }
 function _troPath() { return `dashboards/${gameState.userId}/trophies`; }
 
+/* ── the leader's ledger ──────────────────────────────────────────────────────
+   Reads `grants` / `taken` out of a trophies snapshot into memory, folding the
+   LEGACY shape in as it goes: `granted/{id} = true` was one award and
+   `claimed/{id}` was its settlement, so they become the grant `legacy`. Nothing
+   is written back — the old keys keep meaning exactly what they meant. */
+function _troAdoptAwards(v) {
+    const grants = {}, taken = {};
+    for (const [id, m] of Object.entries((v && v.grants) || {})) grants[id] = { ...m };
+    for (const [id, m] of Object.entries((v && v.taken)  || {})) taken[id]  = { ...m };
+    const legacy  = (v && v.granted) || {};
+    const claimed = (v && v.claimed) || {};
+    for (const id of Object.keys(legacy)) {
+        if (!legacy[id]) continue;
+        (grants[id] = grants[id] || {}).legacy = 1;
+        if (claimed[id] && !(taken[id] && taken[id].legacy)) (taken[id] = taken[id] || {}).legacy = claimed[id];
+    }
+    _tro.grants = grants;
+    _tro.taken  = taken;
+}
+// The OLDEST unsettled award, or null. Oldest first so the member is paid in the
+// order the leader gave them, and so a replay always picks the same one.
+function _troPendingGrant(id) {
+    const g = _tro.grants[id] || {}, tk = _tro.taken[id] || {};
+    const ids = Object.keys(g).filter(k => !tk[k]);
+    if (!ids.length) return null;
+    ids.sort((a, b) => (Number(g[a]) || 0) - (Number(g[b]) || 0));
+    return ids[0];
+}
+function _troTakenCount(id) { return Object.keys(_tro.taken[id] || {}).length; }
+// مرة واحدة / مرتين / ٣ مرات / ١١ مرة — Arabic counts a plural differently past ten.
+function _troTimesAr(n) {
+    n = Math.max(0, Number(n) || 0);
+    if (n === 1) return 'مرة واحدة';
+    if (n === 2) return 'مرتين';
+    if (n <= 10) return `${_libAr(n)} مرات`;
+    return `${_libAr(n)} مرة`;
+}
+
 /* Only a Siraj ghost sees every trophy full and claimable, so the ceremony is
    walkable without waiting sixty-seven hours. A ghost resolves to nobody in
    MDWNH_ROSTER, so it can never mint a claim — which is exactly what makes it the
@@ -28317,9 +28365,16 @@ const TROPHY_RESET_UIDS = new Set([DASH_TARGET_UID]);
 function _troProgress(t) {
     const test = _troTestUnlocked();
     if (t.granted) {
-        const has = !!_tro.granted[t.id] || test;
-        return { cur: has ? 1 : 0, goal: 1, pct: has ? 100 : 0, done: has,
-                 label: has ? 'مُنحت لك' : 'بيد القائد' };
+        /* Nothing to measure — it is pending if the leader has awarded it and the
+           member has not settled that award yet. `got` is how many times it has
+           already been collected, which for a repeatable trophy is the number the
+           shelf shows once there is nothing waiting. */
+        const got   = _troTakenCount(t.id);
+        const ready = !!_troPendingGrant(t.id) || (test && !got);
+        const label = ready ? 'مُنحت لك — استلمها'
+                    : got   ? `استلمتها ${_troTimesAr(got)}`
+                            : 'بيد القائد';
+        return { cur: ready ? 1 : 0, goal: 1, pct: ready ? 100 : 0, done: ready, label, grants: got };
     }
     const cur = test ? t.goal : Math.max(0, t.read(_tro.prog) || 0);
     const pct = Math.max(0, Math.min(100, (cur / t.goal) * 100));
@@ -28541,7 +28596,9 @@ function drawTrophyShelfPrompt() {
    handler, and both carry the state class. */
 function _troState(t) {
     const p = _troProgress(t);
-    const taken = !!_tro.claimed[t.id];
+    // A repeatable trophy is only "taken" while nothing is waiting — a fresh grant
+    // puts it straight back to جاهزة للاستلام however many times it was collected.
+    const taken = t.repeatable ? (p.grants > 0 && !p.done) : !!_tro.claimed[t.id];
     return { p, taken, cls: taken ? 'is-taken' : (p.done ? 'is-ready' : '') };
 }
 
@@ -28559,8 +28616,10 @@ function _troFigHtml(t) {
 
 function _troCapHtml(t) {
     const { p, taken, cls } = _troState(t);
-    const bottom = taken ? 'مستلمة'
-        : t.granted ? p.label
+    const bottom = t.granted
+        ? (p.done ? 'جاهزة للاستلام'
+                  : p.grants > 0 ? `مستلمة ×${_libAr(p.grants)}` : 'بيد القائد')
+        : taken ? 'مستلمة'
         : (p.done ? 'جاهزة للاستلام' : _libAr(Math.floor(p.pct)) + '٪');
     return `<div class="tro-cap ${cls}" data-tro="${_libEsc(t.id)}">
         <span class="tro-name">${_libEsc(t.name)}</span>
@@ -28600,7 +28659,7 @@ function _troOpenDetail(id) {
     if (st) { st.style.display = ''; st.onerror = () => { st.style.display = 'none'; }; st.src = _libSticker(t.pts); st.alt = `${_libAr(t.pts)} نقطة`; }
     set('tro-detail-name', t.name);
     set('tro-detail-desc', t.desc);
-    set('tro-detail-count', taken ? 'استُلمت بالفعل' : p.label);
+    set('tro-detail-count', (taken && !t.repeatable) ? 'استُلمت بالفعل' : p.label);
     const fill = document.getElementById('tro-detail-fill');
     if (fill) fill.style.width = (taken ? 100 : p.pct).toFixed(1) + '%';
     const btn = document.getElementById('tro-complete-btn');
@@ -28608,7 +28667,10 @@ function _troOpenDetail(id) {
         // Visual-only lock is a CLASS — never the `disabled` attribute (iOS leaks
         // touch events straight through it to whatever sits below).
         btn.classList.toggle('unlocked', p.done && !taken);
-        btn.textContent = taken ? 'استُلمت' : (p.done ? 'استلام الجائزة' : 'لم تكتمل بعد');
+        btn.textContent = p.done ? 'استلام الجائزة'
+            : t.granted ? 'بيد القائد'
+            : taken ? 'استُلمت'
+            : 'لم تكتمل بعد';
     }
     document.getElementById('trophy-overlay')?.classList.add('tro-focus');
     const d = document.getElementById('tro-detail');
@@ -28636,7 +28698,8 @@ function _troOpenCollected() {
             .map(t => `<div class="tro-col-row">
                 <img src="${_libEsc(TRO_ART(t.img))}" alt="">
                 <span class="tro-col-txt">
-                    <span class="tro-col-name">${_libEsc(t.name)}</span>
+                    <span class="tro-col-name">${_libEsc(t.name)}${
+                        t.repeatable && _troTakenCount(t.id) > 1 ? ` ×${_libAr(_troTakenCount(t.id))}` : ''}</span>
                     <span class="tro-col-date">${_libEsc(_troDate(_tro.claimed[t.id]))}</span>
                 </span>
                 <img class="tro-col-pts" src="${_libEsc(_libSticker(t.pts))}" alt="${_libAr(t.pts)} نقطة"
@@ -28678,6 +28741,15 @@ function openTrophyShelf() {
     // قارئ's number comes from the reading module; refresh it in the background and
     // repaint if it moved. The shelf is already up either way.
     _troRefreshReading().then(() => { if (_tro.open) _troRenderShelves(); });
+    /* And re-read the leader's ledger: النقطة الماسية can be awarded while the member
+       is already logged in, and the login `get()` would not have seen it. One small
+       read on an explicit open, no listener. */
+    if (gameState.userId) {
+        get(ref(database, _troPath())).then(snap => {
+            _troAdoptAwards(snap.val() || {});
+            if (_tro.open) _troRenderShelves();
+        }).catch(() => {});
+    }
 }
 
 function closeTrophyShelf() {
@@ -28696,7 +28768,10 @@ function closeTrophyShelf() {
    «تم» (or closing the tab mid-ceremony) can never lose it. */
 async function _troClaim(id) {
     const t = TROPHY_BY_ID[id];
-    if (!t || _tro.claiming || _tro.claimed[id]) return;
+    if (!t || _tro.claiming) return;
+    // A repeatable trophy is gated by its pending award, not by having been
+    // claimed before — that check lives in _troProgress().done below.
+    if (!t.repeatable && _tro.claimed[id]) return;
     if (!_troProgress(t).done) return;
     _tro.claiming = true;
 
@@ -28712,28 +28787,53 @@ async function _troClaim(id) {
        claimed would still think the trophy is unclaimed — and because the Points
        site DELETES a claim when it settles it, a second record really would pay
        twice. One tiny read on a once-per-trophy action closes that. */
+    let grantId = null;
     try {
-        const fresh = await get(ref(database, `${_troPath()}/claimed`));
-        _tro.claimed = fresh.val() || _tro.claimed;
-        if (_tro.claimed[id]) { _tro.claiming = false; _troRenderShelves(); return; }
-    } catch (_) { /* offline — the local snapshot is the best we have */ }
+        if (t.granted) {
+            /* A leader-awarded trophy re-reads the whole ledger: the grant may have
+               landed a minute ago from another device, and the pending award is what
+               keys the payout record. */
+            const fresh = await get(ref(database, _troPath()));
+            _troAdoptAwards(fresh.val() || {});
+            grantId = _troPendingGrant(id);
+            if (!grantId && !_troTestUnlocked()) { _tro.claiming = false; _troRenderShelves(); return; }
+        } else {
+            const fresh = await get(ref(database, `${_troPath()}/claimed`));
+            _tro.claimed = fresh.val() || _tro.claimed;
+            if (_tro.claimed[id]) { _tro.claiming = false; _troRenderShelves(); return; }
+        }
+    } catch (_) {
+        /* offline — the local snapshot is the best we have */
+        if (t.granted) grantId = _troPendingGrant(id);
+    }
 
+    /* The record's id carries the GRANT, so a second award pays a second time while a
+       replay of the same award overwrites its own record and cannot pay twice. The
+       Points site lists every pending record under the member's claims node whatever
+       the id, so nothing changes on that end. */
+    const claimKey = grantId ? `${TRO_CLAIM_ID(id)}-${grantId}` : TRO_CLAIM_ID(id);
     if (me && me.dbKey) {
         const key = _libNfc(me.dbKey);
         const payload = {
-            taskId: TRO_CLAIM_ID(id),
+            taskId: claimKey,
             title: `جائزة ${t.name}`,
             points: t.pts,
             color: '#e2a92b',
             ts: Date.now(),
         };
         // `keepalive`, because «استلم النقاط» navigates this tab away mid-write.
-        libPtsPut(`${LIB_PTS_ROOT}/claims/${encodeURIComponent(key)}/${TRO_CLAIM_ID(id)}`, payload).catch(() => {});
+        libPtsPut(`${LIB_PTS_ROOT}/claims/${encodeURIComponent(key)}/${claimKey}`, payload).catch(() => {});
     }
 
-    _tro.claimed[id] = Date.now();
+    const now = Date.now();
+    _tro.claimed[id] = now;
     if (gameState.userId) {
-        update(ref(database), { [`${_troPath()}/claimed/${id}`]: _tro.claimed[id] }).catch(() => {});
+        const u = { [`${_troPath()}/claimed/${id}`]: now };
+        if (grantId) {
+            (_tro.taken[id] = _tro.taken[id] || {})[grantId] = now;
+            u[`${_troPath()}/taken/${id}/${grantId}`] = now;
+        }
+        update(ref(database), u).catch(() => {});
     }
     _tro.claiming = false;
     _troCeremony(t);
@@ -29153,7 +29253,7 @@ function setupTrophyUI() {
         _tro.prog.workDays  = p.workDays  || {};
         _tro.prog.azkarDays = p.azkarDays || {};
         _tro.claimed = v.claimed || {};
-        _tro.granted = v.granted || {};
+        _troAdoptAwards(v);
         _tro.dayKey = _todayDateStr();
         /* A clean shelf for the named accounts whenever TROPHY_RESET_TAG moves —
            and on EVERY login for a test ghost, tag or no tag, so سراج always walks
@@ -29163,8 +29263,10 @@ function setupTrophyUI() {
         if (_troTestUnlocked()
             || (TROPHY_RESET_UIDS.has(gameState.userId) && v.resetTag !== TROPHY_RESET_TAG)) {
             _tro.claimed = {};
+            _tro.taken = {};
             update(ref(database), {
                 [`${_troPath()}/claimed`]: null,
+                [`${_troPath()}/taken`]: null,
                 [`${_troPath()}/resetTag`]: TROPHY_RESET_TAG,
             }).catch(() => {});
         }
@@ -29191,4 +29293,437 @@ function setupTrophyUI() {
        call is now just a backstop for a session where idle never fired. */
     if (window.requestIdleCallback) requestIdleCallback(_troEnsureAssets, { timeout: 12000 });
     else setTimeout(_troEnsureAssets, 6000);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   لوحة القائد — the leader's panel
+   ═══════════════════════════════════════════════════════════════════════════════
+   Grep anchors: ADMIN_UIDS, adminAllowed, _admFetchMember, _admRenderDetail,
+   _admGrantDiamond.
+
+   WHO. نواف (the roster's `admin`) and a سراج test ghost, and nobody else. The
+   button is `hidden` until `adminAllowed()` says otherwise, and every entry point
+   re-asks — a hidden button is not a permission check.
+
+   WHAT IT READS. Each member's own `dashboards/{uid}/sessions` node, which
+   dashSaveSession has been writing since the dashboard shipped: one record per
+   finished session over the ten-minute floor, carrying `finishMs` and `durMs`.
+   That is ALREADY the history — nothing new had to be recorded and no backfill
+   exists to run; the weekly numbers below are derived from it on read.
+
+   COST. One-shot `get()` per member, ON CLICK, memoised for the session — never a
+   listener, never a fan-out. The whole-team button is deliberately explicit
+   («احسب هذا الأسبوع للجميع») rather than automatic on open: it is ~28 reads, and
+   the leader should be the one asking for them. `dashboards` carries no live
+   listener anywhere in this app, so none of this streams to anyone.
+
+   WHAT IT WRITES. Exactly one thing: an award of النقطة الماسية at
+   `dashboards/{uid}/trophies/grants/diamond/{ts}`. The member's own shelf settles
+   it through the claim handshake that was already there (see رف الجوائز) — this
+   panel never touches the Points database itself.
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+// نواف's Discord id, as a floor under the roster lookup: the roster's `admin` flag
+// is the real answer, but it arrives over the network and this must hold if it never does.
+const ADMIN_UIDS = new Set(['292276027823095829']);
+const ADM_WEEKS = 12;              // how many weeks of history the detail lists
+const ADM_SEQ_MAX = 14;            // rows past this cascade silently (see _admRowHtml)
+const ADM_DIAMOND_ID = 'diamond';
+
+const _adm = {
+    open: false, wired: false, uid: null,
+    q: '', cache: new Map(), loading: new Map(),
+    confirmAt: 0, granting: false, bulk: false,
+    btn: null,          // cached — updateAdminLifecycle runs every frame
+};
+
+function adminPanelIsOpen() { return !!_adm.open; }
+function adminAllowed() {
+    if (gameState.isSirajGhost) return true;
+    if (ADMIN_UIDS.has(String(gameState.userId || ''))) return true;
+    return !!(_lib.me && _lib.me.admin);
+}
+
+/* ── the calendar ─────────────────────────────────────────────────────────────
+   A week starts on SUNDAY, local time, and is walked with setDate() rather than a
+   millisecond division — a DST hop is an hour, and an hour either side of a
+   boundary would move a whole week's work into the wrong column. Same reasoning
+   as _chalMidnights(). */
+function _admWeekStart(ms) {
+    const d = new Date(ms);
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - d.getDay());
+    return d.getTime();
+}
+function _admWeekBack(startMs, n) {
+    const d = new Date(startMs);
+    d.setDate(d.getDate() - 7 * n);
+    return d.getTime();
+}
+function _admWeekLabel(startMs) {
+    const a = new Date(startMs), b = new Date(startMs);
+    b.setDate(b.getDate() + 6);
+    const f = d => { try { return d.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }); } catch (_) { return ''; } };
+    return `${f(a)} – ${f(b)}`;
+}
+// ٥ س ٣٠ د — hours only past an hour, minutes under it, and a dash at zero.
+function _admDur(ms) {
+    ms = Math.max(0, Number(ms) || 0);
+    if (ms < 60000) return '—';
+    const mins = Math.floor(ms / 60000);
+    const h = Math.floor(mins / 60), m = mins % 60;
+    if (!h) return `${_libAr(m)} د`;
+    return m ? `${_libAr(h)} س ${_libAr(m)} د` : `${_libAr(h)} س`;
+}
+function _admDate(ms) {
+    try { return new Date(ms).toLocaleDateString('ar-EG', { day: 'numeric', month: 'long', year: 'numeric' }); }
+    catch (_) { return ''; }
+}
+
+/* ── the numbers ──────────────────────────────────────────────────────────────
+   Everything below is DERIVED from the session log on read; nothing is stored. A
+   member who has never worked simply has no node, which reads as zeros. */
+function _admSummarise(sessions) {
+    const weekMs = new Map();          // weekStart → ms
+    const weekN  = new Map();          // weekStart → session count
+    const tasks  = new Map();          // task name → ms
+    let total = 0, n = 0, last = 0;
+    for (const rec of Object.values(sessions || {})) {
+        const fin = Number(rec && rec.finishMs) || 0;
+        const dur = Math.max(0, Number(rec && rec.durMs) || 0);
+        if (!fin || !dur) continue;
+        const w = _admWeekStart(fin);
+        weekMs.set(w, (weekMs.get(w) || 0) + dur);
+        weekN.set(w, (weekN.get(w) || 0) + 1);
+        const task = (rec.task || '').trim();
+        if (task) tasks.set(task, (tasks.get(task) || 0) + dur);
+        total += dur; n++;
+        if (fin > last) last = fin;
+    }
+    const cur = _admWeekStart(Date.now());
+    const weeks = [];
+    for (let i = 0; i < ADM_WEEKS; i++) {
+        const start = _admWeekBack(cur, i);
+        weeks.push({ start, ms: weekMs.get(start) || 0, n: weekN.get(start) || 0 });
+    }
+    const topTasks = [...tasks.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .map(([name, ms]) => ({ name, ms }));
+    return {
+        weeks, total, sessions: n, last, topTasks,
+        thisWeek: weeks[0].ms, prevWeek: weeks[1].ms,
+    };
+}
+
+/* One member, one read of two small nodes, memoised for the session. `force`
+   re-reads (the refresh button and a fresh grant both want that). */
+function _admFetchMember(uid, force) {
+    if (!uid) return Promise.resolve(null);
+    if (!force && _adm.cache.has(uid)) return Promise.resolve(_adm.cache.get(uid));
+    // The in-flight promise, not a flag — a second caller (the bulk loader racing a
+    // click) has to WAIT for the same read, not resolve early on a stale cache.
+    if (_adm.loading.has(uid)) return _adm.loading.get(uid);
+    const base = `dashboards/${uid}`;
+    const job = Promise.all([
+        get(ref(database, `${base}/sessions`)).then(s => s.val()).catch(() => null),
+        get(ref(database, `${base}/trophies`)).then(s => s.val()).catch(() => null),
+    ]).then(([sessions, trophies]) => {
+        const v = trophies || {};
+        // Same legacy fold as _troAdoptAwards, on the leader's side of the glass.
+        const grants = { ...((v.grants || {})[ADM_DIAMOND_ID] || {}) };
+        const taken  = { ...((v.taken  || {})[ADM_DIAMOND_ID] || {}) };
+        if ((v.granted || {})[ADM_DIAMOND_ID]) {
+            grants.legacy = 1;
+            if ((v.claimed || {})[ADM_DIAMOND_ID] && !taken.legacy) taken.legacy = (v.claimed || {})[ADM_DIAMOND_ID];
+        }
+        const data = { uid, at: Date.now(), diamond: { grants, taken }, ..._admSummarise(sessions) };
+        _adm.cache.set(uid, data);
+        return data;
+    }).finally(() => { _adm.loading.delete(uid); });
+    _adm.loading.set(uid, job);
+    return job;
+}
+
+/* ── the member list ──────────────────────────────────────────────────────────
+   Faces and names come from the shared roster (github.com/mdwnstudio/MdwnhMembers),
+   exactly as the task pills and the fireplace do; the numbers beside them come from
+   maqr. A member with no Discord id has no maqr node to join to, so the row says so
+   rather than showing a silent zero. */
+function _admMembers() {
+    const q = _fireNormName(_adm.q || '').trim();
+    return MDWNH_ROSTER.list
+        .filter(m => m.slug && !m.dummy && m.active !== false)
+        .filter(m => !q || _fireNormName(m.name || '').includes(q) || String(m.slug).includes(q))
+        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ar'));
+}
+
+function _admRowHtml(m, i) {
+    const uid = m.discordId ? String(m.discordId) : '';
+    const data = uid ? _adm.cache.get(uid) : null;
+    const right = !uid ? '<span class="adm-row-none">لا حساب في المقر</span>'
+        : data ? `<span class="adm-row-ms">${_libEsc(_admDur(data.thisWeek))}</span>
+                  <span class="adm-row-cap">هذا الأسبوع</span>`
+        : '<span class="adm-row-cap">اضغط للعرض</span>';
+    /* Past ADM_SEQ_MAX the delay stops growing and the row goes `.quiet`, which
+       swaps in an identical keyframe whose NAME is not registered for the blip —
+       thirty simultaneous chirps is noise (the same cap the task pills use). */
+    const quiet = i >= ADM_SEQ_MAX;
+    return `<button class="adm-row${uid ? '' : ' is-off'}${quiet ? ' quiet' : ''}" type="button"
+                    data-adm="${_libEsc(uid)}"
+                    style="animation-delay:${Math.min(i, ADM_SEQ_MAX) * 26}ms">
+        <img class="adm-row-av" src="${_libEsc(_libAvatar(m.slug))}" alt="" loading="lazy" decoding="async"
+             onerror="this.style.visibility='hidden'">
+        <span class="adm-row-name">${_libEsc(m.name || m.slug)}</span>
+        <span class="adm-row-right">${right}</span>
+    </button>`;
+}
+
+function _admRenderList() {
+    const host = document.getElementById('adm-members');
+    if (!host) return;
+    const list = _admMembers();
+    /* The entrance cascade belongs to the OPEN and nothing else. Typing re-renders on
+       every keystroke and the bulk loader re-renders once a batch — replaying it there
+       reads as a flicker, so both switch it off. */
+    host.classList.toggle('is-still', !!_adm.q || _adm.bulk);
+    host.innerHTML = list.length
+        ? list.map(_admRowHtml).join('')
+        : '<p class="adm-empty">لا يوجد عضو بهذا الاسم.</p>';
+}
+
+/* ── one member ───────────────────────────────────────────────────────────── */
+function _admRenderDetail() {
+    const host = document.getElementById('adm-detail');
+    const uid = _adm.uid;
+    if (!host || !uid) return;
+    const m = MDWNH_ROSTER.byDiscord[uid];
+    const d = _adm.cache.get(uid);
+    const name = m ? (m.name || m.slug) : uid;
+
+    if (!d) {
+        host.innerHTML = `<div class="adm-loading">جارٍ حساب ساعات ${_libEsc(name)}…</div>`;
+        return;
+    }
+
+    // Bars are scaled against the busiest week on screen, with an hour as the floor
+    // so a quiet stretch doesn't blow one short session up into a full bar.
+    const peak = Math.max(3600000, ...d.weeks.map(w => w.ms));
+    const weeks = d.weeks.map((w, i) => {
+        const pct = Math.max(w.ms > 0 ? 2 : 0, (w.ms / peak) * 100);
+        const tag = i === 0 ? 'هذا الأسبوع' : i === 1 ? 'الأسبوع الماضي' : '';
+        return `<div class="adm-week${w.ms ? '' : ' is-zero'}${i < 2 ? ' is-near' : ''}">
+            <span class="adm-week-lbl">${_libEsc(_admWeekLabel(w.start))}${tag ? `<i>${tag}</i>` : ''}</span>
+            <span class="adm-week-bar"><i style="width:${pct.toFixed(1)}%"></i></span>
+            <span class="adm-week-ms">${_libEsc(_admDur(w.ms))}</span>
+        </div>`;
+    }).join('');
+
+    const tasks = d.topTasks.length
+        ? d.topTasks.map(t => `<div class="adm-task">
+               <span class="adm-task-name">${_libEsc(t.name)}</span>
+               <span class="adm-task-ms">${_libEsc(_admDur(t.ms))}</span>
+           </div>`).join('')
+        : '<p class="adm-empty">لم يكتب أي مهمة بعد.</p>';
+
+    const gN = Object.keys(d.diamond.grants).length;
+    const tN = Object.keys(d.diamond.taken).length;
+    const pending = gN - tN;
+    const confirming = _adm.confirmAt > Date.now();
+    const gLine = !gN ? 'لم تُمنح له من قبل'
+        : `مُنحت ${_troTimesAr(gN)} — ` + (pending <= 0 ? 'استلمها كلها'
+            : pending === 1 ? 'واحدة بانتظار الاستلام'
+            : `${_libAr(pending)} بانتظار الاستلام`);
+
+    host.innerHTML = `
+        <header class="adm-mem">
+            <img class="adm-mem-av" src="${_libEsc(m ? _libAvatar(m.slug) : '')}" alt=""
+                 onerror="this.style.visibility='hidden'">
+            <span class="adm-mem-txt">
+                <span class="adm-mem-name">${_libEsc(name)}</span>
+                <span class="adm-mem-sub">${d.last ? 'آخر جلسة: ' + _libEsc(_admDate(d.last)) : 'لا جلسات مسجّلة'}</span>
+            </span>
+            <button id="adm-refresh" class="adm-refresh" type="button" title="تحديث" aria-label="تحديث">↻</button>
+        </header>
+
+        <div class="adm-stats">
+            <div class="adm-stat is-hero"><span class="adm-stat-v">${_libEsc(_admDur(d.thisWeek))}</span><span class="adm-stat-k">هذا الأسبوع</span></div>
+            <div class="adm-stat"><span class="adm-stat-v">${_libEsc(_admDur(d.prevWeek))}</span><span class="adm-stat-k">الأسبوع الماضي</span></div>
+            <div class="adm-stat"><span class="adm-stat-v">${_libEsc(_admDur(d.total))}</span><span class="adm-stat-k">الإجمالي</span></div>
+            <div class="adm-stat"><span class="adm-stat-v">${_libAr(d.sessions)}</span><span class="adm-stat-k">جلسة</span></div>
+        </div>
+
+        <h4 class="adm-h">الأسابيع</h4>
+        <div class="adm-weeks">${weeks}</div>
+
+        <h4 class="adm-h">أكثر ما عمل عليه</h4>
+        <div class="adm-tasks">${tasks}</div>
+
+        <section class="adm-gift">
+            <img class="adm-gift-img" src="${_libEsc(TRO_ART(TROPHY_BY_ID.diamond.img))}" alt="">
+            <div class="adm-gift-txt">
+                <span class="adm-gift-name">النقطة الماسية</span>
+                <span class="adm-gift-sub">${_libEsc(gLine)}</span>
+            </div>
+            <button id="adm-grant" class="adm-grant${confirming ? ' is-confirm' : ''}" type="button"
+                    ${m && m.discordId ? '' : 'data-off="1"'}>${confirming ? 'تأكيد المنح' : 'منح الجائزة'}</button>
+        </section>`;
+}
+
+function _admOpenMember(uid) {
+    if (!uid) return;
+    _adm.uid = uid;
+    _adm.confirmAt = 0;
+    document.getElementById('adm-list-view')?.setAttribute('hidden', '');
+    document.getElementById('adm-detail-view')?.removeAttribute('hidden');
+    _admRenderDetail();
+    _admFetchMember(uid, false).then(() => { if (_adm.open && _adm.uid === uid) _admRenderDetail(); });
+}
+
+function _admBackToList() {
+    _adm.uid = null;
+    _adm.confirmAt = 0;
+    document.getElementById('adm-detail-view')?.setAttribute('hidden', '');
+    document.getElementById('adm-list-view')?.removeAttribute('hidden');
+    _admRenderList();
+}
+
+/* ── the award ────────────────────────────────────────────────────────────────
+   ONE write, and the id it is written under is the timestamp — which is what the
+   member's own claim turns into a unique points record, so a second award pays a
+   second time and a replay of one award cannot pay twice (see _troClaim). This
+   panel never writes to the Points database itself. */
+function _admGrantDiamond() {
+    const uid = _adm.uid;
+    if (!uid || _adm.granting) return;
+    // Two presses: awarding points is not something to do on a mis-tap. The window
+    // is the button's own state, so it clears itself on leaving the member.
+    if (_adm.confirmAt <= Date.now()) {
+        _adm.confirmAt = Date.now() + 5000;
+        _admRenderDetail();
+        setTimeout(() => {
+            if (_adm.open && _adm.uid === uid && _adm.confirmAt <= Date.now()) _admRenderDetail();
+        }, 5100);
+        return;
+    }
+    _adm.confirmAt = 0;
+    _adm.granting = true;
+    const ts = Date.now();
+    update(ref(database), { [`dashboards/${uid}/trophies/grants/${ADM_DIAMOND_ID}/${ts}`]: ts })
+        .then(() => {
+            const d = _adm.cache.get(uid);
+            if (d) d.diamond.grants[ts] = ts;
+            _libToast('مُنحت النقطة الماسية — تظهر له في رف الجوائز');
+        })
+        .catch(() => _libToast('تعذّر منح الجائزة، حاول مرة أخرى'))
+        .finally(() => {
+            _adm.granting = false;
+            if (_adm.open && _adm.uid === uid) _admRenderDetail();
+        });
+}
+
+/* ── open / close ─────────────────────────────────────────────────────────── */
+function openAdminPanel() {
+    if (_adm.open || !adminAllowed()) return;
+    const overlay = document.getElementById('admin-overlay');
+    if (!overlay) return;
+    _adm.open = true;
+    gameState.keys = {};                   // drop any held movement key
+    // The gear's panel hangs off the tools box this button lives in, so leaving it
+    // open behind a full-screen overlay just strands it.
+    try { _closeSettingsPanel && _closeSettingsPanel(); } catch (_) {}
+    document.body.classList.add('admin-active');
+    overlay.setAttribute('aria-hidden', 'false');
+    _admBackToList();
+    _uiSeqReset();
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (_adm.open) overlay.classList.add('active');
+    }));
+}
+
+function closeAdminPanel() {
+    if (!_adm.open) return;
+    _adm.open = false;
+    const overlay = document.getElementById('admin-overlay');
+    if (overlay) { overlay.classList.remove('active'); overlay.setAttribute('aria-hidden', 'true'); }
+    document.body.classList.remove('admin-active');
+}
+
+/* Per frame, from the game loop — the SINGLE place the button's visibility and the
+   panel's lifecycle are decided, the shape updatePiPLifecycle and
+   updateLibPanelLifecycle already use. The roster lands asynchronously, so
+   `adminAllowed()` can flip from false to true a second or two after spawn. */
+function updateAdminLifecycle() {
+    const btn = _adm.btn;
+    const allowed = adminAllowed();
+    if (btn && btn.hidden === allowed) {
+        btn.hidden = !allowed;
+        _hudPositionDock();
+    }
+    if (!_adm.open) return;
+    if (!allowed
+        || gameState.azkar.active || gameState.prayer.isOverlayActive
+        || isMinigameOverlayOpen() || isMinigameActive()
+        || gameState._dupSessionDetected) {
+        closeAdminPanel();
+    }
+}
+
+function setupAdminUI() {
+    if (_adm.wired) return;
+    _adm.wired = true;
+
+    const overlay = document.getElementById('admin-overlay');
+    _adm.btn = document.getElementById('admin-btn');
+    _adm.btn?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _adm.open ? closeAdminPanel() : openAdminPanel();
+    });
+    document.getElementById('admin-close')?.addEventListener('click', closeAdminPanel);
+    // The backdrop is a back button, same as every other overlay here.
+    overlay?.addEventListener('click', (e) => { if (e.target === overlay) closeAdminPanel(); });
+    // Scrolling the panel must never reach the world's zoom handler underneath.
+    overlay?.addEventListener('wheel', (e) => { e.stopPropagation(); }, { passive: false });
+
+    document.getElementById('adm-members')?.addEventListener('click', (e) => {
+        const row = e.target.closest('[data-adm]');
+        if (row && row.dataset.adm) _admOpenMember(row.dataset.adm);
+    });
+    document.getElementById('adm-back')?.addEventListener('click', _admBackToList);
+
+    // Delegated, because the detail view is re-rendered wholesale on every change.
+    document.getElementById('adm-detail')?.addEventListener('click', (e) => {
+        if (e.target.closest('#adm-grant')) {
+            if (e.target.closest('#adm-grant').dataset.off) return;
+            _admGrantDiamond();
+        } else if (e.target.closest('#adm-refresh')) {
+            const uid = _adm.uid;
+            _admFetchMember(uid, true).then(() => { if (_adm.open && _adm.uid === uid) _admRenderDetail(); });
+        }
+    });
+
+    const search = document.getElementById('adm-search');
+    search?.addEventListener('input', () => { _adm.q = search.value || ''; _admRenderList(); });
+
+    /* The whole team at once. Deliberately a BUTTON and not something the open
+       does by itself: it is one read per member, and the leader should be the one
+       asking for them. Sequential-ish (small batches) so a slow link doesn't open
+       thirty sockets at once. */
+    document.getElementById('adm-loadall')?.addEventListener('click', async (e) => {
+        if (_adm.bulk) return;
+        _adm.bulk = true;
+        const btn = e.currentTarget;
+        const uids = _admMembers().map(m => m.discordId && String(m.discordId)).filter(Boolean);
+        for (let i = 0; i < uids.length; i += 4) {
+            if (!_adm.open) break;
+            if (btn) btn.textContent = `جارٍ الحساب… ${_libAr(Math.min(i + 4, uids.length))} / ${_libAr(uids.length)}`;
+            await Promise.all(uids.slice(i, i + 4).map(u => _admFetchMember(u, false)));
+            _admRenderList();
+        }
+        if (btn) btn.textContent = 'احسب هذا الأسبوع للجميع';
+        _adm.bulk = false;
+    });
+
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && _adm.open) closeAdminPanel(); });
+
+    // The row cascade wants its own animation name registered to get the blip.
+    _JUICE_IN_ANIMS.add('admRowIn');
 }

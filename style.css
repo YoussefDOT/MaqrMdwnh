@@ -10124,3 +10124,453 @@ body.is-mobile .tro-back:active { transform: translateX(-50%) scale(0.94); }
     .tro-cer-ghost.go, .tro-cer-pulse.go { animation: none; opacity: 0; }
     .tro-cer-av.wind, .tro-cer-av.dash, .tro-cer-av.slow { transform: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════════
+   لوحة القائد — the leader's panel
+   ════════════════════════════════════════════════════════════════════════════
+   Dark glass like the rest of the site; the only colour is the brand gold the
+   trophy shelf already uses, so «النقطة الماسية» reads as the same object in
+   both places. Enter/exit is opacity + visibility + a double-rAF `.active` —
+   `display` can't transition (the azkar/fireplace/trophy pattern).
+   ═════════════════════════════════════════════════════════════════════════ */
+
+/* A `hidden` tool button needs this: the class sets `display: grid`, which beats
+   the UA's `[hidden] { display: none }`, so the crown would show for everyone. */
+.hud-tool-btn[hidden] { display: none !important; }
+.hud-tool-admin { color: rgba(255, 216, 138, 0.82); }
+.hud-tool-admin:hover { color: #ffdf87; background: rgba(226, 169, 43, 0.16); }
+
+.adm-overlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background: rgba(6, 6, 8, 0.74);
+    z-index: 9100;            /* below prayer/azkar (10000) — those must cover it */
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.32s ease, visibility 0s linear 0.32s;
+    --adm-gold: #e2a92b;
+    --adm-gold-hi: #ffdf87;
+}
+.adm-overlay.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 0.32s ease, visibility 0s linear 0s;
+}
+
+.adm-room {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    width: min(680px, 96vw);
+    max-height: min(86vh, 900px);
+    padding: 20px 20px 16px;
+    border-radius: 25px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(18, 18, 18, 0.86);
+    backdrop-filter: blur(20px) saturate(1.6);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.55);
+    transform: scale(0.96);
+    opacity: 0;
+    transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.28s ease;
+}
+.adm-overlay.active .adm-room { transform: scale(1); opacity: 1; }
+
+.adm-head {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+.adm-head-txt { flex: 1 1 auto; min-width: 0; }
+.adm-title {
+    margin: 0;
+    font-size: 1.32rem;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: rgba(255, 255, 255, 0.94);
+}
+.adm-sub {
+    margin: 3px 0 0;
+    font-size: 0.78rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.42);
+}
+.adm-close {
+    flex: 0 0 auto;
+    width: 30px; height: 30px;
+    display: grid; place-items: center;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: transform 0.24s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s, color 0.18s;
+}
+.adm-close:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.adm-close:active { transform: scale(0.9); }
+
+.adm-view {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
+    padding-top: 14px;
+}
+/* `display: flex` above beats the UA's `[hidden] { display: none }`, so the view
+   that is switched off has to be told again — same trap as .hud-tool-btn[hidden]. */
+.adm-view[hidden] { display: none !important; }
+
+/* ── search ──────────────────────────────────────────────────────────────── */
+.adm-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    padding: 0 14px;
+    height: 40px;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(255, 255, 255, 0.045);
+}
+.adm-search svg { width: 15px; height: 15px; flex: 0 0 auto; color: rgba(255, 255, 255, 0.38); }
+.adm-search input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 0;
+    outline: 0;
+    background: transparent;
+    color: rgba(255, 255, 255, 0.9);
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+}
+.adm-search input::placeholder { color: rgba(255, 255, 255, 0.3); }
+.adm-search input::-webkit-search-cancel-button { -webkit-appearance: none; }
+
+/* ── the member list ─────────────────────────────────────────────────────── */
+.adm-members {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    margin-top: 12px;
+    padding-left: 4px;          /* room for the scrollbar without clipping a row */
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+.adm-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 0 0 auto;
+    width: 100%;
+    padding: 8px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.035);
+    color: inherit;
+    font-family: inherit;
+    text-align: right;
+    cursor: pointer;
+    /* Fade lives INSIDE the keyframe with fill-mode backwards: a browser that skips
+       the animation falls back to the visible base style, never a blank list. */
+    animation: admRowIn 0.34s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+    transition: background 0.18s, border-color 0.18s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes admRowIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: none; }
+}
+/* Identical motion, different NAME — the blip is opt-in by animation name, so this
+   one is silent. Used past the cascade cap. */
+@keyframes admRowInQuiet {
+    from { opacity: 0; transform: translateY(8px); }
+    to   { opacity: 1; transform: none; }
+}
+.adm-row.quiet { animation-name: admRowInQuiet; }
+/* A re-render that is not an open (typing, a bulk load) must not replay the cascade. */
+.adm-members.is-still .adm-row { animation: none; }
+.adm-row:hover { background: rgba(255, 255, 255, 0.085); border-color: rgba(255, 255, 255, 0.12); }
+.adm-row:active { transform: scale(0.985); }
+.adm-row.is-off { opacity: 0.45; cursor: default; }
+.adm-row.is-off:hover { background: rgba(255, 255, 255, 0.035); border-color: rgba(255, 255, 255, 0.06); }
+.adm-row-av {
+    width: 34px; height: 34px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255, 255, 255, 0.07);
+}
+.adm-row-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.94rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.88);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.adm-row-right {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;   /* RTL: the physical left edge of the row */
+    gap: 1px;
+    text-align: left;
+}
+.adm-row-ms { font-size: 0.92rem; font-weight: 700; color: var(--adm-gold-hi); }
+.adm-row-cap, .adm-row-none { font-size: 0.68rem; font-weight: 500; color: rgba(255, 255, 255, 0.34); }
+
+.adm-empty, .adm-loading {
+    margin: 18px 0;
+    text-align: center;
+    font-size: 0.86rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.34);
+}
+
+.adm-loadall {
+    flex: 0 0 auto;
+    margin-top: 12px;
+    padding: 11px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 50px;
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.72);
+    font-family: inherit;
+    font-size: 0.84rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.18s, color 0.18s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.adm-loadall:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+.adm-loadall:active { transform: scale(0.98); }
+
+/* ── one member ──────────────────────────────────────────────────────────── */
+.adm-view-detail { min-height: 0; }
+.adm-back {
+    flex: 0 0 auto;
+    align-self: flex-start;
+    margin-bottom: 10px;
+    padding: 7px 16px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 50px;
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.72);
+    font-family: inherit;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.18s, color 0.18s;
+}
+.adm-back:hover { background: rgba(255, 255, 255, 0.1); color: #fff; }
+
+.adm-detail {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding-left: 4px;
+}
+.adm-mem { display: flex; align-items: center; gap: 12px; }
+.adm-mem-av {
+    width: 46px; height: 46px;
+    flex: 0 0 auto;
+    border-radius: 50%;
+    object-fit: cover;
+    background: rgba(255, 255, 255, 0.07);
+}
+.adm-mem-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.adm-mem-name { font-size: 1.06rem; font-weight: 700; color: rgba(255, 255, 255, 0.94); }
+.adm-mem-sub  { font-size: 0.75rem; font-weight: 500; color: rgba(255, 255, 255, 0.38); }
+.adm-refresh {
+    flex: 0 0 auto;
+    width: 30px; height: 30px;
+    display: grid; place-items: center;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 0.95rem;
+    cursor: pointer;
+    transition: background 0.18s, color 0.18s, transform 0.3s ease;
+}
+.adm-refresh:hover { background: rgba(255, 255, 255, 0.12); color: #fff; transform: rotate(120deg); }
+
+.adm-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-top: 16px;
+}
+.adm-stat {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 3px;
+    padding: 12px 6px;
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.04);
+}
+.adm-stat-v { font-size: 0.96rem; font-weight: 800; color: rgba(255, 255, 255, 0.92); }
+.adm-stat-k { font-size: 0.68rem; font-weight: 500; color: rgba(255, 255, 255, 0.36); }
+.adm-stat.is-hero {
+    border-color: rgba(226, 169, 43, 0.3);
+    background: rgba(226, 169, 43, 0.09);
+}
+.adm-stat.is-hero .adm-stat-v { color: var(--adm-gold-hi); }
+.adm-stat.is-hero .adm-stat-k { color: rgba(255, 223, 135, 0.62); }
+
+.adm-h {
+    margin: 20px 0 10px;
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+    color: rgba(255, 255, 255, 0.42);
+}
+
+.adm-weeks { display: flex; flex-direction: column; gap: 7px; }
+.adm-week {
+    display: grid;
+    grid-template-columns: 128px 1fr 74px;
+    align-items: center;
+    gap: 10px;
+}
+.adm-week-lbl {
+    font-size: 0.74rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.56);
+    white-space: nowrap;
+}
+.adm-week-lbl i {
+    display: block;
+    font-style: normal;
+    font-size: 0.63rem;
+    font-weight: 500;
+    color: rgba(255, 223, 135, 0.66);
+}
+.adm-week-bar {
+    height: 8px;
+    border-radius: 50px;
+    background: rgba(255, 255, 255, 0.06);
+    overflow: hidden;
+}
+.adm-week-bar i {
+    display: block;
+    height: 100%;
+    border-radius: 50px;
+    background: linear-gradient(90deg, rgba(226, 169, 43, 0.55), var(--adm-gold-hi));
+}
+.adm-week-ms {
+    font-size: 0.8rem;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.8);
+    text-align: left;
+}
+.adm-week.is-zero .adm-week-ms { color: rgba(255, 255, 255, 0.24); font-weight: 500; }
+.adm-week.is-near .adm-week-lbl { color: rgba(255, 255, 255, 0.82); }
+
+.adm-tasks { display: flex; flex-direction: column; gap: 6px; }
+.adm-task {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 13px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.035);
+}
+.adm-task-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.86rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.82);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.adm-task-ms { flex: 0 0 auto; font-size: 0.8rem; font-weight: 700; color: rgba(255, 255, 255, 0.62); }
+
+/* ── the gift ────────────────────────────────────────────────────────────── */
+.adm-gift {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 22px 0 6px;
+    padding: 12px 14px;
+    border: 1px solid rgba(226, 169, 43, 0.26);
+    border-radius: 20px;
+    background:
+        radial-gradient(120% 160% at 8% 50%, rgba(226, 169, 43, 0.16), transparent 62%),
+        rgba(255, 255, 255, 0.035);
+}
+.adm-gift-img { width: 42px; height: 42px; flex: 0 0 auto; object-fit: contain; }
+.adm-gift-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.adm-gift-name { font-size: 0.94rem; font-weight: 700; color: var(--adm-gold-hi); }
+.adm-gift-sub  { font-size: 0.72rem; font-weight: 500; color: rgba(255, 255, 255, 0.44); }
+.adm-grant {
+    flex: 0 0 auto;
+    padding: 10px 18px;
+    border: 1px solid rgba(226, 169, 43, 0.42);
+    border-radius: 50px;
+    background: rgba(226, 169, 43, 0.16);
+    color: var(--adm-gold-hi);
+    font-family: inherit;
+    font-size: 0.82rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.18s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.adm-grant:hover { background: rgba(226, 169, 43, 0.26); }
+.adm-grant:active { transform: scale(0.96); }
+/* The second press. It says what it is about to do, rather than opening a dialog. */
+.adm-grant.is-confirm {
+    background: var(--adm-gold);
+    border-color: var(--adm-gold);
+    color: #2a2118;
+}
+.adm-grant[data-off] { opacity: 0.4; cursor: default; }
+
+/* ── mobile ──────────────────────────────────────────────────────────────── */
+body.admin-active { overflow: hidden; }
+body.is-mobile .adm-overlay { padding: 0; }
+/* No backdrop-filter over the live canvas on a phone — it re-rasterises the
+   backdrop every frame (invariant 10). The panel is opaque enough without it. */
+body.is-mobile .adm-room {
+    width: 100%;
+    max-height: 100%;
+    height: 100dvh;
+    border-radius: 0;
+    border: 0;
+    background: rgba(14, 14, 14, 0.97);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    padding: max(16px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom));
+}
+body.is-mobile .adm-stats { grid-template-columns: repeat(2, 1fr); }
+body.is-mobile .adm-week { grid-template-columns: 104px 1fr 62px; }
+body.is-mobile .adm-week-lbl { font-size: 0.68rem; }
+body.is-mobile .adm-gift { flex-wrap: wrap; }
+body.is-mobile .adm-grant { width: 100%; }
+
+@media (prefers-reduced-motion: reduce) {
+    .adm-row { animation: none; }
+    .adm-room { transition: opacity 0.2s ease; transform: none; }
+    .adm-overlay.active .adm-room { transform: none; }
+    .adm-refresh:hover { transform: none; }
+}

@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 272 · Updated 9/8 12:05 PM</div>
+    <div id="build-number" class="build-number">Build 273 · Updated 9/8 3:25 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -192,6 +192,14 @@
              موضعه يُحسب في JS من مقاس البطاقة (`_hudPositionDock`) لأن عرض
              البطاقة يتغيّر بطول الاسم وبظهور النقاط. -->
         <div id="hud-tools" class="hud-tools">
+            <!-- لوحة القائد — مخفي إلا لنواف وسراج (`updateAdminLifecycle`). -->
+            <button id="admin-btn" class="hud-tool-btn hud-tool-admin" type="button" hidden
+                    aria-label="لوحة القائد" title="لوحة القائد">
+                <svg class="hud-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M3 7.5l4.2 3.6L12 4.5l4.8 6.6L21 7.5l-1.7 10.2a1 1 0 0 1-1 .8H5.7a1 1 0 0 1-1-.8z"/>
+                    <path d="M8.5 18.5h7" stroke-width="1.4"/>
+                </svg>
+            </button>
             <button id="settings-custom-btn" class="hud-tool-btn" type="button" aria-label="تخصيص الشخصية" title="تخصيص الشخصية">
                 <svg class="hud-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 1 1 4.03 4.03l-8.06 8.08"/>
@@ -1459,6 +1467,39 @@
         <button id="fireplace-close" class="fp-close" aria-label="إغلاق">✕</button>
     </div>
 
+    <!-- ═══ لوحة القائد ═══
+         تظهر لنواف وسراج فقط. القائمة (الصور والأسماء) من سجل الأعضاء المشترك،
+         والأرقام كلها من بيانات المقر: `dashboards/{uid}/sessions` — سجل الجلسات
+         الذي يُكتب منذ إطلاق لوحة المتابعة، فلا شيء جديد يُسجَّل هنا، إنما يُحسب
+         عند القراءة. الصفوف والتفاصيل يبنيها game.js. -->
+    <div id="admin-overlay" class="adm-overlay" aria-hidden="true">
+        <div class="adm-room">
+            <header class="adm-head">
+                <span class="adm-head-txt">
+                    <h2 class="adm-title">لوحة القائد</h2>
+                    <p class="adm-sub">ساعات العمل الفعلية لكل عضو، أسبوعًا بأسبوع</p>
+                </span>
+                <button id="admin-close" class="adm-close" type="button" aria-label="إغلاق">✕</button>
+            </header>
+
+            <div id="adm-list-view" class="adm-view">
+                <label class="adm-search">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+                        <circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>
+                    </svg>
+                    <input id="adm-search" type="search" autocomplete="off" placeholder="اكتب اسم العضو…">
+                </label>
+                <div id="adm-members" class="adm-members"></div>
+                <button id="adm-loadall" class="adm-loadall" type="button">احسب هذا الأسبوع للجميع</button>
+            </div>
+
+            <div id="adm-detail-view" class="adm-view adm-view-detail" hidden>
+                <button id="adm-back" class="adm-back" type="button">رجوع</button>
+                <div id="adm-detail" class="adm-detail"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- رف الجوائز. The two planks and every slot inside them are built by
          setupTrophyUI from the TROPHIES array, so the ids, goals, art numbers and
          point values live in game.js only — nothing here needs editing to add one. -->
@@ -1901,7 +1942,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=262"></script>
+        <script type="module" src="game.js?v=263"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
