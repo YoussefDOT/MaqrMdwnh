@@ -2472,19 +2472,58 @@ The source PNGs are 1000×1000 with the hat floating in the middle of mostly-emp
 the in-world draw use the crop — uncropped, a preview would be a speck and every
 offset/scale would be meaningless.
 
-### Hat behaviour — a lagging, overshooting spring
-`_updateHatSpring()` gives each player a spring (`_HAT_K` stiffness, `_HAT_D` damping < 1)
-that **chases** the avatar's draw anchor instead of being welded to it: it arrives a few
-frames late and **overshoots** on stop, which is what sells it as an object with mass. The
-hat is drawn in `drawPlayers` **after** the avatar's transform is restored (it must not
-inherit the working bounce/rotation), and it leans into its own velocity (`tilt`). Remote
-players' hats swing the same way — their render position drives the same spring. Two
-guards that matter:
-- A >260px jump (teleport / kidnap) **re-anchors** instead of stretching the spring across
-  the map; the lag is also hard-capped at `_HAT_MAX`.
+### Hat physics — a jointed STACK hinged at the avatar's centre
+The old single "chase the anchor" spring is **gone**; don't reintroduce it. Every hat a
+player wears is a **link in a chain whose one pivot is the avatar's centre**
+(`_updateHatChain` / `_hatChainState`, per-player state on `player._hatPhys`).
+
+- **Angles are RELATIVE and compound.** A link's angle is measured against the link below
+  it; the angle a hat is *drawn* at is the **sum of every angle beneath it**. So the
+  bottom hat barely tips and the fifth one whips — with **no per-hat fudge factor**. That
+  is the whole reason it's a chain and not five independent springs.
+- **Inertia sets the frequency.** A link's `L` is the **gap** between it and the hat below
+  (the bottom link measures from the avatar's centre), and its inertia is `I = L × (how
+  many hats it still has to carry)`, with ω₀ = `sqrt(HAT_K / I)`. The bottom link drags
+  the whole tower — slow, heavy, barely moves — while the top link carries only itself and
+  answers the same shove **faster and wider**. That is the brief's "farther from the
+  anchor ⇒ more frequency and intensity", out of the physics rather than a per-hat
+  multiplier.
+- **`HAT_COUPLE` is deliberately LOW (0.22).** Crank it and the whole tower is *forced* at
+  the base link's slow frequency, every hat rings in unison, and the per-link frequency
+  spread above becomes invisible — which is the exact look this rewrite replaced. It is
+  high enough to read as a whip and no higher.
+- **The drive is the pivot's ACCELERATION** (pseudo-force in the pivot's frame), which is
+  why nothing needs special-casing: stopping after a sprint, a direction flip, the kidnap
+  yank, the sofa hop and a session start are all the same term. Each link then hands the
+  tangential acceleration of its own tip **up** the chain (`HAT_COUPLE`) — that coupling
+  is what makes the top hat look driven by the hats under it, not by the player.
+- **The anchor is the avatar's centre**, so a hat placed high sweeps a real arc (it
+  travels sideways as it leans) and a hat parked on the centre spins in place. Each link
+  also carries a little **vertical give** (`HAT_YDRIVE`), so a landing compresses the
+  stack and springs it back. Position is otherwise **welded** to the anchor — no
+  positional lag, so the stack never floats along behind the player.
+- **Chain order is by distance from the pivot**, not array order; **draw order stays the
+  array order** (z-order), which is why `st.angle` / `st.yOff` are indexed by the hat's
+  original index.
+- **`link.bias` is load-bearing.** A perfectly balanced 2D stack cannot be toppled by a
+  purely vertical jolt — the hair of built-in lean is what lets the sofa hop wobble it. It
+  is a **deterministic hash of the hat id**, never `Math.random()`: two clients watching
+  the same player must see the stack fall the same way.
+- Anchor velocity is converted to **PLAYER_SIZE units per frame**, so the swing is
+  identical on the ground and on the 1.2× mezzanine.
+
+Two guards that matter (unchanged in spirit from the old spring):
+- A **teleport/kidnap snap** (`HAT_JUMP`, in player-units/frame) **re-anchors** instead of
+  handing the chain a one-frame acceleration the size of the map. Every angle, vertical
+  offset and drive term is additionally clamped (`HAT_ANG_MAX` / `HAT_TOT_MAX` /
+  `HAT_Y_MAX` / `HAT_ACC_MAX`).
 - **`gameState._pipPass`** — PiP runs its own rAF over the same draw code, so it would
-  integrate the springs a second time each frame (double speed). `renderPiPInto` sets the
-  flag; the spring draws but never advances during that pass.
+  integrate the chain a second time each frame (double speed). `renderPiPInto` sets the
+  flag; the chain **draws but never advances** during that pass.
+
+The chain is rebuilt when the hat list changes (`st.key` = ids + offsets), so a saved
+placement re-derives the segment lengths. The customizer's preview is **static DOM** and
+deliberately runs none of this.
 
 ### The scene
 `openCharCustom()` fades in a "3D space" (gradient room + a perspective floor plane), the
@@ -2582,7 +2621,7 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | Camera rubber-bands to a default framing on every zoom, forever, after a reading session ends | The `exiting` camera phase only cleared once zoom converged on its target — but the scroll wheel was unblocked during it, so any scroll moved zoom away and the phase **never cleared**. `updateCamera()` early-returns while a reading phase is set, so the exit lerp owned the camera for the rest of the session and fought every gesture | Time-bound the exit tween (`READING_EXIT_MS` + hard `READING_EXIT_MAX_MS`), and have both zoom handlers call `abortReadingCamera()` so a user gesture always hands the camera back |
 | World is black / half the elements missing, "still loading", long waits, only a fresh tab fixes it | Two compounding causes: (1) `startGame`'s **flat 15s** boot failsafe fired mid-load on a slow link and slid the loader away over a world cache nothing had composited into yet; (2) the SW's stale-while-revalidate re-downloaded **all ~18 MB of art on every visit** even though it was cached, competing with the requests the page waits on (and wedging the connection pool — hence the fresh tab) | Content-hash the layers (`manifest.json` → `?h=`) and make the SW treat them as **immutable, cache-first, never revalidated** → a repeat visit fetches zero art bytes; replace the failsafe with a **progress watchdog** that only releases after a real 25s stall (or a 120s ceiling). See **Loading Strategy** |
 | New art needs a hard refresh to show up, every time | `sw.js` was pure cache-first for `Art/` — a cached file was pinned until its URL or `CACHE_VERSION` changed | Stale-while-revalidate in production (fresh copy lands for the next reload), and **network-first on localhost/LAN** (`IS_LOCAL`) so the dev loop always sees the file on disk |
-| Hats run at double speed / jitter while PiP is open | PiP renders the same draw code on its own rAF, so `_updateHatSpring` integrated twice per frame | `gameState._pipPass` set by `renderPiPInto` — the PiP pass draws the spring but never advances it |
+| Hats run at double speed / jitter while PiP is open | PiP renders the same draw code on its own rAF, so `_updateHatChain` integrated twice per frame | `gameState._pipPass` set by `renderPiPInto` — the PiP pass draws the chain but never advances it |
 | SVG crescent renders as a plain filled circle | An arc whose radius is smaller than half its chord is silently scaled UP to fit by the SVG spec, so the two-arc crescent became two identical semicircles | Build it as a `<mask>`: a disc with an offset disc punched out |
 | Players pop out and back in mid-session for me; they never actually disconnected | `activeInGame` is flipped false server-side by `onDisconnect` the instant their socket blips (mobile data, sleeping laptop) and healed a second later by their own `.info/connected`. The users listener removed them the moment they left the snapshot, so a blip = a visible departure + rejoin | Grace period: stamp `_presenceLostAt` instead of removing; `updatePresenceGrace()` commits the exit only after `PRESENCE_GRACE_MS` (8s) still-gone, and **any WebSocket packet cancels it**. See **Presence self-heal** |
 | Others see me snap onto the sofa; no hop, and the reading sequence looks nothing like it does for me | `handleMovement` bails while seated, so nothing is broadcast during the 0.64s sit animation — observers only got the Firebase write at the end, i.e. a teleport | Relay the hop as a one-off `{t:'sit'}` event and replay it remotely through the same pure stepper (`_stepSitAnim`). See **Player Position Sync → the sofa hop** |

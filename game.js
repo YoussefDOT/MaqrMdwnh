@@ -13526,9 +13526,10 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         ctx.globalAlpha = 1;
         ctx.restore(); // restores translate, rotate, scale
 
-        // The hat rides OUTSIDE the avatar transform: it chases the avatar's anchor
-        // on its own spring, so it lags a few frames behind and overshoots on stop —
-        // which is what sells it as a real object sitting on the player's head.
+        // The hats ride OUTSIDE the avatar transform: they're a jointed stack hinged
+        // at this anchor (the avatar's centre), driven by the anchor's acceleration,
+        // so they lean into a move and overshoot on a stop — and the higher a hat
+        // sits in the stack, the wider and faster it swings. See drawPlayerHats.
         drawPlayerHats(player,
             screenX + coopDX,
             screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY,
@@ -24733,59 +24734,172 @@ function sanitizeHats(userData) {
     return out;
 }
 
-// ── Hat physics: pinned position, overshooting ROTATION only ─────────────────
-// The hat's position is welded to the avatar's centre anchor every frame — no
-// positional lag, so it never looks like it's floating behind the player. All the
-// "object with mass" feel instead comes from a rotation spring: the anchor's
-// sudden velocity changes (stopping after a run, the kidnap yank, the sit-down
-// jump) impart torque, and the hat's rotation overshoots past level before
-// settling — a small flop, not a chase. Per-player state, so remote players'
-// hats flop too (their render position drives the same spring).
-const _HAT_ROT_K   = 0.10;   // stiffness — how hard rotation is pulled back to level
-const _HAT_ROT_D   = 0.90;   // damping (<1 ⇒ light overshoot before settling)
-const _HAT_TORQUE  = 0.0026; // how much anchor acceleration turns into angular kick
-const _HAT_ROT_MAX = 0.30;   // rad — hard cap so a teleport/kidnap yank can't spin it silly
+// ── Hat physics: a jointed STACK hinged at the avatar's centre ───────────────
+// Rewritten from scratch as a real chain, not one shared spring. Every hat a
+// player wears is a link in a tower whose ONE pivot is the avatar's centre, and
+// each link is its own torsional spring-damper carrying everything above it:
+//
+//   • A link's angle is measured RELATIVE to the link below it, and the angle a
+//     hat is finally drawn at is the SUM of every angle beneath it. The lean
+//     therefore compounds up the stack — the bottom hat barely tips, the fifth
+//     one whips — with no per-hat fudge factor. That's just what a chain does.
+//   • A link's segment length L is the GAP between it and the hat below it (the
+//     bottom link measures from the avatar's centre), and its inertia is that
+//     length TIMES the number of hats it still has to carry. Its natural
+//     frequency is sqrt(HAT_K / I): the bottom link is dragging the whole tower
+//     — slow, heavy, barely moves — while the top link carries only itself and
+//     answers the same shove with a faster, wider swing. That is the brief's
+//     "farther from the anchor ⇒ more frequency and intensity", out of the
+//     physics rather than a per-hat multiplier.
+//   • The drive is the pivot's own ACCELERATION (the pseudo-force in the pivot's
+//     frame), so nothing is special-cased: stopping after a sprint, a direction
+//     flip, the kidnap yank, the sofa hop and a session start all fall out of
+//     that one term. Each link then hands the tangential acceleration of its own
+//     tip UP the chain as the next link's pivot motion — that coupling is what
+//     makes the top hat look driven by the hats under it, not by the player.
+//   • Rotation happens about the avatar's centre, so a hat placed high sweeps a
+//     real arc (it travels sideways as it leans) while a hat parked on the
+//     centre spins in place. Each link also has a little vertical GIVE, so a
+//     landing compresses the stack and springs it back.
+//   • Position is otherwise welded to the anchor — no positional lag, so the
+//     stack never looks like it's floating along behind the player.
+//
+// Per-player state, so remote players' stacks swing identically (their
+// interpolated render position drives the same solver).
+const HAT_K       = 0.019;  // torsional stiffness (player-units/frame²); ω₀ = sqrt(K/L)
+const HAT_ZETA    = 0.15;   // damping ratio (<1 ⇒ overshoot, a few swings before rest)
+const HAT_DRIVE   = 0.20;   // how much pivot acceleration becomes torque
+const HAT_COUPLE  = 0.22;   // share of a link's tip acceleration handed to the link above.
+                            // Kept LOW on purpose: crank it and the whole tower is forced
+                            // at the base link's slow frequency and every hat rings in
+                            // unison, which is exactly the look this rewrite replaced.
+const HAT_VDRIVE  = 1.2;    // vertical jolts topple the stack through its built-in lean
+const HAT_YDRIVE  = 0.32;   // vertical give: how much a jolt compresses each link
+const HAT_YFREQ   = 1.45;   // the vertical spring is stiffer than the rotational one
+const HAT_SEG_MIN = 0.20;   // player units — floor on L (two hats parked at one spot)
+const HAT_ANG_MAX = 0.34;   // rad — per-link clamp
+const HAT_TOT_MAX = 0.95;   // rad — clamp on the accumulated angle at the top
+const HAT_Y_MAX   = 0.10;   // player units — clamp on one link's vertical give
+const HAT_ACC_MAX = 0.40;   // player-units/frame² — drive clamp, kills one-frame spikes
+const HAT_JUMP    = 3;      // player-units/frame ⇒ a teleport: re-anchor, don't torque
 
-function _updateHatSpring(player, tx, ty) {
-    let h = player._hatSpring;
-    if (!h) {
-        h = player._hatSpring = { x: tx, y: ty, vx: 0, vy: 0, rot: 0, rotVel: 0 };
-        return h;
-    }
-    // Position is always pinned to the anchor — no lag.
-    const dt = Math.min(2, gameState.dtFactor || 1);
-    const rawVx = (tx - h.x) / Math.max(dt, 0.001);
-    const rawVy = (ty - h.y) / Math.max(dt, 0.001);
-    h.x = tx; h.y = ty;
-
-    if (gameState._pipPass) return h;   // PiP draws the spring, never advances it
-
-    // A teleport/kidnap jump: re-anchor the rotation spring instead of imparting
-    // a giant one-frame torque (which would look like a spin, not a flop).
-    const jumped = Math.abs(rawVx - h.vx) > 40 || Math.abs(rawVy - h.vy) > 40;
-    const ax = jumped ? 0 : (rawVx - h.vx);
-    h.vx = rawVx; h.vy = rawVy;
-
-    // Torque from the horizontal deceleration/acceleration impulse — this alone
-    // covers "stop after running", the kidnap pull, and the sit-down jump, with
-    // no special-casing needed: any sudden anchor-velocity change flops the hat.
-    h.rotVel += -ax * _HAT_TORQUE * dt;
-    h.rotVel = (h.rotVel - h.rot * _HAT_ROT_K * dt) * Math.pow(_HAT_ROT_D, dt);
-    h.rot += h.rotVel * dt;
-    h.rot = Math.max(-_HAT_ROT_MAX, Math.min(_HAT_ROT_MAX, h.rot));
-    return h;
+// Deterministic tiny hash — the per-hat lean below must be the SAME on every
+// client, or two people would see the same stack fall different ways.
+function _hatHash(str) {
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return (h >>> 0);
 }
 
-// Draw a player's hats pinned to the avatar's centre anchor. Called from drawPlayers
-// AFTER the avatar's transform is restored, with the anchor the avatar was drawn at.
-// One shared rotation spring drives the flop for every hat the player wears.
+// Build (or rebuild) the chain. The links are ordered by how far each hat sits
+// from the pivot — that's the physical stacking order, which need not match the
+// array/draw order the user happened to add them in.
+function _hatChainState(player, hats, tx, ty) {
+    let st = player._hatPhys;
+    let key = '';
+    for (const h of hats) key += h.id + ':' + h.x.toFixed(2) + ',' + h.y.toFixed(2) + '|';
+    if (st && st.key === key) return st;
+
+    st = player._hatPhys = {
+        key, x: tx, y: ty, vx: 0, vy: 0,
+        links: [],
+        angle: new Array(hats.length).fill(0),   // accumulated angle, by ORIGINAL index
+        yOff:  new Array(hats.length).fill(0),   // accumulated vertical give, ditto
+    };
+    const order = hats.map((h, i) => i)
+        .sort((a, b) => Math.hypot(hats[a].x, hats[a].y) - Math.hypot(hats[b].x, hats[b].y));
+    let rPrev = 0;
+    for (const idx of order) {
+        const r = Math.hypot(hats[idx].x, hats[idx].y);
+        st.links.push({
+            idx,
+            L: Math.max(HAT_SEG_MIN, r - rPrev),
+            // A real stack is never perfectly balanced, and that imperfection is
+            // the only reason a purely VERTICAL jolt can topple one at all.
+            bias: ((_hatHash(hats[idx].id + '#' + idx) % 1000) / 1000 - 0.5) * 0.20,
+            a: 0, v: 0, y: 0, yv: 0,
+        });
+        rPrev = r;
+    }
+    return st;
+}
+
+function _updateHatChain(player, hats, tx, ty) {
+    const st = _hatChainState(player, hats, tx, ty);
+
+    const dt  = Math.min(2, gameState.dtFactor || 1);
+    const inv = 1 / Math.max(dt, 0.001);
+    // Anchor velocity in PLAYER-SIZE units per frame — so the swing is identical
+    // on the ground and on the 1.2× mezzanine (the anchor arrives in world px).
+    const rawVx = (tx - st.x) / PLAYER_SIZE * inv;
+    const rawVy = (ty - st.y) / PLAYER_SIZE * inv;
+    st.x = tx; st.y = ty;
+
+    if (gameState._pipPass) return st;   // PiP draws the chain, never advances it
+
+    // Teleport / kidnap snap: re-anchor rather than hand the chain a one-frame
+    // acceleration the size of the map.
+    const jumped = Math.abs(rawVx - st.vx) > HAT_JUMP || Math.abs(rawVy - st.vy) > HAT_JUMP;
+    const clampA = v => Math.max(-HAT_ACC_MAX, Math.min(HAT_ACC_MAX, v));
+    const ax = jumped ? 0 : clampA((rawVx - st.vx) * inv * HAT_DRIVE);
+    const ay = jumped ? 0 : clampA((rawVy - st.vy) * inv * HAT_DRIVE);
+    st.vx = rawVx; st.vy = rawVy;
+
+    let pivotAx = ax, sumA = 0, sumY = 0;
+    for (let i = 0; i < st.links.length; i++) {
+        const link = st.links[i];
+        // Inertia = the segment's length × the number of hats it still has to carry.
+        // The bottom link is dragging the whole tower, the top link only itself, so
+        // ω₀ = sqrt(HAT_K / I) RISES up the stack and the same shove moves the top
+        // link furthest: the "farther from the pivot ⇒ faster and wilder" the brief
+        // asked for, out of the physics rather than a per-hat multiplier.
+        const I  = link.L * (st.links.length - i);
+        const w0 = Math.sqrt(HAT_K / I);
+
+        // Restoring spring toward upright, plus the pivot's pseudo-force, plus a
+        // vertical jolt acting through the link's built-in lean — all divided by
+        // that inertia.
+        const aa = (-HAT_K * Math.sin(link.a)
+                    - pivotAx * Math.cos(link.a)
+                    + ay * Math.sin(link.a + link.bias) * HAT_VDRIVE) / I
+                   - 2 * HAT_ZETA * w0 * link.v;
+        link.v += aa * dt;
+        link.a += link.v * dt;
+        if (link.a >  HAT_ANG_MAX) { link.a =  HAT_ANG_MAX; if (link.v > 0) link.v = 0; }
+        if (link.a < -HAT_ANG_MAX) { link.a = -HAT_ANG_MAX; if (link.v < 0) link.v = 0; }
+
+        // Vertical give — the stack squashes on a landing and springs back, and
+        // compounds up the chain the same way the angle does.
+        const wy = w0 * HAT_YFREQ;
+        link.yv += (-wy * wy * link.y - ay * HAT_YDRIVE - 2 * HAT_ZETA * wy * link.yv) * dt;
+        link.y  += link.yv * dt;
+        if (link.y >  HAT_Y_MAX) { link.y =  HAT_Y_MAX; if (link.yv > 0) link.yv = 0; }
+        if (link.y < -HAT_Y_MAX) { link.y = -HAT_Y_MAX; if (link.yv < 0) link.yv = 0; }
+
+        sumA += link.a;
+        sumY += link.y;
+        st.angle[link.idx] = Math.max(-HAT_TOT_MAX, Math.min(HAT_TOT_MAX, sumA));
+        st.yOff[link.idx]  = sumY;
+
+        // This link's tip accelerates the pivot of the one above it — the whip.
+        pivotAx = clampA(pivotAx + aa * link.L * HAT_COUPLE);
+    }
+    return st;
+}
+
+// Draw a player's hats hinged at the avatar's centre anchor. Called from
+// drawPlayers AFTER the avatar's transform is restored, with the anchor the
+// avatar was drawn at. Draw order stays the array order (z-order); the physics
+// order is the chain's, which is why the angles are looked up by index.
 function drawPlayerHats(player, anchorX, anchorY, rScale, alpha) {
     const hats = player.hats;
-    if (!hats || !hats.length || alpha < 0.02) { player._hatSpring = null; return; }
+    if (!hats || !hats.length || alpha < 0.02) { player._hatPhys = null; return; }
 
-    const spr = _updateHatSpring(player, anchorX, anchorY);
+    const st  = _updateHatChain(player, hats, anchorX, anchorY);
     const ctx = gameState.ctx;
-    for (const hat of hats) {
+    const U   = PLAYER_SIZE * rScale;
+    for (let i = 0; i < hats.length; i++) {
+        const hat = hats[i];
         if (!hat || !hat.id) continue;
         const entry = ensureHatAsset(hat.id);
         if (!entry || !entry.ready) continue;
@@ -24794,9 +24908,10 @@ function drawPlayerHats(player, anchorX, anchorY, rScale, alpha) {
         const h = w * (src.height / src.width);
         ctx.save();
         ctx.globalAlpha = alpha;
-        ctx.translate(spr.x, spr.y);
-        ctx.translate(hat.x * PLAYER_SIZE * rScale, hat.y * PLAYER_SIZE * rScale);
-        ctx.rotate(hat.rot + spr.rot);
+        ctx.translate(anchorX, anchorY);
+        ctx.rotate(st.angle[i] || 0);                    // the whole stack pivots here
+        ctx.translate(hat.x * U, hat.y * U + (st.yOff[i] || 0) * U);
+        ctx.rotate(hat.rot);
         if (hat.flip) ctx.scale(-1, 1);
         ctx.drawImage(src, -w / 2, -h / 2, w, h);
         ctx.restore();
