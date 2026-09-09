@@ -29508,6 +29508,10 @@ function setupTrophyUI() {
    press to enlarge, drag to move it anywhere, pinch (or the wheel) to zoom.
    Closing runs the same curve backwards and tapes it back on the wall.
 
+   SILENT, on purpose. The flight had a peel / slap / release cue on it and they
+   were taken back out — the room is quiet and the sheet is a poster, not an
+   event. Don't put them back without being asked.
+
    THE FLIGHT IS ONE rAF, NOT A KEYFRAME. It has to start from wherever the sheet
    is pinned and end wherever the viewport centre is, and neither is knowable in
    CSS — so `_awdPose(u)` is the whole score and every frame writes one transform.
@@ -29541,13 +29545,6 @@ const _awd = {
 function _awdReduced() {
     try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
     catch (_) { return false; }
-}
-function _awdSfx(name, rate, peak) {
-    const fe = gameState.focusAudioEngine;
-    if (!fe) return;
-    // playPitched only starts on a running context and returns false otherwise;
-    // playEffect resumes it first, so it is the honest fallback rather than silence.
-    try { if (!fe.playPitched(name, rate, peak)) fe.playEffect(name); } catch (_) {}
 }
 function _awdEl(id) { return document.getElementById(id); }
 
@@ -29662,9 +29659,9 @@ function _awdRun(dir) {
     _awd.raf = requestAnimationFrame(step);
 }
 
-/* The contact. The three one-shots are cleared at open, and poked with a reflow
-   here anyway — a `forwards` animation left on the element would otherwise never
-   replay on the second visit. */
+/* The contact — visual only, see the header. The three one-shots are cleared at
+   open, and poked with a reflow here anyway: a `forwards` animation left on the
+   element would otherwise never replay on the second visit. */
 function _awdImpact() {
     const view = _awdEl('tro-paper-view'), flash = _awdEl('tro-paper-flash'), ring = _awdEl('tro-paper-ring');
     for (const [el, cls] of [[flash, 'go'], [ring, 'go'], [view, 'hit']]) {
@@ -29673,7 +29670,6 @@ function _awdImpact() {
         void el.offsetWidth;
         el.classList.add(cls);
     }
-    _awdSfx('paperIntro', 1.12, 0.85);
 }
 
 function _awdLanded() {
@@ -29693,7 +29689,6 @@ function _awdGone() {
     _awd.s = 1; _awd.x = 0; _awd.y = 0;
     if (view) { view.classList.remove('active', 'hit', 'landed'); view.setAttribute('aria-hidden', 'true'); }
     if (fly) fly.classList.remove('is-stuck', 'is-drag', 'is-live');
-    _awdSfx('paperSwipe', 0.9, 0.4);
     /* The wall stays empty until the pane has finished fading, so the sheet is not
        briefly on the wall AND in the air. Guarded, in case it was opened again. */
     clearTimeout(_awd.backTimer);
@@ -29732,7 +29727,6 @@ function _awdOpen() {
     // Two frames, as everywhere else here: `display` can't transition, so the pane
     // is always laid out and enter/exit is opacity + visibility.
     requestAnimationFrame(() => requestAnimationFrame(() => { if (_awd.open) view.classList.add('active'); }));
-    _awdSfx('paperSwipe', 1.18, 0.5);
     _awdRun('in');
 }
 
@@ -29740,7 +29734,6 @@ function _awdClose() {
     if (!_awd.open || _awd.phase === 'out' || _awd.phase === 'in') return;
     _awdTip('');
     _awdEl('tro-paper-view')?.classList.remove('landed');
-    _awdSfx('paperExit', 1.06, 0.6);
     _awdRun('out');
 }
 
@@ -29859,9 +29852,6 @@ function _awdTapZoom(px, py) {
     else _awdZoomTo(AWD.zoom, px, py);
     _awdClampPan();
     _awdApply();
-    // playPitched only — the blip is a 0.07-peak tick, and playEffect's fallback
-    // path would fire the same file at 0.8.
-    try { gameState.focusAudioEngine?.playPitched('uiBlip', _awd.s > 1.04 ? 1.12 : 0.86, 0.07); } catch (_) {}
 }
 
 function _awdWheel(e) {

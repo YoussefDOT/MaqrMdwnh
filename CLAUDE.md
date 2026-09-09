@@ -2161,6 +2161,10 @@ curve backwards and tapes it back up. Code is the `جوائز العام` block 
 overlay; styles sit with the shelf's. Grep anchors: `AWD`, `_awdOpen`, `_awdPose`,
 `_awdRun`, `_awdClose`.
 
+**It is silent, on purpose.** The flight carried a peel / slap / release cue and
+they were taken back out — the room is quiet and the sheet is a poster, not an
+event. Don't put them back without being asked.
+
 **Cost: zero.** Nothing is written, read or synced — it is a picture on a wall,
 identical for everyone. The image carries **no `src` in the markup**: both `<img>`s
 are attached by `_troEnsureAssets` (idle after spawn, with the trophies), so ~80 KB
