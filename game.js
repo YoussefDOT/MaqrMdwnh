@@ -24767,18 +24767,20 @@ function sanitizeHats(userData) {
 // Per-player state, so remote players' stacks swing identically (their
 // interpolated render position drives the same solver).
 const HAT_K       = 0.019;  // torsional stiffness (player-units/frame²); ω₀ = sqrt(K/L)
-const HAT_ZETA    = 0.15;   // damping ratio (<1 ⇒ overshoot, a few swings before rest)
-const HAT_DRIVE   = 0.20;   // how much pivot acceleration becomes torque
+const HAT_ZETA    = 0.24;   // damping ratio (<1 ⇒ overshoot, a couple of swings before rest)
+const HAT_DRIVE   = 0.13;   // how much pivot acceleration becomes torque. Halved from the
+                            // first pass: the motion was right but read as distracting in
+                            // the corner of the eye. Ambient, not the main event.
 const HAT_COUPLE  = 0.22;   // share of a link's tip acceleration handed to the link above.
                             // Kept LOW on purpose: crank it and the whole tower is forced
                             // at the base link's slow frequency and every hat rings in
                             // unison, which is exactly the look this rewrite replaced.
-const HAT_VDRIVE  = 1.2;    // vertical jolts topple the stack through its built-in lean
-const HAT_YDRIVE  = 0.32;   // vertical give: how much a jolt compresses each link
+const HAT_VDRIVE  = 0.7;    // vertical jolts topple the stack through its built-in lean
+const HAT_YDRIVE  = 0.16;   // vertical give: how much a jolt compresses each link
 const HAT_YFREQ   = 1.45;   // the vertical spring is stiffer than the rotational one
 const HAT_SEG_MIN = 0.20;   // player units — floor on L (two hats parked at one spot)
-const HAT_ANG_MAX = 0.34;   // rad — per-link clamp
-const HAT_TOT_MAX = 0.95;   // rad — clamp on the accumulated angle at the top
+const HAT_ANG_MAX = 0.24;   // rad — per-link clamp
+const HAT_TOT_MAX = 0.62;   // rad — clamp on the accumulated angle at the top
 const HAT_Y_MAX   = 0.10;   // player units — clamp on one link's vertical give
 const HAT_ACC_MAX = 0.40;   // player-units/frame² — drive clamp, kills one-frame spikes
 const HAT_JUMP    = 3;      // player-units/frame ⇒ a teleport: re-anchor, don't torque
