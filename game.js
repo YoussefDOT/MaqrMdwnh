@@ -3129,43 +3129,138 @@ function syncEntityRenderToTarget(entity) {
 }
 
 // ---------------------------------------------------------------------------
-// Remote-player snapshot interpolation
+// Remote-player snapshot interpolation (jitter buffer + clock sync)
 // ---------------------------------------------------------------------------
-// Positions arrive ~11×/sec (WebSocket) plus the occasional Firebase write.
-// Easing toward each one and stopping makes movement "step" (worst at sprint
-// speed). Instead we buffer the last ~1s of samples and render each remote
-// player NET_RENDER_DELAY ms in the past, gliding at constant velocity between
-// the two samples that bracket that render time. Result: smooth motion even at
-// a low, cheap send rate. When the buffer starves we briefly extrapolate along
-// the last velocity (only while the player is still moving), then clamp.
-const NET_RENDER_DELAY = 140; // ms behind real time (≈1.5 send intervals)
-const NET_MAX_EXTRAP   = 180; // ms cap on extrapolation when starved (TCP bursts/delays)
-const NET_BUF_MAX_AGE  = 1200; // ms of history to retain
+// The model competitive shooters use (Quake 3 / Source `cl_interp` / Overwatch),
+// adapted to a browser WebSocket relay. Three ideas, each fixing a distinct way
+// the old version "misynced" even though the packets themselves were fine:
+//
+//  1. SENDER TIMESTAMPS, not arrival time. Every packet carries `w`, the
+//     sender's own `performance.now()`. The receiver keeps a per-player offset
+//     (sender clock → local clock) estimated by a MINIMUM filter — the fastest
+//     packet seen defines the true send time, later ones are just late. Samples
+//     are then spaced by when they were SENT (a clean, even 90 ms), so network
+//     jitter no longer deforms the replayed motion. Stamping on arrival (what
+//     this used to do) fed the jitter straight into the timeline: a burst of
+//     three packets 5 ms apart replayed as the avatar sprinting, then stalling.
+//     `w` is a monotonic clock with an arbitrary per-tab epoch — the offset
+//     absorbs the epoch, so no wall-clock sync and no server change is needed.
+//
+//  2. AN ADAPTIVE INTERPOLATION DELAY. We render each remote player `delay` ms
+//     in the past. A fixed 140 ms only tolerated ~50 ms of jitter — past that
+//     the buffer ran dry, which is exactly what "sometimes smooth, sometimes
+//     jumping" was. `delay` now tracks a jitter estimate (fast attack, slow
+//     decay) and the sender's real packet spacing, so a bad link buys latency
+//     instead of breaking, and a good one drifts back down to minimum.
+//
+//  3. ERROR SMOOTHING — the failsafe that makes a JUMP impossible. Whenever the
+//     timeline has to discontinue (buffer reset, or resync after a starve where
+//     extrapolation guessed wrong), we do not move the avatar. We record the
+//     position error and decay it to zero over ~250 ms, so the correction is a
+//     glide. Only a genuine teleport (further than NET_SMOOTH_MAX) snaps.
+//
+// When the buffer does starve we extrapolate with the velocity easing to zero
+// (a natural coast to a stop) instead of running flat out and then clamping
+// dead — the clamp was the visible half of the old jump.
+const NET_DELAY_MIN   = 130;  // ms behind real time on a clean link (≈1.4 send intervals)
+const NET_DELAY_MAX   = 520;  // ms ceiling — past this we'd rather look laggy than break
+const NET_JITTER_K    = 2.2;  // delay = MIN + jitter * K
+const NET_JITTER_MIN  = 6;
+const NET_JITTER_MAX  = 220;
+const NET_JIT_ATTACK  = 0.40; // grow the jitter estimate fast…
+const NET_JIT_DECAY   = 0.015;// …shrink it slowly (one good packet proves nothing)
+const NET_OFF_CREEP   = 0.003;// clock-offset drift follow (a faster path snaps instantly)
+const NET_DELAY_SHRINK= 0.02; // per 60 fps frame, easing `delay` back down
+const NET_GAP_MULT    = 1.6;  // delay floor as a multiple of the sender's packet spacing
+const NET_EXTRAP_MS   = 260;  // ms of coast when starved (velocity eases to 0 across it)
+const NET_STARVE_BUMP = 22;   // ms of jitter credited each time we actually run dry
+const NET_ERR_DECAY   = 0.86; // per 60 fps frame → correction invisible in ~250 ms
+const NET_ERR_MAX_STEP= 3.2;  // world units/frame the correction may add (walk is 5, sprint 9)
+const NET_SMOOTH_MAX  = 300;  // world units; beyond this it's a teleport, not an error
+const NET_IDLE_GAP    = 400;  // ms of silence after which the timeline restarts
+const NET_BLOAT_MS    = 260;  // ms of backlog past `delay` before we wind playback forward
+const NET_BUF_MAX_AGE = 1600; // ms of history to retain
 
-const NET_IDLE_GAP = 250; // ms of silence after which a stream counts as "resumed"
+function _netNow() {
+    return (typeof performance !== 'undefined') ? performance.now() : Date.now();
+}
 
-function pushNetSample(player, x, y) {
-    const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-    if (player.renderX === undefined) { player.renderX = x; player.renderY = y; }
-    if (!player._netBuf) player._netBuf = [];
-    const buf = player._netBuf;
-    const last = buf[buf.length - 1];
-    // Re-anchor when the stream resumed after a gap (idle) OR after the buffer
-    // STARVED (the relay is a WebSocket over TCP, so a lost packet really means a
-    // delayed burst — meanwhile the avatar ran past the last sample and clamped).
-    // Re-anchoring at the CURRENT render position, timestamped one render-delay in
-    // the past, makes the glide resume smoothly from wherever the avatar actually
-    // is — no dead time, and crucially no forward JUMP when the burst lands (the
-    // "snapping" users saw with a laggy friend, in or out of a session).
-    if (!last || now - last.t > NET_IDLE_GAP || player._netStarved) {
-        buf.length = 0;
-        buf.push({ t: now - NET_RENDER_DELAY, x: player.renderX, y: player.renderY });
-        player._netStarved = false;
-    } else if (last.x === x && last.y === y) {
-        return; // not idle and no movement → no new sample
+function _netClockFor(player) {
+    let n = player._netClock;
+    if (!n) {
+        n = player._netClock = {
+            off: null,           // sender clock → local clock (minimum-filtered)
+            lastW: 0,            // newest sender stamp seen (drops stale / duplicate)
+            gap: POS_WS_MIN_INTERVAL, // observed sender packet spacing
+            jitter: NET_JITTER_MIN,
+            delay: NET_DELAY_MIN,
+            errX: 0, errY: 0,    // smoothing offset being decayed to zero
+            starved: false,
+            resync: false,       // timeline restarted → absorb the offset, don't jump
+            playing: false,      // did we render from this buffer last frame?
+        };
     }
-    buf.push({ t: now, x, y });
+    return n;
+}
+
+// `w` = the sender's own performance.now() when it built the packet. Omitted by
+// the Firebase fallback path (and by any pre-`w` client), which falls back to
+// arrival stamping — correct, just no jitter immunity.
+function pushNetSample(player, x, y, w) {
+    const now = _netNow();
+    if (player.renderX === undefined) { player.renderX = x; player.renderY = y; }
+    const n = _netClockFor(player);
+
+    let t;
+    if (typeof w === 'number' && isFinite(w)) {
+        const d = now - w;                                   // transit + epoch difference
+        if (n.off === null || d < n.off) n.off = d;          // a faster path IS the truth
+        else n.off += (d - n.off) * NET_OFF_CREEP;           // otherwise follow drift only
+        const late = d - n.off;
+        n.jitter += (late - n.jitter) * (late > n.jitter ? NET_JIT_ATTACK : NET_JIT_DECAY);
+        if (n.jitter < NET_JITTER_MIN) n.jitter = NET_JITTER_MIN;
+        if (n.jitter > NET_JITTER_MAX) n.jitter = NET_JITTER_MAX;
+        if (n.lastW) {
+            if (w <= n.lastW) return;                        // stale / duplicate
+            const g = w - n.lastW;
+            if (g < 2000) n.gap += (g - n.gap) * 0.15;       // track the real send rate
+        }
+        n.lastW = w;
+        t = w + n.off;
+        if (t > now) t = now;
+    } else {
+        t = now;
+    }
+
+    let buf = player._netBuf;
+    if (!buf) {
+        // A hard reset (join settle, sofa hop, teleport). Those call sites place
+        // the avatar themselves, so the next frame must snap, not glide.
+        buf = player._netBuf = [];
+        n.playing = false; n.starved = false; n.resync = false; n.errX = 0; n.errY = 0;
+    }
+    const last = buf[buf.length - 1];
+    if (last && t - last.t > NET_IDLE_GAP) {
+        // The stream resumed after a silence. The old samples describe a different
+        // moment entirely, and interpolating across the gap would replay a stale
+        // animation state (and a span so long the maths is meaningless). Restart
+        // the timeline here and let the continuity guard absorb the offset.
+        buf.length = 0;
+        n.resync = true;
+    } else if (last && t <= last.t) {
+        t = last.t + 1;                                      // keep the timeline monotonic
+    }
+    buf.push({ t, x, y, m: player._netM, s: player._netS });
     while (buf.length > 2 && now - buf[0].t > NET_BUF_MAX_AGE) buf.shift();
+}
+
+// Continuity guard: absorb a positional discontinuity as a decaying offset
+// instead of moving the avatar. A jump bigger than NET_SMOOTH_MAX is a real
+// teleport (kidnap, reclaim, a seat), so it snaps.
+function _netAbsorbError(n, prevX, prevY, ix, iy) {
+    const ex = prevX - ix, ey = prevY - iy;
+    if (ex * ex + ey * ey > NET_SMOOTH_MAX * NET_SMOOTH_MAX) { n.errX = 0; n.errY = 0; return; }
+    n.errX = ex; n.errY = ey;
 }
 
 // Sets entity.renderX/renderY from the buffer. Returns false if no buffer yet
@@ -3173,33 +3268,90 @@ function pushNetSample(player, x, y) {
 function interpolateRemoteFromBuffer(entity) {
     const buf = entity._netBuf;
     if (!buf || !buf.length) return false;
-    const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-    const renderT = now - NET_RENDER_DELAY;
+    const n = entity._netClock;
+    if (!n) return false;
+    const now = _netNow();
+    const dtF = Math.max(0.2, Math.min(6, gameState.dtFactor || 1));
+
+    // Grow the delay the instant the link demands it; give it back slowly.
+    const target = Math.max(NET_DELAY_MIN, Math.min(NET_DELAY_MAX,
+        Math.max(NET_DELAY_MIN + n.jitter * NET_JITTER_K, n.gap * NET_GAP_MULT)));
+    if (target > n.delay) n.delay = target;
+    else n.delay += (target - n.delay) * (1 - Math.pow(1 - NET_DELAY_SHRINK, dtF));
+
+    const prevX = entity.renderX, prevY = entity.renderY;
+    const lastS = buf[buf.length - 1];
+    // Buffer bloat guard: a burst (or a delay that grew during a spike and hasn't
+    // eased back) can leave playback trailing far behind the newest sample, which
+    // reads as the player lagging permanently. Wind the clock forward gently —
+    // 6 ms a frame is invisible motion but clears a second of backlog in ~3 s.
+    if (lastS.t - (now - n.delay) > n.delay + NET_BLOAT_MS) {
+        n.delay = Math.max(NET_DELAY_MIN, n.delay - 6 * dtF);
+    }
+    const renderT = now - n.delay;
+    let ix, iy, starving = false;
+
     if (buf.length === 1 || renderT <= buf[0].t) {
-        entity.renderX = buf[0].x; entity.renderY = buf[0].y; return true;
-    }
-    for (let i = 0; i < buf.length - 1; i++) {
+        ix = buf[0].x; iy = buf[0].y;
+        if (buf[0].m !== undefined) { entity.isMoving = !!buf[0].m; entity.isSprinting = !!buf[0].s; }
+    } else if (renderT <= lastS.t) {
+        let i = buf.length - 2;
+        while (i > 0 && buf[i].t > renderT) i--;
         const a = buf[i], b = buf[i + 1];
-        if (renderT >= a.t && renderT <= b.t) {
-            const span = b.t - a.t || 1;
-            const f = (renderT - a.t) / span;
-            entity.renderX = a.x + (b.x - a.x) * f;
-            entity.renderY = a.y + (b.y - a.y) * f;
-            return true;
-        }
+        const span = b.t - a.t || 1;
+        const f = Math.min(1, Math.max(0, (renderT - a.t) / span));
+        ix = a.x + (b.x - a.x) * f;
+        iy = a.y + (b.y - a.y) * f;
+        // Animation state belongs to playback time too — applying it on arrival
+        // stopped a remote walk cycle a whole interpolation delay early.
+        const act = (f < 1 ? a : b);
+        if (act.m !== undefined) { entity.isMoving = !!act.m; entity.isSprinting = !!act.s; }
+    } else if (lastS.m !== undefined ? !lastS.m : !entity.isMoving) {
+        ix = lastS.x; iy = lastS.y;
+        if (lastS.m !== undefined) { entity.isMoving = false; entity.isSprinting = false; }
+    } else {
+        // Ran dry mid-walk: coast along the last velocity with the speed easing
+        // to zero over NET_EXTRAP_MS, so a stall reads as slowing down, never as
+        // a freeze followed by a catch-up jump.
+        starving = true;
+        const a = buf[buf.length - 2];
+        const span = lastS.t - a.t || 1;
+        const ah = Math.min(renderT - lastS.t, NET_EXTRAP_MS);
+        const travel = ah - (ah * ah) / (2 * NET_EXTRAP_MS);
+        ix = lastS.x + ((lastS.x - a.x) / span) * travel;
+        iy = lastS.y + ((lastS.y - a.y) / span) * travel;
+        // Fully coasted with nothing behind it (a dropped socket, a 'bye'): the
+        // avatar is at rest, so stop the walk cycle rather than moonwalk forever.
+        if (ah >= NET_EXTRAP_MS) { entity.isMoving = false; entity.isSprinting = false; }
     }
-    // renderT is past the newest sample (buffer starved this frame).
-    const b = buf[buf.length - 1];
-    if (!entity.isMoving) { entity.renderX = b.x; entity.renderY = b.y; return true; }
-    // Still moving but out of buffer → extrapolate along the last velocity, and flag
-    // the starve so the NEXT incoming sample re-anchors smoothly instead of letting
-    // interpolation jump the avatar forward to catch up.
-    entity._netStarved = true;
-    const a = buf[buf.length - 2];
-    const span = b.t - a.t || 1;
-    const ahead = Math.min(renderT - b.t, NET_MAX_EXTRAP);
-    entity.renderX = b.x + ((b.x - a.x) / span) * ahead;
-    entity.renderY = b.y + ((b.y - a.y) / span) * ahead;
+
+    if (starving && !n.starved) {
+        // Running dry IS the measurement that the delay was too small.
+        n.jitter = Math.min(NET_JITTER_MAX, n.jitter + NET_STARVE_BUMP);
+    } else if (!starving && (n.starved || n.resync) && n.playing) {
+        // Either extrapolation guessed wrong and real data just contradicted it,
+        // or the timeline restarted. Absorb it as a decaying offset — the avatar
+        // never teleports, however bad the link got.
+        _netAbsorbError(n, prevX, prevY, ix, iy);
+    }
+    if (!starving) n.resync = false;
+    n.starved = starving;
+    if (!n.playing) { n.errX = 0; n.errY = 0; n.playing = true; }
+
+    // Bleed the correction off exponentially, but never faster than
+    // NET_ERR_MAX_STEP — a plain exponential sheds ~14% on the first frame, which
+    // for a big error IS the jump we're trying to avoid. Rate-capped, a large
+    // correction reads as the avatar walking a little off-pace for a moment.
+    const mag = Math.hypot(n.errX, n.errY);
+    if (mag > 0.05) {
+        const cut = Math.min(mag, Math.min(mag * (1 - Math.pow(NET_ERR_DECAY, dtF)),
+                                           NET_ERR_MAX_STEP * dtF));
+        const k = (mag - cut) / mag;
+        n.errX *= k; n.errY *= k;
+    } else { n.errX = 0; n.errY = 0; }
+
+    entity.renderX = ix + n.errX;
+    entity.renderY = iy + n.errY;
     return true;
 }
 
@@ -8771,6 +8923,11 @@ function listenToPlayers() {
                                     // movement smooth; Firebase is only the fallback when WS is quiet.
                                     const _now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
                                     if (_now - (player._lastWsSampleAt || 0) > 1000) {
+                                        // No sender stamp here (a Firebase write has no send
+                                        // clock) → arrival-stamped, and the animation flags
+                                        // must come from THIS snapshot, not a stale WS one.
+                                        player._netM = userData.isMoving ? 1 : 0;
+                                        player._netS = userData.isSprinting ? 1 : 0;
                                         pushNetSample(player, userData.x, userData.y);
                                     }
                                 }
@@ -8842,10 +8999,19 @@ function listenToPlayers() {
 // ============================================================================
 const PRESENCE_WS_BASE = 'wss://mdwnh-presence.yosefbore3y.workers.dev';
 const POS_WS_MIN_INTERVAL = 90; // ms between sends → ~11/sec max while walking
+// A heading change would otherwise be corner-cut across a whole send interval:
+// the receiver interpolates a straight line between the two samples, so a sharp
+// turn arrives as a diagonal shortcut through the corner. An extra packet on a
+// real turn costs a handful of messages and keeps the replayed PATH honest —
+// smoothness alone isn't accuracy.
+const POS_WS_TURN_GAP = 28;   // ms hard floor, even on a turn
+const POS_WS_TURN_COS = 0.80; // ≈37° of heading change forces an out-of-band send
 const presenceNet = {
     ws: null,
     lobby: null,        // which lobby room the current socket is joined to
     lastSendAt: 0,
+    lastVX: 0, lastVY: 0,   // unit heading at the last send (turn detection)
+    turnAt: -1e9,       // last out-of-band turn send — rate-limited to one per interval
     reconnectTimer: null,
     closing: false,     // true = we asked it to close (logout); don't reconnect
 };
@@ -8901,9 +9067,25 @@ function sendPositionWS(x, y, force) {
     const ws = presenceNet.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     const now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-    if (!force && now - presenceNet.lastSendAt < POS_WS_MIN_INTERVAL) return false;
-    presenceNet.lastSendAt = now;
     const p = gameState.players[gameState.userId];
+    // Current heading as a unit vector, for the turn test below.
+    let hx = 0, hy = 0;
+    if (p && p.isMoving) {
+        const mag = Math.hypot(p._vx || 0, p._vy || 0);
+        if (mag > 0.001) { hx = (p._vx || 0) / mag; hy = (p._vy || 0) / mag; }
+    }
+    const since = now - presenceNet.lastSendAt;
+    if (!force && since < POS_WS_MIN_INTERVAL) {
+        const turned = (hx !== 0 || hy !== 0)
+            && (hx * presenceNet.lastVX + hy * presenceNet.lastVY) < POS_WS_TURN_COS;
+        // One extra packet per interval at most, so a wiggling joystick can't
+        // multiply the send rate.
+        if (!(turned && since >= POS_WS_TURN_GAP
+              && now - presenceNet.turnAt >= POS_WS_MIN_INTERVAL)) return false;
+        presenceNet.turnAt = now;
+    }
+    presenceNet.lastSendAt = now;
+    presenceNet.lastVX = hx; presenceNet.lastVY = hy;
     const payload = JSON.stringify({
         uid: gameState.userId,
         x: Math.round(x),
@@ -8911,6 +9093,11 @@ function sendPositionWS(x, y, force) {
         m: (p && p.isMoving) ? 1 : 0,
         s: (p && p.isSprinting) ? 1 : 0,
         fl: (p && p.floor) || 1,    // which floor I'm on → others scale me correctly
+        // Our own monotonic clock when this packet was built. The receiver maps it
+        // onto its own clock with a minimum-filtered offset, so its jitter buffer
+        // replays the samples at the spacing they were SENT at, not the spacing
+        // the network happened to deliver them at. See pushNetSample.
+        w: Math.round(now),
     });
     try { ws.send(payload); return true; } catch (_) { return false; }
 }
@@ -8951,6 +9138,11 @@ function onPresenceMessage(data) {
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
     player.isSprinting = msg.s === 1;
+    // The buffered copy is what actually drives the walk cycle — the sample it
+    // rides on is replayed one interpolation delay later, so the animation stops
+    // when the avatar visually stops rather than a delay early.
+    player._netM = msg.m === 1 ? 1 : 0;
+    player._netS = msg.s === 1 ? 1 : 0;
     if (msg.fl === 1 || msg.fl === 2) player.floor = msg.fl;
     if (typeof msg.x === 'number' && typeof msg.y === 'number') {
         setEntityTarget(player, msg.x, msg.y);  // keep .x/.y authoritative
@@ -8958,7 +9150,7 @@ function onPresenceMessage(data) {
             // Still settling in — pin (no buffered travel) until we pop them in.
             player.renderX = msg.x; player.renderY = msg.y; player._netBuf = null;
         } else {
-            pushNetSample(player, msg.x, msg.y);    // feed the interpolation buffer
+            pushNetSample(player, msg.x, msg.y, msg.w);  // feed the jitter buffer
         }
     }
 }
@@ -9159,6 +9351,10 @@ function handleMovement() {
     const moving = (player._vx !== 0 || player._vy !== 0);
 
     if (moving) {
+        // Force the first packet of a walk out of band — otherwise the throttle can
+        // hold it for a whole interval and everyone else sees the start up to 90 ms
+        // late (and, with the delay buffer on top, a visibly late foot-off).
+        const startedMoving = !player.isMoving;
         player.isMoving = true;
         player.isSprinting = isSprinting && hasInput;
         const nextX = player.x + player._vx * gameState.dtFactor;
@@ -9169,7 +9365,7 @@ function handleMovement() {
         syncEntityRenderToTarget(player);
         // Live movement goes over the WebSocket relay (throttled), NOT Firebase —
         // this is the per-frame write that used to spam the database.
-        sendPositionWS(player.x, player.y);
+        sendPositionWS(player.x, player.y, startedMoving);
 
         if (Math.random() < (player.isSprinting ? 0.8 : 0.4) * gameState.dtFactor) {
             spawnDust(player.renderX, player.renderY, player.isSprinting ? 2 : 1, false);
