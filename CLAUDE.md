@@ -91,6 +91,7 @@ Grep anchors for the major systems (all verified to exist):
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
 | Work streak challenge | `CHAL`, `updateWorkChallenge`, `_chalBank`, `_chalClaim` |
 | Trophy shelf | `TROPHIES`, `updateTrophies`, `_troBank`, `_troClaim`, `_troCeremony` |
+| جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
 | Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admGrantDiamond` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
@@ -2148,6 +2149,57 @@ dilated bottom wall already stops the player ~50 source px short of it.
   back to must be the one you left.
 - z-index **9000 for the shelf, 9400 for the ceremony — both below prayer/azkar
   (10000)**, which must cover them.
+
+### جوائز العام — the sheet on the wall
+
+`Art/Awards.jpg` is taped low on the room's wall (`#tro-paper`). Pressing it peels
+it off, tumbles it through the room and **slaps it flat against the screen**, the
+screen being read as a pane of glass. It stays stuck there to be read — press to
+enlarge, drag it anywhere, pinch or wheel to zoom — and closing runs the same
+curve backwards and tapes it back up. Code is the `جوائز العام` block right after
+`setupTrophyUI`; markup is `#tro-paper` + `#tro-paper-view` inside the shelf
+overlay; styles sit with the shelf's. Grep anchors: `AWD`, `_awdOpen`, `_awdPose`,
+`_awdRun`, `_awdClose`.
+
+**Cost: zero.** Nothing is written, read or synced — it is a picture on a wall,
+identical for everyone. The image carries **no `src` in the markup**: both `<img>`s
+are attached by `_troEnsureAssets` (idle after spawn, with the trophies), so ~80 KB
+can never land on the login path.
+
+**The flight is one rAF, not a keyframe.** It has to start wherever the sheet is
+pinned and end wherever the viewport centre is, and neither is knowable in CSS — so
+`_awdPose(u)` is the whole score (`u` = 0 on the wall, 1 flat on the glass) and each
+frame writes one transform. The one-shot glass FX (flash, ring, the pane's jolt)
+**are** keyframes: they never need a rect, and a class is the cheapest way to fire
+them once.
+
+- **The fly element is laid out at the STUCK rect** — reading size, centred — and the
+  transform maps it *back* onto the wall. The stuck pose is the one that must be
+  pixel-exact, because it is what the pan and the zoom are measured against.
+- **The scale comes from `offsetWidth`, the position from the rect.** The pinned sheet
+  is tilted, so its `getBoundingClientRect().width` is the rotated bounding box —
+  ~10% too wide on a tall sheet, which would land it at the wrong size.
+- `visibility: hidden` (`.is-away`), never `display: none`, while it is away: the wall
+  rect has to stay measurable, because it is what the flight home is aimed at.
+- **Travel accelerates into the glass** (`k^1.6`) — a sheet thrown at a pane, not eased
+  into one — with an arc off the straight line. What reads as *paper* is the decay
+  terms: the X/Y flutter dies out as it flattens, and the impact is **one** damped
+  bounce (`exp(-4.6b)·cos(2.9πb)`, ~4 frames). A slower decay turns paper into jelly.
+- `AWD.spin` is **360**, a whole turn, so it lands upright and readable.
+- **The reader's pan/zoom is folded into the flight home weighted by `u`**, so closing
+  from a dragged, zoomed sheet still lands on the wall — one code path, not two.
+- Tap-to-enlarge only fires when the press **moved < 10 px** (the sheet is dragged
+  around, and a drag still ends in a press — the library-pill rule).
+- **A press on the pinned sheet within `AWD.ghost` (450 ms) of the shelf opening is
+  ignored** — the world tap that opened the room is followed ~300 ms later by a
+  synthesized click, and the sheet sits in a corner it could land in. Same guard the
+  laptop mode-select chain uses (`_tro.openedAt`).
+- The 0.36 s ease that makes tap-to-enlarge feel good would smear a wheel or a pinch,
+  so those add `.is-live` (no transition) for 160 ms.
+- `closeTrophyShelf` calls `_awdReset()` — the sheet goes back on the wall with the room.
+- `will-change` is on `.tro-paper-view.active .tro-paper-fly` only: a promoted layer
+  this size held for the whole session is memory spent on a room that is closed
+  almost all of the time.
 
 ## لوحة القائد — the leader's panel
 

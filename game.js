@@ -28484,7 +28484,7 @@ const _tro = {
     // قارئ counts only what is read AFTER the epoch, so the reading total the member
     // already had banked before the shelf existed is subtracted, not credited.
     readAt: 0, readBase: 0,
-    detailId: null, claiming: false,
+    detailId: null, claiming: false, openedAt: 0,
     assets: null,
     cer: { running: false, timers: [], collect: null, id: null, raf: 0 },
 };
@@ -28745,12 +28745,19 @@ async function _troStartEpoch(prog) {
    ceremony. Never on the login path. Idempotent, and a file that fails resolves. */
 function _troEnsureAssets() {
     if (_tro.assets) return _tro.assets;
-    const imgs = ['Shelf', 1, 2, 3, 4, 5, 6, 7].map(n => new Promise(res => {
+    const imgs = ['Shelf', 'Awards', 1, 2, 3, 4, 5, 6, 7].map(n => new Promise(res => {
         const img = new Image();
         img.decoding = 'async';
         img.onload = img.onerror = () => res();
-        img.src = n === 'Shelf' ? 'Art/trophies/Shelf.webp' : TRO_ART(n);
+        img.src = n === 'Shelf' ? 'Art/trophies/Shelf.webp' : n === 'Awards' ? AWD_SRC : TRO_ART(n);
     }));
+    /* جوائز العام hangs on the room's wall. Its two <img>s carry no src in the
+       markup on purpose — attaching it HERE is what keeps ~80 KB off the login
+       path while still having it decoded long before anyone opens the room. */
+    for (const id of ['tro-paper-thumb', 'tro-paper-img']) {
+        const el = document.getElementById(id);
+        if (el && !el.getAttribute('src')) el.src = AWD_SRC;
+    }
     const snd = gameState.focusAudioEngine
         ? gameState.focusAudioEngine.ensureTrophySounds()
         : Promise.resolve();
@@ -28917,6 +28924,7 @@ function openTrophyShelf() {
     const overlay = document.getElementById('trophy-overlay');
     if (!overlay) return;
     _tro.open = true;
+    _tro.openedAt = Date.now();           // the sheet's ghost-click guard reads this
     gameState.keys = {};                  // drop any held movement key
     _troEnsureAssets();
     // Park the world camera. The game loop keeps running behind the overlay, so a
@@ -28950,6 +28958,7 @@ function closeTrophyShelf() {
     const overlay = document.getElementById('trophy-overlay');
     if (overlay) { overlay.classList.remove('active'); overlay.setAttribute('aria-hidden', 'true'); }
     _troCloseSub();
+    _awdReset();                          // جوائز العام goes back on the wall with it
     document.body.classList.remove('trophy-active');
     _tro.camFrozen = null;
 }
@@ -29411,6 +29420,7 @@ function setupTrophyUI() {
         el?.addEventListener('click', (e) => { if (e.target === el) _troCloseSub(); });
     }
     document.getElementById('tro-collected-btn')?.addEventListener('click', _troOpenCollected);
+    _awdWire();                           // جوائز العام — the sheet on the wall
     document.getElementById('tro-complete-btn')?.addEventListener('click', (e) => {
         // Class, not the `disabled` attribute — so the lock has to be checked here.
         if (!e.currentTarget.classList.contains('unlocked')) return;
@@ -29485,6 +29495,408 @@ function setupTrophyUI() {
        call is now just a backstop for a session where idle never fired. */
     if (window.requestIdleCallback) requestIdleCallback(_troEnsureAssets, { timeout: 12000 });
     else setTimeout(_troEnsureAssets, 6000);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   جوائز العام — the paper on the wall of the trophy room
+   ═══════════════════════════════════════════════════════════════════════════════
+   Grep anchors: AWD, _awdOpen, _awdPose, _awdRun, _awdClose.
+
+   A sheet taped low on the room's wall. Pressing it PEELS it off, tumbles it
+   through the room and SLAPS it flat against the screen — the screen being read
+   as a pane of glass the sheet has just hit. It stays stuck there to be read:
+   press to enlarge, drag to move it anywhere, pinch (or the wheel) to zoom.
+   Closing runs the same curve backwards and tapes it back on the wall.
+
+   THE FLIGHT IS ONE rAF, NOT A KEYFRAME. It has to start from wherever the sheet
+   is pinned and end wherever the viewport centre is, and neither is knowable in
+   CSS — so `_awdPose(u)` is the whole score and every frame writes one transform.
+   The one-shot glass FX (flash, ring, jolt) ARE keyframes: they never need a rect.
+
+   COST: zero. Nothing here is written, read, or synced — the sheet is a picture on
+   a wall, identical for everyone. The image is attached to its two <img>s by
+   _troEnsureAssets (idle after spawn, with the trophies), never on the login path.
+   ═══════════════════════════════════════════════════════════════════════════════ */
+const AWD_SRC = 'Art/Awards.jpg';
+const AWD_AR  = 588 / 1060;        // the sheet's own aspect (w / h)
+const AWD = {
+    fly: 940,      // wall → glass, ms
+    back: 620,     // glass → wall, ms
+    hit: 0.70,     // the fraction of `fly` at which it meets the glass
+    arc: 0.17,     // how far it swings off the straight line, as a fraction of the trip
+    spin: 360,     // degrees of Z tumble on the way in — a whole turn, so it lands upright
+    lift: 190,     // how far back in Z it starts, px
+    zoom: 2.1, zoomMin: 1, zoomMax: 4.6,
+    grip: 72,      // px of the sheet that must stay on screen when it is dragged away
+    ghost: 450,    // ms after the shelf opens in which a press is the world's, not ours
+};
+const _awd = {
+    wired: false, open: false, phase: '',      // '' | 'in' | 'stuck' | 'out'
+    raf: 0, from: null, fit: null,
+    s: 1, x: 0, y: 0,                          // the stuck pose: zoom + pan
+    ptrs: new Map(), drag: null, pinch: null, moved: 0,
+    tipTimer: 0, liveTimer: 0, backTimer: 0,
+};
+
+function _awdReduced() {
+    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; }
+    catch (_) { return false; }
+}
+function _awdSfx(name, rate, peak) {
+    const fe = gameState.focusAudioEngine;
+    if (!fe) return;
+    // playPitched only starts on a running context and returns false otherwise;
+    // playEffect resumes it first, so it is the honest fallback rather than silence.
+    try { if (!fe.playPitched(name, rate, peak)) fe.playEffect(name); } catch (_) {}
+}
+function _awdEl(id) { return document.getElementById(id); }
+
+/* Where the sheet flies FROM and TO. The fly element is laid out at the stuck
+   rect — the reading size, centred — and the transform maps it back onto the
+   wall, because the stuck pose is the one that has to be pixel-exact (it is what
+   the pan and the zoom are measured against). */
+function _awdLayout() {
+    const pin = _awdEl('tro-paper'), fly = _awdEl('tro-paper-fly');
+    if (!pin || !fly) return false;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    let h = Math.min(vh * 0.88, 1160), w = h * AWD_AR;
+    const maxW = vw * 0.9;
+    if (w > maxW) { w = maxW; h = w / AWD_AR; }
+    const cx = vw / 2, cy = vh / 2;
+    fly.style.left  = (cx - w / 2) + 'px';
+    fly.style.top   = (cy - h / 2) + 'px';
+    fly.style.width = w + 'px';
+    fly.style.height = h + 'px';
+    _awd.fit = { w, h, cx, cy };
+    /* `visibility: hidden` still lays out, so the wall rect stays measurable while
+       the sheet is away — which is what the flight home is aimed at. The rect's
+       WIDTH is the rotated bounding box, ~10% too wide on a tall tilted sheet, so
+       the scale comes from offsetWidth; only the centre is read off the rect. */
+    const r = pin.getBoundingClientRect();
+    _awd.from = {
+        tx: (r.left + r.width / 2) - cx,
+        ty: (r.top + r.height / 2) - cy,
+        s: (pin.offsetWidth || r.width) / w,
+        rz: -3.2,                                   // the tilt the tape holds it at
+    };
+    return true;
+}
+
+/* The score. `u` is 0 on the wall and 1 flat on the glass; everything below is a
+   function of it, so the same curve runs backwards for the flight home. */
+function _awdPose(u) {
+    const f = _awd.from;
+    if (!f) return null;
+    const k = Math.min(1, u / AWD.hit);                          // travel
+    const b = u <= AWD.hit ? 0 : (u - AWD.hit) / (1 - AWD.hit);  // settle on the glass
+    /* Travel ACCELERATES into the glass — a sheet thrown at a pane, not eased into
+       it. Everything that reads as "paper" is the decay terms: the flutter in X and
+       Y dies out as it flattens, and the impact is one damped oscillation. */
+    const p = Math.pow(k, 1.6);
+    /* One damped bounce, not a wobble: the sheet arrives already deformed and
+       relaxes over ~4 frames, which is how a real impact reads. A slower decay
+       here turns paper into jelly. */
+    const osc = b > 0 ? Math.exp(-4.6 * b) * Math.cos(b * Math.PI * 2.9) : 0;
+    const soft = _awdReduced();
+
+    // The trip, plus a swing off the straight line so it arcs instead of sliding.
+    const dx = -f.tx, dy = -f.ty;
+    const len = Math.hypot(dx, dy) || 1;
+    const arc = soft ? 0 : Math.sin(Math.PI * k) * len * AWD.arc;
+    const nx = -dy / len, ny = dx / len;
+
+    const decay = Math.pow(1 - k, 1.35);
+    return {
+        tx: f.tx * (1 - p) + nx * arc,
+        ty: f.ty * (1 - p) + ny * arc,
+        tz: soft ? 0 : -AWD.lift * (1 - p) + 30 * osc,
+        rx: soft ? 0 : 34 * Math.pow(1 - k, 1.2) * Math.sin(k * Math.PI * 2.3) - 5 * osc,
+        ry: soft ? 0 : 66 * decay * Math.cos(k * Math.PI * 1.6) + 7 * osc,
+        rz: soft ? 0 : f.rz + (AWD.spin - f.rz) * Math.pow(k, 1.25) + 9 * osc,
+        // The squash on contact: wider and shorter for an instant, like a sheet
+        // hitting glass flat-on.
+        sx: (f.s + (1 - f.s) * p) * (1 + 0.14 * osc),
+        sy: (f.s + (1 - f.s) * p) * (1 - 0.115 * osc),
+    };
+}
+
+/* The stuck pose (pan + zoom) is folded in weighted by `u`, so the flight home
+   starts from wherever the reader had dragged the sheet to and still lands on the
+   wall. On the way in it is the identity, so this is one code path, not two. */
+function _awdTransform(po, stuck, u) {
+    if (!po) return '';
+    const ox = stuck ? stuck.x * u : 0;
+    const oy = stuck ? stuck.y * u : 0;
+    const ms = stuck ? 1 + (stuck.s - 1) * u : 1;
+    return `translate3d(${(po.tx + ox).toFixed(2)}px, ${(po.ty + oy).toFixed(2)}px, ${po.tz.toFixed(2)}px)`
+         + ` rotateX(${po.rx.toFixed(2)}deg) rotateY(${po.ry.toFixed(2)}deg) rotateZ(${po.rz.toFixed(2)}deg)`
+         + ` scale(${(po.sx * ms).toFixed(4)}, ${(po.sy * ms).toFixed(4)})`;
+}
+
+function _awdApply() {
+    const fly = _awdEl('tro-paper-fly');
+    if (fly) fly.style.transform = `translate3d(${_awd.x.toFixed(2)}px, ${_awd.y.toFixed(2)}px, 0) scale(${_awd.s.toFixed(4)})`;
+}
+
+function _awdRun(dir) {
+    const fly = _awdEl('tro-paper-fly');
+    if (!fly || !_awd.from) return;
+    cancelAnimationFrame(_awd.raf);
+    _awd.phase = dir;
+    fly.classList.remove('is-stuck', 'is-drag', 'is-live');
+    const soft = _awdReduced();
+    const dur  = (dir === 'in' ? AWD.fly : AWD.back) * (soft ? 0.55 : 1);
+    // Only the flight home carries the reader's pan/zoom; the flight out starts clean.
+    const stuck = dir === 'in' ? null : { x: _awd.x, y: _awd.y, s: _awd.s };
+    const t0 = performance.now();
+    let hit = dir !== 'in';                 // the glass FX fire once, on the way in only
+    const step = (now) => {
+        const t = Math.min(1, (now - t0) / dur);
+        const u = dir === 'in' ? t : 1 - t;
+        fly.style.transform = _awdTransform(_awdPose(u), stuck, u);
+        if (!hit && u >= AWD.hit) { hit = true; _awdImpact(); }
+        if (t < 1) { _awd.raf = requestAnimationFrame(step); return; }
+        _awd.raf = 0;
+        if (dir === 'in') _awdLanded(); else _awdGone();
+    };
+    _awd.raf = requestAnimationFrame(step);
+}
+
+/* The contact. The three one-shots are cleared at open, and poked with a reflow
+   here anyway — a `forwards` animation left on the element would otherwise never
+   replay on the second visit. */
+function _awdImpact() {
+    const view = _awdEl('tro-paper-view'), flash = _awdEl('tro-paper-flash'), ring = _awdEl('tro-paper-ring');
+    for (const [el, cls] of [[flash, 'go'], [ring, 'go'], [view, 'hit']]) {
+        if (!el) continue;
+        el.classList.remove(cls);
+        void el.offsetWidth;
+        el.classList.add(cls);
+    }
+    _awdSfx('paperIntro', 1.12, 0.85);
+}
+
+function _awdLanded() {
+    const fly = _awdEl('tro-paper-fly'), view = _awdEl('tro-paper-view');
+    _awd.phase = 'stuck';
+    if (fly) { fly.classList.add('is-stuck'); }
+    _awdApply();
+    view?.classList.add('landed');
+    _awdTip(isMobile() ? 'اضغط للتكبير · قرّب بإصبعين · اسحب للتحريك'
+                       : 'اضغط للتكبير · اسحب للتحريك · حرّك العجلة للتقريب');
+}
+
+function _awdGone() {
+    const view = _awdEl('tro-paper-view'), fly = _awdEl('tro-paper-fly');
+    _awd.open = false; _awd.phase = '';
+    _awd.drag = null; _awd.pinch = null; _awd.ptrs.clear();
+    _awd.s = 1; _awd.x = 0; _awd.y = 0;
+    if (view) { view.classList.remove('active', 'hit', 'landed'); view.setAttribute('aria-hidden', 'true'); }
+    if (fly) fly.classList.remove('is-stuck', 'is-drag', 'is-live');
+    _awdSfx('paperSwipe', 0.9, 0.4);
+    /* The wall stays empty until the pane has finished fading, so the sheet is not
+       briefly on the wall AND in the air. Guarded, in case it was opened again. */
+    clearTimeout(_awd.backTimer);
+    _awd.backTimer = setTimeout(() => { if (!_awd.open) _awdEl('tro-paper')?.classList.remove('is-away'); }, 220);
+}
+
+function _awdTip(txt) {
+    const el = _awdEl('tro-paper-tip');
+    if (!el) return;
+    clearTimeout(_awd.tipTimer);
+    if (!txt) { el.classList.remove('show'); return; }
+    el.textContent = txt;
+    el.classList.add('show');
+    _awd.tipTimer = setTimeout(() => el.classList.remove('show'), 5200);
+}
+
+function _awdOpen() {
+    if (_awd.open || _awd.phase) return;
+    /* The press that opened the shelf is followed ~300 ms later by a synthesized
+       click at the same point — and the sheet sits in a corner it could land in.
+       Same guard the laptop mode-select chain uses. */
+    if (Date.now() - (_tro.openedAt || 0) < AWD.ghost) return;
+    const pin = _awdEl('tro-paper'), view = _awdEl('tro-paper-view'), fly = _awdEl('tro-paper-fly');
+    const img = _awdEl('tro-paper-img');
+    if (!pin || !view || !fly) return;
+    if (img && !img.getAttribute('src')) img.src = AWD_SRC;     // backstop; normally warmed
+    if (!_awdLayout()) return;
+    _awd.open = true;
+    _awd.s = 1; _awd.x = 0; _awd.y = 0;
+    clearTimeout(_awd.backTimer);
+    for (const id of ['tro-paper-flash', 'tro-paper-ring']) _awdEl(id)?.classList.remove('go');
+    view.classList.remove('hit', 'landed');
+    view.setAttribute('aria-hidden', 'false');
+    fly.style.transform = _awdTransform(_awdPose(0), null, 0);
+    pin.classList.add('is-away');
+    // Two frames, as everywhere else here: `display` can't transition, so the pane
+    // is always laid out and enter/exit is opacity + visibility.
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (_awd.open) view.classList.add('active'); }));
+    _awdSfx('paperSwipe', 1.18, 0.5);
+    _awdRun('in');
+}
+
+function _awdClose() {
+    if (!_awd.open || _awd.phase === 'out' || _awd.phase === 'in') return;
+    _awdTip('');
+    _awdEl('tro-paper-view')?.classList.remove('landed');
+    _awdSfx('paperExit', 1.06, 0.6);
+    _awdRun('out');
+}
+
+/* Hard teardown, no animation — the shelf closing under it, a logout, a resize
+   that happened while it was mid-flight. */
+function _awdReset() {
+    cancelAnimationFrame(_awd.raf); _awd.raf = 0;
+    clearTimeout(_awd.tipTimer); clearTimeout(_awd.liveTimer); clearTimeout(_awd.backTimer);
+    _awd.open = false; _awd.phase = '';
+    _awd.drag = null; _awd.pinch = null; _awd.ptrs.clear();
+    _awd.s = 1; _awd.x = 0; _awd.y = 0;
+    const view = _awdEl('tro-paper-view'), fly = _awdEl('tro-paper-fly');
+    if (view) { view.classList.remove('active', 'hit', 'landed'); view.setAttribute('aria-hidden', 'true'); }
+    if (fly) fly.classList.remove('is-stuck', 'is-drag', 'is-live');
+    for (const id of ['tro-paper-flash', 'tro-paper-ring']) _awdEl(id)?.classList.remove('go');
+    _awdEl('tro-paper-tip')?.classList.remove('show');
+    _awdEl('tro-paper')?.classList.remove('is-away');
+}
+
+/* ── reading it: zoom, pan, pinch ─────────────────────────────────────────── */
+function _awdClampScale(s) { return Math.max(AWD.zoomMin, Math.min(AWD.zoomMax, s)); }
+function _awdClampPan() {
+    const f = _awd.fit;
+    if (!f) return;
+    // Draggable almost anywhere, but never entirely off the screen.
+    const lx = Math.max(0, f.w * _awd.s / 2 + f.cx - AWD.grip);
+    const ly = Math.max(0, f.h * _awd.s / 2 + f.cy - AWD.grip);
+    _awd.x = Math.max(-lx, Math.min(lx, _awd.x));
+    _awd.y = Math.max(-ly, Math.min(ly, _awd.y));
+}
+/* Zoom about a point: the bit of the sheet under the cursor stays under it. */
+function _awdZoomTo(ns, px, py) {
+    const f = _awd.fit;
+    if (!f) return;
+    const k = ns / _awd.s;
+    _awd.x = (px - f.cx) - ((px - f.cx) - _awd.x) * k;
+    _awd.y = (py - f.cy) - ((py - f.cy) - _awd.y) * k;
+    _awd.s = ns;
+}
+/* Wheel and pinch write a transform every event; the 0.36 s ease that makes the
+   tap-to-enlarge feel good would smear them, so it is dropped for a moment. */
+function _awdLive() {
+    const fly = _awdEl('tro-paper-fly');
+    if (!fly) return;
+    fly.classList.add('is-live');
+    clearTimeout(_awd.liveTimer);
+    _awd.liveTimer = setTimeout(() => fly.classList.remove('is-live'), 160);
+}
+
+function _awdPtrDown(e) {
+    if (_awd.phase !== 'stuck') return;
+    const fly = e.currentTarget;
+    _awd.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    try { fly.setPointerCapture(e.pointerId); } catch (_) {}
+    fly.classList.add('is-drag');
+    if (_awd.ptrs.size >= 2) {
+        const [a, b] = [..._awd.ptrs.values()];
+        _awd.pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, s: _awd.s,
+                       mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2, x: _awd.x, y: _awd.y };
+        _awd.drag = null;                     // a pinch is not a drag and not a tap
+    } else {
+        _awd.drag = { px: e.clientX, py: e.clientY, x: _awd.x, y: _awd.y };
+        _awd.moved = 0;
+    }
+    e.preventDefault();
+}
+
+function _awdPtrMove(e) {
+    if (_awd.phase !== 'stuck' || !_awd.ptrs.has(e.pointerId)) return;
+    _awd.ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (_awd.pinch && _awd.ptrs.size >= 2) {
+        const [a, b] = [..._awd.ptrs.values()];
+        const p = _awd.pinch;
+        const ns = _awdClampScale(p.s * ((Math.hypot(a.x - b.x, a.y - b.y) || 1) / p.d));
+        const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+        const f = _awd.fit, k = ns / p.s;
+        if (!f) return;
+        // Anchored to where the pinch STARTED, so the two fingers zoom and pan at once.
+        _awd.x = (mx - f.cx) - ((p.mx - f.cx) - p.x) * k;
+        _awd.y = (my - f.cy) - ((p.my - f.cy) - p.y) * k;
+        _awd.s = ns;
+    } else if (_awd.drag) {
+        const d = _awd.drag;
+        _awd.x = d.x + (e.clientX - d.px);
+        _awd.y = d.y + (e.clientY - d.py);
+        _awd.moved = Math.max(_awd.moved, Math.hypot(e.clientX - d.px, e.clientY - d.py));
+    } else return;
+    _awdClampPan();
+    _awdApply();
+    e.preventDefault();
+}
+
+function _awdPtrUp(e) {
+    if (!_awd.ptrs.has(e.pointerId)) return;
+    _awd.ptrs.delete(e.pointerId);
+    const fly = e.currentTarget;
+    try { fly.releasePointerCapture(e.pointerId); } catch (_) {}
+    _awd.pinch = null;
+    if (_awd.ptrs.size === 0) {
+        fly.classList.remove('is-drag');
+        // The sheet is dragged around, and a drag still ends in a press — only a
+        // press that barely moved is a press (same rule as the library pills).
+        if (_awd.drag && _awd.moved < 10 && _awd.phase === 'stuck') _awdTapZoom(e.clientX, e.clientY);
+        _awd.drag = null;
+    } else {
+        // A finger lifted out of a pinch: re-anchor on the one that is left, or the
+        // sheet jumps the moment it moves. Never a tap.
+        const [a] = [..._awd.ptrs.values()];
+        _awd.drag = { px: a.x, py: a.y, x: _awd.x, y: _awd.y };
+        _awd.moved = 99;
+    }
+}
+
+function _awdTapZoom(px, py) {
+    if (_awd.s > 1.04) { _awd.s = 1; _awd.x = 0; _awd.y = 0; }
+    else _awdZoomTo(AWD.zoom, px, py);
+    _awdClampPan();
+    _awdApply();
+    // playPitched only — the blip is a 0.07-peak tick, and playEffect's fallback
+    // path would fire the same file at 0.8.
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', _awd.s > 1.04 ? 1.12 : 0.86, 0.07); } catch (_) {}
+}
+
+function _awdWheel(e) {
+    if (_awd.phase !== 'stuck') return;
+    e.preventDefault();
+    e.stopPropagation();
+    // deltaMode 1 = lines (a physical mouse) — normalise it, same as the azkar picker.
+    const d = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    _awdLive();
+    _awdZoomTo(_awdClampScale(_awd.s * Math.exp(-d * 0.0016)), e.clientX, e.clientY);
+    _awdClampPan();
+    _awdApply();
+}
+
+function _awdWire() {
+    if (_awd.wired) return;
+    const pin = _awdEl('tro-paper'), view = _awdEl('tro-paper-view'), fly = _awdEl('tro-paper-fly');
+    if (!pin || !view || !fly) return;
+    _awd.wired = true;
+    pin.addEventListener('click', _awdOpen);
+    _awdEl('tro-paper-close')?.addEventListener('click', _awdClose);
+    // A press on the glass around the sheet is a back button, like every other panel
+    // here. The sheet, the tip and the close button are all children, so the target
+    // test can only match the empty pane.
+    view.addEventListener('pointerdown', (e) => { if (e.target === view) _awdClose(); });
+    fly.addEventListener('pointerdown', _awdPtrDown);
+    fly.addEventListener('pointermove', _awdPtrMove);
+    fly.addEventListener('pointerup', _awdPtrUp);
+    fly.addEventListener('pointercancel', _awdPtrUp);
+    fly.addEventListener('wheel', _awdWheel, { passive: false });
+    window.addEventListener('resize', () => {
+        if (!_awd.open) return;
+        _awdLayout();
+        if (_awd.phase === 'stuck') { _awdClampPan(); _awdApply(); }
+    });
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════

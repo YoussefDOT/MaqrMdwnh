@@ -10138,6 +10138,219 @@ body.is-mobile .tro-back:active { transform: translateX(-50%) scale(0.94); }
     .tro-cer-av.wind, .tro-cer-av.dash, .tro-cer-av.slow { transform: none; }
 }
 
+/* ── جوائز العام — the paper on the wall ─────────────────────────────────────
+   A sheet taped low on the room's wall. Pressing it flies it to the middle of
+   the screen with real 3-D paper motion and STICKS it there, as if the screen
+   were a pane of glass: it slaps flat, the glass blooms, and the sheet stays
+   pressed against it under a faint sheen until it is peeled back off.
+
+   Every transform on the flight is written per frame by _awdPose (game.js) —
+   there is no keyframe for it, because the curve has to start from wherever the
+   sheet happens to be pinned and end wherever the viewport centre happens to be.
+   The one-shot FX below (flash, ring, shake) ARE keyframes: they never need to
+   know a rect, and a class is the cheapest way to fire them exactly once.
+   ────────────────────────────────────────────────────────────────────────── */
+.tro-paper {
+    position: absolute;
+    bottom: 20px;
+    inset-inline-end: 22px;
+    z-index: 5;
+    padding: 0;
+    border: 0;
+    background: none;
+    cursor: pointer;
+    line-height: 0;
+    -webkit-tap-highlight-color: transparent;
+    /* Sized against WIDTH as well as height: on a narrow window a height-only
+       clamp puts the sheet under the deck. */
+    height: clamp(112px, min(20vh, 21vw), 208px);
+    transform: rotate(-3.2deg);
+    filter: drop-shadow(0 12px 18px rgba(0, 0, 0, 0.55));
+    transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease;
+}
+.tro-paper img {
+    display: block;
+    height: 100%;
+    width: auto;
+    border-radius: 2px;
+}
+/* The tape strip that holds it up — the same trick the dashboard avatar uses. */
+.tro-paper-tape {
+    position: absolute;
+    top: -9px; left: 50%;
+    width: 46%; height: 20px;
+    transform: translateX(-50%) rotate(2.4deg);
+    background: linear-gradient(180deg, rgba(255, 250, 232, 0.5), rgba(240, 228, 200, 0.34));
+    border-inline: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+    pointer-events: none;
+}
+.tro-paper:hover  { transform: rotate(-1.4deg) translateY(-6px) scale(1.03); }
+.tro-paper:active { transform: rotate(-2.6deg) translateY(-1px) scale(0.98); }
+.tro-paper:focus-visible { outline: 2px solid var(--tro-gold-hi); outline-offset: 6px; }
+/* Off the wall while it is in the air / on the glass — `visibility`, not
+   `display`, so its rect stays measurable for the flight back. */
+.tro-paper.is-away { visibility: hidden; }
+/* Pushed away with the room when the detail panel is up. */
+.tro-overlay.tro-focus .tro-paper { opacity: 0; pointer-events: none; }
+
+/* The flight stage. `perspective` here is what makes the tumble read as paper
+   turning in space rather than a sprite being rotated. */
+.tro-paper-view {
+    position: absolute;
+    inset: 0;
+    z-index: 12;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    perspective: 1400px;
+    perspective-origin: 50% 50%;
+    transition: opacity 0.25s ease, visibility 0s linear 0.25s;
+    background: radial-gradient(120% 90% at 50% 50%, rgba(0, 0, 0, 0.34), rgba(0, 0, 0, 0.72));
+}
+.tro-paper-view.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 0.25s ease, visibility 0s linear 0s;
+}
+/* The hit: the whole pane jolts once. Transform-only, so it is compositor-cheap
+   and safe at every graphics tier. */
+.tro-paper-view.hit { animation: awdShake 0.34s cubic-bezier(0.36, 0.07, 0.19, 0.97); }
+@keyframes awdShake {
+    0%   { transform: translate3d(0, 0, 0); }
+    22%  { transform: translate3d(0, 7px, 0) scale(1.006); }
+    48%  { transform: translate3d(0, -4px, 0); }
+    74%  { transform: translate3d(0, 2px, 0); }
+    100% { transform: translate3d(0, 0, 0); }
+}
+
+.tro-paper-fly {
+    position: fixed;          /* left/top/width/height written once per open */
+    transform-origin: 50% 50%;
+    touch-action: none;       /* the sheet owns the pinch and the drag */
+    cursor: grab;
+}
+/* Promoted only while the pane is up: a layer held for the whole session costs
+   its full size in memory, and the shelf is closed almost all of the time. */
+.tro-paper-view.active .tro-paper-fly { will-change: transform; }
+.tro-paper-fly.is-stuck { transition: transform 0.36s cubic-bezier(0.22, 1, 0.36, 1); }
+.tro-paper-fly.is-drag  { transition: none; cursor: grabbing; }
+/* The wheel and the pinch write a transform per event; the ease that makes
+   tap-to-enlarge feel good would smear them, so it is dropped for a moment. */
+.tro-paper-fly.is-live  { transition: none; }
+.tro-paper-fly img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border-radius: 3px;
+    box-shadow: 0 22px 60px rgba(0, 0, 0, 0.6);
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-user-drag: none;
+}
+/* Pressed against the glass: a faint diagonal sheen sitting ON the sheet. Static
+   — a moving highlight here would repaint a large element every frame. */
+.tro-paper-sheen {
+    position: absolute;
+    inset: 0;
+    border-radius: 3px;
+    pointer-events: none;
+    background: linear-gradient(112deg,
+        rgba(255, 255, 255, 0.16) 0%,
+        rgba(255, 255, 255, 0.05) 22%,
+        rgba(255, 255, 255, 0) 42%,
+        rgba(255, 255, 255, 0) 72%,
+        rgba(255, 255, 255, 0.07) 92%);
+    mix-blend-mode: screen;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+}
+.tro-paper-fly.is-stuck .tro-paper-sheen,
+.tro-paper-fly.is-drag  .tro-paper-sheen { opacity: 1; }
+
+/* The bloom where it meets the glass, and the ring thrown off by the contact. */
+.tro-paper-flash {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    background: radial-gradient(38% 30% at 50% 50%, rgba(255, 255, 255, 0.5), transparent 70%);
+}
+.tro-paper-flash.go { animation: awdFlash 0.5s ease-out forwards; }
+@keyframes awdFlash {
+    0%   { opacity: 0; }
+    9%   { opacity: 1; }
+    100% { opacity: 0; }
+}
+.tro-paper-ring {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 24vmin; height: 24vmin;
+    margin: -12vmin 0 0 -12vmin;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.55);
+    opacity: 0;
+    pointer-events: none;
+}
+.tro-paper-ring.go { animation: awdRing 0.66s cubic-bezier(0.12, 0.72, 0.2, 1) forwards; }
+@keyframes awdRing {
+    0%   { opacity: 0.85; transform: scale(0.35); }
+    100% { opacity: 0;    transform: scale(2.4); }
+}
+
+.tro-paper-tip {
+    position: absolute;
+    left: 50%; bottom: 22px;
+    transform: translateX(-50%);
+    margin: 0;
+    padding: 7px 14px;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(18, 18, 18, 0.68);
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 0.74rem;
+    font-weight: 600;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+.tro-paper-tip.show { opacity: 1; }
+
+.tro-paper-close {
+    position: absolute;
+    top: 20px; inset-inline-end: 20px;
+    width: 38px; height: 38px;
+    display: grid; place-items: center;
+    border-radius: 50%;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.62);
+    font-size: 15px;
+    cursor: pointer;
+    opacity: 0;
+    transition: transform 0.22s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.18s, color 0.18s, opacity 0.3s ease;
+}
+.tro-paper-view.landed .tro-paper-close { opacity: 1; }
+.tro-paper-close:hover  { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.tro-paper-close:active { transform: scale(0.88); }
+
+body.is-mobile .tro-paper { bottom: 14px; inset-inline-end: 14px; height: clamp(92px, min(16vh, 24vw), 150px); }
+body.is-mobile .tro-paper-tip { font-size: 0.68rem; bottom: 16px; }
+/* A blurred pane over the live canvas re-rasterises every frame (invariant 10) —
+   there is none here, and the sheen is the only blend on the sheet. */
+body.is-mobile .tro-paper-sheen { mix-blend-mode: normal; opacity: 0; }
+body.is-mobile .tro-paper-fly.is-stuck .tro-paper-sheen,
+body.is-mobile .tro-paper-fly.is-drag  .tro-paper-sheen { opacity: 0.5; }
+
+@media (prefers-reduced-motion: reduce) {
+    .tro-paper-view.hit { animation: none; }
+    .tro-paper-ring.go  { animation: none; opacity: 0; }
+    .tro-paper-flash.go { animation-name: awdFlashSoft; }
+    @keyframes awdFlashSoft { 0% { opacity: 0; } 10% { opacity: 0.22; } 100% { opacity: 0; } }
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    لوحة القائد — the leader's panel
    ════════════════════════════════════════════════════════════════════════════
