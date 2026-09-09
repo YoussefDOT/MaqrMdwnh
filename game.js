@@ -22197,6 +22197,38 @@ function confirmCrop() {
     document.getElementById('crop-modal').classList.remove('active');
 }
 
+// A pasted image goes through the SAME crop modal as a dropped one — `loadCropImage`
+// takes any Blob, so nothing about the crop/zoom flow changes.
+// Two paths on purpose: the button asks for the clipboard (needs permission, and
+// Safari only grants it inside the gesture — so never `await` anything first), and
+// the ⌘V / Ctrl+V paste event needs no permission at all and is the fallback for
+// browsers that refuse `clipboard.read()`.
+function _successPasteFeedback(msg) {
+    const btn = document.getElementById('success-photo-paste');
+    if (!btn) return;
+    if (btn._resetTimer) clearTimeout(btn._resetTimer);
+    const label = btn._label || (btn._label = btn.textContent);
+    btn.textContent = msg;
+    btn.classList.add('is-error');
+    btn._resetTimer = setTimeout(() => { btn.textContent = label; btn.classList.remove('is-error'); }, 2200);
+}
+
+function _successPasteFromClipboard() {
+    if (!navigator.clipboard || !navigator.clipboard.read) {
+        _successPasteFeedback('استخدم ⌘V للصق');
+        return;
+    }
+    navigator.clipboard.read().then((items) => {
+        for (const item of items) {
+            const type = (item.types || []).find(t => t.startsWith('image/'));
+            if (!type) continue;
+            item.getType(type).then(blob => loadCropImage(blob)).catch(() => _successPasteFeedback('تعذّر قراءة الصورة'));
+            return;
+        }
+        _successPasteFeedback('لا توجد صورة في الحافظة');
+    }).catch(() => _successPasteFeedback('استخدم ⌘V للصق'));
+}
+
 function setupSuccessCardUI() {
     const drop  = document.getElementById('success-photo-drop');
     const wrap  = document.getElementById('success-photo-wrap');
@@ -22205,6 +22237,31 @@ function setupSuccessCardUI() {
     if (!drop || !wrap || !input || !card) return;
 
     drop.addEventListener('click', () => input.click());
+    // Enter/Space on the (now div) drop zone, since it lost the button's native key handling.
+    drop.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); input.click(); }
+    });
+    // The paste button lives INSIDE the drop zone, so its click must not also open
+    // the file picker. `_successPasteFromClipboard` runs synchronously inside the
+    // gesture — Safari revokes clipboard permission the moment you await first.
+    document.getElementById('success-photo-paste')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _successPasteFromClipboard();
+    });
+    // ⌘V / Ctrl+V while the card is open — needs no clipboard permission at all.
+    document.addEventListener('paste', (e) => {
+        const modal = document.getElementById('success-modal');
+        if (!modal || !modal.classList.contains('active')) return;
+        if (document.getElementById('crop-modal')?.classList.contains('active')) return;
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (const it of items) {
+            if (it.kind !== 'file' || !it.type.startsWith('image/')) continue;
+            const f = it.getAsFile();
+            if (f) { e.preventDefault(); if (wrap.style.display === 'none') successPhotoState('drop'); loadCropImage(f); }
+            return;
+        }
+    });
     input.addEventListener('change', () => { if (input.files && input.files[0]) loadCropImage(input.files[0]); input.value = ''; });
     // ✕ removes the photo completely (card shrinks) and reveals the "اضافة صورة" text.
     document.getElementById('success-photo-remove')?.addEventListener('click', () => successPhotoState('removed'));

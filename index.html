@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 274 · Updated 9/8 4:03 PM</div>
+    <div id="build-number" class="build-number">Build 275 · Updated 9/9 7:45 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -986,10 +986,11 @@
                     <div id="success-photo-wrap" class="success-photo-wrap">
                         <button type="button" id="success-photo-remove" class="success-photo-remove"
                             aria-label="إزالة الصورة">✕</button>
-                        <button type="button" id="success-photo-drop" class="success-photo-drop">
+                        <div id="success-photo-drop" class="success-photo-drop" role="button" tabindex="0">
                             <span class="success-photo-icon">📷</span>
                             <span class="success-photo-text">اسحب صورة هنا أو انقر</span>
-                        </button>
+                            <button type="button" id="success-photo-paste" class="success-photo-paste">نسخ من الحافظة</button>
+                        </div>
                         <div id="success-photo-taped" class="success-photo-taped" style="display:none;">
                             <div class="success-photo-inner"><img id="success-photo-img" src="" alt=""></div>
                         </div>
@@ -1943,7 +1944,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=264"></script>
+        <script type="module" src="game.js?v=265"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

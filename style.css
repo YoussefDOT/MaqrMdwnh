@@ -6133,6 +6133,16 @@ body.is-mobile .dash-todo-header { font-size: 21px; }
 }
 .success-photo-icon { font-size: 26px; line-height: 1; }
 .success-photo-text { font-size: 13px; font-weight: 600; max-width: 150px; line-height: 1.4; }
+/* «نسخ من الحافظة» — sits inside the drop square, under the hint text. Its own
+   button, so it must not inherit the dashed zone's hover colour shifts. */
+.success-photo-paste {
+    margin-top: 2px; padding: 5px 12px; border-radius: 50px; cursor: pointer;
+    border: 1px solid #d5d5d5; background: #fff; color: #888;
+    font-family: inherit; font-size: 12px; font-weight: 700; line-height: 1.2;
+    transition: border-color .2s, background .2s, color .2s;
+}
+.success-photo-paste:hover { border-color: var(--clr-blue); color: var(--clr-blue); background: #f4f9ff; }
+.success-photo-paste.is-error { border-color: #e0a0a0; color: #c05656; background: #fff4f4; }
 
 /* Taped-on photo (4:3) — replicates the dashboard avatar tape (warm tint + tape + tilt) */
 .success-photo-taped {
