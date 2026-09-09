@@ -22136,6 +22136,7 @@ function successPhotoState(state) {
 // Reset to the default (add zone) state — called each time the card opens.
 function clearSuccessPhoto() {
     successPhotoState('drop');
+    _successPasteClearHint();   // a message left over from the last session's card
 }
 
 function _cropApply() {
@@ -22203,14 +22204,31 @@ function confirmCrop() {
 // Safari only grants it inside the gesture — so never `await` anything first), and
 // the ⌘V / Ctrl+V paste event needs no permission at all and is the fallback for
 // browsers that refuse `clipboard.read()`.
+// The message lands on the zone's own hint LINE, never on the button — swapping the
+// button's own label read as "the button is gone" and left nothing obvious to press
+// again on the very failure ("nothing in the clipboard") the user has to retry after
+// copying something.
 function _successPasteFeedback(msg) {
-    const btn = document.getElementById('success-photo-paste');
-    if (!btn) return;
-    if (btn._resetTimer) clearTimeout(btn._resetTimer);
-    const label = btn._label || (btn._label = btn.textContent);
-    btn.textContent = msg;
-    btn.classList.add('is-error');
-    btn._resetTimer = setTimeout(() => { btn.textContent = label; btn.classList.remove('is-error'); }, 2200);
+    const zone = document.getElementById('success-photo-drop');
+    const line = zone && zone.querySelector('.success-photo-text');
+    if (!line) return;
+    clearTimeout(_successPasteFeedback._t);
+    if (line._label === undefined) line._label = line.textContent;
+    line.textContent = msg;
+    zone.classList.add('is-error');
+    _successPasteFeedback._t = setTimeout(() => {
+        line.textContent = line._label;
+        zone.classList.remove('is-error');
+    }, 2600);
+}
+
+function _successPasteClearHint() {
+    const zone = document.getElementById('success-photo-drop');
+    const line = zone && zone.querySelector('.success-photo-text');
+    if (!line) return;
+    clearTimeout(_successPasteFeedback._t);
+    if (line._label !== undefined) line.textContent = line._label;
+    zone.classList.remove('is-error');
 }
 
 function _successPasteFromClipboard() {
@@ -22222,7 +22240,7 @@ function _successPasteFromClipboard() {
         for (const item of items) {
             const type = (item.types || []).find(t => t.startsWith('image/'));
             if (!type) continue;
-            item.getType(type).then(blob => loadCropImage(blob)).catch(() => _successPasteFeedback('تعذّر قراءة الصورة'));
+            item.getType(type).then(blob => { _successPasteClearHint(); loadCropImage(blob); }).catch(() => _successPasteFeedback('تعذّر قراءة الصورة'));
             return;
         }
         _successPasteFeedback('لا توجد صورة في الحافظة');
@@ -22258,7 +22276,7 @@ function setupSuccessCardUI() {
         for (const it of items) {
             if (it.kind !== 'file' || !it.type.startsWith('image/')) continue;
             const f = it.getAsFile();
-            if (f) { e.preventDefault(); if (wrap.style.display === 'none') successPhotoState('drop'); loadCropImage(f); }
+            if (f) { e.preventDefault(); if (wrap.style.display === 'none') successPhotoState('drop'); _successPasteClearHint(); loadCropImage(f); }
             return;
         }
     });

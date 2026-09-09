@@ -6142,7 +6142,10 @@ body.is-mobile .dash-todo-header { font-size: 21px; }
     transition: border-color .2s, background .2s, color .2s;
 }
 .success-photo-paste:hover { border-color: var(--clr-blue); color: var(--clr-blue); background: #f4f9ff; }
-.success-photo-paste.is-error { border-color: #e0a0a0; color: #c05656; background: #fff4f4; }
+/* A failed paste tints the ZONE's hint line, so the button itself stays put and
+   obviously pressable — the retry is the whole point of the message. */
+.success-photo-drop.is-error { border-color: #e0a0a0; background: #fff6f6; color: #c05656; }
+.success-photo-drop.is-error .success-photo-text { color: #c05656; }
 
 /* Taped-on photo (4:3) — replicates the dashboard avatar tape (warm tint + tape + tilt) */
 .success-photo-taped {
