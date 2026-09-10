@@ -11335,3 +11335,418 @@ body.is-mobile .adm-cal-ms { font-size: 0.62rem; }
     .adm-overlay.active .adm-room { transform: none; }
     .adm-refresh:hover { transform: none; }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   غرفة الاجتماعات — طاولة الاجتماع (the meeting table overlay)
+   The room behind is ONE blurred frame of the world (a static canvas — its
+   filter is rasterised once), the table sits under a warm pendant-light pool,
+   and the members sit round it. The only colour that isn't wood or glass is
+   Discord's speaking green.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.meet-overlay {
+    --meet-a: 64px;
+    --meet-green: #23a55a;
+    position: fixed;
+    inset: 0;
+    z-index: 9050;            /* below prayer/azkar (10000) — those must cover it */
+    direction: rtl;
+    overflow: hidden;
+    color: #fff;
+    font-family: 'Rubik', -apple-system, system-ui, sans-serif;
+    background: #0b0a09;
+    /* display can't transition — opacity + visibility, .active after a double rAF */
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.42s ease, visibility 0s linear 0.42s;
+}
+.meet-overlay.active {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 0.42s ease, visibility 0s linear 0s;
+}
+.meet-backdrop {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    filter: blur(14px) saturate(1.15) brightness(0.5);
+    transform: scale(1.08);   /* the blur's soft edge never shows */
+}
+.meet-scrim {
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(ellipse at 50% 48%, rgba(12, 9, 6, 0.10), rgba(6, 6, 8, 0.66) 78%);
+}
+
+/* ── head ── */
+.meet-head {
+    position: absolute;
+    top: max(18px, env(safe-area-inset-top));
+    right: 22px;
+    left: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    pointer-events: none;
+}
+.meet-title {
+    margin: 0;
+    font-size: 22px;
+    font-weight: 700;
+    line-height: 1.15;
+    text-shadow: 0 2px 14px rgba(0, 0, 0, 0.55);
+}
+.meet-count {
+    margin-top: 3px;
+    font-size: 13px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.55);
+}
+.meet-voice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 13px;
+    border-radius: 50px;
+    background: rgba(18, 18, 18, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    font-size: 12px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+    transition: color 0.3s ease;
+}
+.meet-voice-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.28);
+    transition: background 0.3s ease, box-shadow 0.3s ease;
+}
+.meet-voice.live { color: rgba(255, 255, 255, 0.85); }
+.meet-voice.live .meet-voice-dot {
+    background: var(--meet-green);
+    box-shadow: 0 0 0 3px rgba(35, 165, 90, 0.22);
+}
+
+/* ── the table ── */
+.meet-stage { position: absolute; }
+/* The pendant light over the table — a static pool, never animated. */
+.meet-lamp {
+    position: absolute;
+    inset: -42% -34%;
+    background: radial-gradient(closest-side, rgba(255, 214, 160, 0.24), rgba(255, 196, 120, 0.09) 48%, rgba(255, 190, 110, 0) 100%);
+    pointer-events: none;
+}
+.meet-table { position: absolute; inset: 0; }
+.meet-table img {
+    position: absolute;
+    display: block;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-user-drag: none;
+    pointer-events: none;
+    filter: drop-shadow(0 26px 34px rgba(0, 0, 0, 0.55)) drop-shadow(0 4px 6px rgba(0, 0, 0, 0.4));
+}
+/* Fade lives inside the keyframes; `backwards` supplies the hidden state during
+   the delay. A skipped animation leaves the table visible (invariant 20). */
+.meet-overlay.active .meet-table { animation: meetTableIn 0.6s cubic-bezier(0.22, 1, 0.36, 1) 0.08s backwards; }
+@keyframes meetTableIn {
+    from { opacity: 0; transform: translateY(18px) scale(0.94); }
+    to   { opacity: 1; transform: none; }
+}
+
+/* ── seats: .meet-seat (position + pop-in) > .meet-bob (hop) > .meet-av (reaction) ──
+   Three elements so the three motions never fight over one transform. */
+.meet-seat {
+    position: absolute;
+    width: var(--meet-a);
+    height: var(--meet-a);
+    animation: meetSeatIn 0.52s cubic-bezier(0.34, 1.56, 0.64, 1) var(--d, 0s) backwards;
+}
+@keyframes meetSeatIn {
+    from { opacity: 0; transform: translateY(12px) scale(0.4); }
+    to   { opacity: 1; transform: none; }
+}
+.meet-seat.out { animation: meetSeatOut 0.26s ease-in forwards; }
+@keyframes meetSeatOut {
+    to { opacity: 0; transform: scale(0.5); }
+}
+.meet-bob {
+    width: 100%;
+    height: 100%;
+    transition: opacity 0.35s ease, filter 0.35s ease;
+}
+/* In the call and not talking. */
+.meet-seat.quiet .meet-bob { opacity: 0.42; filter: saturate(0.55); }
+.meet-bob.hop { animation: meetHop 0.42s cubic-bezier(0.34, 1.56, 0.64, 1); }
+@keyframes meetHop {
+    0%   { transform: none; }
+    38%  { transform: translateY(-22%) scale(1.04, 0.97); }
+    66%  { transform: translateY(0) scale(1.07, 0.92); }
+    100% { transform: none; }
+}
+.meet-av {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    border-radius: 50%;
+    background: #2a2a2e center / cover no-repeat;
+    box-shadow: 0 0 0 3px var(--ring, #fff), 0 8px 18px rgba(0, 0, 0, 0.45);
+    transition: box-shadow 0.14s ease;
+}
+.meet-av[data-initial]::before {
+    content: attr(data-initial);
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-size: calc(var(--meet-a) * 0.38);
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.9);
+}
+.meet-seat.me .meet-av { cursor: pointer; }
+.meet-seat.me .meet-av:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.85); outline-offset: 5px; }
+/* Discord says they're talking. */
+.meet-seat.spk .meet-av {
+    box-shadow: 0 0 0 3px var(--ring, #fff), 0 0 0 7px var(--meet-green), 0 0 26px 4px rgba(35, 165, 90, 0.5);
+}
+.meet-name {
+    position: absolute;
+    top: calc(100% + 9px);
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: 130px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1.2;
+    color: rgba(255, 255, 255, 0.84);
+    text-shadow: 0 1px 6px rgba(0, 0, 0, 0.75);
+    pointer-events: none;
+}
+/* A top-row seat's name goes above it, so it never lands on the wood. */
+.meet-seat.name-up .meet-name { top: auto; bottom: calc(100% + 9px); }
+.meet-seat.name-up .meet-bubble { bottom: calc(100% + 32px); }
+
+/* The chat line over a seat — shown by class, faded by transition. */
+.meet-bubble {
+    position: absolute;
+    bottom: calc(100% + 13px);
+    left: 50%;
+    z-index: 2;
+    width: max-content;
+    max-width: 220px;
+    padding: 7px 12px;
+    border-radius: 15px;
+    background: rgba(20, 20, 22, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.4);
+    font-size: 14px;
+    font-weight: 500;
+    line-height: 1.35;
+    text-align: center;
+    overflow-wrap: anywhere;
+    color: rgba(255, 255, 255, 0.95);
+    transform: translateX(-50%);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 0.22s ease, visibility 0s linear 0.22s;
+}
+.meet-bubble::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -6px;
+    border: 6px solid transparent;
+    border-top-color: rgba(20, 20, 22, 0.92);
+}
+.meet-bubble.show {
+    opacity: 1;
+    visibility: visible;
+    transition: opacity 0.22s ease, visibility 0s linear 0s;
+    animation: meetBubbleIn 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes meetBubbleIn {
+    from { transform: translateX(-50%) translateY(8px) scale(0.6); }
+    to   { transform: translateX(-50%); }
+}
+
+/* ── reactions ── The emoji only ever appears through its animation: if one is
+   skipped the flourish is lost, never the avatar. */
+.meet-emoji {
+    position: absolute;
+    left: 50%;
+    top: -8%;
+    font-size: calc(var(--meet-a) * 0.44);
+    line-height: 1;
+    opacity: 0;
+    transform: translate(-50%, 0);
+    pointer-events: none;
+}
+.meet-seat.rx .meet-emoji { animation: meetEmojiUp 1.6s cubic-bezier(0.22, 1, 0.36, 1); }
+@keyframes meetEmojiUp {
+    0%   { opacity: 0; transform: translate(-50%, 10%) scale(0.6); }
+    12%  { opacity: 1; transform: translate(-50%, -20%) scale(1.12); }
+    70%  { opacity: 1; transform: translate(-50%, -85%) scale(1); }
+    100% { opacity: 0; transform: translate(-50%, -125%) scale(0.95); }
+}
+.meet-av.rx-happy { animation: rxHappy 1.6s ease-out; }
+@keyframes rxHappy {
+    0%, 100% { transform: none; }
+    10% { transform: translateY(-20%); }
+    20% { transform: translateY(0) scale(1.08, 0.92); }
+    32% { transform: translateY(-15%); }
+    43% { transform: translateY(0) scale(1.06, 0.94); }
+    55% { transform: translateY(-9%); }
+    66% { transform: translateY(0) scale(1.03, 0.97); }
+}
+.meet-av.rx-clap { animation: rxClap 1.6s ease-out; }
+@keyframes rxClap {
+    0%, 100% { transform: none; }
+    8%, 24%, 40%, 56% { transform: scale(1.09); }
+    16%, 32%, 48%, 64% { transform: scale(0.98); }
+}
+.meet-av.rx-laugh { animation: rxLaugh 1.6s ease-out; }
+@keyframes rxLaugh {
+    0%, 100% { transform: none; }
+    10% { transform: rotate(-11deg) translateY(-5%); }
+    22% { transform: rotate(10deg); }
+    34% { transform: rotate(-9deg) translateY(-4%); }
+    46% { transform: rotate(7deg); }
+    58% { transform: rotate(-4deg) translateY(-2%); }
+    70% { transform: rotate(2deg); }
+}
+.meet-av.rx-love { animation: rxLove 1.6s ease-out; }
+@keyframes rxLove {
+    0%, 100% { transform: none; }
+    12% { transform: scale(1.16); }
+    22% { transform: scale(0.98); }
+    32% { transform: scale(1.12); }
+    46% { transform: none; }
+    58% { transform: scale(1.1); }
+    68% { transform: scale(0.99); }
+}
+.meet-av.rx-sad { animation: rxSad 1.6s ease-in-out; }
+@keyframes rxSad {
+    0%, 100% { transform: none; filter: none; }
+    30%, 70% { transform: translateY(9%) scale(1.05, 0.9) rotate(-5deg); filter: saturate(0.3) brightness(0.88); }
+}
+.meet-av.rx-mad { animation: rxMad 1.6s ease-out; }
+@keyframes rxMad {
+    0%, 100% { transform: none; filter: none; }
+    6%  { transform: translateX(-7%) scale(1.05); filter: sepia(0.6) saturate(3) hue-rotate(-28deg); }
+    12% { transform: translateX(7%) scale(1.05); }
+    18% { transform: translateX(-6%) scale(1.05); }
+    24% { transform: translateX(6%) scale(1.04); }
+    30% { transform: translateX(-4%) scale(1.03); }
+    36% { transform: translateX(3%); }
+    60% { transform: none; filter: sepia(0.35) saturate(2) hue-rotate(-20deg); }
+}
+
+/* ── the dock ── */
+.meet-dock {
+    position: absolute;
+    bottom: max(18px, env(safe-area-inset-bottom));
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 8px 8px 10px;
+    border-radius: 50px;
+    background: rgba(18, 18, 18, 0.68);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.3);
+}
+.meet-reacts { display: flex; gap: 6px; }
+.meet-react {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    border: 0;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    background: rgba(255, 255, 255, 0.06);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.12s ease-out, background 0.2s ease;
+}
+.meet-react span { display: block; transform: translateY(1px); }
+.meet-react:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.8); outline-offset: 2px; }
+@media (hover: hover) and (pointer: fine) {
+    .meet-react:hover { background: rgba(255, 255, 255, 0.13); transform: translateY(-2px); }
+}
+.meet-react:active { transform: scale(0.88); transition-duration: 0.06s; }
+/* Visual-only cooldown — a class, never the `disabled` attribute (iOS touch leak). */
+.meet-reacts.cool .meet-react { opacity: 0.5; }
+.meet-hint {
+    font-size: 12px;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.42);
+    white-space: nowrap;
+}
+.meet-leave {
+    padding: 11px 18px;
+    border-radius: 50px;
+    border: 1px solid rgba(255, 69, 58, 0.34);
+    background: rgba(255, 69, 58, 0.14);
+    color: #ff8a80;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 700;
+    cursor: pointer;
+    white-space: nowrap;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.2s ease, color 0.2s ease, transform 0.12s ease-out;
+}
+@media (hover: hover) and (pointer: fine) {
+    .meet-leave:hover { background: rgba(255, 69, 58, 0.3); color: #fff; }
+}
+.meet-leave:active { transform: scale(0.96); }
+.meet-leave:focus-visible { outline: 2px solid rgba(255, 255, 255, 0.8); outline-offset: 2px; }
+
+/* The chat box, its picker and toast ride above the overlay while it's up. */
+body.meet-active .chat-input-wrap { z-index: 9060; }
+
+/* ── mobile ── no backdrop-filter at all (invariant 10); the dock stacks. */
+body.is-mobile .meet-title { font-size: 19px; }
+body.is-mobile .meet-dock {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(22, 22, 24, 0.94);
+    flex-direction: column;
+    gap: 8px;
+    width: calc(100% - 24px);
+    max-width: 420px;
+    padding: 10px;
+    border-radius: 25px;
+}
+body.is-mobile .meet-reacts { width: 100%; justify-content: space-between; }
+body.is-mobile .meet-leave { width: 100%; }
+body.is-mobile .meet-name { font-size: 11px; max-width: 96px; }
+body.is-mobile .meet-bubble { max-width: 170px; font-size: 13px; }
+
+@media (prefers-reduced-motion: reduce) {
+    .meet-overlay.active .meet-table,
+    .meet-seat, .meet-seat.out,
+    .meet-bob.hop, .meet-bubble.show,
+    .meet-av[class*="rx-"] { animation: none; }
+    .meet-seat.out { opacity: 0; }
+    .meet-seat.rx .meet-emoji { animation: meetEmojiFade 1.6s ease; }
+    @keyframes meetEmojiFade { 0%, 100% { opacity: 0; } 15%, 75% { opacity: 1; } }
+}
+@media (prefers-reduced-transparency: reduce) {
+    .meet-dock { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(22, 22, 24, 0.96); }
+}

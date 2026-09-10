@@ -133,7 +133,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 291 · Updated 9/10 8:14 PM</div>
+    <div id="build-number" class="build-number">Build 292 · Updated 9/10 9:30 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1476,6 +1476,34 @@
         <button id="fireplace-close" class="fp-close" aria-label="إغلاق">✕</button>
     </div>
 
+    <!-- ═══ غرفة الاجتماعات — طاولة الاجتماع ═══
+         يفتح حين يجلس العضو على الطاولة في الغرفة. الخلفية لقطة واحدة من العالم
+         مصغّرة ومضبّبة (لا backdrop-filter فوق الكانفس الحيّ). المقاعد، والتفاعلات،
+         والحلقة الخضراء (من بوت ديسكورد) يبنيها game.js — انظر setupMeetingUI. -->
+    <div id="meet-overlay" class="meet-overlay" aria-hidden="true">
+        <canvas id="meet-backdrop" class="meet-backdrop" aria-hidden="true"></canvas>
+        <div class="meet-scrim" aria-hidden="true"></div>
+        <header class="meet-head">
+            <div class="meet-title-wrap">
+                <h2 class="meet-title">طاولة الاجتماع</h2>
+                <div id="meet-count" class="meet-count"></div>
+            </div>
+            <div id="meet-voice" class="meet-voice" role="status">
+                <span class="meet-voice-dot" aria-hidden="true"></span>
+                <span id="meet-voice-text">ديسكورد: غير متصل</span>
+            </div>
+        </header>
+        <div id="meet-stage" class="meet-stage">
+            <div class="meet-lamp" aria-hidden="true"></div>
+            <div class="meet-table"><img id="meet-table-img" alt="طاولة الاجتماع" draggable="false"></div>
+        </div>
+        <div class="meet-dock">
+            <div id="meet-reacts" class="meet-reacts" role="group" aria-label="التفاعلات"></div>
+            <span id="meet-hint" class="meet-hint"></span>
+            <button id="meet-leave" class="meet-leave" type="button">مغادرة الاجتماع</button>
+        </div>
+    </div>
+
     <!-- ═══ لوحة القائد ═══
          تظهر لنواف وسراج فقط. القائمة (الصور والأسماء) من سجل الأعضاء المشترك،
          والأرقام كلها من بيانات المقر: `dashboards/{uid}/sessions` — سجل الجلسات
@@ -1977,7 +2005,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=279"></script>
+        <script type="module" src="game.js?v=280"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

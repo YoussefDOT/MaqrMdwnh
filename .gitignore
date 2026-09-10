@@ -23,3 +23,8 @@ Art/trophies/*.png
 Sound/Trophy_Collect.full.mp3
 # player_Fall ships re-encoded at 128k; this is the 242k original.
 Sound/player_Fall.full.mp3
+
+# Meeting-room + extra-table masters. What ships is Art/Workspace/Extension_*.webp
+# (cropped to their painted bbox) and Art/Meeting_Table_Real.webp; the full-canvas
+# PNGs are parked in a subfolder so the pre-commit manifest globber never sees them.
+Art/Workspace/masters/

@@ -2895,10 +2895,39 @@ const WORLD_H = IMG_H * WORLD_SCALE;
 // source-px → world helpers
 const sx2w = (px) => (px - IMG_W / 2) * WORLD_SCALE;
 const sy2w = (py) => (py - IMG_H / 2) * WORLD_SCALE;
-// New outer bounds (a loose clamp; the walls layer does the real collision).
+
+// ── غرفة الاجتماعات — the meeting-room extension ──────────────────────────────
+// Extension_Meeting_Room is its OWN 1111×1534 canvas, snapped to the main scene's
+// top-right corner: its left edge butts the main right wall at source x = IMG_W, its
+// top at y = 0. Everything about it lives in "meet-local" px (0..MEET_IMG_W), offset
+// by MEET_OX/MEET_OY; the main scene's origin and coordinates are untouched, so
+// every stored position and every hand-measured constant above stays valid.
+const MEET_IMG_W = 1111, MEET_IMG_H = 1534;
+const MEET_OX = IMG_W, MEET_OY = 0;                  // meet-local (0,0) in main-scene source px
+const MEET_X0 = sx2w(MEET_OX), MEET_Y0 = sy2w(MEET_OY);
+const MEET_WW = MEET_IMG_W * WORLD_SCALE, MEET_WH = MEET_IMG_H * WORLD_SCALE;
+// Measured off the art: the walkable wood (walls are painted, the PNG is opaque),
+// the table's solid body, the screen that sticks out of the right wall, and the
+// table layer's own crop (it ships cropped, like the trophy shelf).
+const MEET_FLOOR = [0, 93, 1033, 1450];
+const MEET_TABLE_SOLID = [383, 478, 706, 1100];
+const MEET_TV_SOLID = [975, 640, 1033, 950];
+const MEET_TABLE_BOX = [354, 457, 737, 1140];
+// The new doorway in the main right wall (Workspace_0013_Walls), SOURCE px.
+const MEET_DOOR = [2134, 869, 2210, 1180];
+
+// The extra work table (Extension_Extra_Work_Table) — against the divider, bottom-
+// right of the work room. Ships cropped to this bbox (SOURCE px); its 3 laptops are
+// appended to LAPTOP_DEFS, and their glow sheet ships cropped to EXT_LIGHTS_BOX.
+const EXT_TABLE_BOX = [1528, 1330, 2210, 1517];
+const EXT_TABLE_GHOST = [1553, 1380, 2175, 1517];
+const EXT_LIGHTS_BOX = [1626, 1472, 2147, 1502];
+
+// New outer bounds (a loose clamp; the walls layer does the real collision). The
+// right edge reaches the meeting room's far wall — its own mask decides the rest.
 const WORLD_BOUNDS = {
     minX: -WORLD_W / 2 + PLAYER_SIZE * 0.4,
-    maxX:  WORLD_W / 2 - PLAYER_SIZE * 0.4,
+    maxX:  MEET_X0 + MEET_WW - PLAYER_SIZE * 0.4,
     minY: -WORLD_H / 2 + PLAYER_SIZE * 0.4,
     maxY:  WORLD_H / 2 - PLAYER_SIZE * 0.4,
 };
@@ -2955,6 +2984,16 @@ const LAPTOP_DEFS = [
     { px: 910,  py: 175, dir: 'left',  floor: 2, lightBox: [924, 92, 962, 258] },
     { px: 910,  py: 390, dir: 'left',  floor: 2, lightBox: [924, 307, 962, 473] },
     { px: 910,  py: 603, dir: 'left',  floor: 2, lightBox: [924, 520, 962, 686] },
+    // The extra work table (Extension_Extra_Work_Table). These laptops are the
+    // 'down' laptop's art turned 180° — keyboard on top, screen toward the wall — so
+    // the seat is ABOVE them (the kidnap pushes the player up). Appended, never
+    // inserted: a laptop's id is its index here, and ids key live pomodoro docs.
+    // `gap` overrides LAPTOP_SIT_GAP so the seat clears the table's collider, and
+    // `sheet: 'ext'` points drawLaptopLights at their own (cropped) glow sheet —
+    // lightBoxes found by matching the 'down' laptop's glow onto each screen.
+    { px: 1698, py: 1459, dir: 'up', floor: 1, gap: 92, sheet: 'ext', lightBox: [1630, 1476, 1765, 1498] },
+    { px: 1886, py: 1459, dir: 'up', floor: 1, gap: 92, sheet: 'ext', lightBox: [1818, 1476, 1953, 1498] },
+    { px: 2076, py: 1459, dir: 'up', floor: 1, gap: 92, sheet: 'ext', lightBox: [2008, 1476, 2143, 1498] },
 ];
 const LAPTOP_SIT_GAP = 78;   // world px the seat sits away from the laptop, along `dir`
 const LAPTOP_SELECT_R = 120; // interaction radius (world px)
@@ -4423,11 +4462,22 @@ const WORLD_LAYERS = [
     // wLaptops is deliberately NOT masked — its collider is the manual
     // GROUND_TABLE_GHOST_* rect (the auto alpha shape didn't match the desk).
     { k: 'wLaptops',           f: 'Workspace_0008_Laptops_Table.png',                         cache: 'ground' },
+    // The extra work table — cropped to its bbox (`box`), collider is the manual
+    // EXT_TABLE_GHOST rect like the ground desk's.
+    { k: 'wExtTable',          f: 'Extension_Extra_Work_Table.webp',                          cache: 'ground', box: EXT_TABLE_BOX },
     { k: 'wStairs',            f: 'Workspace_0007_Stairs.png',                                cache: 'ground', mask: 'stairs' },
     { k: 'wGames',             f: 'Workspace_0006_Games_Table.png',                           cache: 'ground', mask: 'furn'   },
     { k: 'wSecondBg',          f: 'Workspace_0005_Second_Floor_Background.png',               cache: 'second' },
     { k: 'wSecondLaptops',     f: 'Workspace_0004_Second_Floor_Laptops_Table.png',            cache: 'second', mask: 'desks'  },
     { k: 'wSecondPapers',      f: 'Workspace_0003_Second_Floor_Papers_Table.png',             cache: 'second', mask: 'desks'  },
+    // غرفة الاجتماعات — composited into its OWN cache (meet-local px, MEET_IMG_W×H),
+    // drawn at the proximity-reveal alpha. Its collider is geometric (the art is
+    // opaque; the walls are painted), so neither layer feeds a mask.
+    { k: 'wMeetRoom',          f: 'Extension_Meeting_Room.webp',                              cache: 'meet' },
+    { k: 'wMeetTable',         f: 'Extension_Meeting_Room_Table.webp',                        cache: 'meet', box: MEET_TABLE_BOX },
+    // The extra table's screen glow. Already cropped on disk, so `box` is where it
+    // sits and it is resident at ~60 KB decoded — no `shrink` needed.
+    { k: 'wExtLaptopLights',   f: 'Extension_Extra_Work_Table_Laptop_Lights.png',             keep: true, box: EXT_LIGHTS_BOX },
     { k: 'wLaptopLights',      f: 'Workspace_0008_Laptops_Table_Laptop_Lights.png',           keep: true, shrink: 'lights1' },
     { k: 'wSecondLaptopLights',f: 'Workspace_0004_Second_Floor_Laptops_Table_Laptop_Lights.png', keep: true, shrink: 'lights2' },
     { k: 'wOverlayDay2',       f: 'Workspace_0002_(Normal)Day-Overlay-2.png',                 keep: true, shrink: 'overlay' },
@@ -4445,7 +4495,9 @@ const WORLD_LAYERS = [
 function _lightsUnionBox(floor) {
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
     for (const d of LAPTOP_DEFS) {
-        if ((d.floor || 1) !== floor || !d.lightBox) continue;
+        // A laptop with its own `sheet` isn't on this floor's sheet at all — counting
+        // it would stretch the crop across empty canvas for nothing.
+        if ((d.floor || 1) !== floor || !d.lightBox || d.sheet) continue;
         const [a, b, c, e] = d.lightBox;
         if (a < x0) x0 = a;
         if (b < y0) y0 = b;
@@ -4485,6 +4537,8 @@ function _shrinkOverlay(bmp) {
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = 'high';
     g.drawImage(bmp, 0, 0, w, h);
+    // Its authored size in source px — drawDayOverlays places Day-Overlay by it.
+    c.srcW = bmp.width; c.srcH = bmp.height;
     return c;
 }
 
@@ -4726,8 +4780,9 @@ function initLaptops() {
     LAPTOP_DEFS.forEach((d, i) => {
         const lx = sx2w(d.px), ly = sy2w(d.py);
         const [vx, vy] = _DIR_VEC[d.dir] || _DIR_VEC.down;
-        const sitX = lx + vx * LAPTOP_SIT_GAP;
-        const sitY = ly + vy * LAPTOP_SIT_GAP;
+        const gap = d.gap || LAPTOP_SIT_GAP;
+        const sitX = lx + vx * gap;
+        const sitY = ly + vy * gap;
         gameState.laptops.push({
             id: i + 1,
             x: lx, y: ly,
@@ -4743,6 +4798,7 @@ function initLaptops() {
             endTime: 0,
             phase: 'none',
             lightBox: d.lightBox || null,
+            lightSheet: d.sheet || null,   // null = its floor's sheet; 'ext' = the extra table's
             lightAlpha: 0,   // lerped toward claimedBy-ness each frame, see updateLaptopLights
         });
     });
@@ -4751,7 +4807,7 @@ function initLaptops() {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  WORLD ENGINE — alpha collision masks, floors, dynamic scale, second-floor fade
 // ═══════════════════════════════════════════════════════════════════════════════
-const worldCollision = { floor1: null, floor2desks: null, stairs: null, built: false };
+const worldCollision = { floor1: null, floor2desks: null, stairs: null, meet: null, built: false };
 
 // Rasterise an image into a MASK_W×MASK_H alpha bitmap (1 = solid). `threshold`
 // ignores near-transparent pixels (empty art never collides).
@@ -4823,7 +4879,7 @@ function _erode(m, n)  { for (let i = 0; i < n; i++) m = _morph(m, false); retur
 // don't blow the mobile canvas-memory budget. They're created empty up front and
 // filled layer-by-layer as each one decodes, so the world paints in progressively
 // and no layer has to stay decoded waiting for the others.
-const worldCache = { ground: null, second: null, w: 0, h: 0 };
+const worldCache = { ground: null, second: null, meet: null, w: 0, h: 0 };
 // Set once every layer is decoded + composited. startGame checks it so a user who
 // idled on the menu long enough for the art to finish isn't held on the boot
 // screen for no reason.
@@ -4861,7 +4917,13 @@ async function loadWorldArt() {
     worldCache.ground = mkCanvas();
     worldCache.second = mkCanvas();
     worldCache.w = cw; worldCache.h = ch;
-    const gctx = { ground: worldCache.ground.getContext('2d'), second: worldCache.second.getContext('2d') };
+    // The meeting room is its own canvas at the same texel density (6.8 MB at full
+    // res, ~2.6 MB on متوسط) — it fades on its own, so it can't share `ground`.
+    const mcw = Math.round(MEET_IMG_W * _cacheScale), mch = Math.round(MEET_IMG_H * _cacheScale);
+    worldCache.meet = document.createElement('canvas');
+    worldCache.meet.width = mcw; worldCache.meet.height = mch;
+    const gctx = { ground: worldCache.ground.getContext('2d'), second: worldCache.second.getContext('2d'),
+                   meet: worldCache.meet.getContext('2d') };
 
     // Collision masks accumulate here as their layers go by; the morphology passes
     // (dilate/erode) need the FULL combined mask, so they run at the end. A mask is
@@ -4899,14 +4961,18 @@ async function loadWorldArt() {
         // A `box` layer ships cropped to its painted bbox (SOURCE px), so it is
         // pasted back at that rect rather than stretched over the whole canvas.
         if (def.cache) {
+            // The meeting room's cache is in meet-local px; everything else in main.
+            const isMeet = def.cache === 'meet';
+            const tw = isMeet ? mcw : cw, th = isMeet ? mch : ch;
+            const iw = isMeet ? MEET_IMG_W : IMG_W, ih = isMeet ? MEET_IMG_H : IMG_H;
             if (def.box) {
                 // Separate x/y scales: `ch` is rounded independently of `cw`, so at a
                 // reduced cache resolution one shared factor is a fraction of a px out.
-                const sx = cw / IMG_W, sy = ch / IMG_H;
+                const sx = tw / iw, sy = th / ih;
                 const [bx0, by0, bx1, by1] = def.box;
                 gctx[def.cache].drawImage(bmp, bx0 * sx, by0 * sy, (bx1 - bx0) * sx, (by1 - by0) * sy);
             } else {
-                gctx[def.cache].drawImage(bmp, 0, 0, cw, ch);
+                gctx[def.cache].drawImage(bmp, 0, 0, tw, th);
             }
         }
         if (def.mask)  _orMask(M[def.mask], _rasterMask(bmp, MASK_THRESHOLD[def.mask]));
@@ -4914,7 +4980,17 @@ async function loadWorldArt() {
         if (def.keep) {
             // Shrink first, THEN close the source — the resident layers are the
             // whole reason peak memory used to stay high all session.
-            const small = def.shrink ? _shrinkResidentLayer(def.shrink, bmp) : null;
+            let small = def.shrink ? _shrinkResidentLayer(def.shrink, bmp) : null;
+            // A resident layer that ships pre-cropped: copy it to a canvas that knows
+            // where it sits (srcOX/srcOY), exactly what a cropped lights sheet carries.
+            if (!small && def.box) {
+                try {
+                    small = document.createElement('canvas');
+                    small.width = bmp.width; small.height = bmp.height;
+                    small.getContext('2d').drawImage(bmp, 0, 0);
+                    small.srcOX = def.box[0]; small.srcOY = def.box[1];
+                } catch (_) { small = null; }
+            }
             if (small) { A[def.k] = small; bmp.close(); }
             else       { A[def.k] = bmp; }   // drawn live every frame — must stay decoded
         } else {
@@ -4974,7 +5050,9 @@ async function loadWorldArt() {
     _orMask(f1, M.fire);
     _fillMaskRectSrc(f1, STAIR_GHOST_PX0, STAIR_GHOST_PY0, STAIR_GHOST_PX1, STAIR_GHOST_PY1); // stair dead-zone ghost collider
     _fillMaskRectSrc(f1, GROUND_TABLE_GHOST_PX0, GROUND_TABLE_GHOST_PY0, GROUND_TABLE_GHOST_PX1, GROUND_TABLE_GHOST_PY1); // ground laptop desk collider
+    _fillMaskRectSrc(f1, EXT_TABLE_GHOST[0], EXT_TABLE_GHOST[1], EXT_TABLE_GHOST[2], EXT_TABLE_GHOST[3]); // extra work table collider
     worldCollision.floor1 = f1;
+    worldCollision.meet = _buildMeetMask();
     worldCollision.floor2desks = _erode(M.desks, 3);
     await _yield();
     // Stair footprint, DILATED generously so the walkable ramp is wide + forgiving
@@ -5009,6 +5087,39 @@ function _maskAt(mask, worldX, worldY) {
     if (mx < 0 || my < 0 || mx >= MASK_W || my >= MASK_H) return true;
     return mask[my * MASK_W + mx] === 1;
 }
+// ── Meeting-room collision ────────────────────────────────────────────────────
+// Its own half-res mask in meet-local px. The art is opaque (its walls are painted,
+// not transparent), so the mask is GEOMETRIC: solid everywhere, the wood floor carved
+// out, then the table body and the wall screen put back. Built with the other masks.
+const MEET_MASK_W = Math.ceil(MEET_IMG_W / MASK_DIV), MEET_MASK_H = Math.ceil(MEET_IMG_H / MASK_DIV);
+function _buildMeetMask() {
+    const m = new Uint8Array(MEET_MASK_W * MEET_MASK_H).fill(1);
+    const put = (r, v) => {
+        const x0 = Math.max(0, Math.floor(r[0] / MASK_DIV)), x1 = Math.min(MEET_MASK_W - 1, Math.ceil(r[2] / MASK_DIV));
+        const y0 = Math.max(0, Math.floor(r[1] / MASK_DIV)), y1 = Math.min(MEET_MASK_H - 1, Math.ceil(r[3] / MASK_DIV));
+        for (let y = y0; y <= y1; y++) m.fill(v, y * MEET_MASK_W + x0, y * MEET_MASK_W + x1 + 1);
+    };
+    put(MEET_FLOOR, 0);
+    put(MEET_TABLE_SOLID, 1);
+    put(MEET_TV_SOLID, 1);
+    return m;
+}
+function _meetMaskAt(worldX, worldY) {
+    const m = worldCollision.meet;
+    if (!m) return true;
+    const mx = (((worldX - MEET_X0) / WORLD_SCALE) / MASK_DIV) | 0;
+    const my = (((worldY - MEET_Y0) / WORLD_SCALE) / MASK_DIV) | 0;
+    if (mx < 0 || my < 0 || mx >= MEET_MASK_W || my >= MEET_MASK_H) return true;
+    return m[my * MEET_MASK_W + mx] === 1;
+}
+// Floor-1 solidity at one point: east of the main scene's edge the meeting room's
+// mask answers, everywhere else the main one. The doorway works because the main
+// wall's hole runs right up to that edge and the room's floor starts right at it.
+function _floor1SolidAt(worldX, worldY) {
+    return worldX >= MEET_X0 ? _meetMaskAt(worldX, worldY)
+                             : _maskAt(worldCollision.floor1, worldX, worldY);
+}
+
 // Solid if the player's BODY (a ring around the feet point, not just the centre)
 // overlaps the mask — so the avatar stops when its EDGE meets furniture instead of
 // burying its centre in it, and thin walls can't slip between sample points.
@@ -5027,6 +5138,11 @@ function _maskSolid(mask, worldX, worldY) {
 // (a tight diagonal band) — not a big bbox — so you can't phase through from beside
 // or above the steps.
 function isOnStairs(x, y) {
+    // East of the main image is the meeting room, never stairs. _maskAt reads
+    // off-image as SOLID — right for collision, exactly wrong here: it put anyone in
+    // the meeting room "on the stairs", flipped them to floor 2, faded the room out
+    // and trapped them inside the platform's collision bounds.
+    if (x >= MEET_X0) return false;
     return _maskAt(worldCollision.stairs, x, y);
 }
 function stairScaleAt(x) {
@@ -5476,6 +5592,10 @@ function updateFloorsAndScales() {
     const local = gameState.players[localId];
     if (local) {
         if (local.floor === undefined) local.floor = 1;
+        // The meeting room has no second floor. Also heals a floor-2 position that
+        // was saved in there before isOnStairs learned about the room (a stored
+        // floor 2 is otherwise never flipped back — it only flips on the stairs).
+        if (local.x >= MEET_X0 && local.floor !== 1) local.floor = 1;
         // Pin to the seated laptop's floor while locked in / being kidnapped — this
         // is what keeps a second-floor work session from wrongly reading floor 1
         // (which faded the whole mezzanine and hid the player from others). During
@@ -5895,6 +6015,7 @@ function startGame(userData) {
     setupAdminUI();
     setupWorkChallenge();
     setupChatUI();
+    setupMeetingUI();
     setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
     startTabTitleTicker();
 
@@ -6852,7 +6973,7 @@ function setupControls() {
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
         // Disable scroll zoom while the dashboard / customization / fireplace / tasks panel is open
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || meetingIsOpen()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -6928,6 +7049,8 @@ function setupControls() {
             openTrophyShelf();
             return;
         }
+        // غرفة الاجتماعات — press the table itself to take a seat at it.
+        if (meetTableClick(clickWorld)) return;
         // Sofa seating: sofa1 uses the CLICKED y (clamped to the strip + nudged off
         // any neighbour); sofa2 always seats at its fixed spot.
         if (gameState.activeSofa1 && canSit()) {
@@ -7646,6 +7769,8 @@ function initMobileControls() {
                 openTrophyShelf();
                 return;
             }
+            // غرفة الاجتماعات — same "tap the thing itself" rule.
+            if (meetTableClick(clickWorld)) return;
             // Sofa seating (proximity-based tap, same as the dashboard/laptop zones above)
             if (gameState.activeSofa1 && canSit()) {
                 const freeY = _findFreeSofa1Y(clickWorld.y, gameState.userId);
@@ -9247,6 +9372,9 @@ function onPresenceMessage(data) {
     if (!msg) return;
     // Race car telemetry (uses `cuid`, not `uid` — see sendRaceCarWS).
     if (msg.t === 'car') { onRaceCarWS(msg); return; }
+    // Discord voice state from MdwnhBot (its `uid` is the bot, not a player — the
+    // member is `s` / `ids`). See الاجتماع → the voice feed.
+    if (msg.t === 'spk' || msg.t === 'vc') { onMeetVoiceMsg(msg); return; }
     if (!msg.uid || msg.uid === gameState.userId) return;
     if (msg.t === 'bye') {
         // Firebase presence owns add/remove; just stop their walk animation so
@@ -9273,6 +9401,8 @@ function onPresenceMessage(data) {
     // Proximity chat — also a one-off event, never a stream. Returns before the
     // position handling below for the same reason a sit message does.
     if (msg.t === 'chat') { receiveChatMessage(player, msg.m, msg.s); return; }
+    // Meeting-table reaction — one-off, zero Firebase, same shape as a chat event.
+    if (msg.t === 'react') { receiveMeetReaction(player, msg.r); return; }
     // isMoving must update before pushing the sample — interpolateRemoteFromBuffer
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
@@ -9388,7 +9518,11 @@ function checkCollision(x, y) {
         return _maskSolid(worldCollision.floor2desks, x, fy);
     }
     if (!worldCollision.built) return false;   // don't trap the player before masks decode
-    return _maskSolid(worldCollision.floor1, x, fy);
+    // Same body ring as _maskSolid, but each point asks the mask of the room it's in.
+    for (const [dx, dy] of _BODY_PTS) {
+        if (_floor1SolidAt(x + dx * _BODY_R, fy + dy * _BODY_R)) return true;
+    }
+    return false;
 }
 
 function updateCamera() {
@@ -9638,6 +9772,9 @@ function updateInteractions() {
     // Walking up is the earliest honest signal you're about to open it, so the art
     // and the (half-megabyte) ceremony audio start here rather than on the click.
     if (gameState.nearTrophyShelf) _troEnsureAssets();
+
+    // غرفة الاجتماعات — the table. Floor 1, free to sit (its places ARE seats).
+    _meetUpdateProximity(player, pFloor);
 
     // Games table (race / boss / coffee triggers) — floor 1 only, one big room now
     // (no more separate break room), so proximity alone shows the prompt; whether
@@ -10236,6 +10373,7 @@ function gameLoop(timestamp) {
         updateAmbientMotes();
         updateDustParticles();
         updateInteractions();
+        updateMeeting();             // meeting room reveal, voice state, table overlay
         updateSharedPomoProximity();
         updateCoopAnimation();
         updateCoopTaskPanel();
@@ -10262,7 +10400,7 @@ function render() {
     // prayer/dashboard/customization/fireplace on mobile) — drawing the whole world
     // into a hidden canvas still costs full CPU/GPU time per frame. Skip the world
     // pass entirely; the DOM panel toggles at the bottom still run every frame.
-    const _canvasHidden = gameState.azkar.active || troCeremonyIsRunning() ||
+    const _canvasHidden = gameState.azkar.active || troCeremonyIsRunning() || _meet.canvasOff ||
         (gameState._isMobile && (gameState.prayer.isOverlayActive
             || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen() || _lib.canvasOff));
     if (_canvasHidden) { _renderPanelToggles(); return; }
@@ -10294,7 +10432,9 @@ function render() {
 
     // ── Ground floor (both rooms are one open world now) ────────────────────────
     drawWorldGround();
+    drawMeetingRoom();          // غرفة الاجتماعات — revealed as you reach its door
     drawLaptopLights(1);
+    drawMeetDoorGlow();         // ...whose doorway glows white until you do
 
     // Lemo lives on the ground floor. Drawn before the avatars so players always
     // pass in FRONT of him — he's set dressing, he shouldn't ever occlude someone.
@@ -10337,6 +10477,7 @@ function render() {
     drawBooksLibraryPrompt();    // "ابدأ القراءة" near books library
     drawFireplacePrompt();       // "انقر للنظر الى المدفئة" near the fireplace
     drawTrophyShelfPrompt();     // "انقر لرؤية رف الجوائز" near the trophy shelf
+    drawMeetPrompt();            // "انقر للانضمام إلى الاجتماع" near the meeting table
     drawSeatPrompt();            // "اضغط للجلوس" near a sofa
     drawStandUpButton();         // وقوف — floats above the local player while seated
     drawGameZonePrompt();        // games-table trigger prompt / locked notice
@@ -10406,16 +10547,19 @@ function _drawWorldLayer(img) {
 function drawLaptopLights(floorFilter, groupAlpha) {
     groupAlpha = groupAlpha ?? 1;
     if (groupAlpha < 0.01) return;
-    const img = floorFilter === 1 ? gameState.assets.wLaptopLights : gameState.assets.wSecondLaptopLights;
-    if (!_layerReady(img)) return;
-    // The sheet is normally cropped to the union of this floor's lightBoxes (see
-    // `shrink` on WORLD_LAYERS — the full sheet is 99.85% empty and cost 28 MB), so
-    // subtract the crop origin. A sheet that failed to crop has no srcOX/srcOY and
-    // falls through as 0, addressing the full image exactly as before.
-    const ox = img.srcOX || 0, oy = img.srcOY || 0;
+    const A = gameState.assets;
+    const floorSheet = floorFilter === 1 ? A.wLaptopLights : A.wSecondLaptopLights;
     const ctx = gameState.ctx;
     for (const laptop of gameState.laptops) {
         if (laptop.floor !== floorFilter || !laptop.lightBox || laptop.lightAlpha <= 0.01) continue;
+        // The extra table's laptops have a sheet of their own (see LAPTOP_DEFS `sheet`).
+        const img = laptop.lightSheet === 'ext' ? A.wExtLaptopLights : floorSheet;
+        if (!_layerReady(img)) continue;
+        // The sheet is normally cropped to the union of this floor's lightBoxes (see
+        // `shrink` on WORLD_LAYERS — the full sheet is 99.85% empty and cost 28 MB), so
+        // subtract the crop origin. A sheet that failed to crop has no srcOX/srcOY and
+        // falls through as 0, addressing the full image exactly as before.
+        const ox = img.srcOX || 0, oy = img.srcOY || 0;
         const [sx0, sy0, sx1, sy1] = laptop.lightBox;
         const dx = sx2w(sx0), dy = sy2w(sy0);
         const dw = (sx1 - sx0) * WORLD_SCALE, dh = (sy1 - sy0) * WORLD_SCALE;
@@ -10456,11 +10600,17 @@ function drawDayOverlays() {
     if (!gameState._overlaysOn) return;
     const A = gameState.assets;
     _drawWorldLayer(A.wOverlayDay2);
-    if (_layerReady(A.wOverlayDay)) {
+    const day = A.wOverlayDay;
+    if (_layerReady(day)) {
+        // Day-Overlay is authored 1:1 in source px from the scene's top-left and runs
+        // on over the meeting room (3081×2747 — the old 2210-wide sheet, extended), so
+        // it's placed by its own authored size rather than stretched over the main
+        // scene. srcW/srcH survive the shrink; an unshrunk bitmap has width/height.
+        const sw = day.srcW || day.width, sh = day.srcH || day.height;
         const ctx = gameState.ctx;
         ctx.save();
         ctx.globalCompositeOperation = 'overlay';
-        _drawWorldLayer(A.wOverlayDay);
+        ctx.drawImage(day, -WORLD_W / 2, -WORLD_H / 2, sw * WORLD_SCALE, sh * WORLD_SCALE);
         ctx.restore();
     }
 }
@@ -12589,7 +12739,8 @@ function drawDustParticles(floorFilter) {
     ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
     gameState.dustParticles.forEach(p => {
         if (floorFilter && (p.floor || 1) !== floorFilter) return;
-        ctx.globalAlpha = Math.max(0, p.life);
+        // Dust kicked up in the meeting room fades with the room.
+        ctx.globalAlpha = Math.max(0, p.life) * (p.x >= MEET_X0 ? _meet.vis : 1);
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
         ctx.fill();
@@ -13613,13 +13764,21 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         // it. Platform players fade together with the second-floor art.
         const pFloor = player.floor || 1;
         if (floorFilter && pFloor !== floorFilter) continue;
-        const floorVis = (pFloor === 2) ? (gameState.secondFloorVis ?? 1) : 1;
+        let floorVis = (pFloor === 2) ? (gameState.secondFloorVis ?? 1) : 1;
         if (floorVis < 0.02) continue;
         const rScale = player.renderScale || 1;   // second-floor / stair scale (1.0 → 1.25)
         // Held invisible until their join position settles (see SPAWN_SETTLE_MS).
         if (player._pendingSpawn != null) continue;
 
         const { x: screenX, y: renderY } = getPlayerRenderPos(player);
+        // غرفة الاجتماعات: anyone in there fades with the room, and a member at the
+        // table fades while the call says they're quiet (see _meetSpeakFx). Both are
+        // pure reads — the PiP pass draws them without advancing anything.
+        const _mfade = _meetFadeAt(screenX);
+        if (_mfade < 0.02) continue;
+        const _spk = _meetSpeakFx(player);
+        const _rx = _meetReactFx(player);
+        floorVis *= _mfade * _spk.a;
         const screenY = renderY - (player.bobOffset || 0);
 
         // Teleport animation overrides
@@ -13716,6 +13875,15 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
                     const s = Math.sin(st * Math.PI) * (1 - st) * 0.16;   // quick squash → recover
                     workScaleX *= (1 + s); workScaleY *= (1 - s);
                 }
+            }
+        }
+
+        // Meeting table: a hop the moment someone starts speaking, and the reactions.
+        if (!tpData) {
+            workBob += _spk.hop;
+            if (_rx) {
+                workScaleX *= _rx.sx; workScaleY *= _rx.sy;
+                workAngle += _rx.rot; workBob += _rx.dy; coopDX += _rx.dx;
             }
         }
 
@@ -13824,6 +13992,14 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         ctx.fill();
         ctx.shadowBlur = 0;
         ctx.shadowOffsetY = 0;
+        // Discord says they're talking (meeting table only) — the green outline.
+        if (_spk.on) {
+            ctx.beginPath();
+            ctx.arc(0, 0, (PLAYER_SIZE / 2) + 7, 0, Math.PI * 2);
+            ctx.strokeStyle = MEET_SPEAK_GREEN;
+            ctx.lineWidth = 4;
+            ctx.stroke();
+        }
 
         ctx.save();
         ctx.beginPath();
@@ -13871,6 +14047,12 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY,
             rScale * _juiceScale,
             floorVis * (tpFadeOut > 0.01 ? (1 - tpFadeOut) : 1));
+
+        // A reaction's emoji rises off the head (the avatar's own motion is above).
+        if (_rx && _rx.ea > 0.01 && !tpData) {
+            _meetDrawReactEmoji(ctx, player, screenX + coopDX,
+                screenY + workBob - (PLAYER_SIZE / 2) * rScale, _rx, floorVis);
+        }
 
         if (player.nameAlpha > 0.01 && !tpData && !gameState._hideNames) {
             const nA = player.nameAlpha * floorVis;
@@ -14240,7 +14422,9 @@ function renderPiPInto(ctx, canvas, dpr) {
         ctx.translate(s.camera.x, s.camera.y);
 
         drawWorldGround();
+        drawMeetingRoom();
         drawLaptopLights(1);
+        drawMeetDoorGlow();       // draw-only — updateMeeting never runs on the PiP pass
         drawLemo();               // draw-only — updateLemo never runs on the PiP pass
         drawAmbientMotes();
         drawDustParticles(1);
@@ -28874,6 +29058,7 @@ function receiveChatMessage(player, raw, segs) {
         accent: mens.length ? _chatMenColor(mens[0].u) : null,
     });
     while (list.length > CHAT_STACK_MAX) list.shift();
+    _meetOnChat(player, text);   // the same line over their seat at the meeting table
     // Only someone ELSE's message makes a sound. My own needs no cue — I pressed send.
     if (fromMe) return;
     if (mine) _chatMentionPing(player, mine.l, text);
@@ -29597,6 +29782,8 @@ function updateChatInputPos(force) {
     const me = gameState.players[gameState.userId];
     const canvas = gameState.canvas;
     if (!me || !canvas || !_chatUi.wrap) return;
+    // At the meeting table the box sits over MY seat in the overlay, not the world.
+    if (meetingIsOpen()) { _meetPlaceChatInput(force); return; }
     // Movement is locked while the box is open, so after the camera has settled there
     // is nothing left to follow — and continuously rewriting the top/left of a fixed
     // element that holds the focused input is a known way to make a mobile keyboard
@@ -29792,7 +29979,8 @@ function drawChatBubbles(floorFilter = null) {
         if (player._pendingSpawn != null) continue;
         const pFloor = player.floor || 1;
         if (floorFilter && pFloor !== floorFilter) continue;
-        const floorVis = (pFloor === 2) ? f2vis : 1;
+        // A bubble in the meeting room fades with the room (see _meetFadeAt).
+        const floorVis = ((pFloor === 2) ? f2vis : 1) * _meetFadeAt(player.renderX ?? player.x ?? 0);
         if (floorVis < 0.02) continue;
 
         // The "proximity" half of proximity chat: a bubble across the building
@@ -32013,4 +32201,788 @@ function setupAdminUI() {
 
     // The row cascade wants its own animation name registered to get the blip.
     _JUICE_IN_ANIMS.add('admRowIn');
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// غرفة الاجتماعات — the meeting room + طاولة الاجتماع
+// ════════════════════════════════════════════════════════════════════════════
+// A room snapped onto the main scene's top-right corner (see MEET_* up top), hidden
+// behind a glowing doorway until you walk up to it. Its table is a set of SEATS: a
+// press takes the first free one (the ordinary sofa hop, relayed like any sit) and
+// opens a full-screen look at the real table with everyone sitting around it.
+//
+// Cost: the seat rides the existing users/{uid}/sitSeatId sync (no new Firebase key,
+// no rules change, freed by the same per-field onDisconnect). Reactions ride the
+// WebSocket relay like chat. Who is TALKING comes from MdwnhBot, which sits in the
+// Discord call and relays speaking events into the same lobby rooms — zero Firebase.
+// The reveal, the fades and the doorway light are all client-side.
+
+const MEET_SPEAK_GREEN = '#23a55a';       // Discord's own "speaking" green
+const MEET_SELECT_R = 95;                 // world px from the table's edge → the prompt
+const MEET_CLICK_PAD = 60;                // a press this close to the table counts
+// The reveal only happens walking the corridor straight in front of the doorway (its
+// height, ± a little), measured from the opening's left edge — see updateMeeting.
+const MEET_REVEAL_NEAR = 40, MEET_REVEAL_FAR = 230;   // world px from the opening
+const MEET_APPROACH_X0 = sx2w(MEET_DOOR[0]);
+const MEET_APPROACH_Y0 = sy2w(MEET_DOOR[1]) - 20, MEET_APPROACH_Y1 = sy2w(MEET_DOOR[3]) + 20;
+const MEET_QUIET_A = 0.45;                // in the call, not talking
+const MEET_VC_STALE_MS = 45000;           // no word from the bot for this long → no feed
+const MEET_SPK_STALE_MS = 9000;           // the bot re-asserts a live speaker every ~4s
+const MEET_HOP_MS = 420;
+const MEET_REACT_MS = 1600;
+const MEET_REACT_COOLDOWN_MS = 700;
+const MEET_CANVAS_OFF_MS = 520;           // the world pass stops once the overlay covers it
+
+// The table's solid body in MAIN-scene source px, and its seats: four down each long
+// side, one at each end. The order is the order new arrivals fill them — alternating
+// sides, so two people face each other instead of sitting shoulder to shoulder.
+const MEET_TBL = [MEET_OX + MEET_TABLE_SOLID[0], MEET_OY + MEET_TABLE_SOLID[1],
+                  MEET_OX + MEET_TABLE_SOLID[2], MEET_OY + MEET_TABLE_SOLID[3]];
+const MEET_TBL_W = { x0: sx2w(MEET_TBL[0]), y0: sy2w(MEET_TBL[1]), x1: sx2w(MEET_TBL[2]), y1: sy2w(MEET_TBL[3]) };
+const MEET_SEATS = (() => {
+    const [x0, y0, x1, y1] = MEET_TBL;
+    const side = 64, end = 66, cx = (x0 + x1) / 2;
+    const out = [];
+    for (let k = 0; k < 4; k++) {
+        const v = (k + 0.5) / 4, py = y0 + (y1 - y0) * v;
+        out.push({ side: 'L', v, px: x0 - side, py }, { side: 'R', v, px: x1 + side, py });
+    }
+    out.push({ side: 'T', v: 0, px: cx, py: y0 - end }, { side: 'B', v: 1, px: cx, py: y1 + end });
+    return out.map((s, i) => ({ ...s, id: 'meet_' + i, x: sx2w(s.px), y: sy2w(s.py) }));
+})();
+const MEET_SEAT_INDEX = Object.fromEntries(MEET_SEATS.map((s, i) => [s.id, i]));
+
+const MEET_REACTIONS = [
+    { k: 'happy', e: '😄', n: 'فرح' },
+    { k: 'clap',  e: '👏', n: 'تصفيق' },
+    { k: 'laugh', e: '😂', n: 'ضحك' },
+    { k: 'love',  e: '❤️', n: 'حب' },
+    { k: 'sad',   e: '😢', n: 'حزن' },
+    { k: 'mad',   e: '😠', n: 'غضب' },
+];
+const MEET_REACT_BY_KEY = Object.fromEntries(MEET_REACTIONS.map(r => [r.k, r]));
+
+// The doorway's light: a few soft beams fanning into the work room.
+const MEET_RAYS = [
+    { y: 0.12, ang: -0.30, len: 250, w: 34, a: 0.22, s: 0.9,  p: 0.0 },
+    { y: 0.30, ang: -0.14, len: 330, w: 46, a: 0.26, s: 0.7,  p: 1.7 },
+    { y: 0.48, ang:  0.00, len: 380, w: 58, a: 0.30, s: 0.55, p: 3.1 },
+    { y: 0.64, ang:  0.12, len: 320, w: 44, a: 0.24, s: 0.8,  p: 4.4 },
+    { y: 0.82, ang:  0.26, len: 260, w: 36, a: 0.20, s: 1.0,  p: 5.6 },
+];
+
+const _meet = {
+    vis: 0,                   // the room's reveal, 0 hidden → 1 shown
+    open: false, openedAt: 0, canvasOff: false, offTimer: 0, clearTimer: 0,
+    el: null, stage: null, backdrop: null, tableImg: null, countEl: null,
+    voiceEl: null, voiceTxt: null, reactsEl: null,
+    seatEls: new Map(), stageKey: '', geo: null,
+    artReq: false,
+    // Discord voice feed (MdwnhBot, via the relay)
+    vcAt: 0, vcIds: new Set(), spk: new Map(),
+    voiceShown: null, voiceAt: 0,
+    lastReactAt: 0,
+};
+const MEET_FX_NONE = Object.freeze({ a: 1, hop: 0, on: false });
+
+function meetingIsOpen() { return !!_meet.open; }
+function _meetSeated(p) { return !!(p && typeof p.sitSeatId === 'string' && p.sitSeatId.startsWith('meet_')); }
+
+// ─── The room ────────────────────────────────────────────────────────────────
+// How visible something standing at world x is: the main scene is always 1, the
+// meeting room is the room's reveal, and a short ramp across the doorway so someone
+// walking through it fades into the light rather than popping out.
+function _meetFadeAt(x) {
+    const v = _meet.vis;
+    if (v >= 0.999 || x < MEET_X0 - 30) return 1;
+    if (x > MEET_X0 + 10) return v;
+    return 1 + (v - 1) * ((x - (MEET_X0 - 30)) / 40);
+}
+
+function drawMeetingRoom() {
+    const v = _meet.vis;
+    if (v < 0.01 || !_layerReady(worldCache.meet)) return;
+    const ctx = gameState.ctx;
+    ctx.save();
+    ctx.globalAlpha = v;
+    ctx.drawImage(worldCache.meet, MEET_X0, MEET_Y0, MEET_WW, MEET_WH);
+    ctx.restore();
+}
+
+let _meetBeam = null, _meetBloom = null, _meetDoorLight = null;
+// One beam: a tapered shaft (narrow at the doorway, widening into the room) built
+// from ten stacked trapezoids, each wider and fainter — their sum has a feathered
+// edge everywhere. No hard start, no hard sides, and it dies out to nothing: a
+// single hard-edged quad is what read as a solid square at the end of each ray.
+function _meetBeamSprite() {
+    if (_meetBeam) return _meetBeam;
+    const W = 256, H = 96, N = 10;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    const lg = g.createLinearGradient(0, 0, W, 0);
+    lg.addColorStop(0, 'rgba(255,253,245,0)');
+    lg.addColorStop(0.08, 'rgba(255,253,245,1)');
+    lg.addColorStop(0.45, 'rgba(255,250,238,0.4)');
+    lg.addColorStop(1, 'rgba(255,248,232,0)');
+    g.fillStyle = lg;
+    g.globalAlpha = 1 / N;
+    for (let i = 0; i < N; i++) {
+        const k = (i + 1) / N;
+        const h0 = H * (0.04 + 0.10 * k), h1 = H * (0.16 + 0.34 * k);   // half-heights: start → end
+        g.beginPath();
+        g.moveTo(0, H / 2 - h0); g.lineTo(W, H / 2 - h1);
+        g.lineTo(W, H / 2 + h1); g.lineTo(0, H / 2 + h0);
+        g.closePath();
+        g.fill();
+    }
+    _meetBeam = c;
+    return c;
+}
+// The opening itself: brightest against the hidden room (so the void behind it never
+// shows), falling off into the work room and feathered top and bottom over the wall —
+// light pouring through a gap, not a painted white rectangle.
+function _meetDoorLightSprite() {
+    if (_meetDoorLight) return _meetDoorLight;
+    const W = 128, H = 256;
+    const c = document.createElement('canvas'); c.width = W; c.height = H;
+    const g = c.getContext('2d');
+    const lg = g.createLinearGradient(0, 0, W, 0);
+    lg.addColorStop(0, 'rgba(255,253,246,0)');
+    lg.addColorStop(0.45, 'rgba(255,253,246,0.35)');
+    lg.addColorStop(0.72, 'rgba(255,254,250,0.92)');
+    lg.addColorStop(1, 'rgba(255,255,255,1)');
+    g.fillStyle = lg; g.fillRect(0, 0, W, H);
+    g.globalCompositeOperation = 'destination-in';
+    const vg = g.createLinearGradient(0, 0, 0, H);
+    vg.addColorStop(0, 'rgba(0,0,0,0)');
+    vg.addColorStop(0.18, 'rgba(0,0,0,1)');
+    vg.addColorStop(0.82, 'rgba(0,0,0,1)');
+    vg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = vg; g.fillRect(0, 0, W, H);
+    _meetDoorLight = c;
+    return c;
+}
+function _meetBloomSprite() {
+    if (_meetBloom) return _meetBloom;
+    const c = document.createElement('canvas'); c.width = 128; c.height = 128;
+    const g = c.getContext('2d');
+    const rg = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+    rg.addColorStop(0, 'rgba(255,255,255,0.9)');
+    rg.addColorStop(0.4, 'rgba(255,250,236,0.35)');
+    rg.addColorStop(1, 'rgba(255,248,230,0)');
+    g.fillStyle = rg; g.fillRect(0, 0, 128, 128);
+    _meetBloom = c;
+    return c;
+}
+
+// The doorway, while the room behind it is still hidden: the opening itself is pure
+// light, a bloom spills onto the floor, and (with the atmosphere layers on) beams fan
+// out into the work room. It all fades as the room is revealed — walking up to the
+// light is what turns it off. Sprites are built once; this is ~7 drawImages a frame.
+function drawMeetDoorGlow() {
+    const a = 1 - _meet.vis;
+    if (a < 0.01) return;
+    const ctx = gameState.ctx;
+    const t = performance.now() / 1000;
+    const x0 = sx2w(MEET_DOOR[0]), y0 = sy2w(MEET_DOOR[1]);
+    const x1 = sx2w(MEET_DOOR[2]), y1 = sy2w(MEET_DOOR[3]);
+    const dh = y1 - y0, cy = (y0 + y1) / 2;
+    ctx.save();
+    ctx.globalAlpha = a;
+    // Its plateau (18–82% of its height) spans the opening; the feather lies over the wall.
+    const dw = x1 - x0, lw = dw * 2.2, lh = dh * 1.44;
+    ctx.drawImage(_meetDoorLightSprite(), x1 + 4 - lw, y0 - dh * 0.22, lw, lh);
+    ctx.globalAlpha = a * (0.55 + 0.08 * Math.sin(t * 1.3));
+    const bw = dh * 2.2, bh = dh * 1.6;
+    ctx.drawImage(_meetBloomSprite(), x1 - bw * 0.62, cy - bh / 2, bw, bh);
+    if (gameState._overlaysOn) {
+        const beam = _meetBeamSprite();
+        for (const r of MEET_RAYS) {
+            ctx.save();
+            ctx.globalAlpha = a * r.a * (0.6 + 0.4 * Math.sin(t * r.s + r.p));
+            ctx.translate(x0 + 4, y0 + dh * r.y);
+            ctx.rotate(Math.PI + r.ang + Math.sin(t * 0.35 + r.p) * 0.025);   // pointing into the room
+            ctx.drawImage(beam, 0, -r.w * 0.8, r.len, r.w * 1.6);   // the sprite is tapered, so drawn wider
+            ctx.restore();
+        }
+    }
+    ctx.restore();
+}
+
+// ─── The table in the world: prompt + press ─────────────────────────────────────
+function _meetDistToTable(x, y) {
+    const t = MEET_TBL_W;
+    const dx = Math.max(t.x0 - x, 0, x - t.x1), dy = Math.max(t.y0 - y, 0, y - t.y1);
+    return Math.hypot(dx, dy);
+}
+function _meetFreeSeat() {
+    const me = gameState.userId;
+    const taken = new Set();
+    for (const p of Object.values(gameState.players)) {
+        if (p.userId !== me && _meetSeated(p)) taken.add(p.sitSeatId);
+    }
+    return MEET_SEATS.find(s => !taken.has(s.id)) || null;
+}
+function _meetUpdateProximity(player, pFloor) {
+    gameState.nearMeetTable = null;
+    if (!player || pFloor !== 1 || !canSit() || _meet.open) return;
+    if (_meetDistToTable(player.x, player.y) > MEET_SELECT_R) return;
+    gameState.nearMeetTable = { full: !_meetFreeSeat() };
+    _meetEnsureArt();   // idempotent — the real table image, before the press
+}
+
+const _meetPrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null, shown: null };
+function drawMeetPrompt() {
+    const near = gameState.nearMeetTable;
+    const key = near ? (near.full ? 'full' : 'join') : null;
+    const cx = (MEET_TBL_W.x0 + MEET_TBL_W.x1) / 2, cy = (MEET_TBL_W.y0 + MEET_TBL_W.y1) / 2;
+    if (!_updatePromptCrossfade(_meetPrompt, key, cx, cy, near)) return;
+    const ctx = gameState.ctx;
+    const a = _meetPrompt.alpha * _meet.vis;
+    const bob = Math.sin(Date.now() * 0.004) * 2.5;
+    const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _meetPrompt.pop));
+    ctx.save();
+    ctx.translate(_meetPrompt.x, _meetPrompt.y - (1 - a) * 10 + bob);
+    ctx.scale(pop, pop);
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.shadowBlur = 4; ctx.shadowColor = `rgba(0,0,0,${0.65 * a})`;
+    ctx.fillStyle = `rgba(255,255,255,${a})`;
+    ctx.font = 'bold 16px Rubik';
+    ctx.fillText(_meetPrompt.shownKey === 'full' ? 'الطاولة ممتلئة' : 'انقر للانضمام إلى الاجتماع', 0, 0);
+    ctx.shadowBlur = 0;
+    ctx.restore();
+}
+
+// Returns true when it handled the press (the caller stops its hit-test chain).
+function meetTableClick(world) {
+    const near = gameState.nearMeetTable;
+    if (!near || !world) return false;
+    if (_meetDistToTable(world.x, world.y) > MEET_CLICK_PAD) return false;
+    if (!near.full) joinMeetingTable();
+    return true;
+}
+
+function joinMeetingTable() {
+    if (!canSit() || _meet.open) return;
+    const seat = _meetFreeSeat();
+    if (!seat) return;
+    // The ordinary sit: hop + relay + sitSeatId write (+ its sound). Everyone else
+    // sees the member take their place at the table.
+    startSitAnimation(seat.id, seat.x, seat.y);
+    openMeetingOverlay();
+}
+
+function leaveMeetingTable() {
+    closeMeetingOverlay();
+    const me = gameState.players[gameState.userId];
+    if (me && _meetSeated(me) && gameState.isSitting) standUp();
+}
+
+// ─── Voice (MdwnhBot) ────────────────────────────────────────────────────────
+// {t:'vc', ids:[in the call], sp:[talking]} every ~15 s, and {t:'spk', s:id, on:1|0}
+// the moment someone starts or stops. The bot is the only sender, but a relayed
+// payload is client-claimed like everything else on the relay — every field is
+// type-checked here and it can only ever change a highlight.
+function onMeetVoiceMsg(msg) {
+    const now = Date.now();
+    _meet.vcAt = now;
+    if (msg.t === 'vc') {
+        const ids = Array.isArray(msg.ids) ? msg.ids.filter(x => typeof x === 'string').slice(0, 99) : [];
+        _meet.vcIds = new Set(ids);
+        const sp = new Set(Array.isArray(msg.sp) ? msg.sp.filter(x => typeof x === 'string') : []);
+        for (const [id, s] of _meet.spk) if (!sp.has(id)) s.on = false;
+        for (const id of sp) _meet.spk.set(id, { on: true, at: now });
+        return;
+    }
+    if (typeof msg.s !== 'string' || msg.s.length > 32) return;
+    _meet.spk.set(msg.s, { on: msg.on === 1, at: now });
+    if (msg.on === 1) _meet.vcIds.add(msg.s);
+}
+// 'on' talking · 'quiet' in the call and silent · null = no live feed / not in the
+// call, which is NOT faded: a member who's only typing must not look absent.
+function _meetSpeakState(uid, now) {
+    if (now - _meet.vcAt > MEET_VC_STALE_MS) return null;
+    const s = _meet.spk.get(uid);
+    if (s && s.on && now - s.at < MEET_SPK_STALE_MS) return 'on';
+    return _meet.vcIds.has(uid) ? 'quiet' : null;
+}
+
+// Pure reads for drawPlayers (safe on the PiP pass — updateMeeting advances them).
+function _meetSpeakFx(player) {
+    if (!_meetSeated(player)) return MEET_FX_NONE;
+    let hop = 0;
+    if (player._meetHopT) {
+        const t = (performance.now() - player._meetHopT) / MEET_HOP_MS;
+        if (t >= 0 && t < 1) hop = -Math.sin(t * Math.PI) * 10;
+    }
+    return { a: player._spkA ?? 1, hop, on: !!player._spkOn };
+}
+
+// ─── Reactions ───────────────────────────────────────────────────────────────
+// Each is a pure function of its age, so the PiP pass can draw it untouched.
+function _meetReactFx(player) {
+    const rx = player._react;
+    if (!rx) return null;
+    const age = performance.now() - rx.t0;
+    if (age < 0 || age >= MEET_REACT_MS) return null;
+    const t = age / MEET_REACT_MS, fall = 1 - t, env = Math.sin(t * Math.PI);
+    const fx = { sx: 1, sy: 1, rot: 0, dx: 0, dy: 0, e: rx.e, ea: 0, ey: 0, es: 1 };
+    switch (rx.k) {
+        case 'happy': {       // three hops, landing squashed
+            const h = Math.abs(Math.sin(t * Math.PI * 3));
+            fx.dy = -h * 14 * (1 - t * 0.5);
+            const c = Math.cos(t * Math.PI * 6) * 0.06 * fall;
+            fx.sx = 1 + c; fx.sy = 1 - c;
+            break;
+        }
+        case 'clap': {        // quick little pulses
+            const h = Math.abs(Math.sin(t * Math.PI * 9)) * fall;
+            fx.sx = fx.sy = 1 + 0.07 * h; fx.dy = -3 * h;
+            break;
+        }
+        case 'laugh': {       // rocking with it
+            const w = Math.sin(t * Math.PI * 7) * fall;
+            fx.rot = 0.2 * w; fx.dy = -4 * Math.abs(w);
+            break;
+        }
+        case 'love': {        // a heartbeat
+            const b = Math.pow(Math.max(0, Math.sin(t * Math.PI * 4)), 3);
+            fx.sx = fx.sy = 1 + 0.13 * b * (1 - t * 0.4);
+            break;
+        }
+        case 'sad': {         // a slow droop
+            fx.dy = 7 * env; fx.sy = 1 - 0.09 * env; fx.sx = 1 + 0.05 * env; fx.rot = -0.07 * env;
+            break;
+        }
+        case 'mad': {         // shaking with it
+            fx.dx = 5 * Math.sin(age * 0.045) * fall; fx.sx = fx.sy = 1 + 0.05 * env;
+            break;
+        }
+    }
+    fx.ea = t < 0.12 ? t / 0.12 : (t > 0.7 ? (1 - t) / 0.3 : 1);
+    fx.ey = -30 * (1 - Math.pow(1 - t, 3));
+    fx.es = 0.7 + 0.3 * Math.min(1, t / 0.15);
+    return fx;
+}
+function _meetDrawReactEmoji(ctx, player, x, headY, fx, alpha) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(1, fx.ea * alpha));
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.font = `${Math.round(26 * fx.es)}px "Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif`;
+    ctx.fillText(fx.e, x, headY - 16 + fx.ey);
+    ctx.restore();
+}
+
+function _meetBlip(rate, peak) {
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', rate, peak); } catch (_) {}
+}
+function sendMeetReactWS(k) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try { ws.send(JSON.stringify({ t: 'react', uid: gameState.userId, r: k })); return true; } catch (_) { return false; }
+}
+function meetReact(k) {
+    const def = MEET_REACT_BY_KEY[k];
+    const me = gameState.players[gameState.userId];
+    if (!def || !me || !_meetSeated(me)) return;
+    const now = performance.now();
+    if (now - _meet.lastReactAt < MEET_REACT_COOLDOWN_MS) return;
+    _meet.lastReactAt = now;
+    me._react = { k: def.k, e: def.e, t0: now };
+    _meetPlayReactDom(me.userId, def.k);
+    _meetBlip(1.25, 0.05);
+    sendMeetReactWS(def.k);
+    // Visual-only lock: a class, never the `disabled` attribute (iOS touch leak).
+    _meet.reactsEl?.classList.add('cool');
+    setTimeout(() => _meet.reactsEl?.classList.remove('cool'), MEET_REACT_COOLDOWN_MS);
+}
+function receiveMeetReaction(player, r) {
+    const def = MEET_REACT_BY_KEY[r];
+    if (!def || !player || !_meetSeated(player)) return;   // only someone at the table reacts
+    player._react = { k: def.k, e: def.e, t0: performance.now() };
+    if (_meet.open) { _meetPlayReactDom(player.userId, def.k); _meetBlip(1.1, 0.03); }
+}
+
+// A chat line from someone at the table: their seat bounces (in the world and in the
+// overlay) and the line floats over their seat. Voice is what draws the green ring —
+// typing never does.
+function _meetOnChat(player, text) {
+    if (!player || !_meetSeated(player)) return;
+    player._meetHopT = performance.now();
+    if (!_meet.open) return;
+    const el = _meet.seatEls.get(player.userId);
+    if (!el) return;
+    const b = el.querySelector('.meet-bubble');
+    if (b) {
+        b.textContent = text || '';
+        b.classList.remove('show'); void b.offsetWidth; b.classList.add('show');
+        clearTimeout(el._bubT);
+        el._bubT = setTimeout(() => b.classList.remove('show'),
+            CHAT_LIFE_MS + (text || '').length * CHAT_LIFE_PER_CH);
+    }
+    _meetHopEl(el);
+}
+
+// ─── The overlay ─────────────────────────────────────────────────────────────
+function _meetEnsureArt() {
+    if (_meet.artReq) return;
+    const img = _meet.tableImg || document.getElementById('meet-table-img');
+    if (!img) return;
+    _meet.artReq = true;
+    img.decoding = 'async';
+    img.src = 'Art/Meeting_Table_Real.webp';
+}
+
+// The room behind the table: ONE frame of the world, downscaled and blurred by CSS.
+// A static element's filter is rasterised once — unlike a backdrop-filter over the
+// live canvas, which re-blurs every frame (and is banned on mobile for exactly that).
+// The world pass then stops altogether while the overlay covers it (canvasOff).
+function _meetSnapshot() {
+    const src = gameState.canvas, c = _meet.backdrop;
+    if (!src || !c) return;
+    const w = Math.max(2, Math.round(src.width / 5)), h = Math.max(2, Math.round(src.height / 5));
+    c.width = w; c.height = h;
+    try { c.getContext('2d').drawImage(src, 0, 0, w, h); } catch (_) {}
+}
+
+// Table + seat geometry for the current viewport. Landscape turns the table on its
+// side (the art is portrait); the world's left side becomes the top row, so a seat
+// keeps its neighbours whichever way round it's drawn.
+function _meetLayout() {
+    const el = _meet.el, stage = _meet.stage, img = _meet.tableImg;
+    if (!el || !stage) return;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    const mob = isMobile();
+    const wide = vw > vh * 1.1;
+    const headH = mob ? 76 : 84, dockH = mob ? 150 : 104;
+    const a = Math.round(Math.max(46, Math.min(78, Math.min(vw, vh) * 0.085)));
+    const off = a * 0.8 + 10;
+    const reach = off + a / 2, nameH = 24;
+    const R = 335 / 679;
+    const aw = vw - 24, ah = vh - headH - dockH;
+    let L = wide ? Math.min(aw - 2 * reach, (ah - 2 * reach - nameH) / R)
+                 : Math.min((aw - 2 * reach) / R, ah - 2 * reach - nameH);
+    L = Math.max(170, Math.min(L, wide ? 980 : 760));
+    const S = L * R;
+    const w = wide ? L : S, h = wide ? S : L;
+    _meet.geo = { wide, L, S, a, off };
+    el.style.setProperty('--meet-a', a + 'px');
+    stage.style.width = w + 'px';
+    stage.style.height = h + 'px';
+    stage.style.left = ((vw - w) / 2) + 'px';
+    stage.style.top = (headH + (ah - h) / 2) + 'px';
+    if (img) {
+        // The img keeps the art's own portrait box; landscape just turns it.
+        img.style.width = S + 'px';
+        img.style.height = L + 'px';
+        img.style.left = ((w - S) / 2) + 'px';
+        img.style.top = ((h - L) / 2) + 'px';
+        img.style.transform = wide ? 'rotate(-90deg)' : 'none';
+    }
+    for (const seatEl of _meet.seatEls.values()) _meetPlaceSeat(seatEl);
+}
+function _meetSeatXY(seat, g) {
+    if (!g.wide) {
+        if (seat.side === 'L') return { x: -g.off, y: seat.v * g.L };
+        if (seat.side === 'R') return { x: g.S + g.off, y: seat.v * g.L };
+        if (seat.side === 'T') return { x: g.S / 2, y: -g.off };
+        return { x: g.S / 2, y: g.L + g.off };
+    }
+    // Turned: the world's top end sits on the RIGHT (reading starts there in RTL).
+    if (seat.side === 'L') return { x: g.L * (1 - seat.v), y: -g.off };
+    if (seat.side === 'R') return { x: g.L * (1 - seat.v), y: g.S + g.off };
+    if (seat.side === 'T') return { x: g.L + g.off, y: g.S / 2 };
+    return { x: -g.off, y: g.S / 2 };
+}
+function _meetPlaceSeat(el) {
+    const g = _meet.geo, seat = MEET_SEATS[el._seatIdx];
+    if (!g || !seat) return;
+    const p = _meetSeatXY(seat, g);
+    el.style.left = (p.x - g.a / 2) + 'px';
+    el.style.top = (p.y - g.a / 2) + 'px';
+    // Which way is "outward" from the table decides where the name tag goes, so a
+    // top-row name never lands on the wood.
+    const top = g.wide ? seat.side === 'L' : seat.side === 'T';
+    el.classList.toggle('name-up', top);
+}
+
+// A plain https URL (Discord), a same-origin art path (سراج's `Art/siraj.png` — the
+// https-only first version showed test ghosts as a bare letter) or a base64 image.
+const _MEET_SAFE_URL = /^(https:\/\/[^\s"'()\\<>]+|Art\/[\w\-./]+|data:image\/(png|jpeg|webp|gif);base64,[A-Za-z0-9+/=]+)$/;
+function _meetMakeSeat(p) {
+    const me = p.userId === gameState.userId;
+    const el = document.createElement('div');
+    el.className = 'meet-seat' + (me ? ' me' : '');
+    el.dataset.uid = p.userId;
+    el.innerHTML = '<div class="meet-bubble"></div>'
+                 + '<div class="meet-bob"><div class="meet-av"><span class="meet-emoji" aria-hidden="true"></span></div></div>'
+                 + '<div class="meet-name"></div>';
+    const av = el.querySelector('.meet-av');
+    av.style.setProperty('--ring', _validHex(p.ringColor) || (me ? COLORS.blue : '#ffffff'));
+    // The avatar URL comes out of a world-writable node — only a plain https URL is
+    // ever put into CSS.
+    if (typeof p.avatar === 'string' && _MEET_SAFE_URL.test(p.avatar)) {
+        av.style.backgroundImage = `url("${p.avatar}")`;
+    } else {
+        av.dataset.initial = (p.username || '؟').trim().charAt(0).toUpperCase();
+    }
+    el.querySelector('.meet-name').textContent = p.username || '';
+    if (me) {
+        av.setAttribute('role', 'button');
+        av.setAttribute('aria-label', 'اكتب رسالة');
+        av.tabIndex = 0;
+    }
+    return el;
+}
+function _meetHopEl(el) {
+    const bob = el && el.querySelector('.meet-bob');
+    if (!bob) return;
+    bob.classList.remove('hop'); void bob.offsetWidth; bob.classList.add('hop');
+}
+function _meetPlayReactDom(uid, k) {
+    const el = _meet.seatEls.get(uid);
+    const def = MEET_REACT_BY_KEY[k];
+    if (!el || !def) return;
+    const av = el.querySelector('.meet-av'), em = el.querySelector('.meet-emoji');
+    if (em) em.textContent = def.e;
+    for (const r of MEET_REACTIONS) av.classList.remove('rx-' + r.k);
+    el.classList.remove('rx');
+    void av.offsetWidth;
+    av.classList.add('rx-' + k);
+    el.classList.add('rx');
+    clearTimeout(el._rxT);
+    el._rxT = setTimeout(() => { av.classList.remove('rx-' + k); el.classList.remove('rx'); }, MEET_REACT_MS + 80);
+}
+
+// Keep the seats in step with who is at the table. Membership is diffed against a
+// key so the DOM is only touched when someone arrives or leaves; the speaking state
+// is a class toggle, written only when it changes.
+function _meetSyncSeats(opening) {
+    if (!_meet.stage) return;
+    const members = [];
+    for (const p of Object.values(gameState.players)) {
+        if (!_meetSeated(p) || p._pendingSpawn != null) continue;
+        const idx = MEET_SEAT_INDEX[p.sitSeatId];
+        if (idx != null) members.push({ p, idx });
+    }
+    const key = members.map(m => m.p.userId + '@' + m.idx).sort().join('|');
+    if (key !== _meet.stageKey) {
+        _meet.stageKey = key;
+        const alive = new Set();
+        let order = 0;
+        for (const m of members) {
+            alive.add(m.p.userId);
+            let el = _meet.seatEls.get(m.p.userId);
+            if (!el) {
+                el = _meetMakeSeat(m.p);
+                // Staggered after the table on open; a later arrival pops in at once.
+                el.style.setProperty('--d', opening ? (0.3 + order * 0.07).toFixed(2) + 's' : '0s');
+                order++;
+                _meet.stage.appendChild(el);
+                _meet.seatEls.set(m.p.userId, el);
+            }
+            el._seatIdx = m.idx;
+            _meetPlaceSeat(el);
+        }
+        for (const [uid, el] of _meet.seatEls) {
+            if (alive.has(uid)) continue;
+            _meet.seatEls.delete(uid);
+            el.classList.add('out');
+            setTimeout(() => el.remove(), 300);
+        }
+        if (_meet.countEl) {
+            const n = members.length;
+            _meet.countEl.textContent = `${n.toLocaleString('ar-EG')} على الطاولة`;
+        }
+    }
+    const now = Date.now();
+    for (const [uid, el] of _meet.seatEls) {
+        const st = _meetSpeakState(uid, now);
+        const spk = st === 'on', quiet = st === 'quiet';
+        if (el._spk !== spk) { el._spk = spk; el.classList.toggle('spk', spk); if (spk) _meetHopEl(el); }
+        if (el._quiet !== quiet) { el._quiet = quiet; el.classList.toggle('quiet', quiet); }
+    }
+}
+
+function _meetRefreshVoice() {
+    const live = Date.now() - _meet.vcAt < MEET_VC_STALE_MS;
+    if (live === _meet.voiceShown) return;
+    _meet.voiceShown = live;
+    _meet.voiceEl?.classList.toggle('live', live);
+    if (_meet.voiceTxt) _meet.voiceTxt.textContent = live ? 'ديسكورد: متصل' : 'ديسكورد: غير متصل';
+}
+
+function openMeetingOverlay() {
+    if (_meet.open || !_meet.el) return;
+    _meet.open = true;
+    _meet.openedAt = performance.now();
+    gameState.keys = {};
+    clearTimeout(_meet.clearTimer);
+    // A reopen mid-fade starts from a clean stage, so every seat plays its entrance.
+    for (const el of _meet.seatEls.values()) el.remove();
+    _meet.seatEls.clear();
+    _meet.stageKey = '';
+    _meetSnapshot();
+    _meetEnsureArt();
+    _meet.voiceShown = null;
+    _meetRefreshVoice();
+    _meetLayout();
+    if (typeof _uiSeqReset === 'function') _uiSeqReset();   // the seats' blip sweep starts deep
+    _meetSyncSeats(true);
+    document.body.classList.add('meet-active');
+    _meet.el.setAttribute('aria-hidden', 'false');
+    // Two frames before `.active` so the fade actually runs (display can't transition).
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (_meet.open) _meet.el.classList.add('active');
+    }));
+    clearTimeout(_meet.offTimer);
+    _meet.offTimer = setTimeout(() => { if (_meet.open) _meet.canvasOff = true; }, MEET_CANVAS_OFF_MS);
+}
+
+function closeMeetingOverlay() {
+    if (!_meet.open) return;
+    _meet.open = false;
+    clearTimeout(_meet.offTimer);
+    _meet.canvasOff = false;      // the world draws again underneath the fade-out
+    if (chatIsOpen()) closeChatBox();
+    _meet.el?.classList.remove('active');
+    _meet.el?.setAttribute('aria-hidden', 'true');
+    document.body.classList.remove('meet-active');
+    clearTimeout(_meet.clearTimer);
+    _meet.clearTimer = setTimeout(() => {
+        if (_meet.open) return;
+        for (const el of _meet.seatEls.values()) el.remove();
+        _meet.seatEls.clear();
+        _meet.stageKey = '';
+    }, 480);
+}
+
+// The chat box over MY seat instead of over my head in the world (same clamps as
+// updateChatInputPos: `top` is the box's bottom edge, kept clear of the keyboard).
+function _meetPlaceChatInput(force) {
+    const w = _chatUi.wrap, el = _meet.seatEls.get(gameState.userId);
+    if (!w || !el) return;
+    if (!force && Date.now() - _chatUi.openedAt > 500) return;
+    const av = el.querySelector('.meet-av');
+    if (!av) return;
+    const r = av.getBoundingClientRect();
+    let sx = r.left + r.width / 2, sy = r.top - 14;
+    const vv = window.visualViewport;
+    const vL = vv ? vv.offsetLeft : 0, vT = vv ? vv.offsetTop : 0;
+    const vW = vv ? vv.width : window.innerWidth;
+    const vH = vv ? vv.height : window.innerHeight;
+    const halfW = (_chatUi.w || 240) / 2;
+    sx = Math.min(Math.max(sx, vL + halfW + 10), vL + vW - halfW - 10);
+    sy = Math.min(Math.max(sy, vT + (_chatUi.h || 54) + 10), vT + vH - 10);
+    _chatUi.lastX = sx; _chatUi.lastY = sy;
+    w.style.left = sx.toFixed(1) + 'px';
+    w.style.top  = sy.toFixed(1) + 'px';
+}
+
+// ─── Per frame ───────────────────────────────────────────────────────────────
+function updateMeeting() {
+    const me = gameState.players[gameState.userId];
+    const dt = gameState.dtFactor || 1;
+
+    // The reveal: inside the room or at its table → shown. Otherwise only WALKING the
+    // corridor in front of the doorway, straight at it: the fade tracks position only
+    // while moving left/right (_moveDX) — someone crossing the corridor, standing in
+    // it, or sitting at the laptops just below it leaves it where it was (the
+    // mezzanine fade's rule). Plain proximity used to half-reveal it from those seats.
+    let target = 0;
+    if (me && (me.floor || 1) === 1) {
+        const x = me.renderX ?? me.x, y = me.renderY ?? me.y;
+        if (x >= MEET_X0 - 12 || _meetSeated(me)) target = 1;
+        else if (y > MEET_APPROACH_Y0 && y < MEET_APPROACH_Y1 && x > MEET_APPROACH_X0 - MEET_REVEAL_FAR) {
+            const d = Math.max(0, MEET_APPROACH_X0 - x);
+            target = me._moveDX
+                ? Math.max(0, Math.min(1, (MEET_REVEAL_FAR - d) / (MEET_REVEAL_FAR - MEET_REVEAL_NEAR)))
+                : _meet.vis;
+        }
+    }
+    // A kidnap never reveals it — the grab to the extra table's laptops swings right
+    // past the doorway. It may still fade out.
+    if (gameState.anim.active) target = Math.min(target, _meet.vis);
+    _meet.vis += (target - _meet.vis) * (1 - Math.pow(1 - 0.10, dt));
+    if (Math.abs(target - _meet.vis) < 0.002) _meet.vis = target;
+
+    // Voice → per-player fade + the hop on starting to speak; stale reactions drop.
+    const now = Date.now(), pnow = performance.now();
+    const k = 1 - Math.pow(1 - 0.14, dt);
+    for (const p of Object.values(gameState.players)) {
+        if (p._react && pnow - p._react.t0 >= MEET_REACT_MS) p._react = null;
+        const st = _meetSeated(p) ? _meetSpeakState(p.userId, now) : null;
+        const on = st === 'on';
+        const a0 = p._spkA ?? 1;
+        p._spkA = a0 + ((st === 'quiet' ? MEET_QUIET_A : 1) - a0) * k;
+        if (on && !p._spkOn) p._meetHopT = pnow;
+        p._spkOn = on;
+    }
+
+    if (_meet.open) {
+        // One guard closes it: the moment I'm no longer seated at the table (left,
+        // kidnapped back to work, disconnected), the overlay goes with it.
+        if (!me || !_meetSeated(me)) { closeMeetingOverlay(); return; }
+        _meetSyncSeats(false);
+        if (now - _meet.voiceAt > 500) { _meet.voiceAt = now; _meetRefreshVoice(); }
+    }
+}
+
+// ─── Wiring ──────────────────────────────────────────────────────────────────
+function setupMeetingUI() {
+    const el = document.getElementById('meet-overlay');
+    if (!el || _meet.el) return;
+    _meet.el = el;
+    _meet.stage = document.getElementById('meet-stage');
+    _meet.backdrop = document.getElementById('meet-backdrop');
+    _meet.tableImg = document.getElementById('meet-table-img');
+    _meet.countEl = document.getElementById('meet-count');
+    _meet.voiceEl = document.getElementById('meet-voice');
+    _meet.voiceTxt = document.getElementById('meet-voice-text');
+    _meet.reactsEl = document.getElementById('meet-reacts');
+
+    if (_meet.reactsEl) {
+        _meet.reactsEl.innerHTML = MEET_REACTIONS.map(r =>
+            `<button type="button" class="meet-react" data-r="${r.k}" title="${r.n}" aria-label="${r.n}"><span>${r.e}</span></button>`
+        ).join('');
+        _meet.reactsEl.addEventListener('click', (e) => {
+            const b = e.target.closest('.meet-react');
+            if (b) meetReact(b.dataset.r);
+        });
+    }
+    document.getElementById('meet-leave')?.addEventListener('click', leaveMeetingTable);
+    const hint = document.getElementById('meet-hint');
+    if (hint) hint.textContent = isMobile() ? 'انقر صورتك للكتابة' : 'اضغط Enter للكتابة';
+
+    // My own seat is the chat button, like my own character is in the world.
+    _meet.stage?.addEventListener('pointerdown', (e) => {
+        // Pressing it while the box is open must not reach the document-level
+        // "press outside closes it" listener — that would wipe the half-typed line.
+        if (chatIsOpen() && e.target.closest('.meet-seat.me')) e.stopPropagation();
+    });
+    _meet.stage?.addEventListener('click', (e) => {
+        if (!e.target.closest('.meet-seat.me .meet-av')) return;
+        if (!chatIsOpen() && chatCanOpen()) openChatBox();
+    });
+    _meet.stage?.addEventListener('keydown', (e) => {
+        if ((e.key === 'Enter' || e.key === ' ') && e.target.closest('.meet-seat.me .meet-av')) {
+            e.preventDefault(); e.stopPropagation();
+            if (!chatIsOpen() && chatCanOpen()) openChatBox();
+        }
+    });
+    // Escape leaves — in the CAPTURE phase so it sees an open chat box before the
+    // chat's own Escape handler closes it (then Escape only closes the box).
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _meet.open && !chatIsOpen()) leaveMeetingTable();
+    }, true);
+    window.addEventListener('resize', () => { if (_meet.open) _meetLayout(); });
+
+    // The seats' entrance plays the house cascade blip (see setupJuiceUi).
+    try { _JUICE_IN_ANIMS.add('meetSeatIn'); } catch (_) {}
+
+    // Warm the real table's art on idle after spawn — ~5 KB, never on the login path.
+    if (window.requestIdleCallback) requestIdleCallback(_meetEnsureArt, { timeout: 15000 });
+    else setTimeout(_meetEnsureArt, 8000);
 }

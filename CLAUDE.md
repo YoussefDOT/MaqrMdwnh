@@ -94,6 +94,7 @@ Grep anchors for the major systems (all verified to exist):
 | جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
 | Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admRenderDutyBar`, `_admDutySection` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS` |
+| Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
 | Success card | `setupSuccessCardUI` |
@@ -226,6 +227,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **رف الجوائز** | Three trophies (and four hidden, blacked-out ones) on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. It is read-only. See **لوحة القائد**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٥٠ حرفًا, wrapping onto two lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
+| **غرفة الاجتماعات** | A room snapped onto the top-right of the scene, hidden behind a doorway that glows white until you walk up to it. Press its table → a seat (the sofa hop) and a full-screen look at the real table with everyone round it: six reactions, the proximity chat, and a **green ring on whoever is talking in the Discord call** — fed live by MdwnhBot over the relay, zero Firebase. See **غرفة الاجتماعات**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
 | **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
@@ -262,6 +264,12 @@ Sound/Focus Sounds/          — ambient focus audio files (.mp3)
 Art/                         — minigame art (race track, coffee, boss fight, siraj)
 Art/Workspace/               — THE WORLD: one combined scene split into stacked layers
                                (Workspace_00NN_*.png, all 2210×3160). See "The World".
+                               Plus the extension layers (Extension_*.webp, cropped) —
+                               their full-canvas PNG masters sit in masters/ (gitignored,
+                               and a subfolder so the manifest hook never hashes them).
+Art/Meeting_Table_Real.webp  — the top-down table in the meeting overlay
+../MdwnhBot/                 — the Discord bot (its own repo, deployed on Render from
+                               GitHub main): relays who is speaking. See غرفة الاجتماعات.
 Art/Old/                     — the retired pixel-art world (no longer used)
 pomo9.json                   — legacy tilemap (no longer used by the new world; don't edit)
 ```
@@ -372,7 +380,10 @@ Painted bottom → top:
 4. second-floor players + timers (`drawPlayers(false, 2)` / `drawTimers(2)`)
 5. **`drawDayOverlays()`** — `Day-Overlay-2` (normal blend) then `Day-Overlay`
    (**`globalCompositeOperation = 'overlay'`**, dropped on بطاطس). The multiply Night
-   overlay is intentionally NOT drawn yet.
+   overlay is intentionally NOT drawn yet. **Day-Overlay is 3081×2747, not 2210×3160**:
+   the same sun beams, extended right so they run on over the meeting room. It's
+   authored 1:1 from the scene's top-left, so it is placed by its own size
+   (`srcW/srcH`, kept through `_shrinkOverlay`), never stretched over the main scene.
 6. screen-space FX: focus mask, smooth wind, fog, sun rays, **cloud shadows**, vignette.
 
 ### Collision — alpha masks from the actual filled pixels
@@ -423,9 +434,17 @@ under. The **stair-entry side barely fades** (min of the east/south penetration)
 being on floor 2 keeps it fully visible. Reverts on exit. Also floor-gates shared-pomo:
 you can't invite/join someone on a different floor.
 
-### Laptops (7 total) — `LAPTOP_DEFS` / `initLaptops()`
+### Laptops (10 total) — `LAPTOP_DEFS` / `initLaptops()`
 - **Ground desk** (`Workspace_0008`): 3 laptops that **drag the player LEFT** into the
   seat + 1 at the bottom that **drags DOWN**.
+- **Extra work table** (`Extension_Extra_Work_Table.webp`, against the divider, bottom-
+  right of the work room): 3 laptops that **drag UP** — their art is the 'down' laptop
+  turned 180°, screen toward the wall. Ids 8–10, **appended** (a laptop's id is its
+  index, and ids key live pomodoro docs — never insert). Two per-def extras: `gap`
+  (seat distance; 92 so the seat clears `EXT_TABLE_GHOST`) and `sheet: 'ext'` — their
+  glow lives on its own cropped sheet, `Extension_Extra_Work_Table_Laptop_Lights.png`,
+  whose lightBoxes were found by template-matching the 'down' laptop (glow included)
+  onto each screen. `_lightsUnionBox` skips `sheet` laptops so floor 1's crop stays tight.
 - **Second-floor desk** (`Workspace_0004`): 3 laptops, same orientation → also **drag
   LEFT** (seat on the open platform floor to their left). "3 to the right" in the brief
   meant their position, not the drag direction.
@@ -516,6 +535,9 @@ mobile, a phone went from **~200 MB to ~50 MB** of resident canvas/bitmap memory
 | `FocusYouTubePlayer` | line ~409 | YouTube IFrame API wrapper |
 
 ### Discord is OAuth ONLY — the voice-channel integration is gone
+(One narrow exception since the meeting room: MdwnhBot relays **who is speaking** in the
+call over the WebSocket relay — no Firebase, no presence, no lobby — see **غرفة
+الاجتماعات → The voice feed**. Everything below still holds.)
 Discord is a **login provider and nothing else**. There is no bot listing voice-channel
 members, no `status: 'in-voice'` users, no `channelName` / `categoryName` on
 `users/{uid}`, no faded low-opacity avatars for "in VC but not in the website", and no
@@ -1332,6 +1354,110 @@ payload is client-claimed and spoofable, the same known limit the position relay
 carries — which also means a spoofed `l` could fake a step. Fine for the trusted group.
 
 ---
+
+## غرفة الاجتماعات — the meeting room and its table
+
+A room snapped onto the scene's top-right corner, reached through a small doorway in the
+work room's right wall. Code is the `غرفة الاجتماعات` block at the very end of `game.js`
+(plus the `MEET_*` constants beside `sx2w`); markup is `#meet-overlay` in `index.html`;
+styles are the matching block at the foot of `style.css`. Grep anchors: `MEET_`,
+`updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`,
+`onMeetVoiceMsg`, `_meetReactFx`.
+
+### Geometry — its OWN coordinate space, the main scene untouched
+`Extension_Meeting_Room` is a separate 1111×1534 canvas whose origin is main-scene
+source `(IMG_W, 0)` — its floor starts exactly where the main right wall ends. Everything
+in it is in **meet-local px** (`MEET_FLOOR`, `MEET_TABLE_SOLID`, …) offset by
+`MEET_OX/MEET_OY`. IMG_W, the world origin and every existing constant/stored position
+are unchanged — that was the point; widening the main image would have shifted the
+origin and every saved `x/y` in Firebase. `WORLD_BOUNDS.maxX` now reaches the room's far
+wall; the room's own mask decides everything east of `MEET_X0`.
+
+- **Layers**: `wMeetRoom` + `wMeetTable` composite into **`worldCache.meet`** (own canvas,
+  same texel density as `ground`), drawn right after `drawWorldGround` at `_meet.vis`.
+  The table ships cropped (`box` in meet-local px — `consume()` scales boxes per cache).
+- **Collision is geometric** (`_buildMeetMask`): the art is opaque (its walls are
+  painted, not transparent), so the mask is solid everywhere with the wood floor carved
+  out and the table body + the wall screen put back. `checkCollision`'s floor-1 ring asks
+  `_floor1SolidAt` per sample point — east of `MEET_X0` the meet mask, west of it the main
+  one. The doorway works because the main wall's hole (`MEET_DOOR`) runs right to that
+  edge. Built with the other masks, so it obeys the same `worldCollision.built` rule.
+
+### The reveal — client-side only (`updateMeeting`, `_meet.vis`)
+Shown (1) inside the room or seated at its table. Otherwise it is revealed ONLY by
+**walking the corridor straight at the doorway** — the doorway's height ± 20
+(`MEET_APPROACH_Y0/Y1`), within `MEET_REVEAL_FAR` of the opening — and the fade tracks
+position only while the player moves left/right (`_moveDX`); standing, crossing the
+corridor vertically or sitting leaves it frozen. That rule exists because plain
+proximity half-revealed the room from the extra table's seats just below the door.
+**A kidnap never reveals it** (`anim.active` → the target can only fall): the grab to
+laptops 8–10 swings right past the doorway. While hidden, `drawMeetDoorGlow` paints the
+opening with a feathered light sprite (brightest against the hidden room so its void
+never shows, never a solid rectangle), a bloom, and five slow beams fanning into the
+work room — each beam a sprite of ten stacked, fading trapezoids so it has no hard
+start, sides or end (the first version's hard quad read as a square at the ray's end).
+Beams only with the atmosphere layers on (`_overlaysOn`); all of it fades as the room
+fades in. **Everything in the room fades with it**:
+`_meetFadeAt(x)` multiplies into `drawPlayers` (avatar, hats, name, reaction emoji),
+`drawChatBubbles` and `drawDustParticles`, with a short ramp across the doorway so a
+walker fades into the light instead of popping. All pure reads — the PiP pass draws the
+room and the door (`renderPiPInto`) without advancing anything.
+
+### The table — its places are SEATS
+Prompt «انقر للانضمام إلى الاجتماع» (or «الطاولة ممتلئة») within `MEET_SELECT_R` of the
+table's edge, `canSit()` required. A press on the table (`meetTableClick`, desktop +
+mobile hit-test chains) takes the first free of **`MEET_SEATS`** (4 down each side + 1 per
+end; filled alternating sides) through the ordinary **`startSitAnimation('meet_N', …)`**
+— so the hop is relayed, `sitSeatId` is written and freed by the same per-field
+onDisconnect as a sofa, and **no new Firebase key or rules change exists**. Seated =
+`sitSeatId` starts with `meet_` (`_meetSeated`).
+
+### The overlay (`#meet-overlay`, z-index 9050 — below prayer/azkar)
+- **The background is ONE frame of the world** (`_meetSnapshot`: the game canvas drawn
+  1/5 size into a canvas, blurred + darkened by a CSS `filter`). A static element's
+  filter is rasterised once; a `backdrop-filter` over the live canvas would re-blur every
+  frame (and is banned on mobile — invariant 10). `_meet.canvasOff` then **stops the
+  world pass entirely** `MEET_CANVAS_OFF_MS` after opening; closing clears it first so
+  the fade-out reveals a live world.
+- The table image is portrait; **landscape turns it** (`rotate(-90deg)`), mapping the
+  world's left side to the top row so a seat keeps its neighbours both ways
+  (`_meetSeatXY`). Sizes come from the viewport in `_meetLayout` (re-run on resize).
+- Seats are three nested elements — `.meet-seat` (position + pop-in, `meetSeatIn`,
+  registered in `_JUICE_IN_ANIMS` for the cascade blip) › `.meet-bob` (hop) › `.meet-av`
+  (reaction) — so the three motions never fight over one transform. Entrance fades use
+  `animation-fill-mode: backwards` with an opaque base (invariant 20). Membership is
+  diffed by a key (`_meetSyncSeats`); the DOM is only touched when someone arrives/leaves.
+- **One guard closes it**: `updateMeeting` shuts the overlay the moment I'm no longer
+  seated at the table — مغادرة الاجتماع, Escape, a break-end kidnap's instant stand-up, a
+  disconnect all land there.
+- **Chat works unchanged**: Enter (or pressing my own seat) opens the same box;
+  `updateChatInputPos` hands off to `_meetPlaceChatInput` while the overlay is up (the box
+  sits over my seat), and `body.meet-active .chat-input-wrap` lifts it above the overlay.
+  `receiveChatMessage` → `_meetOnChat` floats the line over the sender's seat and bounces
+  them (in the world too). Typing never draws the green ring — only voice does.
+- **Reactions** (فرح، تصفيق، ضحك، حب، حزن، غضب): `{t:'react',uid,r}` on the relay, zero
+  Firebase, accepted only from someone seated. In the world `_meetReactFx` is a pure
+  function of the reaction's age (squash / hop / rock / heartbeat / droop / shake + a
+  rising emoji); in the overlay it's CSS keyframes. 700 ms cooldown, locked by a class.
+
+### The voice feed — MdwnhBot (`../MdwnhBot`, Render, auto-deploys from GitHub main)
+The bot sits **muted, not deafened** (deafened bots receive no packets, and speaking is
+detected from packets) in the most-populated voice channel (or `MEETING_CHANNEL_IDS`),
+and relays into the lobby room(s) of that channel's category:
+`{t:'spk',uid:'mdwnhbot',s:<discordId>,on:1|0}` on change (re-asserted every 4 s while
+talking) and `{t:'vc',ids:[in call],sp:[talking]}` every 15 s. **Zero Firebase and no
+Worker change** — the relay forwards raw bytes. `onPresenceMessage` hands both to
+`onMeetVoiceMsg` BEFORE its player lookup (the sender is the bot, not a player).
+- `_meetSpeakState` → `'on'` (green ring + a hop on start), `'quiet'` (in the call and
+  silent → faded to `MEET_QUIET_A`), or `null` — no live feed, or not in the call — which
+  is **not faded**: a member who is only typing must not look absent.
+- A speaker not re-asserted in `MEET_SPK_STALE_MS` drops; no bot word in
+  `MEET_VC_STALE_MS` means no feed at all (the pill reads «ديسكورد: غير متصل»).
+- The bot's payloads are client-claimed like everything on the relay — every field is
+  type-checked and can only change a highlight.
+- The old bot mirrored voice members into `users/{uid}` every 10 s (and nulled `x/y` on
+  leaving the call). That was removed with this rewrite; the site writes its own
+  avatar/name at login.
 
 ## Dismissing panels — the backdrop is a back button
 
