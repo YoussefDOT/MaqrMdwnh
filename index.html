@@ -31,8 +31,9 @@
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jacquard+12&display=swap" media="print" onload="this.media='all'">
     <!-- The library task pills, mirrored 1:1 from MdwnhLibrary. See library-tasks.css. -->
     <link rel="stylesheet" href="library-tasks.css?v=3">
-    <!-- Baloo Bhaijaan 2 is the library's own face — used ONLY inside #lib-panel, so it
-         must never block the boot. If it never arrives the panel falls back to Rubik. -->
+    <!-- Baloo Bhaijaan 2 is the مدونة brand face — used inside #lib-panel and the
+         حضور المقر card/panel (#chal-dock, #chal-modal), so it must never block the
+         boot. If it never arrives both fall back to Rubik. -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Baloo+Bhaijaan+2:wght@400;500;600;700;800&display=swap" media="print" onload="this.media='all'">
 </head>
 
@@ -132,7 +133,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 288 · Updated 9/10 4:00 PM</div>
+    <div id="build-number" class="build-number">Build 289 · Updated 9/10 7:17 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -239,30 +240,28 @@
             </button>
         </div>
 
-        <!-- ═══ تحدي المثابرة — الحضور اليومي (٣ ساعات في المقر) ═══
+        <!-- ═══ حضور المقر — الحضور اليومي (٣ ساعات في المقر) ═══
+             (كانت «تحدي المثابرة»؛ المعرّفات chal-* باقية عمدًا.) بهوية المدونة:
+             ورق ثلجي وحبر ورموز الفرشاة، كما في دليل الفريق.
              رصيف ثالث تحت رصيف الأذكار، يُوضع في JS من مقاس البطاقة مثل إخوته
              (`_hudPositionDock`). قابلة للطي: الطيّ محفوظ في localStorage، وعلى
-             الجوال تكون مطويّة افتراضيًا حتى لا تزاحم الشاشة. نصوصها يكتبها
-             game.js (`_chalPaintCard`)؛ ما هنا قيم مبدئية فقط. -->
+             الجوال تكون مطويّة افتراضيًا حتى لا تزاحم الشاشة. الضغط على البطاقة كلها
+             يفتح اللوحة (زرّ الطيّ وحده يوقف ذلك). نصوصها يكتبها game.js
+             (`_chalPaintCard`)؛ ما هنا قيم مبدئية فقط. -->
         <div id="chal-dock" class="chal-dock" hidden>
             <button id="chal-mini" class="chal-mini" type="button" hidden
-                    aria-label="فتح تحدي المثابرة" title="تحدي المثابرة">
-                <svg class="chal-mini-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M13 2 4.5 13.2h6.1L11 22l8.5-11.2h-6.1z"/>
-                </svg>
+                    aria-label="فتح حضور المقر" title="حضور المقر">
+                <span class="chal-mark chal-mini-mark" aria-hidden="true"></span>
                 <span id="chal-mini-day" class="chal-mini-day">٠</span>
             </button>
 
-            <section id="chal-card" class="chal-card" aria-labelledby="chal-title">
+            <section id="chal-card" class="chal-card" role="button" tabindex="0"
+                     aria-labelledby="chal-title" aria-describedby="chal-state">
                 <header class="chal-head">
-                    <span class="chal-head-icon" aria-hidden="true">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M13 2 4.5 13.2h6.1L11 22l8.5-11.2h-6.1z"/>
-                        </svg>
-                    </span>
+                    <span class="chal-mark chal-head-mark" aria-hidden="true"></span>
                     <span class="chal-head-txt">
-                        <span id="chal-title" class="chal-title">تحدي المثابرة</span>
-                        <span class="chal-sub">٣ ساعات في المقر يوميًا</span>
+                        <span id="chal-title" class="chal-title">حضور المقر</span>
+                        <span class="chal-sub">ثلاث ساعات كل يوم</span>
                     </span>
                     <span id="chal-tag" class="chal-tag">يومي</span>
                     <button id="chal-fold" class="chal-fold" type="button" aria-label="طيّ البطاقة" title="طيّ">
@@ -272,18 +271,18 @@
                     </button>
                 </header>
 
-                <button id="chal-body" class="chal-body" type="button" aria-label="تفاصيل التحدي">
+                <div id="chal-body" class="chal-body">
                     <span class="chal-row">
                         <span id="chal-day" class="chal-day">اليوم</span>
                         <span id="chal-state" class="chal-state"></span>
                     </span>
                     <span class="chal-bar"><span id="chal-fill" class="chal-fill"></span></span>
                     <span id="chal-note" class="chal-note"></span>
-                </button>
+                </div>
             </section>
         </div>
 
-        <!-- ═══ لوحة التحدي / بطاقة التهنئة / استلام الجولة الأولى ═══
+        <!-- ═══ لوحة الحضور / بطاقة التهنئة / استلام الجولة الأولى ═══
              لوحة واحدة بثلاثة وجوه (`_chal.mode`): أيام هذا الأسبوع مع زرّ الإجازة،
              والتهنئة بعد ثلاث ساعات، ونافذة استلام نقاط الجولة الأولى التي لا تُغلق
              إلا بالاستلام. العرض/الإخفاء بالشفافية لا بـ display. -->
@@ -295,8 +294,8 @@
                     </svg>
                 </button>
                 <div id="chal-modal-burst" class="chal-modal-burst" aria-hidden="true"></div>
-                <div id="chal-modal-kicker" class="chal-modal-kicker">فعالية الأسبوع</div>
-                <h3 id="chal-modal-head" class="chal-modal-head">تحدي المثابرة</h3>
+                <div id="chal-modal-kicker" class="chal-modal-kicker">الحضور اليومي</div>
+                <h3 id="chal-modal-head" class="chal-modal-head">حضور <em>المقر</em></h3>
                 <p id="chal-modal-sub" class="chal-modal-sub">ثلاث ساعات في المقر كل يوم.</p>
 
                 <div id="chal-track" class="chal-track" aria-hidden="true"></div>
@@ -1978,7 +1977,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=277"></script>
+        <script type="module" src="game.js?v=278"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

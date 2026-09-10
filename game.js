@@ -27443,7 +27443,7 @@ function _hudPositionDock() {
         // only pushes the challenge card down when it actually has height.
         if (dock.offsetHeight > 0) base = dock.getBoundingClientRect().bottom;
     }
-    /* تحدي المثابرة sits on the fourth rung. It is a SIBLING of the other two,
+    /* حضور المقر sits on the fourth rung. It is a SIBLING of the other two,
        not a child, for the same reason the tasks panel is: on mobile the user
        card carries `will-change: transform`, which makes it the containing
        block for any fixed descendant. */
@@ -27718,7 +27718,7 @@ function setupLibraryPanel() {
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   تحدي المثابرة — ثلاث ساعات في المقر، كل يوم
+   حضور المقر (was «تحدي المثابرة») — ثلاث ساعات في المقر، كل يوم
    ═══════════════════════════════════════════════════════════════════════════
    Two things live in this block, and only the second one is still running.
 
@@ -28147,6 +28147,7 @@ function _chalPaintCard() {
     if (card) {
         card.classList.toggle('is-done', done);
         card.classList.toggle('is-vac', !!r.vac);
+        card.classList.toggle('is-trial', !started);
     }
 
     const tagEl   = document.getElementById('chal-tag');
@@ -28272,25 +28273,28 @@ function _chalPaintModal() {
     const sub    = document.getElementById('chal-modal-sub');
     const note   = document.getElementById('chal-modal-note');
     const set = (el, t) => { if (el) el.textContent = t; };
+    // The head carries an <em> for the brand's highlighter swipe. Static strings
+    // only — nothing user-typed ever goes through here.
+    const setHead = (html) => { if (head) head.innerHTML = html; };
 
     if (mode === 'pay') {
-        set(kicker, 'انتهى التحدي');
-        set(head, 'حصيلة تحدي المثابرة');
-        set(sub, 'انتهى أسبوع التحدي، وهذه نقاطك.');
+        set(kicker, 'الجولة الأولى');
+        setHead('حصيلة <em>أسبوع العمل</em>');
+        set(sub, 'انتهت الجولة الأولى، وهذه نقاطك.');
         set(note, 'تُحتسب دقائق العمل فقط — الاستراحات لا تُحسب.');
         _chalBuildTrack();
     } else {
         if (mode === 'win') {
             set(kicker, 'أحسنت!');
-            set(head, 'أتممت ثلاث ساعات اليوم');
+            setHead('أتممت <em>ثلاث ساعات</em> اليوم');
             set(sub, 'يومك محسوب — نراك غدًا.');
         } else if (!_dutyStarted()) {
             set(kicker, 'تجريبي');
-            set(head, 'تحدي المثابرة');
+            setHead('حضور <em>المقر</em>');
             set(sub, `ثلاث ساعات في المقر كل يوم، إلزاميًا ابتداءً من ${_dutyStartLabel()}. وحتى ذلك الحين يُحسب وقتك تجريبيًا.`);
         } else {
             set(kicker, 'الحضور اليومي');
-            set(head, 'تحدي المثابرة');
+            setHead('حضور <em>المقر</em>');
             set(sub, 'ثلاث ساعات في المقر كل يوم.');
         }
         set(note, 'يُحسب كل وقتك داخل المقر، لا الجلسات وحدها — ولك إجازتان في الأسبوع.');
@@ -28415,7 +28419,7 @@ async function _chalClaim() {
         _chal.claimed = already;
         _chal.claiming = false;
         _chalCloseModal();
-        _libToast('نقاط التحدي مستلمة من قبل');
+        _libToast('نقاط الجولة الأولى مستلمة من قبل');
         return;
     }
 
@@ -28451,8 +28455,17 @@ function setupWorkChallenge() {
     document.getElementById('chal-mini')?.addEventListener('click', (e) => {
         e.stopPropagation(); _chalSetMinimized(false); repaint();
     });
-    document.getElementById('chal-body')?.addEventListener('click', (e) => {
+    /* The WHOLE card opens the panel, not just its progress bar. The fold button
+       inside it stops its own click, so folding never opens anything. */
+    const card = document.getElementById('chal-card');
+    card?.addEventListener('click', (e) => {
         e.stopPropagation(); _chalOpenModal('duty');
+    });
+    // It is a role=button section (it holds the fold button, so it can't be a
+    // <button>) — Enter/Space on it, and kept away from the chat's Enter.
+    card?.addEventListener('keydown', (e) => {
+        if (e.target !== card || (e.key !== 'Enter' && e.key !== ' ')) return;
+        e.preventDefault(); e.stopPropagation(); _chalOpenModal('duty');
     });
     document.getElementById('chal-modal-close')?.addEventListener('click', _chalUserClose);
     document.getElementById('chal-ok-btn')?.addEventListener('click', _chalUserClose);
@@ -28474,6 +28487,10 @@ function setupWorkChallenge() {
 
     _mdwnhRosterReady.then(() => { _chal.rosterDone = true; });
     window.addEventListener('resize', () => { if (_duty.ready) repaint(); });
+    /* The card's face (Baloo Bhaijaan 2) loads without blocking the boot, so it can
+       land after the card was first measured — and a font swap changes its height,
+       which is part of where the tasks panel starts. Rare event, cheap repaint. */
+    try { document.fonts?.addEventListener?.('loadingdone', () => { if (_duty.ready) repaint(); }); } catch (_) {}
 
     /* Two reads, both deliberately NOT inside startGame's Promise.all: the login
        path must not wait on them. The card stays hidden until the week lands. */
@@ -29997,21 +30014,21 @@ function setupChatUI() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   رف الجوائز — seven trophies on two planks in the break room
+   رف الجوائز — three trophies (and four hidden ones) on two planks in the break room
    ═══════════════════════════════════════════════════════════════════════════════
    Grep anchors: TROPHIES, updateTrophies, _troBank, _troClaim, _troCeremony.
 
    COST. Every counter this feature keeps lives under `dashboards/{uid}/trophies`
    (decision tree §5 case 4: private to one member, persistent, written more than
-   once a day). ONE `get()` on idle after spawn, `runTransaction` at most once a
-   minute while working, and NO listener anywhere — nobody holds a live listener on
+   once a day). ONE `get()` on idle after spawn, an `update()` of day keys at most
+   once a minute while working, and NO listener anywhere — nobody holds a live listener on
    `dashboards`, so the fan-out is zero. Under `users/{uid}` this would re-stream
    every member's every worked minute to every client in BOTH lobbies.
 
    Every counter is CAPPED at its own goal, which is what bounds the writes: once a
    trophy is won it costs nothing at all, forever.
 
-   THE CLAIM is the same ecosystem handshake تحدي المثابرة uses — a record at
+   THE CLAIM is the same ecosystem handshake حضور المقر's round-one payout uses — a record at
    `mdwnhLibrary/claims/<NFC dbKey>/maqr-trophy-<id>` that the Points site settles.
    No rules change and no change on either other site: a claim was already generic.
    A Siraj ghost resolves to nobody in MDWNH_ROSTER, so it can never mint one.
@@ -30019,18 +30036,19 @@ function setupChatUI() {
 
 const TRO_HOUR = 3600000;
 const TRO_BANK_MS   = 60000;   // at most one transaction a minute, like the reading bank
-const TRO_SESSION_MS = 10 * 60000;   // "a work session" per شغوف — the dashboard's own floor
 const TRO_ART = n => `Art/trophies/${n}.webp`;
 
-/* The seven. `shelf` 0 = top plank (four, ٣٠ نقطة each), 1 = bottom plank (three,
-   the hard ones, ٦٠ نقطة each). `img` is the file number in Art/trophies.
+/* Seven slots on two planks, but only THREE are live (٣٠ نقطة each). `shelf` 0 =
+   top plank, 1 = bottom plank; `img` is the file number in Art/trophies.
    `read(p)` pulls the current value out of the progress mirror; `goal` is what it
-   has to reach. `granted` means there is nothing to measure — the leader awards it
-   by writing `dashboards/{uid}/trophies/granted/diamond = true` by hand. */
+   has to reach.
+
+   The other four are `locked`: a blacked-out silhouette with a question mark. They
+   have no name, no condition and no points, and NOTHING is counted towards them —
+   they are left out for now, on purpose. Bringing one back means giving it a real
+   entry here again (and a counter, if it needs one). */
 const TROPHIES = [
-    { id: 'dawn', img: 1, shelf: 0, pts: 30, name: 'باكر',
-      desc: 'اعمل ١٠ ساعات في ما بين الفجر والظهر، على مدار جلسات متعددة.',
-      goal: 10 * TRO_HOUR, unit: 'hours', read: p => p.dawnMs },
+    { id: 'locked-1', img: 1, shelf: 0, locked: true },
     { id: 'azkar', img: 2, shelf: 0, pts: 30, name: 'مثابر الأذكار',
       desc: 'اقرأ أذكار الصباح والمساء يوميًا لمدة ١٠ أيام من خلال الموقع.',
       goal: 10, unit: 'days', read: p => _troCount(p.azkarDays) },
@@ -30040,45 +30058,29 @@ const TROPHIES = [
     { id: 'thirty', img: 4, shelf: 0, pts: 30, name: 'ثلاثون يومًا',
       desc: 'اعمل في المقر في ٣٠ يومًا مختلفًا.',
       goal: 30, unit: 'days', read: p => _troCount(p.workDays) },
-    { id: 'brainrot', img: 5, shelf: 1, pts: 60, name: 'برينروت',
-      desc: 'اعمل ٦٧ ساعة كاملة، على مدار جلسات متعددة.',
-      goal: 67 * TRO_HOUR, unit: 'hours', read: p => p.workMs },
-    { id: 'devoted', img: 6, shelf: 1, pts: 60, name: 'شغوف',
-      desc: 'ابدأ ١٠٠ جلسة عمل، كل واحدة منها تتجاوز ١٠ دقائق.',
-      goal: 100, unit: 'sessions', read: p => p.sessions },
-    /* The one trophy with no condition and no ceiling: the leader hands it out
-       from لوحة القائد, and it may be handed out AGAIN. `repeatable` is what says
-       "a second grant is a second payout" — every other trophy is once, forever. */
-    { id: 'diamond', img: 7, shelf: 1, pts: 60, name: 'النقطة الماسية',
-      desc: 'لا شروط لها — يمنحها القائد متى شاء، وقد يمنحها أكثر من مرة.',
-      granted: true, repeatable: true },
+    { id: 'locked-5', img: 5, shelf: 1, locked: true },
+    { id: 'locked-6', img: 6, shelf: 1, locked: true },
+    { id: 'locked-7', img: 7, shelf: 1, locked: true },
 ];
 const TROPHY_BY_ID = Object.fromEntries(TROPHIES.map(t => [t.id, t]));
+// The ones that can actually be won, collected and listed.
+const TROPHY_LIVE = TROPHIES.filter(t => !t.locked);
 const TRO_CLAIM_ID = id => `maqr-trophy-${id}`;
 
 /* The caps the accumulator stops writing at. Derived from TROPHIES so a changed
    goal can never leave a counter climbing past the point anyone reads it. */
-const TRO_WORK_CAP = TROPHY_BY_ID.brainrot.goal;
-const TRO_DAWN_CAP = TROPHY_BY_ID.dawn.goal;
-const TRO_SESS_CAP = TROPHY_BY_ID.devoted.goal;
 const TRO_DAYS_CAP = TROPHY_BY_ID.thirty.goal;
 const TRO_AZK_CAP  = TROPHY_BY_ID.azkar.goal;
 
 const _tro = {
     open: false, wired: false, ready: false, camFrozen: null,
-    prog: { workMs: 0, dawnMs: 0, sessions: 0, workDays: {}, azkarDays: {}, readMs: 0 },
-    claimed: {},        // id → ms of the LAST claim (what الجوائز المستلمة lists)
-    /* Leader-awarded trophies are a LEDGER, not a flag, because النقطة الماسية can
-       be granted more than once: `grants[id][grantId] = ts` is every award, and
-       `taken[id][grantId] = ms` is the ones already settled. Pending = the
-       difference. The grantId is also what makes the points record unique, so a
-       replay of one grant can never pay twice (see _troClaim). */
-    grants: {}, taken: {},
-    // Unbanked deltas. The ledger is ALWAYS a delta, never a total, so two devices
-    // banking the same minute cannot double-count (same shape as bankReadingProgress).
-    pending: { workMs: 0, dawnMs: 0, sessions: 0, days: [], azkar: [] },
+    prog: { workDays: {}, azkarDays: {}, readMs: 0 },
+    claimed: {},        // id → ms of the claim (what الجوائز المستلمة lists)
+    // Unbanked day keys. Setting a day key is idempotent, so two devices banking
+    // the same day cannot double-count.
+    pending: { days: [], azkar: [] },
     lastBankAt: 0,
-    lastWorked: 0, tickAt: 0, primed: false, dayKey: '', sessionCounted: false,
+    lastWorked: 0, tickAt: 0, primed: false, dayKey: '',
     // قارئ counts only what is read AFTER the epoch, so the reading total the member
     // already had banked before the shelf existed is subtracted, not credited.
     readAt: 0, readBase: 0,
@@ -30097,46 +30099,8 @@ function trophyHoldsCamera() { return !!_tro.camFrozen; }
 function _troCount(map) { return map ? Object.keys(map).length : 0; }
 function _troPath() { return `dashboards/${gameState.userId}/trophies`; }
 
-/* ── the leader's ledger ──────────────────────────────────────────────────────
-   Reads `grants` / `taken` out of a trophies snapshot into memory, folding the
-   LEGACY shape in as it goes: `granted/{id} = true` was one award and
-   `claimed/{id}` was its settlement, so they become the grant `legacy`. Nothing
-   is written back — the old keys keep meaning exactly what they meant. */
-function _troAdoptAwards(v) {
-    const grants = {}, taken = {};
-    for (const [id, m] of Object.entries((v && v.grants) || {})) grants[id] = { ...m };
-    for (const [id, m] of Object.entries((v && v.taken)  || {})) taken[id]  = { ...m };
-    const legacy  = (v && v.granted) || {};
-    const claimed = (v && v.claimed) || {};
-    for (const id of Object.keys(legacy)) {
-        if (!legacy[id]) continue;
-        (grants[id] = grants[id] || {}).legacy = 1;
-        if (claimed[id] && !(taken[id] && taken[id].legacy)) (taken[id] = taken[id] || {}).legacy = claimed[id];
-    }
-    _tro.grants = grants;
-    _tro.taken  = taken;
-}
-// The OLDEST unsettled award, or null. Oldest first so the member is paid in the
-// order the leader gave them, and so a replay always picks the same one.
-function _troPendingGrant(id) {
-    const g = _tro.grants[id] || {}, tk = _tro.taken[id] || {};
-    const ids = Object.keys(g).filter(k => !tk[k]);
-    if (!ids.length) return null;
-    ids.sort((a, b) => (Number(g[a]) || 0) - (Number(g[b]) || 0));
-    return ids[0];
-}
-function _troTakenCount(id) { return Object.keys(_tro.taken[id] || {}).length; }
-// مرة واحدة / مرتين / ٣ مرات / ١١ مرة — Arabic counts a plural differently past ten.
-function _troTimesAr(n) {
-    n = Math.max(0, Number(n) || 0);
-    if (n === 1) return 'مرة واحدة';
-    if (n === 2) return 'مرتين';
-    if (n <= 10) return `${_libAr(n)} مرات`;
-    return `${_libAr(n)} مرة`;
-}
-
-/* Only a Siraj ghost sees every trophy full and claimable, so the ceremony is
-   walkable without waiting sixty-seven hours. A ghost resolves to nobody in
+/* Only a Siraj ghost sees every live trophy full and claimable, so the ceremony is
+   walkable without waiting thirty days. A ghost resolves to nobody in
    MDWNH_ROSTER, so it can never mint a claim — which is exactly what makes it the
    safe account to test with. It is a LOCAL override; nothing is written, so the
    real counters keep accumulating underneath. */
@@ -30153,37 +30117,19 @@ const TROPHY_RESET_UIDS = new Set([DASH_TARGET_UID]);
 /* ── progress ─────────────────────────────────────────────────────────────── */
 // One shape for every caller: the shelf caption, the detail bar, and the claim gate.
 function _troProgress(t) {
-    const test = _troTestUnlocked();
-    if (t.granted) {
-        /* Nothing to measure — it is pending if the leader has awarded it and the
-           member has not settled that award yet. `got` is how many times it has
-           already been collected, which for a repeatable trophy is the number the
-           shelf shows once there is nothing waiting. */
-        const got   = _troTakenCount(t.id);
-        const ready = !!_troPendingGrant(t.id) || (test && !got);
-        const label = ready ? 'مُنحت لك — استلمها'
-                    : got   ? `استلمتها ${_troTimesAr(got)}`
-                            : 'بيد القائد';
-        return { cur: ready ? 1 : 0, goal: 1, pct: ready ? 100 : 0, done: ready, label, grants: got };
-    }
-    const cur = test ? t.goal : Math.max(0, t.read(_tro.prog) || 0);
+    const cur = _troTestUnlocked() ? t.goal : Math.max(0, t.read(_tro.prog) || 0);
     const pct = Math.max(0, Math.min(100, (cur / t.goal) * 100));
-    let label;
-    if (t.unit === 'hours') {
-        label = `${_libAr(Math.floor(cur / TRO_HOUR))} من ${_libAr(Math.round(t.goal / TRO_HOUR))} ساعة`;
-    } else if (t.unit === 'days') {
-        label = `${_libAr(Math.min(cur, t.goal))} من ${_libAr(t.goal)} يوم`;
-    } else {
-        label = `${_libAr(Math.min(cur, t.goal))} من ${_libAr(t.goal)} جلسة`;
-    }
+    const label = t.unit === 'hours'
+        ? `${_libAr(Math.floor(cur / TRO_HOUR))} من ${_libAr(Math.round(t.goal / TRO_HOUR))} ساعة`
+        : `${_libAr(Math.min(cur, t.goal))} من ${_libAr(t.goal)} يوم`;
     return { cur, goal: t.goal, pct, done: cur >= t.goal, label };
 }
 
 /* ── counting ─────────────────────────────────────────────────────────────────
-   The session's OWN worked-ms counters are the source, never a frame timer: both
-   are wall-clock and both FREEZE during a break, which is exactly the rule, and a
-   backgrounded tab (which stops rAF) still gets credited in full. Identical
-   reasoning to round one of تحدي المثابرة — and the same clamp, for the same reason. */
+   Only ثلاثون يومًا is counted here (مثابر الأذكار is fed by troNoteAzkarDay, قارئ
+   reads the reading module's own totals). A day counts the moment the session's OWN
+   worked-ms counter moves in it — wall-clock, frozen during a break, and still
+   ticking in a backgrounded tab. */
 function updateTrophies() {
     if (!_tro.ready || !gameState.userId) return;
     const now = Date.now();
@@ -30193,79 +30139,40 @@ function updateTrophies() {
     const worked = (gameState.pomodoro.active ? pomoWorkedMsNow()
                   : gameState.freeMode.active ? freeWorkedMsNow() : 0);
 
-    // A new session restarts its counter near zero — re-anchor, and let شغوف count
-    // this one again once it passes the ten-minute floor.
-    if (worked < _tro.lastWorked) { _tro.lastWorked = worked; _tro.sessionCounted = false; }
-    if (worked <= 0) _tro.sessionCounted = false;
+    // A new session restarts its counter near zero — re-anchor.
+    if (worked < _tro.lastWorked) _tro.lastWorked = worked;
 
     if (!_tro.primed) { _tro.primed = true; _tro.lastWorked = worked; _tro.tickAt = now; return; }
-    // ~1 Hz is plenty: the gain is measured against WALL time, not against how often
-    // this runs, so a slower tick changes nothing except the work it costs.
+    // ~1 Hz is plenty — a day key only has to land once.
     if (now - _tro.tickAt < 1000) return;
 
-    /* Clamped to the WALL time since the last tick (+2s slack). Real work advances
-       both equally, so a half-hour backgrounded stretch arrives as one tick with a
-       half-hour wall gap and is credited whole. What the clamp catches is the
-       free-mode reclaim dumping HOURS of away-credit into totalWorkMs in a single
-       frame — that is a session credit, not time spent at the desk. */
-    const wall = Math.max(0, now - (_tro.tickAt || now));
-    const gain = Math.min(Math.max(0, worked - _tro.lastWorked), wall + 2000);
+    const gain = worked - _tro.lastWorked;
     _tro.lastWorked = worked;
     _tro.tickAt = now;
 
-    if (gain > 0) {
-        const P = _tro.prog, D = _tro.pending;
-        // برينروت
-        if (P.workMs < TRO_WORK_CAP) { P.workMs = Math.min(TRO_WORK_CAP, P.workMs + gain); D.workMs += gain; }
-        // باكر — the Fajr→Dhuhr window is exactly the morning-azkar window.
-        if (P.dawnMs < TRO_DAWN_CAP && getCurrentAzkarType() === 'morning') {
-            P.dawnMs = Math.min(TRO_DAWN_CAP, P.dawnMs + gain); D.dawnMs += gain;
-        }
-        // ثلاثون يومًا — a day counts the moment any work lands in it.
-        if (_troCount(P.workDays) < TRO_DAYS_CAP && !P.workDays[key]) {
-            P.workDays[key] = 1; D.days.push(key);
-        }
-    }
-
-    // شغوف — one per session, the instant it passes the floor.
-    if (!_tro.sessionCounted && worked >= TRO_SESSION_MS) {
-        _tro.sessionCounted = true;
-        if (_tro.prog.sessions < TRO_SESS_CAP) { _tro.prog.sessions++; _tro.pending.sessions++; }
+    // ثلاثون يومًا — a day counts the moment any work lands in it.
+    const P = _tro.prog;
+    if (gain > 0 && _troCount(P.workDays) < TRO_DAYS_CAP && !P.workDays[key]) {
+        P.workDays[key] = 1;
+        _tro.pending.days.push(key);
     }
 
     _troBank(false);
 }
 
-/* Every write ADDS a delta (or sets a day key, which is idempotent). Nothing here
-   ever writes a total. */
+/* Every write sets a day key, which is idempotent. Nothing here ever writes a total. */
 function _troBank(force) {
     if (!_tro.ready || !gameState.userId) return;
     const D = _tro.pending;
-    const has = D.workMs >= 1 || D.dawnMs >= 1 || D.sessions > 0 || D.days.length || D.azkar.length;
-    if (!has) return;
+    if (!D.days.length && !D.azkar.length) return;
     if (!force && Date.now() - _tro.lastBankAt < TRO_BANK_MS) return;
     _tro.lastBankAt = Date.now();
     const base = `${_troPath()}/prog`;
-
-    const addMs = (field, cap) => {
-        const d = Math.round(D[field]);
-        if (d < 1) return;
-        D[field] = 0;
-        runTransaction(ref(database, `${base}/${field}`), c => Math.min(cap, (c || 0) + d)).catch(() => {});
-    };
-    addMs('workMs', TRO_WORK_CAP);
-    addMs('dawnMs', TRO_DAWN_CAP);
-    if (D.sessions > 0) {
-        const d = D.sessions; D.sessions = 0;
-        runTransaction(ref(database, `${base}/sessions`), c => Math.min(TRO_SESS_CAP, (c || 0) + d)).catch(() => {});
-    }
-    if (D.days.length || D.azkar.length) {
-        const u = {};
-        for (const k of D.days)  u[`${base}/workDays/${k}`]  = 1;
-        for (const k of D.azkar) u[`${base}/azkarDays/${k}`] = 1;
-        D.days = []; D.azkar = [];
-        update(ref(database), u).catch(() => {});
-    }
+    const u = {};
+    for (const k of D.days)  u[`${base}/workDays/${k}`]  = 1;
+    for (const k of D.azkar) u[`${base}/azkarDays/${k}`] = 1;
+    D.days = []; D.azkar = [];
+    update(ref(database), u).catch(() => {});
 }
 
 /* مثابر الأذكار. Called from markAzkarCompleted — the only moment either list can
@@ -30318,7 +30225,6 @@ async function _troStartEpoch(prog) {
         return;
     }
 
-    prog.workMs = 0; prog.dawnMs = 0; prog.sessions = 0;
     prog.workDays = {}; prog.azkarDays = {}; prog.readMs = 0;
     _tro.readBase = base;
 
@@ -30326,9 +30232,6 @@ async function _troStartEpoch(prog) {
     update(ref(database), {
         [`${b}/epoch`]: TROPHY_EPOCH_TAG,
         [`${b}/readBase`]: base,
-        [`${b}/workMs`]: 0,
-        [`${b}/dawnMs`]: 0,
-        [`${b}/sessions`]: 0,
         [`${b}/workDays`]: null,
         [`${b}/azkarDays`]: null,
         [`${b}/seeded`]: null,   // drop the retired seed marker
@@ -30393,13 +30296,21 @@ function drawTrophyShelfPrompt() {
    handler, and both carry the state class. */
 function _troState(t) {
     const p = _troProgress(t);
-    // A repeatable trophy is only "taken" while nothing is waiting — a fresh grant
-    // puts it straight back to جاهزة للاستلام however many times it was collected.
-    const taken = t.repeatable ? (p.grants > 0 && !p.done) : !!_tro.claimed[t.id];
+    const taken = !!_tro.claimed[t.id];
     return { p, taken, cls: taken ? 'is-taken' : (p.done ? 'is-ready' : '') };
 }
 
+/* A hidden trophy is a blacked-out silhouette with a question mark (CSS). It is NOT
+   a button and carries no `data-tro`, so the shelf's click handler has nothing to
+   open — there is no name, condition or progress behind it to show. */
 function _troFigHtml(t) {
+    if (t.locked) {
+        return `<div class="tro-slot is-locked" role="img" aria-label="جائزة مخفية">
+            <span class="tro-fig">
+                <img class="tro-img-dim" src="${_libEsc(TRO_ART(t.img))}" alt="" aria-hidden="true">
+            </span>
+        </div>`;
+    }
     const { p, cls } = _troState(t);
     const art = _libEsc(TRO_ART(t.img));
     return `<button class="tro-slot ${cls}" type="button" data-tro="${_libEsc(t.id)}"
@@ -30412,11 +30323,15 @@ function _troFigHtml(t) {
 }
 
 function _troCapHtml(t) {
+    if (t.locked) {
+        return `<div class="tro-cap is-locked" aria-hidden="true">
+            <span class="tro-name">جائزة مخفية</span>
+            <span class="tro-bar"><i></i></span>
+            <span class="tro-pct">&nbsp;</span>
+        </div>`;
+    }
     const { p, taken, cls } = _troState(t);
-    const bottom = t.granted
-        ? (p.done ? 'جاهزة للاستلام'
-                  : p.grants > 0 ? `مستلمة ×${_libAr(p.grants)}` : 'بيد القائد')
-        : taken ? 'مستلمة'
+    const bottom = taken ? 'مستلمة'
         : (p.done ? 'جاهزة للاستلام' : _libAr(Math.floor(p.pct)) + '٪');
     return `<div class="tro-cap ${cls}" data-tro="${_libEsc(t.id)}">
         <span class="tro-name">${_libEsc(t.name)}</span>
@@ -30438,14 +30353,14 @@ function _troRenderShelves() {
         </section>`;
     }
     host.innerHTML = html;
-    const n = Object.keys(_tro.claimed).length;
+    const n = TROPHY_LIVE.filter(t => _tro.claimed[t.id]).length;
     const cnt = document.getElementById('tro-collected-count');
     if (cnt) cnt.textContent = _libAr(n);
 }
 
 function _troOpenDetail(id) {
     const t = TROPHY_BY_ID[id];
-    if (!t) return;
+    if (!t || t.locked) return;
     _tro.detailId = id;
     const p = _troProgress(t);
     const taken = !!_tro.claimed[id];
@@ -30456,7 +30371,7 @@ function _troOpenDetail(id) {
     if (st) { st.style.display = ''; st.onerror = () => { st.style.display = 'none'; }; st.src = _libSticker(t.pts); st.alt = `${_libAr(t.pts)} نقطة`; }
     set('tro-detail-name', t.name);
     set('tro-detail-desc', t.desc);
-    set('tro-detail-count', (taken && !t.repeatable) ? 'استُلمت بالفعل' : p.label);
+    set('tro-detail-count', taken ? 'استُلمت بالفعل' : p.label);
     const fill = document.getElementById('tro-detail-fill');
     if (fill) fill.style.width = (taken ? 100 : p.pct).toFixed(1) + '%';
     const btn = document.getElementById('tro-complete-btn');
@@ -30464,9 +30379,8 @@ function _troOpenDetail(id) {
         // Visual-only lock is a CLASS — never the `disabled` attribute (iOS leaks
         // touch events straight through it to whatever sits below).
         btn.classList.toggle('unlocked', p.done && !taken);
-        btn.textContent = p.done ? 'استلام الجائزة'
-            : t.granted ? 'بيد القائد'
-            : taken ? 'استُلمت'
+        btn.textContent = taken ? 'استُلمت'
+            : p.done ? 'استلام الجائزة'
             : 'لم تكتمل بعد';
     }
     document.getElementById('trophy-overlay')?.classList.add('tro-focus');
@@ -30490,13 +30404,12 @@ function _troCloseSub() {
 function _troOpenCollected() {
     const host = document.getElementById('tro-collected-list');
     if (host) {
-        const rows = TROPHIES.filter(t => _tro.claimed[t.id])
+        const rows = TROPHY_LIVE.filter(t => _tro.claimed[t.id])
             .sort((a, b) => _tro.claimed[b.id] - _tro.claimed[a.id])
             .map(t => `<div class="tro-col-row">
                 <img src="${_libEsc(TRO_ART(t.img))}" alt="">
                 <span class="tro-col-txt">
-                    <span class="tro-col-name">${_libEsc(t.name)}${
-                        t.repeatable && _troTakenCount(t.id) > 1 ? ` ×${_libAr(_troTakenCount(t.id))}` : ''}</span>
+                    <span class="tro-col-name">${_libEsc(t.name)}</span>
                     <span class="tro-col-date">${_libEsc(_troDate(_tro.claimed[t.id]))}</span>
                 </span>
                 <img class="tro-col-pts" src="${_libEsc(_libSticker(t.pts))}" alt="${_libAr(t.pts)} نقطة"
@@ -30539,15 +30452,6 @@ function openTrophyShelf() {
     // قارئ's number comes from the reading module; refresh it in the background and
     // repaint if it moved. The shelf is already up either way.
     _troRefreshReading().then(() => { if (_tro.open) _troRenderShelves(); });
-    /* And re-read the leader's ledger: النقطة الماسية can be awarded while the member
-       is already logged in, and the login `get()` would not have seen it. One small
-       read on an explicit open, no listener. */
-    if (gameState.userId) {
-        get(ref(database, _troPath())).then(snap => {
-            _troAdoptAwards(snap.val() || {});
-            if (_tro.open) _troRenderShelves();
-        }).catch(() => {});
-    }
 }
 
 function closeTrophyShelf() {
@@ -30563,14 +30467,11 @@ function closeTrophyShelf() {
 
 /* ── the claim ────────────────────────────────────────────────────────────────
    Byte-for-byte the record a library task writes, at the path the Points site
-   already settles — see تحدي المثابرة. Written BEFORE the ceremony runs, so
+   already settles — see حضور المقر. Written BEFORE the ceremony runs, so
    «تم» (or closing the tab mid-ceremony) can never lose it. */
 async function _troClaim(id) {
     const t = TROPHY_BY_ID[id];
-    if (!t || _tro.claiming) return;
-    // A repeatable trophy is gated by its pending award, not by having been
-    // claimed before — that check lives in _troProgress().done below.
-    if (!t.repeatable && _tro.claimed[id]) return;
+    if (!t || t.locked || _tro.claiming || _tro.claimed[id]) return;
     if (!_troProgress(t).done) return;
     _tro.claiming = true;
 
@@ -30586,31 +30487,13 @@ async function _troClaim(id) {
        claimed would still think the trophy is unclaimed — and because the Points
        site DELETES a claim when it settles it, a second record really would pay
        twice. One tiny read on a once-per-trophy action closes that. */
-    let grantId = null;
     try {
-        if (t.granted) {
-            /* A leader-awarded trophy re-reads the whole ledger: the grant may have
-               landed a minute ago from another device, and the pending award is what
-               keys the payout record. */
-            const fresh = await get(ref(database, _troPath()));
-            _troAdoptAwards(fresh.val() || {});
-            grantId = _troPendingGrant(id);
-            if (!grantId && !_troTestUnlocked()) { _tro.claiming = false; _troRenderShelves(); return; }
-        } else {
-            const fresh = await get(ref(database, `${_troPath()}/claimed`));
-            _tro.claimed = fresh.val() || _tro.claimed;
-            if (_tro.claimed[id]) { _tro.claiming = false; _troRenderShelves(); return; }
-        }
-    } catch (_) {
-        /* offline — the local snapshot is the best we have */
-        if (t.granted) grantId = _troPendingGrant(id);
-    }
+        const fresh = await get(ref(database, `${_troPath()}/claimed`));
+        _tro.claimed = fresh.val() || _tro.claimed;
+        if (_tro.claimed[id]) { _tro.claiming = false; _troRenderShelves(); return; }
+    } catch (_) { /* offline — the local snapshot is the best we have */ }
 
-    /* The record's id carries the GRANT, so a second award pays a second time while a
-       replay of the same award overwrites its own record and cannot pay twice. The
-       Points site lists every pending record under the member's claims node whatever
-       the id, so nothing changes on that end. */
-    const claimKey = grantId ? `${TRO_CLAIM_ID(id)}-${grantId}` : TRO_CLAIM_ID(id);
+    const claimKey = TRO_CLAIM_ID(id);
     if (me && me.dbKey) {
         const key = _libNfc(me.dbKey);
         const payload = {
@@ -30627,12 +30510,7 @@ async function _troClaim(id) {
     const now = Date.now();
     _tro.claimed[id] = now;
     if (gameState.userId) {
-        const u = { [`${_troPath()}/claimed/${id}`]: now };
-        if (grantId) {
-            (_tro.taken[id] = _tro.taken[id] || {})[grantId] = now;
-            u[`${_troPath()}/taken/${id}/${grantId}`] = now;
-        }
-        update(ref(database), u).catch(() => {});
+        update(ref(database), { [`${_troPath()}/claimed/${id}`]: now }).catch(() => {});
     }
     _tro.claiming = false;
     _troCeremony(t);
@@ -31047,13 +30925,9 @@ function setupTrophyUI() {
     const load = () => get(ref(database, _troPath())).then(snap => {
         const v = snap.val() || {};
         const p = v.prog || {};
-        _tro.prog.workMs   = Math.max(0, Number(p.workMs) || 0);
-        _tro.prog.dawnMs   = Math.max(0, Number(p.dawnMs) || 0);
-        _tro.prog.sessions = Math.max(0, Number(p.sessions) || 0);
         _tro.prog.workDays  = p.workDays  || {};
         _tro.prog.azkarDays = p.azkarDays || {};
         _tro.claimed = v.claimed || {};
-        _troAdoptAwards(v);
         _tro.dayKey = _todayDateStr();
         /* A clean shelf for the named accounts whenever TROPHY_RESET_TAG moves —
            and on EVERY login for a test ghost, tag or no tag, so سراج always walks
@@ -31063,10 +30937,8 @@ function setupTrophyUI() {
         if (_troTestUnlocked()
             || (TROPHY_RESET_UIDS.has(gameState.userId) && v.resetTag !== TROPHY_RESET_TAG)) {
             _tro.claimed = {};
-            _tro.taken = {};
             update(ref(database), {
                 [`${_troPath()}/claimed`]: null,
-                [`${_troPath()}/taken`]: null,
                 [`${_troPath()}/resetTag`]: TROPHY_RESET_TAG,
             }).catch(() => {});
         }
@@ -31490,8 +31362,7 @@ function _awdWire() {
 /* ═══════════════════════════════════════════════════════════════════════════════
    لوحة القائد — the leader's panel
    ═══════════════════════════════════════════════════════════════════════════════
-   Grep anchors: ADMIN_UIDS, adminAllowed, _admFetchMember, _admRenderDetail,
-   _admGrantDiamond.
+   Grep anchors: ADMIN_UIDS, adminAllowed, _admFetchMember, _admRenderDetail.
 
    WHO. نواف (the roster's `admin`) and a سراج test ghost, and nobody else. The
    button is `hidden` until `adminAllowed()` says otherwise, and every entry point
@@ -31509,16 +31380,14 @@ function _awdWire() {
    the leader should be the one asking for them. `dashboards` carries no live
    listener anywhere in this app, so none of this streams to anyone.
 
-   Since the daily duty (see تحدي المثابرة) it also reads
+   Since the daily duty (see حضور المقر) it also reads
    `dashboards/{uid}/duty/days` — the same two-week key range for the list (date
    keys sort chronologically), the whole node only for one opened member — and
    judges every day with the member's own `_dutyDayState`, so the leader's dot and
    the member's dot can never disagree.
 
-   WHAT IT WRITES. Exactly one thing: an award of النقطة الماسية at
-   `dashboards/{uid}/trophies/grants/diamond/{ts}`. The member's own shelf settles
-   it through the claim handshake that was already there (see رف الجوائز) — this
-   panel never touches the Points database itself.
+   WHAT IT WRITES. Nothing. It used to award النقطة الماسية; that trophy is gone
+   (see رف الجوائز) and the award with it, so the panel is read-only.
    ═══════════════════════════════════════════════════════════════════════════════ */
 
 // نواف's Discord id, as a floor under the roster lookup: the roster's `admin` flag
@@ -31528,7 +31397,6 @@ const ADM_WEEKS = 12;              // how many weeks of history the detail lists
 const ADM_SEQ_MAX = 14;            // rows past this cascade silently (see _admRowHtml)
 const ADM_WEEK_TTL_MS = 5 * 60000; // a list already this fresh is not re-fetched on open
 const ADM_BATCH = 5;               // members fetched at a time by the auto-load
-const ADM_DIAMOND_ID = 'diamond';
 const ADM_DUTY_WEEKS = 6;         // weeks of the daily duty the member detail lays out
 
 const _adm = {
@@ -31538,7 +31406,7 @@ const _adm = {
        needs this week and last week, and asking for those is a two-week key range
        rather than the member's whole session log (see _admFetchWeek). */
     week: new Map(), weekLoading: new Map(),
-    confirmAt: 0, granting: false, bulk: false, doneN: 0, totalN: 0,
+    bulk: false, doneN: 0, totalN: 0,
     btn: null,          // cached — updateAdminLifecycle runs every frame
     filter: 'all',      // the duty chips: 'all' | 'done' | 'vac' | 'short'
     sort: 'name',       // 'name' | 'duty' (this week's open time, busiest first)
@@ -31622,7 +31490,7 @@ function _admSummarise(sessions) {
 }
 
 /* One member, one read of two small nodes, memoised for the session. `force`
-   re-reads (the refresh button and a fresh grant both want that). */
+   re-reads (the refresh button wants that). */
 function _admFetchMember(uid, force) {
     if (!uid) return Promise.resolve(null);
     if (!force && _adm.cache.has(uid)) return Promise.resolve(_adm.cache.get(uid));
@@ -31632,18 +31500,9 @@ function _admFetchMember(uid, force) {
     const base = `dashboards/${uid}`;
     const job = Promise.all([
         get(ref(database, `${base}/sessions`)).then(s => s.val()).catch(() => null),
-        get(ref(database, `${base}/trophies`)).then(s => s.val()).catch(() => null),
         get(ref(database, `${base}/duty/days`)).then(s => s.val() || {}).catch(() => null),
-    ]).then(([sessions, trophies, duty]) => {
-        const v = trophies || {};
-        // Same legacy fold as _troAdoptAwards, on the leader's side of the glass.
-        const grants = { ...((v.grants || {})[ADM_DIAMOND_ID] || {}) };
-        const taken  = { ...((v.taken  || {})[ADM_DIAMOND_ID] || {}) };
-        if ((v.granted || {})[ADM_DIAMOND_ID]) {
-            grants.legacy = 1;
-            if ((v.claimed || {})[ADM_DIAMOND_ID] && !taken.legacy) taken.legacy = (v.claimed || {})[ADM_DIAMOND_ID];
-        }
-        const data = { uid, at: Date.now(), diamond: { grants, taken }, duty, ..._admSummarise(sessions) };
+    ]).then(([sessions, duty]) => {
+        const data = { uid, at: Date.now(), duty, ..._admSummarise(sessions) };
         _adm.cache.set(uid, data);
         // The list reads whichever of the two is present, so the fuller answer has to
         // replace the slice — otherwise a stale row would sit beside a fresh detail.
@@ -31978,15 +31837,6 @@ function _admRenderDetail() {
            </div>`).join('')
         : '<p class="adm-empty">لم يكتب أي مهمة بعد.</p>';
 
-    const gN = Object.keys(d.diamond.grants).length;
-    const tN = Object.keys(d.diamond.taken).length;
-    const pending = gN - tN;
-    const confirming = _adm.confirmAt > Date.now();
-    const gLine = !gN ? 'لم تُمنح له من قبل'
-        : `مُنحت ${_troTimesAr(gN)} — ` + (pending <= 0 ? 'استلمها كلها'
-            : pending === 1 ? 'واحدة بانتظار الاستلام'
-            : `${_libAr(pending)} بانتظار الاستلام`);
-
     host.innerHTML = `
         <header class="adm-mem">
             <img class="adm-mem-av" src="${_libEsc(m ? _libAvatar(m.slug) : '')}" alt=""
@@ -32012,23 +31862,12 @@ function _admRenderDetail() {
         <div class="adm-weeks">${weeks}</div>
 
         <h4 class="adm-h">أكثر ما عمل عليه</h4>
-        <div class="adm-tasks">${tasks}</div>
-
-        <section class="adm-gift">
-            <img class="adm-gift-img" src="${_libEsc(TRO_ART(TROPHY_BY_ID.diamond.img))}" alt="">
-            <div class="adm-gift-txt">
-                <span class="adm-gift-name">النقطة الماسية</span>
-                <span class="adm-gift-sub">${_libEsc(gLine)}</span>
-            </div>
-            <button id="adm-grant" class="adm-grant${confirming ? ' is-confirm' : ''}" type="button"
-                    ${m && m.discordId ? '' : 'data-off="1"'}>${confirming ? 'تأكيد المنح' : 'منح الجائزة'}</button>
-        </section>`;
+        <div class="adm-tasks">${tasks}</div>`;
 }
 
 function _admOpenMember(uid) {
     if (!uid) return;
     _adm.uid = uid;
-    _adm.confirmAt = 0;
     document.getElementById('adm-list-view')?.setAttribute('hidden', '');
     document.getElementById('adm-detail-view')?.removeAttribute('hidden');
     _admRenderDetail();
@@ -32037,44 +31876,9 @@ function _admOpenMember(uid) {
 
 function _admBackToList() {
     _adm.uid = null;
-    _adm.confirmAt = 0;
     document.getElementById('adm-detail-view')?.setAttribute('hidden', '');
     document.getElementById('adm-list-view')?.removeAttribute('hidden');
     _admRenderList(true);
-}
-
-/* ── the award ────────────────────────────────────────────────────────────────
-   ONE write, and the id it is written under is the timestamp — which is what the
-   member's own claim turns into a unique points record, so a second award pays a
-   second time and a replay of one award cannot pay twice (see _troClaim). This
-   panel never writes to the Points database itself. */
-function _admGrantDiamond() {
-    const uid = _adm.uid;
-    if (!uid || _adm.granting) return;
-    // Two presses: awarding points is not something to do on a mis-tap. The window
-    // is the button's own state, so it clears itself on leaving the member.
-    if (_adm.confirmAt <= Date.now()) {
-        _adm.confirmAt = Date.now() + 5000;
-        _admRenderDetail();
-        setTimeout(() => {
-            if (_adm.open && _adm.uid === uid && _adm.confirmAt <= Date.now()) _admRenderDetail();
-        }, 5100);
-        return;
-    }
-    _adm.confirmAt = 0;
-    _adm.granting = true;
-    const ts = Date.now();
-    update(ref(database), { [`dashboards/${uid}/trophies/grants/${ADM_DIAMOND_ID}/${ts}`]: ts })
-        .then(() => {
-            const d = _adm.cache.get(uid);
-            if (d) d.diamond.grants[ts] = ts;
-            _libToast('مُنحت النقطة الماسية — تظهر له في رف الجوائز');
-        })
-        .catch(() => _libToast('تعذّر منح الجائزة، حاول مرة أخرى'))
-        .finally(() => {
-            _adm.granting = false;
-            if (_adm.open && _adm.uid === uid) _admRenderDetail();
-        });
 }
 
 /* ── open / close ─────────────────────────────────────────────────────────── */
@@ -32161,10 +31965,7 @@ function setupAdminUI() {
 
     // Delegated, because the detail view is re-rendered wholesale on every change.
     document.getElementById('adm-detail')?.addEventListener('click', (e) => {
-        if (e.target.closest('#adm-grant')) {
-            if (e.target.closest('#adm-grant').dataset.off) return;
-            _admGrantDiamond();
-        } else if (e.target.closest('#adm-refresh')) {
+        if (e.target.closest('#adm-refresh')) {
             const uid = _adm.uid;
             _admFetchMember(uid, true).then(() => { if (_adm.open && _adm.uid === uid) _admRenderDetail(); });
         }

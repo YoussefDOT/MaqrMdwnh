@@ -89,10 +89,10 @@ Grep anchors for the major systems (all verified to exist):
 | Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession` |
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
-| Daily duty (تحدي المثابرة) | `DUTY`, `updateWorkChallenge`, `_dutyTick`, `_dutySetVacation`, `_chalPayDue`, `_chalClaim` |
+| Daily duty (حضور المقر — was تحدي المثابرة) | `DUTY`, `updateWorkChallenge`, `_dutyTick`, `_dutySetVacation`, `_chalPayDue`, `_chalClaim` |
 | Trophy shelf | `TROPHIES`, `updateTrophies`, `_troBank`, `_troClaim`, `_troCeremony` |
 | جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
-| Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admRenderDutyBar`, `_admDutySection`, `_admGrantDiamond` |
+| Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admRenderDutyBar`, `_admDutySection` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
@@ -222,9 +222,9 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock; optional shuffled order; **after-prayer azkar** reachable from the prayer overlay |
 | **المدفئة / أعضاء الشهر** | Walk to the fireplace → a full-screen look at it with the month's top-3 point scorers framed on the mantel. Points come from a **separate Firebase project**. See **Fireplace / Members of the Month**. |
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
-| **تحدي المثابرة** | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the azkar dock and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. See **تحدي المثابرة**. |
-| **رف الجوائز** | Seven trophies on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
-| **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. From the same panel he **gifts النقطة الماسية**, which may be given more than once. See **لوحة القائد**. |
+| **حضور المقر** (was تحدي المثابرة) | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the azkar dock and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. Styled in the مدونة brand; pressing anywhere on the card opens the week panel. See **حضور المقر**. |
+| **رف الجوائز** | Three trophies (and four hidden, blacked-out ones) on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
+| **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. It is read-only. See **لوحة القائد**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٥٠ حرفًا, wrapping onto two lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
@@ -1847,16 +1847,38 @@ measures the card and hangs the rest off it. Re-run by a **`ResizeObserver` on t
 
 ---
 
-## تحدي المثابرة — ثلاث ساعات في المقر، كل يوم (the daily duty)
+## حضور المقر — ثلاث ساعات في المقر، كل يوم (the daily duty; was «تحدي المثابرة»)
 
 Since ١٠ سبتمبر ٢٠٢٦ this block runs the **leader's mandatory rule**: the site **open for
 three hours every day**, mandatory from **Sunday ١٣ سبتمبر ٢٠٢٦** (`DUTY.start`; before it the
 card says «تجريبي» — counted, but nothing owed and no vacations). It reuses round one's card
 and modal. Round one itself — the seven-day **work** streak, ٣ → ٩ سبتمبر, `CHAL` — is
 **over**: its card is gone and all that is left is its payout popup (below). Code is the
-`تحدي المثابرة` block at the very end of `game.js`; markup is `#chal-dock` + `#chal-modal` in
+`حضور المقر` block at the very end of `game.js`; markup is `#chal-dock` + `#chal-modal` in
 `index.html`; styles are the matching block at the foot of `style.css`. Grep anchors: `DUTY`,
 `_dutyTick`, `_dutyBank`, `_dutySetVacation`, `_chalPayDue`, `_chalClaim`.
+
+### The look — the مدونة brand, not the HUD's dark glass
+Renamed from «تحدي المثابرة» (it is a mandatory rule now, not a challenge) and restyled
+after دليل الفريق (`../Members`, `css/members.css`): **snow paper `#faf9f7`, one ink
+`#262626` and its opacities instead of greys, the four `--brand-*` colours, brush marks
+from `Icon Elements` painted through `mask` (`--ico-0` / `--ico-3`), Baloo Bhaijaan 2
+(already loaded non-blocking for the library pills), and a gold highlighter swipe under
+the key word of the panel's head** (`<em>`, written by `_chalPaintModal` via `innerHTML`
+— static strings only). The card's inline-start edge stripe carries the day's state
+(gold open · teal done · blue vacation), the progress fill reveals the four colours
+right-to-left (fixed `background-size` = the bar's width, so filling uncovers rather than
+squashes the gradient). Tokens are scoped `--cd-*` on `.chal-dock` / `.chal-modal`.
+- **The whole card is the button** (`#chal-card`, `role="button"` + `tabindex`; it can't
+  be a `<button>` because it holds the fold button). The fold button stops its own click.
+  Enter/Space open it and are stopped so they never reach the chat's Enter.
+- **No `backdrop-filter` anywhere** — the paper is opaque; **no `letter-spacing`** on
+  its Arabic (Safari breaks the joins).
+- A Baloo swap after first paint changes the card's height, so `document.fonts`
+  `loadingdone` re-runs the paint + `_hudPositionDock`.
+- Internal ids/classes stay `chal-*`, the localStorage key stays `mdwnh_chal_minimized`,
+  and round one's Points claim title stays «تحدي المثابرة — …»: it is the historical name
+  of that round and already in the Points history for everyone who claimed.
 
 ### The duty's state — `dashboards/{uid}/duty/days`
 ```
@@ -1885,7 +1907,7 @@ Under `users/{uid}` this would re-stream every member's every minute to both lob
 
 ### Vacations — two a WEEK, today only
 `DUTY.vacPerWeek` (2), weeks starting **Sunday** like the leader's panel. The button is in the
-modal (tap the card's progress bar): **two presses**, the second reading «تأكيد: سيُمسح تقدّم
+modal (tap anywhere on the card): **two presses**, the second reading «تأكيد: سيُمسح تقدّم
 اليوم», then `{ms: 0, vac: ts}` REPLACES today's record — the brief says taking one removes
 today's progress. «إلغاء الإجازة» is one press, today only, and counting restarts from zero.
 Offered only when the duty has started, the week's read succeeded (`_duty.readOk` — a failed
@@ -1973,87 +1995,58 @@ changing the challenge means changing `MdwnhLibrary/index.html` in the same pass
 
 ---
 
-## رف الجوائز — seven trophies on two planks
+## رف الجوائز — three trophies (and four hidden ones) on two planks
 
 Walk to the shelf on the bottom-left wall of the break room → **«انقر لرؤية رف الجوائز»**
 → a lit display case. Code is the `رف الجوائز` block at the very end of `game.js`;
 markup is `#trophy-overlay` + `#tro-cer` in `index.html`; styles are the matching block
-at the foot of `style.css`. Grep anchors: `TROPHIES`, `updateTrophies`, `_troBank`,
-`_troClaim`, `_troCeremony`.
+at the foot of `style.css`. Grep anchors: `TROPHIES`, `TROPHY_LIVE`, `updateTrophies`,
+`_troBank`, `_troClaim`, `_troCeremony`.
 
-### The seven — `TROPHIES` is the ONLY place any of this lives
+### `TROPHIES` is the ONLY place any of this lives
 `id`, Arabic name, description, art number, plank, goal and point value are all one
 array; the HTML holds no slot markup at all and `setupTrophyUI` builds both rows from
-it. Top plank = four at **٣٠ نقطة**; bottom plank = three hard ones at **٦٠ نقطة**.
+it. Seven slots, **three live** at **٣٠ نقطة** each; `TROPHY_LIVE` is the filtered list
+everything that counts, claims or lists uses.
 
 | id | name | condition | source |
 |---|---|---|---|
-| `dawn` | باكر | ١٠ ساعات عمل بين الفجر والظهر | own accumulator, gated on `getCurrentAzkarType() === 'morning'` |
 | `azkar` | مثابر الأذكار | صباح ومساء، ١٠ أيام | `troNoteAzkarDay()` from `markAzkarCompleted` |
 | `reader` | قارئ | ٥ ساعات قراءة | **derived** from `dashboards/{uid}/reading/books/*/totalMs` |
 | `thirty` | ثلاثون يومًا | ٣٠ يومًا مختلفًا فيه عمل | a set of date keys |
-| `brainrot` | برينروت | ٦٧ ساعة عمل | own accumulator |
-| `devoted` | شغوف | ١٠٠ جلسة تتجاوز ١٠ دقائق | counted the instant a session passes the floor |
-| `diamond` | النقطة الماسية | لا شروط | awarded from **لوحة القائد**, and **repeatable** — see below |
+| `locked-1/5/6/7` | — | — | **hidden — nothing counted** (see below) |
+
+**The four hidden slots were removed on purpose** (باكر، برينروت، شغوف، النقطة
+الماسية). They are `locked: true` entries with only an `img` and a plank: drawn as a
+**blacked-out silhouette** (`brightness(0)`) with the brand's brush question mark
+(`--ico-5`) on it, captioned «جائزة مخفية». No name, no condition, no points, no
+button (`role="img"`, no `data-tro`, so the shelf's click handler never opens them),
+and **no counter** — `updateTrophies` only marks work days for ثلاثون يومًا. The leader
+can no longer award النقطة الماسية either. Their old Firebase keys (`prog/workMs`,
+`prog/dawnMs`, `prog/sessions`, `grants`, `taken`, `granted`) are left where they are —
+nothing reads or writes them, and deleting member data is not worth the risk. To bring
+one back, give it a real entry again (and a counter if it needs one).
 
 **قارئ deliberately keeps no counter of its own** — reading already banks `totalMs` per
 book every minute, so a parallel accumulator here could only ever disagree with it. It
 is one memoised `get()` on open, **minus `prog.readBase`** (see the epoch below), so it
 measures only what was read after the shelf started counting.
 
-### النقطة الماسية is a LEDGER, not a flag — and it repeats
-It is the only trophy with no condition and the only one that can be won **more than
-once**, so a boolean could not carry it. `repeatable: true` on its `TROPHIES` entry is
-what says "a second award is a second payout", and the state underneath is two maps:
-
-```
-dashboards/{uid}/trophies/grants/diamond/{grantId} = ts    // every award the leader made
-dashboards/{uid}/trophies/taken/diamond/{grantId}  = ms    // the ones already settled
-```
-
-**Pending = the difference**, and `_troPendingGrant()` returns the OLDEST unsettled one,
-so a member is paid in the order the awards were given.
-
-- **The grantId is what keys the points record** — `maqr-trophy-diamond-<grantId>`. A
-  second award writes a second record and pays a second time; a **replay of one award
-  overwrites its own record and cannot pay twice**. That is the whole reason the grant
-  is a timestamped entry rather than a counter: a counter has no stable id to write
-  under, and the Points site **deletes** a claim when it settles it.
-- **The legacy shape is folded in on read, never migrated.** `_troAdoptAwards()` turns an
-  old `granted/{id} = true` into the grant `legacy` and an old `claimed/{id}` into its
-  settlement. Nothing is written back — the old keys keep meaning exactly what they meant,
-  and a member who was awarded before this shipped is neither re-paid nor stranded.
-- `claimed/{id}` still exists and is now "**when it was last claimed**" — it is what
-  الجوائز المستلمة lists and dates. It is no longer the gate for a repeatable trophy;
-  `_troClaim` only consults it for the other six.
-- **`openTrophyShelf` re-reads the ledger** (one small `get()`, no listener). An award
-  can land while the member is already logged in, and the login read would not have
-  seen it.
-- A سراج ghost's reset wipes **`taken` as well as `claimed`**, so the shelf is always
-  walkable however many times it claimed last session.
-
 ### Cost — the whole design decision
 ```
-dashboards/{uid}/trophies/prog     = { workMs, dawnMs, sessions, workDays:{d:1}, azkarDays:{d:1}, epoch, readBase }
-dashboards/{uid}/trophies/claimed/{id} = ms      // when it was LAST claimed
-dashboards/{uid}/trophies/grants/{id}/{grantId} = ts   // leader-awarded (see above)
-dashboards/{uid}/trophies/taken/{id}/{grantId}  = ms
+dashboards/{uid}/trophies/prog     = { workDays:{d:1}, azkarDays:{d:1}, epoch, readBase }
+dashboards/{uid}/trophies/claimed/{id} = ms      // when it was claimed
 ```
 Decision tree §5 case 4: private to one member, persistent, written more than once a
-day. **One `get()` on idle after spawn, `runTransaction` at most once a minute while
+day. **One `get()` on idle after spawn, an `update()` of day keys at most once a minute while
 working, and no listener anywhere.** Under `users/{uid}` this would re-stream every
 member's every worked minute to every client in **both** lobbies.
 
 - **Every counter is CAPPED at its own goal**, which is what bounds it: a won trophy
   costs nothing at all, forever. The caps are derived from `TROPHIES`, never retyped.
-- **The ledger is always a DELTA** (`_tro.pending`), never a total, so two devices
-  banking the same minute cannot double-count. Same shape as `bankReadingProgress()`.
-- The per-tick gain is **clamped to the wall time since the last tick (+2s)** — real
-  work advances both equally (a backgrounded half-hour arrives as one tick and is
-  credited whole), but the free-mode reclaim dumping hours of away-credit into
-  `totalWorkMs` in a single frame is not time spent at the desk. Identical to `CHAL`.
-- The accumulator ticks at **~1 Hz**, not per frame: the gain is measured against wall
-  time, so a slower tick changes nothing but the work it costs.
+- **Only day keys are written** (`_tro.pending.days` / `.azkar`), and setting a day key
+  is idempotent, so two devices banking the same day cannot double-count.
+- The accumulator ticks at **~1 Hz**, not per frame — a day key only has to land once.
 
 ### The epoch — old work earns NOTHING
 **Every counter starts at zero for everyone.** An earlier build had a retroactive seed
@@ -2234,8 +2227,8 @@ interaction point, so the art and the hitbox can never drift apart. No collision
 dilated bottom wall already stops the player ~50 source px short of it.
 
 ### Gotchas
-- **Only a Siraj ghost sees every trophy full and claimable** (`_troTestUnlocked`), so
-  the ceremony is walkable without waiting sixty-seven hours. A ghost resolves to
+- **Only a Siraj ghost sees every live trophy full and claimable** (`_troTestUnlocked`), so
+  the ceremony is walkable without waiting thirty days. A ghost resolves to
   nobody in `MDWNH_ROSTER` and therefore **cannot mint a claim** — which is exactly
   what makes it the safe account to test with. It is a local display override; nothing
   is written, and the real counters keep accumulating underneath.
@@ -2320,11 +2313,10 @@ them once.
 
 ## لوحة القائد — the leader's panel
 
-نواف's view of the whole team: who worked, how long, and a way to hand out النقطة الماسية.
+نواف's view of the whole team: who worked and how long. It is read-only.
 Code is the `لوحة القائد` block at the very end of `game.js`; markup is `#admin-btn` +
 `#admin-overlay` in `index.html`; styles are the matching block at the foot of `style.css`.
-Grep anchors: `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`,
-`_admGrantDiamond`.
+Grep anchors: `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`.
 
 ### Who
 `adminAllowed()` = the roster's **`admin`** flag (نواف) **or** a **سراج ghost** (so the
@@ -2371,7 +2363,7 @@ nothing in this app live-listens `dashboards`, so the fan-out is zero.
   wait for the same read, not resolve early on a stale cache.
 - A failed read caches `failed: true` with `at: 0` — a zero must never look like an
   answer, so the row says «تعذّرت القراءة» and is retried on the next open.
-- The two reads per member are `sessions` and `trophies`. **Never read `dashboards/{uid}`
+- The two reads per member are `sessions` and `duty/days`. **Never read `dashboards/{uid}`
   whole** — `invoicePhotos` lives under it.
 - «تحديث الأرقام» is the FORCE, not the loader — the open already loaded.
 - `_admAllUids()` is deliberately **not** filtered by the search box: typing must change
@@ -2397,13 +2389,10 @@ adds nothing), and a six-week calendar (`ADM_DUTY_WEEKS`) with the hours in each
   not «لم يُتمّوا».
 - Every day is judged by the member-side `_dutyStateOf`, never a copy of the rule.
 
-### The one thing it writes
-`dashboards/{uid}/trophies/grants/diamond/{ts} = ts`. That is all. The member's own shelf
-settles it through the claim handshake that was already there (see **رف الجوائز →
-النقطة الماسية is a LEDGER**), so **this panel never touches the Points database** and
-needed no rules change on any site — `dashboards` is already `auth !== null` read+write.
-The award is behind a **two-press confirm** on the button itself (no dialog): it pays real
-points, and a mis-tap should not.
+### It writes nothing
+It used to award **النقطة الماسية** (`trophies/grants/diamond/{ts}`, behind a two-press
+confirm). That trophy and the award button were removed with the hidden trophies (see
+**رف الجوائز**), so the panel is read-only — one-shot `get()`s and nothing else.
 
 ### Gotchas
 - **`.hud-tool-btn` sets `display: grid`, which beats the UA's `[hidden]{display:none}`.**
