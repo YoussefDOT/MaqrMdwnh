@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 283 · Updated 9/10 2:12 PM</div>
+    <div id="build-number" class="build-number">Build 284 · Updated 9/10 2:34 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -239,10 +239,11 @@
             </button>
         </div>
 
-        <!-- ═══ تحدي المثابرة — بطاقة الفعالية ═══
+        <!-- ═══ تحدي المثابرة — الحضور اليومي (٣ ساعات في المقر) ═══
              رصيف ثالث تحت رصيف الأذكار، يُوضع في JS من مقاس البطاقة مثل إخوته
              (`_hudPositionDock`). قابلة للطي: الطيّ محفوظ في localStorage، وعلى
-             الجوال تكون مطويّة افتراضيًا حتى لا تزاحم الشاشة. -->
+             الجوال تكون مطويّة افتراضيًا حتى لا تزاحم الشاشة. نصوصها يكتبها
+             game.js (`_chalPaintCard`)؛ ما هنا قيم مبدئية فقط. -->
         <div id="chal-dock" class="chal-dock" hidden>
             <button id="chal-mini" class="chal-mini" type="button" hidden
                     aria-label="فتح تحدي المثابرة" title="تحدي المثابرة">
@@ -261,9 +262,9 @@
                     </span>
                     <span class="chal-head-txt">
                         <span id="chal-title" class="chal-title">تحدي المثابرة</span>
-                        <span class="chal-sub">٥٠ دقيقة يوميًا لسبعة أيام</span>
+                        <span class="chal-sub">٣ ساعات في المقر يوميًا</span>
                     </span>
-                    <span class="chal-tag">فعالية</span>
+                    <span id="chal-tag" class="chal-tag">يومي</span>
                     <button id="chal-fold" class="chal-fold" type="button" aria-label="طيّ البطاقة" title="طيّ">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true">
                             <path d="M5 12h14"/>
@@ -273,18 +274,19 @@
 
                 <button id="chal-body" class="chal-body" type="button" aria-label="تفاصيل التحدي">
                     <span class="chal-row">
-                        <span id="chal-day" class="chal-day">قريبًا</span>
-                        <span id="chal-state" class="chal-state">يبدأ غدًا</span>
+                        <span id="chal-day" class="chal-day">اليوم</span>
+                        <span id="chal-state" class="chal-state"></span>
                     </span>
                     <span class="chal-bar"><span id="chal-fill" class="chal-fill"></span></span>
-                    <span id="chal-note" class="chal-note">٣٠ نقطة لمن أتمّ الأيام السبعة</span>
+                    <span id="chal-note" class="chal-note"></span>
                 </button>
             </section>
         </div>
 
-        <!-- ═══ لوحة التحدي / بطاقة التهنئة ═══
-             نفس اللوحة تخدم الحالتين: خطّ الأيام السبعة مع الملصقات، ورأسٌ يتغيّر.
-             العرض/الإخفاء بالشفافية لا بـ display (display لا يقبل انتقالًا). -->
+        <!-- ═══ لوحة التحدي / بطاقة التهنئة / استلام الجولة الأولى ═══
+             لوحة واحدة بثلاثة وجوه (`_chal.mode`): أيام هذا الأسبوع مع زرّ الإجازة،
+             والتهنئة بعد ثلاث ساعات، ونافذة استلام نقاط الجولة الأولى التي لا تُغلق
+             إلا بالاستلام. العرض/الإخفاء بالشفافية لا بـ display. -->
         <div id="chal-modal" class="chal-modal" role="dialog" aria-modal="true" aria-labelledby="chal-modal-head">
             <div class="chal-modal-card">
                 <button id="chal-modal-close" class="chal-modal-close" type="button" aria-label="إغلاق">
@@ -295,17 +297,18 @@
                 <div id="chal-modal-burst" class="chal-modal-burst" aria-hidden="true"></div>
                 <div id="chal-modal-kicker" class="chal-modal-kicker">فعالية الأسبوع</div>
                 <h3 id="chal-modal-head" class="chal-modal-head">تحدي المثابرة</h3>
-                <p id="chal-modal-sub" class="chal-modal-sub">٥٠ دقيقة عمل يوميًا لسبعة أيام</p>
+                <p id="chal-modal-sub" class="chal-modal-sub">ثلاث ساعات في المقر كل يوم.</p>
 
                 <div id="chal-track" class="chal-track" aria-hidden="true"></div>
 
                 <div id="chal-tally" class="chal-tally"></div>
 
                 <div class="chal-modal-actions">
-                    <button id="chal-claim-btn" class="chal-modal-btn primary" type="button" hidden>استلم نقاطك</button>
+                    <button id="chal-claim-btn" class="chal-modal-btn primary" type="button" hidden>استلام</button>
+                    <button id="chal-vac-btn" class="chal-modal-btn vac" type="button" hidden>خذ اليوم إجازة</button>
                     <button id="chal-ok-btn" class="chal-modal-btn" type="button">تمام</button>
                 </div>
-                <p class="chal-modal-note">تُحتسب دقائق العمل فقط — الاستراحات لا تُحسب.</p>
+                <p id="chal-modal-note" class="chal-modal-note"></p>
             </div>
         </div>
 
@@ -1478,7 +1481,7 @@
             <header class="adm-head">
                 <span class="adm-head-txt">
                     <h2 class="adm-title">لوحة القائد</h2>
-                    <p class="adm-sub">ساعات العمل الفعلية لكل عضو، أسبوعًا بأسبوع</p>
+                    <p class="adm-sub">الحضور اليومي وساعات العمل لكل عضو</p>
                 </span>
                 <button id="admin-close" class="adm-close" type="button" aria-label="إغلاق">✕</button>
             </header>
@@ -1490,6 +1493,8 @@
                     </svg>
                     <input id="adm-search" type="search" autocomplete="off" placeholder="اكتب اسم العضو…">
                 </label>
+                <!-- حضور اليوم: عدّاد من أتمّ ساعاته الثلاث ومن أخذ إجازة، وفرز بالأعلى حضورًا. يبنيه game.js. -->
+                <div id="adm-duty-bar" class="adm-duty-bar"></div>
                 <div id="adm-members" class="adm-members"></div>
                 <!-- الأرقام تُحسب تلقائيًا عند الفتح؛ هذا الزر للتحديث الفوري فقط. -->
                 <button id="adm-refresh-all" class="adm-loadall" type="button">تحديث الأرقام</button>
@@ -1967,7 +1972,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=272"></script>
+        <script type="module" src="game.js?v=273"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

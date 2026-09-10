@@ -8906,6 +8906,9 @@ body.is-mobile .chal-card { backdrop-filter: none; -webkit-backdrop-filter: none
     transition: width 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
 .chal-card.is-done .chal-fill { background: linear-gradient(90deg, #35a35f, #7fdc9a); }
+/* يوم الإجازة: شريط ممتلئ بلون بارد — اليوم محسوم، لا ناقص */
+.chal-card.is-vac .chal-fill { background: linear-gradient(90deg, #4c8fd6, #8ecbff); }
+.chal-card.is-vac .chal-state { color: #8ecbff; }
 .chal-note {
     font-size: 0.58rem; font-weight: 500; color: rgba(255, 255, 255, 0.34);
     line-height: 1.5;
@@ -9135,6 +9138,38 @@ body.is-mobile .chal-head-icon { width: 22px; height: 22px; }
 .chal-modal-btn[hidden] { display: none; }
 .chal-modal-btn.primary { background: #f4c82b; border-color: #f4c82b; color: #1a1500; }
 .chal-modal-btn.primary:hover { background: #ffd747; color: #1a1500; }
+/* زرّ الإجازة — ضغطتان، والثانية تأكيد صريح لأنها تمسح تقدّم اليوم */
+.chal-modal-btn { line-height: 1.3; }
+.chal-modal-btn.vac { color: #8ecbff; border-color: rgba(142, 203, 255, 0.35); }
+.chal-modal-btn.vac:hover { background: rgba(142, 203, 255, 0.10); color: #b9dfff; }
+.chal-modal-btn.vac.is-confirm { background: #8ecbff; border-color: #8ecbff; color: #06223b; }
+/* مشغول = مظهر فقط، لا خاصية disabled (تسرّب اللمس على iOS) — المعالج يعيد الفحص */
+.chal-modal-btn.is-busy { opacity: 0.55; cursor: default; }
+/* نافذة استلام الجولة الأولى لا تُغلق إلا بالاستلام */
+.chal-modal.pay .chal-modal-close { display: none; }
+.chal-tally .vac { color: #8ecbff; }
+
+/* ── خطّ أيام الأسبوع (الحضور اليومي) ───────────────────────────────────────
+   الساعات تجلس فوق كل نقطة في مكان الملصق، والإجازة بلون بارد. */
+.chal-step-hrs {
+    display: flex; align-items: flex-end; justify-content: center;
+    padding-bottom: 3px;
+    font-size: 0.56rem; font-weight: 700; line-height: 1;
+    color: rgba(255, 255, 255, 0.42);
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.chal-step.now .chal-step-hrs  { color: #f4c82b; }
+.chal-step.done .chal-step-hrs { color: #7fdc9a; }
+.chal-step.vac .chal-step-hrs  { color: #8ecbff; }
+.chal-step.vac .chal-step-dot {
+    background: rgba(142, 203, 255, 0.18); border-color: #8ecbff;
+    color: #fff; font-size: 0.6rem;
+}
+.chal-step.pre .chal-step-dot { border-style: dashed; border-color: rgba(255, 255, 255, 0.12); }
+.chal-step.has-me.vac .chal-step-me {
+    border-color: #8ecbff;
+    box-shadow: 0 0 0 3px rgba(142, 203, 255, 0.18), 0 6px 14px rgba(0, 0, 0, 0.55);
+}
 .chal-modal-note {
     margin-top: 11px; font-size: 0.64rem; font-weight: 500; line-height: 1.6;
     color: rgba(255, 255, 255, 0.3);
@@ -9147,6 +9182,8 @@ body.is-mobile .chal-step-spacer { height: 24px; }
 body.is-mobile .chal-step-me { width: 26px; height: 26px; bottom: 32px; }
 body.is-mobile .chal-step.has-sticker .chal-step-me { bottom: 58px; }
 body.is-mobile .chal-modal-head { font-size: 1.05rem; }
+/* على خطّ الأسبوع الصورة تجلس على نقطة اليوم نفسها — فوقها تغطّي ساعاته */
+body.is-mobile .chal-track.is-duty .chal-step-me { bottom: 13px; }
 
 /* اللوحة تغطّي الشاشة على الجوال، فاللوحة الحيّة خلفها لا داعي لرسمها */
 body.chal-modal-open { overflow: hidden; }
@@ -10776,6 +10813,123 @@ body.is-mobile .tro-paper-fly.is-drag  .tro-paper-sheen { opacity: 0.5; }
 }
 .adm-grant[data-off] { opacity: 0.4; cursor: default; }
 
+/* ── the daily duty (تحدي المثابرة) ──────────────────────────────────────────
+   One colour per day state across the whole panel, the same four the member's
+   own ladder uses: done green, vacation blue, missed red, today gold. */
+.adm-duty-bar {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    margin-top: 12px;
+}
+.adm-duty-bar:empty { display: none; }
+.adm-duty-lbl { font-size: 0.72rem; font-weight: 700; color: rgba(255, 255, 255, 0.42); }
+.adm-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.adm-chip {
+    padding: 6px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 50px;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.66);
+    font-family: inherit;
+    font-size: 0.76rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.18s, border-color 0.18s, color 0.18s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.adm-chip:hover { background: rgba(255, 255, 255, 0.09); color: #fff; }
+.adm-chip:active { transform: scale(0.95); }
+.adm-chip b { font-weight: 800; color: #fff; }
+.adm-chip.is-done b  { color: #7fdc9a; }
+.adm-chip.is-vac b   { color: #8ecbff; }
+.adm-chip.is-short b { color: #ef9a82; }
+.adm-chip.is-on { background: rgba(255, 255, 255, 0.14); border-color: rgba(255, 255, 255, 0.24); color: #fff; }
+.adm-chip.is-done.is-on  { background: rgba(127, 220, 154, 0.16); border-color: rgba(127, 220, 154, 0.42); }
+.adm-chip.is-vac.is-on   { background: rgba(142, 203, 255, 0.14); border-color: rgba(142, 203, 255, 0.4); }
+.adm-chip.is-short.is-on { background: rgba(239, 122, 95, 0.14); border-color: rgba(239, 122, 95, 0.42); }
+.adm-chip.is-sort { margin-inline-start: auto; }
+.adm-chip.is-sort.is-on {
+    background: rgba(226, 169, 43, 0.18);
+    border-color: rgba(226, 169, 43, 0.45);
+    color: var(--adm-gold-hi);
+}
+
+/* The row's middle column: the name, and this week's seven dots under it. */
+.adm-row-mid { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.adm-row-mid .adm-row-name { flex: 0 0 auto; }
+.adm-duty { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.adm-dd-row { flex: 0 0 auto; display: flex; gap: 3px; }
+.adm-dd { width: 8px; height: 8px; border-radius: 50%; background: rgba(255, 255, 255, 0.10); }
+.adm-dd.is-future { background: rgba(255, 255, 255, 0.045); }
+.adm-dd.is-done, .adm-cal-key i.is-done { background: #7fdc9a; }
+.adm-dd.is-vac,  .adm-cal-key i.is-vac  { background: #8ecbff; }
+.adm-dd.is-miss, .adm-cal-key i.is-miss { background: #ef7a5f; }
+.adm-dd.is-now,  .adm-cal-key i.is-now  { background: transparent; box-shadow: inset 0 0 0 1.5px #f4c82b; }
+.adm-dd-cap {
+    min-width: 0;
+    font-size: 0.66rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.4);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.adm-dd-cap.is-done { color: #7fdc9a; }
+.adm-dd-cap.is-vac  { color: #8ecbff; }
+
+.adm-h i { font-style: normal; font-weight: 600; color: rgba(255, 223, 135, 0.7); margin-inline-start: 8px; }
+
+/* The calendar: a label, seven days, the week's open time. */
+.adm-cal { display: flex; flex-direction: column; gap: 5px; margin-top: 12px; }
+.adm-cal-row {
+    display: grid;
+    grid-template-columns: 84px repeat(7, minmax(0, 1fr)) 64px;
+    align-items: center;
+    gap: 4px;
+}
+.adm-cal-lbl {
+    font-size: 0.68rem;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.5);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.adm-cal-row.is-cur .adm-cal-lbl { color: rgba(255, 223, 135, 0.8); }
+.adm-cal-h { text-align: center; font-size: 0.6rem; font-weight: 600; color: rgba(255, 255, 255, 0.34); }
+.adm-cal-c {
+    height: 26px;
+    display: grid;
+    place-items: center;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 0.62rem;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    overflow: hidden;
+}
+.adm-cal-c.is-done { background: rgba(127, 220, 154, 0.16); border-color: rgba(127, 220, 154, 0.36); color: #b5f0c6; }
+.adm-cal-c.is-vac  { background: rgba(142, 203, 255, 0.13); border-color: rgba(142, 203, 255, 0.32); }
+.adm-cal-c.is-miss { background: rgba(239, 122, 95, 0.09); border-color: rgba(239, 122, 95, 0.36); color: rgba(255, 190, 175, 0.85); }
+.adm-cal-c.is-now  { border-color: rgba(244, 200, 43, 0.6); color: var(--adm-gold-hi); }
+.adm-cal-c.is-future { background: transparent; border: 1px dashed rgba(255, 255, 255, 0.06); }
+.adm-cal-ms { font-size: 0.72rem; font-weight: 700; color: rgba(255, 255, 255, 0.72); text-align: left; white-space: nowrap; }
+.adm-cal-key {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-top: 9px;
+    font-size: 0.66rem;
+    font-weight: 500;
+    color: rgba(255, 255, 255, 0.42);
+}
+.adm-cal-key span { display: inline-flex; align-items: center; gap: 5px; }
+.adm-cal-key i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+
 /* ── mobile ──────────────────────────────────────────────────────────────── */
 body.admin-active { overflow: hidden; }
 body.is-mobile .adm-overlay { padding: 0; }
@@ -10797,6 +10951,12 @@ body.is-mobile .adm-week { grid-template-columns: 104px 1fr 62px; }
 body.is-mobile .adm-week-lbl { font-size: 0.68rem; }
 body.is-mobile .adm-gift { flex-wrap: wrap; }
 body.is-mobile .adm-grant { width: 100%; }
+body.is-mobile .adm-chip { padding: 5px 10px; font-size: 0.72rem; }
+body.is-mobile .adm-chip.is-sort { margin-inline-start: 0; }
+body.is-mobile .adm-cal-row { grid-template-columns: 56px repeat(7, minmax(0, 1fr)) 46px; gap: 3px; }
+body.is-mobile .adm-cal-c { height: 24px; border-radius: 7px; font-size: 0.54rem; }
+body.is-mobile .adm-cal-lbl { font-size: 0.6rem; }
+body.is-mobile .adm-cal-ms { font-size: 0.62rem; }
 
 @media (prefers-reduced-motion: reduce) {
     .adm-row { animation: none; }

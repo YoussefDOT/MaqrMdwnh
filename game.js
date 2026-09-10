@@ -27650,36 +27650,44 @@ function setupLibraryPanel() {
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   تحدي المثابرة — the seven-day work streak
+   تحدي المثابرة — ثلاث ساعات في المقر، كل يوم
    ═══════════════════════════════════════════════════════════════════════════
-   Fifty minutes of WORK a day (breaks excluded) for seven days, paid out of
-   the Points database through the same claim loop a library task uses.
+   Two things live in this block, and only the second one is still running.
 
-   WHERE THE STATE LIVES — walk the decision tree in CLAUDE.md §5 and this is
-   case 4: private to one user, persistent, written more than once a day. So it
-   is `dashboards/{uid}/…`, read with ONE `get()` at spawn and written with a
-   `runTransaction` at most once a minute. Nobody holds a live listener on
-   `dashboards`, so the fan-out is zero. It must NEVER go under `users/{uid}` —
-   the global users listener would re-stream it to every client in both lobbies
-   on every minute of every member's work.
+   1. ROUND ONE (`CHAL`, round `s1`) — the seven-day WORK streak, ٣ → ٩ سبتمبر.
+      It is OVER and its card is gone. What is left is the payout: a member who
+      earned points and has not claimed them gets a popup CHAL_PAY_DELAY_MS
+      after the boot screen lifts, and it cannot be dismissed — no ✕, no
+      backdrop, no «تمام» — until «استلام» mints the claim (`_chalPayDue` →
+      `_chalClaim`). Only the prayer/azkar/minigame guard may close it, and it
+      comes straight back once that clears.
 
-     dashboards/{uid}/challenge/{round}/days/{YYYY-MM-DD} = ms worked that day
-     dashboards/{uid}/challenge/{round}/claimed           = ms stamp of the claim
+   2. THE DAILY DUTY (`DUTY`) — the leader's rule: the site OPEN for three hours
+      every day, mandatory from Sunday ١٣ سبتمبر ٢٠٢٦ (counted as a trial before
+      that). It reuses round one's card and modal. What is counted is time spent
+      IN THE GAME SCREEN, not session time — a hidden tab still counts, a
+      sleeping laptop or a suspended phone tab does not (see `_dutyTick`).
+      Two vacation days a WEEK (`DUTY.vacPerWeek`, weeks start Sunday like the
+      leader's panel): taking one wipes today's progress and marks the day
+      `vac`; it can be cancelled the same day, and a won day can't be spent.
 
-   THE PAYOUT is the leader's ladder: 7 days → 30, 6 → 20, 5 → 10, and 5 for
-   taking part at all (at least one completed day). A member is paid for what
-   they DID, so two people on six days are simply on the same rung.
+   WHERE THE STATE LIVES — decision tree §5 case 4: private, persistent, written
+   more than once a day. `dashboards/{uid}/…`, no listener anywhere:
 
-   COST: the day value is CAPPED at the goal, so a member writes at most ~50
-   transactions on a day they work and none at all once the day is won.
+     dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, vac }   // ms open, vac = ts or absent
+     dashboards/{uid}/challenge/s1/{days, claimed}          // round one, read-only now
+
+   `ms` is NOT capped at the goal (only at 24 h): the leader ranks members by how
+   long they were actually here, which a capped value can't tell him. The cost
+   of that is one tiny `runTransaction` a minute while the site is open, on a
+   node nobody listens to — zero fan-out. The leader reads it with a key-range
+   query (date keys sort chronologically), see لوحة القائد.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+// ── round one — over, kept only so it can pay out ───────────────────────────
 const CHAL = {
     round: 's1',
-    // The MOMENT the challenge opens — ١٢:٠١ ص of day one, not a bare date,
-    // because the card counts down to it and a countdown needs a clock. Month
-    // 8 = September. Day one is ٣ سبتمبر ٢٠٢٦.
-    start: new Date(2026, 8, 3, 0, 1, 0),
+    start: new Date(2026, 8, 3, 0, 1, 0),   // ٣ سبتمبر ٢٠٢٦ (month 8 = September)
     days: 7,
     goalMs: 50 * 60000,
     // days completed → points. Walked top-down, first match wins.
@@ -27690,60 +27698,75 @@ const CHAL = {
         { days: 1, pts: 5 },
     ],
 };
-const CHAL_BANK_MS   = 60000;    // at most one transaction a minute, like reading
-const CHAL_MIN_KEY   = 'mdwnh_chal_minimized';
-const CHAL_CLAIM_ID  = 'maqr-streak-' + CHAL.round;
+const CHAL_MIN_KEY      = 'mdwnh_chal_minimized';
+const CHAL_CLAIM_ID     = 'maqr-streak-' + CHAL.round;
+const CHAL_PAY_DELAY_MS = 2500;     // after the boot screen lifts — "two or three seconds"
+
+// ── the daily duty ──────────────────────────────────────────────────────────
+const DUTY = {
+    // The first MANDATORY day (local midnight). Before it the card counts as a
+    // trial: nothing is owed and no vacation can be spent.
+    start: new Date(2026, 8, 13),
+    goalMs: 3 * 3600000,
+    vacPerWeek: 2,
+};
+const DUTY_BANK_MS    = 60000;      // at most one transaction a minute, like reading
+const DUTY_TICK_MS    = 15000;      // background heartbeat — rAF stops in a hidden tab
+const DUTY_GAP_MAX_MS = 150000;     // a longer gap is sleep/suspension, not "open"
+const DUTY_DAY_MAX_MS = 24 * 3600000;
+const DUTY_CONFIRM_MS = 5000;       // the vacation's second press has to land inside this
+const DUTY_DAY_NAMES  = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
+const DUTY_DAY_SHORT  = ['أحد', 'اثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'];
 
 const _chal = {
-    ready: false,       // the one-shot get() has landed (or failed)
-    days: {},           // { 'YYYY-MM-DD': ms } — the banked mirror
+    ready: false,       // round one's one-shot get() has landed (or failed)
+    days: {},           // round one: { 'YYYY-MM-DD': ms }
     claimed: 0,
-    dayKey: '',         // the day the live counters below belong to
-    liveMs: 0,          // unbanked ms accumulated for `dayKey`
-    lastWorked: 0,      // the session's own worked-ms at the previous tick
-    tickAt: 0,
-    lastBankAt: 0,
-    primed: false,
-    pendingWin: false,  // the goal was crossed; celebrate once the session ends
-    celebrated: {},     // { dayKey: true } — one celebration per day, per session
-    paintAt: 0,
-    lastPaintKey: '',
+    claiming: false,
     rosterDone: false,  // the members roster has resolved (so "no library account" is honest)
+    payReadyAt: 0,      // when the payout popup may first appear
+    mode: '',           // 'duty' | 'win' | 'pay' — which face the modal is wearing
     modalOpen: false,
     wired: false,
-    claiming: false,
+    paintAt: 0,
+    lastPaintKey: '',
 };
 
-/* ── the calendar ─────────────────────────────────────────────────────────── */
-// A count of LOCAL midnights, never a millisecond division: a DST hop is an
-// hour, and an hour either side of a boundary would move the whole board a day.
+const _duty = {
+    ready: false,       // the week's read has landed (or failed)
+    readOk: false,      // …and succeeded — vacations are only offered on an honest count
+    days: {},           // { 'YYYY-MM-DD': { ms, vac } } — this week onward, the banked mirror
+    dayKey: '',         // the day `liveMs` belongs to
+    liveMs: 0,          // unbanked open-time for `dayKey`
+    tickAt: 0,          // last counted tick (0 = re-anchor on the next one)
+    checkAt: 0,         // throttles the per-frame call to ~1/s
+    lastBankAt: 0,
+    pendingWin: false,  // three hours crossed; celebrate once the screen is clear
+    celebrated: {},     // { dayKey: true }
+    confirmAt: 0,
+    busy: false,        // a vacation write is in flight — counting pauses
+    screenEl: null,
+};
+
+/* ── calendars ────────────────────────────────────────────────────────────────
+   Counts of LOCAL midnights and setDate() walks, never a millisecond division:
+   a DST hop is an hour, and an hour either side of a boundary moves a whole day. */
 function _chalMidnights(a, b) {
     const A = new Date(a.getFullYear(), a.getMonth(), a.getDate());
     const B = new Date(b.getFullYear(), b.getMonth(), b.getDate());
     return Math.round((B - A) / 864e5);
 }
-// 0-based index of today within the round. Negative before it starts.
 function _chalDayIndex(now) {
     return _chalMidnights(CHAL.start, now || new Date());
 }
 function _chalDateKey(idx) {
-    const d = new Date(CHAL.start.getFullYear(), CHAL.start.getMonth(), CHAL.start.getDate() + idx);
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    return _dutyKeyOf(new Date(CHAL.start.getFullYear(), CHAL.start.getMonth(), CHAL.start.getDate() + idx));
 }
-/* The opening is a MOMENT (a clock can reach it) and the close is a calendar
-   DAY (the last column runs to its own midnight). Asking both the same way
-   either opens the round a minute before it was announced or closes it a
-   minute into an eighth day — the same rule صحبة الفجر settled on. */
 function _chalState() {
     if (Date.now() < CHAL.start.getTime()) return 'soon';
     return _chalDayIndex() > CHAL.days - 1 ? 'over' : 'live';
 }
 function _chalDayMs(key) { return Math.max(0, _chal.days[key] || 0); }
-// The banked value plus whatever this tab has accumulated since the last bank.
-function _chalTodayMs() {
-    const key = _todayDateStr();
-    return Math.min(CHAL.goalMs, _chalDayMs(key) + (_chal.dayKey === key ? _chal.liveMs : 0));
-}
 function _chalDoneCount() {
     let n = 0;
     for (let i = 0; i < CHAL.days; i++) if (_chalDayMs(_chalDateKey(i)) >= CHAL.goalMs) n++;
@@ -27753,101 +27776,233 @@ function _chalPointsFor(done) {
     for (const t of CHAL.tiers) if (done >= t.days) return t.pts;
     return 0;
 }
+// ٥ نقاط / ٢٠ نقطة — Arabic takes the plural only from three to ten.
+function _chalPtsAr(n) { return `${_libAr(n)} ${n >= 3 && n <= 10 ? 'نقاط' : 'نقطة'}`; }
 
-/* ── counting the minutes ─────────────────────────────────────────────────────
-   The session's OWN worked-ms counters are the source, never a frame timer:
-   both are wall-clock (`pomoWorkedMsNow` accumulates from `_workStartMs`,
-   `freeWorkedMsNow` from `workStartTime`) and both FREEZE during a break, which
-   is exactly the rule — breaks are not counted. A backgrounded tab stops
-   rAF entirely, so a frame timer would silently throw away real work. */
-function _chalSessionWorkedMs() {
-    if (gameState.pomodoro.active) return pomoWorkedMsNow();
-    if (gameState.freeMode.active) return freeWorkedMsNow();
-    return 0;
+function _dutyKeyOf(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+const DUTY_START_KEY = _dutyKeyOf(DUTY.start);
+function _dutyStartLabel() {
+    try { return DUTY.start.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }); }
+    catch (_) { return 'الأحد ١٣ سبتمبر'; }
+}
+function _dutyWeekStart(d) {
+    const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+    x.setDate(x.getDate() - x.getDay());
+    return x;
+}
+function _dutyWeekKeys(start) {
+    const out = [];
+    for (let i = 0; i < 7; i++) out.push(_dutyKeyOf(new Date(start.getFullYear(), start.getMonth(), start.getDate() + i)));
+    return out;
+}
+function _dutyStarted(key) { return (key || _todayDateStr()) >= DUTY_START_KEY; }
+function _dutyRec(days, key) {
+    const r = days && days[key];
+    return { ms: Math.max(0, Number(r && r.ms) || 0), vac: Number(r && r.vac) || 0 };
+}
+/* One word per day, shared by the member's own ladder and the leader's panel so
+   the two can never disagree: future · vac · done · now (today, still open) ·
+   pre (before the duty started — owed nothing) · miss. */
+function _dutyStateOf(rec, key, todayKey) {
+    if (key > todayKey) return 'future';
+    if (rec.vac) return 'vac';
+    if (rec.ms >= DUTY.goalMs) return 'done';
+    if (key === todayKey) return 'now';
+    return key < DUTY_START_KEY ? 'pre' : 'miss';
+}
+function _dutyDayState(days, key, todayKey) { return _dutyStateOf(_dutyRec(days, key), key, todayKey); }
+
+// Consecutive WON days ending today (or yesterday, while today is still open).
+// A vacation keeps the chain without adding to it; the trial never counts.
+function _dutyStreak(days, todayKey) {
+    const d = new Date(); d.setHours(0, 0, 0, 0);
+    let n = 0;
+    for (let i = 0; i < 400; i++) {
+        const k = _dutyKeyOf(d);
+        if (k < DUTY_START_KEY) break;
+        const st = _dutyDayState(days, k, todayKey);
+        if (st === 'done') n++;
+        else if (st !== 'vac' && !(st === 'now' && i === 0)) break;
+        d.setDate(d.getDate() - 1);
+    }
+    return n;
 }
 
-function _chalAccumulate(now) {
-    const worked = _chalSessionWorkedMs();
-    // A new session restarts its counter near zero — re-anchor rather than
-    // treating the drop as negative progress.
-    if (worked < _chal.lastWorked) _chal.lastWorked = worked;
+// ٢ س ١٥ د — `ceil` for time still owed, so «٠ د» never shows while a second is.
+function _dutyDur(ms, ceil) {
+    const mins = Math[ceil ? 'ceil' : 'floor'](Math.max(0, Number(ms) || 0) / 60000);
+    const h = Math.floor(mins / 60), m = mins % 60;
+    if (!h) return `${_libAr(m)} د`;
+    return m ? `${_libAr(h)} س ${_libAr(m)} د` : `${_libAr(h)} س`;
+}
+// ١:٠٥ — the compact form the dots and the folded pill carry.
+function _dutyClock(ms) {
+    const mins = Math.floor(Math.max(0, Number(ms) || 0) / 60000);
+    const mm = String(mins % 60).padStart(2, '0').replace(/\d/g, c => _libAr(+c));
+    return _libAr(Math.floor(mins / 60)) + ':' + mm;
+}
+function _dutyDaysAr(n) {
+    if (!n) return 'لا شيء بعد';
+    if (n === 1) return 'يوم واحد';
+    if (n === 2) return 'يومان';
+    if (n <= 10) return `${_libAr(n)} أيام`;
+    return `${_libAr(n)} يومًا`;
+}
 
-    if (!_chal.primed) { _chal.primed = true; _chal.lastWorked = worked; _chal.tickAt = now; return; }
-
-    /* The gain is clamped to the WALL time since the last tick (+2s slack).
-       Real work advances both equally — including across a 30-minute
-       backgrounded stretch, which arrives as one tick with a 30-minute wall
-       gap and is credited in full. What the clamp catches is the free-mode
-       reclaim dumping hours of away-credit into `totalWorkMs` in one frame;
-       that is a session credit, not thirty minutes spent at the desk. */
-    const wall = Math.max(0, now - (_chal.tickAt || now));
-    const gain = Math.min(Math.max(0, worked - _chal.lastWorked), wall + 2000);
-    _chal.lastWorked = worked;
-    _chal.tickAt = now;
-    if (gain <= 0) return;
-
+/* ── my own day ───────────────────────────────────────────────────────────── */
+// The banked value plus whatever this tab has counted since the last bank.
+function _dutyTodayRec() {
     const key = _todayDateStr();
-    if (_chal.dayKey !== key) { _chalBank(true); _chal.dayKey = key; _chal.liveMs = 0; }
-    // Capped at the goal: past it there is nothing left to measure, and it is
-    // what keeps this to ~50 writes on a day worked and none on a day won.
-    if (_chalDayMs(key) + _chal.liveMs >= CHAL.goalMs) return;
-    _chal.liveMs += gain;
+    const r = _dutyRec(_duty.days, key);
+    if (!r.vac && _duty.dayKey === key) r.ms += _duty.liveMs;
+    return r;
+}
+function _dutyVacLeft() {
+    let used = 0;
+    for (const k of _dutyWeekKeys(_dutyWeekStart(new Date()))) if (_dutyRec(_duty.days, k).vac) used++;
+    return Math.max(0, DUTY.vacPerWeek - used);
+}
+// Today may be turned into a vacation: the duty has started, the week's count
+// is honest, today isn't one already, isn't won already, and one is left.
+function _dutyCanVacation() {
+    const r = _dutyTodayRec();
+    return _duty.readOk && _dutyStarted() && !r.vac && r.ms < DUTY.goalMs && _dutyVacLeft() > 0;
 }
 
-/* One transaction that ADDS the delta — never a write of a total, so nothing is
-   double-counted if two devices bank the same minute. Mirrors
-   `bankReadingProgress()`; `_chal.liveMs` is the ledger and is zeroed only once
-   the write is handed off. */
-function _chalBank(force) {
-    if (!gameState.userId || !_chal.ready) return;
-    const key = _chal.dayKey;
-    const delta = Math.round(_chal.liveMs);
+/* ── counting the open time ───────────────────────────────────────────────────
+   Wall-clock gaps between ticks, ticked by the game loop AND a 15 s interval —
+   rAF stops entirely in a hidden tab, the interval keeps going (throttled to
+   ~1/min at worst), so a tab left open in the background is still counted.
+   A gap over DUTY_GAP_MAX_MS is not credited at all: that is a sleeping laptop
+   or a phone that suspended the tab, and the site was not really open.
+   Paused while another device holds the session (`_dupSessionDetected`), so two
+   open tabs can never double-count the same minute. */
+function _dutyCounting() {
+    if (!gameState.userId || gameState._dupSessionDetected || _duty.busy) return false;
+    const s = _duty.screenEl || (_duty.screenEl = document.getElementById('game-screen'));
+    return !!(s && s.classList.contains('active'));
+}
+function _dutyTick() {
+    if (!_duty.ready) return;
+    const now = Date.now();
+    if (now - _duty.checkAt < 1000) return;
+    _duty.checkAt = now;
+    const key = _todayDateStr();
+    if (_duty.dayKey !== key) { _dutyBank(true); _duty.dayKey = key; _duty.liveMs = 0; }
+    const last = _duty.tickAt;
+    if (!_dutyCounting()) { _duty.tickAt = 0; return; }
+    _duty.tickAt = now;
+    const gap = last ? now - last : 0;
+    if (gap <= 0 || gap > DUTY_GAP_MAX_MS) return;
+    if (_dutyRec(_duty.days, key).vac) return;      // a day off counts nothing
+    _duty.liveMs += gap;
+    _dutyBank(false);
+}
+
+function _dutyPath(uid) { return `dashboards/${uid || gameState.userId}/duty/days`; }
+
+/* One transaction that ADDS the delta — never a write of a total, so two devices
+   banking the same minute can't double-count. `_duty.liveMs` is the ledger and is
+   zeroed only once the write is handed off. Same shape as bankReadingProgress(). */
+function _dutyBank(force) {
+    if (!gameState.userId || !_duty.ready) return;
+    const key = _duty.dayKey;
+    const delta = Math.round(_duty.liveMs);
     if (!key || delta <= 0) return;
-    if (!force && Date.now() - _chal.lastBankAt < CHAL_BANK_MS) return;
-    _chal.liveMs = 0;
-    _chal.lastBankAt = Date.now();
-    _chal.days[key] = Math.min(CHAL.goalMs, _chalDayMs(key) + delta);
-    runTransaction(ref(database, `dashboards/${gameState.userId}/challenge/${CHAL.round}/days/${key}`),
-        (curr) => Math.min(CHAL.goalMs, (curr || 0) + delta)).catch(() => {});
+    if (!force && Date.now() - _duty.lastBankAt < DUTY_BANK_MS) return;
+    _duty.liveMs = 0;
+    _duty.lastBankAt = Date.now();
+    const r = _dutyRec(_duty.days, key);
+    _duty.days[key] = { ms: Math.min(DUTY_DAY_MAX_MS, r.ms + delta), vac: r.vac };
+    runTransaction(ref(database, `${_dutyPath()}/${key}/ms`),
+        (curr) => Math.min(DUTY_DAY_MAX_MS, (Number(curr) || 0) + delta)).catch(() => {});
+}
+
+/* ── vacation ─────────────────────────────────────────────────────────────────
+   Taking one is a two-press confirm on the button itself (it wipes the day's
+   progress, a mis-tap should not). Both directions apply locally only once the
+   write is acknowledged, and counting pauses (`busy`) while it is in flight so a
+   bank can't land on top of the wipe. Cancelling is today-only and one press:
+   the progress is already gone, there is nothing left to lose. */
+function _dutyVacPress() {
+    if (_duty.busy) return;
+    if (_dutyTodayRec().vac) { _dutySetVacation(false); return; }
+    if (!_dutyCanVacation()) return;
+    if (_duty.confirmAt <= Date.now()) {
+        _duty.confirmAt = Date.now() + DUTY_CONFIRM_MS;
+        _chalPaintTally();
+        return;
+    }
+    _duty.confirmAt = 0;
+    _dutySetVacation(true);
+}
+function _dutySetVacation(on) {
+    if (!gameState.userId || _duty.busy) return;
+    const key = _todayDateStr();
+    _duty.busy = true;
+    _chalPaintTally();
+    const ts = Date.now();
+    const write = on ? { [`${_dutyPath()}/${key}`]: { ms: 0, vac: ts } }
+                     : { [`${_dutyPath()}/${key}/vac`]: null };
+    update(ref(database), write)
+        .then(() => {
+            if (on) {
+                _duty.days[key] = { ms: 0, vac: ts };
+                _duty.liveMs = 0;
+                _duty.pendingWin = false;
+                _libToast('إجازة اليوم محفوظة — لا شيء مطلوب منك اليوم');
+            } else {
+                _duty.days[key] = { ms: _dutyRec(_duty.days, key).ms, vac: 0 };
+                delete _duty.celebrated[key];   // three hours from here still earns the «أحسنت!»
+                _libToast('أُلغيت الإجازة — عاد عدّاد اليوم للعمل');
+            }
+        })
+        .catch(() => _libToast('تعذّر حفظ الإجازة، حاول مرة أخرى'))
+        .finally(() => {
+            _duty.busy = false;
+            _duty.tickAt = 0;           // re-anchor: the pause is not open time to credit
+            _chal.lastPaintKey = '';
+            _chalPaintCard();
+            if (_chal.modalOpen) _chalPaintModal();
+        });
 }
 
 /* ── per-frame ────────────────────────────────────────────────────────────── */
 function updateWorkChallenge() {
-    if (!_chal.ready || !gameState.userId) return;
+    if (!gameState.userId) return;
     const now = Date.now();
-    const state = _chalState();
-    const key = _todayDateStr();
-    if (_chal.dayKey !== key) { _chalBank(true); _chal.dayKey = key; _chal.liveMs = 0; }
+    _dutyTick();
 
-    if (state === 'live') {
-        _chalAccumulate(now);
-        _chalBank(false);
-        // Crossing the goal only ARMS the celebration; it is shown when the
-        // session ends, which is what the brief asks for.
-        if (_chalTodayMs() >= CHAL.goalMs && !_chal.celebrated[key]) _chal.pendingWin = true;
-    } else if (_chal.liveMs > 0) {
-        _chalBank(true);
-    }
-
-    /* The prayer and azkar overlays outrank everything, and a prayer can fire
-       while this card is up. Closing it here — one guard, in the loop — is the
-       same shape `updateLibPanelLifecycle` uses, and it also means the z-index
-       below theirs is never the only thing keeping them on top. */
+    /* The prayer and azkar overlays outrank everything. Closing here — one guard,
+       in the loop — is the shape updateLibPanelLifecycle uses. The payout popup
+       closes too, and reopens below once the screen allows it. */
     if (_chal.modalOpen && (gameState.azkar.active || gameState.prayer.isOverlayActive
         || isMinigameOverlayOpen() || isMinigameActive() || gameState._dupSessionDetected)) {
         _chalCloseModal();
     }
 
-    /* The celebration waits for a clear screen: no session, no overlay, no end
-       card. One guard in the loop instead of a call at every one of the three
-       session-exit paths — the same shape as `updatePiPLifecycle`. */
-    if (_chal.pendingWin && !_chal.modalOpen && _chalScreenIsClear()) {
-        _chal.pendingWin = false;
-        _chal.celebrated[key] = true;
-        _chalOpenModal(true);
+    if (!_chal.modalOpen) {
+        if (_chalPayDue(now)) {
+            if (_chalPayScreenOk()) _chalOpenModal('pay');
+        } else if (_duty.pendingWin && _chalScreenIsClear()) {
+            // The celebration waits for a clear screen: no session, no overlay, no end card.
+            _duty.pendingWin = false;
+            _chalOpenModal('win');
+        }
     }
 
-    if (now - _chal.paintAt > 950) { _chal.paintAt = now; _chalPaintCard(); }
+    if (now - _chal.paintAt > 950) {
+        _chal.paintAt = now;
+        const key = _duty.dayKey;
+        if (_duty.ready && key && !_duty.celebrated[key]) {
+            const r = _dutyTodayRec();
+            if (!r.vac && r.ms >= DUTY.goalMs) { _duty.celebrated[key] = true; _duty.pendingWin = true; }
+        }
+        _chalPaintCard();
+        if (_chal.modalOpen && _chal.mode !== 'pay') _chalPaintTally();
+    }
 }
 
 function _chalScreenIsClear() {
@@ -27865,12 +28020,37 @@ function _chalScreenIsClear() {
     return !!(screen && screen.classList.contains('active'));
 }
 
+/* ── round one's payout ───────────────────────────────────────────────────────
+   Due once: round one's read landed, the roster knows this member (the claim is
+   keyed by their Points-DB name — a Siraj ghost resolves to nobody and never
+   sees it), they earned something, and it isn't claimed. The clock starts when
+   the boot screen lifts, never before — the popup must not open behind it. */
+function _chalPayDue(now) {
+    if (!_chal.ready || !_chal.rosterDone || _chal.claimed || _chal.claiming) return false;
+    if (!_boot.gateOpen || !_lib.me || !_lib.me.dbKey) return false;
+    if (_chalPointsFor(_chalDoneCount()) <= 0) return false;
+    if (!_chal.payReadyAt) _chal.payReadyAt = now + CHAL_PAY_DELAY_MS;
+    return now >= _chal.payReadyAt;
+}
+// Looser than _chalScreenIsClear on purpose: a work session is no reason to wait —
+// the leader wants round one wrapped up the moment they arrive. Only overlays
+// that would sit on top of it (or under it, mid-flow) hold it back.
+function _chalPayScreenOk() {
+    if (gameState.azkar.active || gameState.prayer.isOverlayActive) return false;
+    if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen()) return false;
+    if (isMinigameOverlayOpen() || isMinigameActive() || gameState._dupSessionDetected) return false;
+    const success = document.getElementById('success-modal');
+    if (success && success.classList.contains('active')) return false;
+    const claim = document.getElementById('lib-claim-modal');
+    if (claim && !claim.classList.contains('hidden')) return false;
+    const screen = document.getElementById('game-screen');
+    return !!(screen && screen.classList.contains('active'));
+}
+
 /* ── the card ─────────────────────────────────────────────────────────────── */
 /* Folded by DEFAULT on a phone, open by default on a desktop — and an explicit
    press is what writes the key, so "never touched it" and "chose the open one"
-   stay two different answers. The stack under the user card is four rungs deep
-   now and the tasks panel starts below all of it; a full card there would push
-   the panel down the screen on every phone. */
+   stay two different answers. */
 function _chalMinimized() {
     let v = null;
     try { v = localStorage.getItem(CHAL_MIN_KEY); } catch (_) {}
@@ -27880,23 +28060,10 @@ function _chalMinimized() {
 }
 function _chalSetMinimized(v) { try { localStorage.setItem(CHAL_MIN_KEY, v ? '1' : '0'); } catch (_) {} }
 
-// mm:ss, rolling into h:mm:ss past an hour — the same shape every other clock
-// on the site takes (see formatTimeMs).
-function _chalCountdown() {
-    return formatTimeMs(Math.max(0, CHAL.start.getTime() - Date.now()));
-}
-
 function _chalPaintCard() {
     const dock = document.getElementById('chal-dock');
     if (!dock) return;
-    const state = _chalState();
-    const done  = _chalDoneCount();
-    const pts   = _chalPointsFor(done);
-
-    // Once the round is over AND there is nothing left to take, the card goes
-    // away rather than sitting there as a monument.
-    const finished = state === 'over' && (_chal.claimed > 0 || pts <= 0 || (_chal.rosterDone && !_lib.me));
-    const show = !!gameState.userId && !finished;
+    const show = !!gameState.userId && _duty.ready;
     dock.hidden = !show;
     if (!show) return;
 
@@ -27906,43 +28073,35 @@ function _chalPaintCard() {
     if (card) card.hidden = min;
     if (mini) mini.hidden = !min;
 
-    const todayMs = _chalTodayMs();
-    const dayIdx  = _chalDayIndex();
-    const todayOk = todayMs >= CHAL.goalMs;
-    if (card) card.classList.toggle('is-done', state === 'live' && todayOk);
+    const r       = _dutyTodayRec();
+    const started = _dutyStarted();
+    const done    = !r.vac && r.ms >= DUTY.goalMs;
+    if (card) {
+        card.classList.toggle('is-done', done);
+        card.classList.toggle('is-vac', !!r.vac);
+    }
 
+    const tagEl   = document.getElementById('chal-tag');
     const dayEl   = document.getElementById('chal-day');
     const stateEl = document.getElementById('chal-state');
     const fillEl  = document.getElementById('chal-fill');
     const noteEl  = document.getElementById('chal-note');
     const miniDay = document.getElementById('chal-mini-day');
 
-    if (state === 'soon') {
-        if (dayEl)   dayEl.textContent = 'قريبًا';
-        if (stateEl) stateEl.textContent = 'يبدأ بعد ' + _chalCountdown();
-        if (fillEl)  fillEl.style.width = '0%';
-        if (noteEl)  noteEl.textContent = 'يبدأ غدًا — ٣٠ نقطة لمن أتمّ الأيام السبعة';
-        if (miniDay) miniDay.textContent = 'قريبًا';
-    } else if (state === 'live') {
-        const n = Math.min(CHAL.days, dayIdx + 1);
-        if (dayEl)   dayEl.textContent = `اليوم ${_libAr(n)} من ${_libAr(CHAL.days)}`;
-        if (stateEl) stateEl.textContent = todayOk
-            ? 'أنجزت يومك ✓'
-            : 'المتبقي اليوم: ' + _libAr(Math.ceil((CHAL.goalMs - todayMs) / 60000)) + ' دقيقة';
-        if (fillEl)  fillEl.style.width = Math.round((todayMs / CHAL.goalMs) * 100) + '%';
-        if (noteEl)  noteEl.textContent = `أتممت ${_libAr(done)} من ${_libAr(CHAL.days)} أيام`;
-        if (miniDay) miniDay.textContent = `${_libAr(n)}/${_libAr(CHAL.days)}`;
-    } else {
-        if (dayEl)   dayEl.textContent = 'انتهى التحدي';
-        if (stateEl) stateEl.textContent = `أتممت ${_libAr(done)} من ${_libAr(CHAL.days)}`;
-        if (fillEl)  fillEl.style.width = Math.round((done / CHAL.days) * 100) + '%';
-        if (noteEl)  noteEl.textContent = pts > 0 ? `لك ${_libAr(pts)} نقطة — اضغط للاستلام` : 'لم تُنجز أي يوم';
-        if (miniDay) miniDay.textContent = pts > 0 ? '+' + _libAr(pts) : '—';
-    }
+    if (tagEl)   tagEl.textContent = started ? 'إلزامي' : 'تجريبي';
+    if (dayEl)   dayEl.textContent = DUTY_DAY_NAMES[new Date().getDay()];
+    if (stateEl) stateEl.textContent = r.vac ? 'إجازة اليوم'
+        : done ? 'أتممت يومك ✓'
+        : 'المتبقي: ' + _dutyDur(DUTY.goalMs - r.ms, true);
+    if (fillEl)  fillEl.style.width = r.vac ? '100%' : Math.min(100, Math.round((r.ms / DUTY.goalMs) * 100)) + '%';
+    if (noteEl)  noteEl.textContent = !started ? 'يصبح إلزاميًا ابتداءً من ' + _dutyStartLabel()
+        : r.vac ? 'اضغط لإلغاء الإجازة'
+        : `${_dutyDur(r.ms)} من ٣ ساعات · الإجازات المتبقية: ${_libAr(_dutyVacLeft())}`;
+    if (miniDay) miniDay.textContent = r.vac ? 'إجازة' : done ? '✓' : _dutyClock(r.ms);
 
-    // The card is the fourth rung of the HUD stack, so its height is part of
-    // where the tasks panel starts. Only re-measure when the text changed.
-    const paintKey = state + '|' + (dayEl ? dayEl.textContent : '') + '|' + min;
+    // The card is a rung of the HUD stack, so its height is part of where the
+    // tasks panel starts. Only re-measure when something that can resize it changed.
+    const paintKey = [min, started, done, r.vac ? 1 : 0, dayEl ? dayEl.textContent : ''].join('|');
     if (paintKey !== _chal.lastPaintKey) {
         _chal.lastPaintKey = paintKey;
         _hudPositionDock();
@@ -27950,7 +28109,10 @@ function _chalPaintCard() {
     }
 }
 
-/* ── the panel / the celebration (one modal, two headers) ──────────────────── */
+/* ── the modal — one element, three faces ─────────────────────────────────────
+   'duty' — this week's seven days, today's hours, the vacation button.
+   'win'  — the same, under a «أحسنت!» header, once three hours are crossed.
+   'pay'  — round one's ladder and the claim, and NO way out but the claim. */
 function _chalMyAvatar() {
     const me = gameState.players[gameState.userId];
     if (me && me.avatar) return me.avatar;
@@ -27958,16 +28120,22 @@ function _chalMyAvatar() {
     return (img && img.getAttribute('src')) || '';
 }
 
+// The avatar sits ON the day's dot, not above it; the dot under it is hidden by
+// `.has-me`, so a broken picture has to hand the dot back.
+function _chalMeImg(avatar) {
+    return `<img class="chal-step-me" src="${_libEsc(avatar)}" alt="أنت" `
+         + `onerror="this.style.display='none';this.parentNode.classList.remove('has-me')">`;
+}
+
+// Round one's ladder — seven days, stickers on the rungs that paid.
 function _chalBuildTrack() {
     const track = document.getElementById('chal-track');
     if (!track) return;
+    track.classList.remove('is-duty');
     const state = _chalState();
     const idx   = _chalDayIndex();
     const avatar = _chalMyAvatar();
-    // Which day the marker sits on: before the round it waits on day one, after
-    // it, it rests on the last one.
     const hereIdx = state === 'soon' ? 0 : Math.min(CHAL.days - 1, Math.max(0, idx));
-    // The rungs that carry a sticker — the ladder, drawn where it is earned.
     const stickerAt = {};
     for (const t of CHAL.tiers) if (t.days >= 5) stickerAt[t.days - 1] = t.pts;
 
@@ -27985,19 +28153,10 @@ function _chalBuildTrack() {
         if (wearsMe) cls.push('has-me');
 
         html += `<div class="${cls.join(' ')}">`;
-        if (stickerAt[i]) {
-            html += `<img class="chal-step-sticker" src="${_libSticker(stickerAt[i])}" alt="${_libAr(stickerAt[i])} نقطة" `
-                  + `onerror="this.style.visibility='hidden'">`;
-        } else {
-            html += '<span class="chal-step-spacer"></span>';
-        }
-        if (wearsMe) {
-            /* If the picture fails, the dot has to come back — it is hidden by
-               `.has-me`, so a broken avatar would otherwise leave a hole on the
-               line where the member is supposed to be standing. */
-            html += `<img class="chal-step-me" src="${_libEsc(avatar)}" alt="أنت" `
-                  + `onerror="this.style.display='none';this.parentNode.classList.remove('has-me')">`;
-        }
+        html += stickerAt[i]
+            ? `<img class="chal-step-sticker" src="${_libSticker(stickerAt[i])}" alt="${_libAr(stickerAt[i])} نقطة" onerror="this.style.visibility='hidden'">`
+            : '<span class="chal-step-spacer"></span>';
+        if (wearsMe) html += _chalMeImg(avatar);
         html += '<span class="chal-step-dot">✓</span>';
         html += `<span class="chal-step-num">${_libAr(i + 1)}</span>`;
         html += '</div>';
@@ -28005,87 +28164,164 @@ function _chalBuildTrack() {
     track.innerHTML = html;
 }
 
-function _chalPaintModal(win) {
-    const state = _chalState();
-    const done  = _chalDoneCount();
-    const pts   = _chalPointsFor(done);
-    const modal = document.getElementById('chal-modal');
-    if (modal) modal.classList.toggle('win', !!win);
+// This week, Sunday → Saturday, with the hours over each dot.
+function _dutyBuildTrack() {
+    const track = document.getElementById('chal-track');
+    if (!track) return;
+    track.classList.add('is-duty');
+    const today  = _todayDateStr();
+    const avatar = _chalMyAvatar();
+    let html = '';
+    _dutyWeekKeys(_dutyWeekStart(new Date())).forEach((key, i) => {
+        const rec = key === today ? _dutyTodayRec() : _dutyRec(_duty.days, key);
+        const st  = _dutyStateOf(rec, key, today);
+        const cls = ['chal-step'];
+        if (st === 'done' || st === 'miss' || st === 'vac' || st === 'pre') cls.push(st);
+        if (key === today) cls.push('now');
+        const wearsMe = key === today && !!avatar;
+        if (wearsMe) cls.push('has-me');
+        const hrs = st === 'future' ? '' : rec.vac ? 'إجازة' : rec.ms >= 60000 ? _dutyClock(rec.ms) : '';
 
+        html += `<div class="${cls.join(' ')}">`;
+        html += `<span class="chal-step-spacer chal-step-hrs">${hrs}</span>`;
+        if (wearsMe) html += _chalMeImg(avatar);
+        html += `<span class="chal-step-dot">${st === 'vac' ? '🌴' : '✓'}</span>`;
+        html += `<span class="chal-step-num">${DUTY_DAY_SHORT[i]}</span>`;
+        html += '</div>';
+    });
+    track.innerHTML = html;
+}
+
+function _chalPaintModal() {
+    const mode  = _chal.mode;
+    const modal = document.getElementById('chal-modal');
+    if (modal) {
+        modal.classList.toggle('win', mode === 'win');
+        modal.classList.toggle('pay', mode === 'pay');
+    }
     const kicker = document.getElementById('chal-modal-kicker');
     const head   = document.getElementById('chal-modal-head');
     const sub    = document.getElementById('chal-modal-sub');
-    if (win) {
-        if (kicker) kicker.textContent = 'أحسنت!';
-        if (head)   head.textContent = 'أتممت خمسين دقيقة اليوم';
-        if (sub)    sub.textContent = 'يومك محفوظ في التحدي — عُد غدًا وأكمل الطريق.';
-    } else if (state === 'soon') {
-        if (kicker) kicker.textContent = 'فعالية الأسبوع';
-        if (head)   head.textContent = 'تحدي المثابرة';
-        if (sub)    sub.textContent = 'يبدأ غدًا: ٥٠ دقيقة عمل يوميًا لسبعة أيام.';
-    } else if (state === 'live') {
-        if (kicker) kicker.textContent = 'فعالية الأسبوع';
-        if (head)   head.textContent = 'تحدي المثابرة';
-        if (sub)    sub.textContent = '٥٠ دقيقة عمل يوميًا لسبعة أيام.';
+    const note   = document.getElementById('chal-modal-note');
+    const set = (el, t) => { if (el) el.textContent = t; };
+
+    if (mode === 'pay') {
+        set(kicker, 'انتهى التحدي');
+        set(head, 'حصيلة تحدي المثابرة');
+        set(sub, 'انتهى أسبوع التحدي، وهذه نقاطك.');
+        set(note, 'تُحتسب دقائق العمل فقط — الاستراحات لا تُحسب.');
+        _chalBuildTrack();
     } else {
-        if (kicker) kicker.textContent = 'انتهى التحدي';
-        if (head)   head.textContent = 'شكرًا على مثابرتك';
-        if (sub)    sub.textContent = 'هذه حصيلة أسبوعك.';
-    }
-
-    _chalBuildTrack();
-
-    const tally = document.getElementById('chal-tally');
-    if (tally) {
-        /* Each rung is its OWN box, and the number inside it is another —
-           never one inline run. `٧ أيام → ٣٠ · ٦ → ٢٠` mixes Arabic-Indic
-           digits with direction-neutral arrows and separators, and the bidi
-           algorithm happily reorders the pairs; the ladder then reads as a
-           different (wrong) promise. Boxes have no neutrals between them. */
-        const rungs = '<div class="chal-rungs">' + CHAL.tiers.map(t =>
-            `<span class="chal-rung"><span>${_libAr(t.days)}${t.days === 1 ? ' يوم فأكثر' : ' أيام'}</span><b>${_libAr(t.pts)}</b></span>`
-        ).join('') + '</div>';
-        if (state === 'soon') {
-            tally.innerHTML = rungs;
+        if (mode === 'win') {
+            set(kicker, 'أحسنت!');
+            set(head, 'أتممت ثلاث ساعات اليوم');
+            set(sub, 'يومك محسوب — نراك غدًا.');
+        } else if (!_dutyStarted()) {
+            set(kicker, 'تجريبي');
+            set(head, 'تحدي المثابرة');
+            set(sub, `ثلاث ساعات في المقر كل يوم، إلزاميًا ابتداءً من ${_dutyStartLabel()}. وحتى ذلك الحين يُحسب وقتك تجريبيًا.`);
         } else {
-            const line = `<div>أتممت <b>${_libAr(done)}</b> من ${_libAr(CHAL.days)} أيام</div>`;
-            const earn = pts > 0
-                ? `<div class="ok">تستحق <b>${_libAr(pts)}</b> نقطة</div>`
-                : '<div>أكمل يومًا واحدًا على الأقل لتستحق نقاطًا</div>';
-            tally.innerHTML = line + earn + rungs;
+            set(kicker, 'الحضور اليومي');
+            set(head, 'تحدي المثابرة');
+            set(sub, 'ثلاث ساعات في المقر كل يوم.');
         }
+        set(note, 'يُحسب كل وقتك داخل المقر، لا الجلسات وحدها — ولك إجازتان في الأسبوع.');
+        _dutyBuildTrack();
+    }
+    _chalPaintTally();
+}
+
+/* The part of the modal that changes while it is open — repainted once a
+   second. Never the track: rebuilding it would replay the avatar's entrance. */
+function _chalPaintTally() {
+    const mode     = _chal.mode;
+    const tally    = document.getElementById('chal-tally');
+    const claimBtn = document.getElementById('chal-claim-btn');
+    const okBtn    = document.getElementById('chal-ok-btn');
+    const vacBtn   = document.getElementById('chal-vac-btn');
+
+    if (mode === 'pay') {
+        const done = _chalDoneCount();
+        const pts  = _chalPointsFor(done);
+        if (tally) {
+            /* Each rung is its OWN box, and the number inside it is another — never
+               one inline run: `٧ أيام → ٣٠ · ٦ → ٢٠` mixes Arabic-Indic digits with
+               direction-neutral separators, and bidi reorders the pairs. */
+            const rungs = '<div class="chal-rungs">' + CHAL.tiers.map(t =>
+                `<span class="chal-rung"><span>${_libAr(t.days)}${t.days === 1 ? ' يوم فأكثر' : ' أيام'}</span><b>${_libAr(t.pts)}</b></span>`
+            ).join('') + '</div>';
+            tally.innerHTML = `<div>أتممت <b>${_libAr(done)}</b> من ${_libAr(CHAL.days)} أيام</div>`
+                + `<div class="ok">تستحق <b>${_libAr(pts)}</b> ${pts >= 3 && pts <= 10 ? 'نقاط' : 'نقطة'}</div>` + rungs;
+        }
+        if (claimBtn) {
+            claimBtn.hidden = false;
+            claimBtn.textContent = 'استلام ' + _chalPtsAr(pts);
+            claimBtn.classList.toggle('is-busy', _chal.claiming);
+        }
+        if (okBtn)  okBtn.hidden = true;
+        if (vacBtn) vacBtn.hidden = true;
+        return;
     }
 
-    /* The claim only appears once the round is closed, once there is something
-       to take, once it has not already been taken — and only for a member the
-       roster knows, because the claim is keyed by their Points-DB name. A Siraj
-       ghost resolves to nobody and so can never mint one. */
-    const claimBtn = document.getElementById('chal-claim-btn');
-    if (claimBtn) {
-        const can = state === 'over' && pts > 0 && !_chal.claimed && !!(_lib.me && _lib.me.dbKey);
-        claimBtn.hidden = !can;
-        claimBtn.textContent = `استلم ${_libAr(pts)} نقطة`;
+    if (claimBtn) claimBtn.hidden = true;
+    if (okBtn)    okBtn.hidden = false;
+
+    const today   = _todayDateStr();
+    const r       = _dutyTodayRec();
+    const started = _dutyStarted();
+    let wkMs = 0, wkDone = 0;
+    for (const k of _dutyWeekKeys(_dutyWeekStart(new Date()))) {
+        const rec = k === today ? r : _dutyRec(_duty.days, k);
+        if (rec.vac) continue;
+        wkMs += rec.ms;
+        if (rec.ms >= DUTY.goalMs) wkDone++;
+    }
+    if (tally) {
+        const todayLine = r.vac ? '<div class="vac">اليوم إجازة 🌴</div>'
+            : r.ms >= DUTY.goalMs ? `<div class="ok">أتممت ساعاتك اليوم ✓ — <b>${_dutyDur(r.ms)}</b></div>`
+            : `<div>اليوم: <b>${_dutyDur(r.ms)}</b> من ٣ ساعات</div>`;
+        const weekLine = `<div>في المقر هذا الأسبوع: <b>${_dutyDur(wkMs)}</b> · الأيام المكتملة: <b>${_libAr(wkDone)}</b></div>`;
+        const vacLine = !started ? '<div>الإجازات تبدأ مع بدء الإلزام.</div>'
+            : `<div>الإجازات المتبقية هذا الأسبوع: <b>${_libAr(_dutyVacLeft())}</b> من ${_libAr(DUTY.vacPerWeek)}</div>`;
+        tally.innerHTML = todayLine + weekLine + vacLine;
+    }
+    if (vacBtn) {
+        const show = mode === 'duty' && (r.vac ? started : _dutyCanVacation());
+        vacBtn.hidden = !show;
+        const confirming = !r.vac && _duty.confirmAt > Date.now();
+        vacBtn.classList.toggle('is-confirm', confirming);
+        vacBtn.classList.toggle('is-busy', _duty.busy);
+        vacBtn.textContent = r.vac ? 'إلغاء الإجازة' : confirming ? 'تأكيد: سيُمسح تقدّم اليوم' : 'خذ اليوم إجازة';
     }
 }
 
-function _chalOpenModal(win) {
+function _chalOpenModal(mode) {
     const modal = document.getElementById('chal-modal');
     if (!modal || _chal.modalOpen) return;
     _chal.modalOpen = true;
-    _chalPaintModal(!!win);
+    _chal.mode = mode || 'duty';
+    _duty.confirmAt = 0;
+    _chalPaintModal();
     document.body.classList.add('chal-modal-open');
     // display can't transition — the element is always laid out and `.active`
     // lands after a double rAF, the same pattern the azkar/fireplace overlays use.
-    requestAnimationFrame(() => requestAnimationFrame(() => modal.classList.add('active')));
-    if (win) { try { gameState.focusAudioEngine?.playEffect('paperTaskComplete'); } catch (_) {} }
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (_chal.modalOpen) modal.classList.add('active'); }));
+    if (_chal.mode !== 'duty') { try { gameState.focusAudioEngine?.playEffect('paperTaskComplete'); } catch (_) {} }
 }
 
 function _chalCloseModal() {
     const modal = document.getElementById('chal-modal');
     if (!modal || !_chal.modalOpen) return;
     _chal.modalOpen = false;
+    _duty.confirmAt = 0;
     modal.classList.remove('active');
     document.body.classList.remove('chal-modal-open');
+}
+// Every close a MEMBER can reach (✕, «تمام», the backdrop) goes through here —
+// and the payout face has none: it stays until «استلام».
+function _chalUserClose() {
+    if (_chal.mode === 'pay') return;
+    _chalCloseModal();
 }
 
 function chalModalIsOpen() { return !!_chal.modalOpen; }
@@ -28093,15 +28329,27 @@ function chalModalIsOpen() { return !!_chal.modalOpen; }
 /* ── the claim — the ecosystem handshake, unchanged ───────────────────────────
    ONE write on the Points database at exactly the path the Points site settles:
      mdwnhLibrary/claims/<NFC dbKey>/<id> = {taskId,title,points,color,ts}
-   Same shape a library task uses, so no change was needed on the Points site.
-   The `claimed` stamp goes on our OWN private node, and is written the moment
-   the record lands — «لاحقًا» is still a claim that has been made. */
-function _chalClaim() {
+   The id is fixed per round, and the Points site DELETES a claim when it settles
+   it — so a second record at the same id would pay twice. Hence the server
+   re-read of `claimed` first: this tab's copy is a login-time snapshot. */
+async function _chalClaim() {
     const me = _lib.me;
     const done = _chalDoneCount();
     const pts  = _chalPointsFor(done);
     if (!me || !me.dbKey || pts <= 0 || _chal.claimed || _chal.claiming) return;
     _chal.claiming = true;
+    _chalPaintTally();
+
+    const claimedPath = `dashboards/${gameState.userId}/challenge/${CHAL.round}/claimed`;
+    let already = 0;
+    try { already = Number((await get(ref(database, claimedPath))).val()) || 0; } catch (_) {}
+    if (already) {
+        _chal.claimed = already;
+        _chal.claiming = false;
+        _chalCloseModal();
+        _libToast('نقاط التحدي مستلمة من قبل');
+        return;
+    }
 
     const key = _libNfc(me.dbKey);
     const payload = {
@@ -28115,19 +28363,12 @@ function _chalClaim() {
     libPtsPut(`${LIB_PTS_ROOT}/claims/${encodeURIComponent(key)}/${CHAL_CLAIM_ID}`, payload).catch(() => {});
 
     _chal.claimed = Date.now();
-    if (gameState.userId) {
-        update(ref(database), {
-            [`dashboards/${gameState.userId}/challenge/${CHAL.round}/claimed`]: _chal.claimed,
-        }).catch(() => {});
-    }
+    update(ref(database), { [claimedPath]: _chal.claimed }).catch(() => {});
 
-    _chalCloseModal();
-    // The claim record already exists, so «لاحقًا» loses nothing: the Points
-    // site settles it whenever they get there.
-    _libShowClaim({ id: CHAL_CLAIM_ID, title: payload.title, points: pts, color: payload.color });
     _chal.claiming = false;
-    _chal.lastPaintKey = '';
-    _chalPaintCard();
+    _chalCloseModal();
+    // The record already exists, so «لاحقًا» on the next card loses nothing.
+    _libShowClaim({ id: CHAL_CLAIM_ID, title: payload.title, points: pts, color: payload.color });
 }
 
 /* ── setup ────────────────────────────────────────────────────────────────── */
@@ -28135,41 +28376,39 @@ function setupWorkChallenge() {
     if (_chal.wired) return;
     _chal.wired = true;
 
+    const repaint = () => { _chal.lastPaintKey = ''; _chalPaintCard(); };
     document.getElementById('chal-fold')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        _chalSetMinimized(true);
-        _chal.lastPaintKey = '';
-        _chalPaintCard();
+        e.stopPropagation(); _chalSetMinimized(true); repaint();
     });
     document.getElementById('chal-mini')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        _chalSetMinimized(false);
-        _chal.lastPaintKey = '';
-        _chalPaintCard();
+        e.stopPropagation(); _chalSetMinimized(false); repaint();
     });
     document.getElementById('chal-body')?.addEventListener('click', (e) => {
-        e.stopPropagation();
-        _chalOpenModal(false);
+        e.stopPropagation(); _chalOpenModal('duty');
     });
-    document.getElementById('chal-modal-close')?.addEventListener('click', _chalCloseModal);
-    document.getElementById('chal-ok-btn')?.addEventListener('click', _chalCloseModal);
-    document.getElementById('chal-claim-btn')?.addEventListener('click', _chalClaim);
-    // The backdrop is a back button, same as every other modal here.
+    document.getElementById('chal-modal-close')?.addEventListener('click', _chalUserClose);
+    document.getElementById('chal-ok-btn')?.addEventListener('click', _chalUserClose);
+    document.getElementById('chal-claim-btn')?.addEventListener('click', () => { _chalClaim(); });
+    // Busy/confirm are classes, never the `disabled` attribute (iOS touch leak) —
+    // the handler re-checks the state itself.
+    document.getElementById('chal-vac-btn')?.addEventListener('click', (e) => { e.stopPropagation(); _dutyVacPress(); });
+    // The backdrop is a back button, same as every other modal here (not on the payout).
     document.getElementById('chal-modal')?.addEventListener('click', (e) => {
-        if (e.target && e.target.id === 'chal-modal') _chalCloseModal();
+        if (e.target && e.target.id === 'chal-modal') _chalUserClose();
     });
 
     // Bank whatever is in hand before the tab goes away — a closed tab would
-    // otherwise cost up to one bank interval of real work.
-    const flush = () => { if (_chal.liveMs > 0) _chalBank(true); };
+    // otherwise cost up to one bank interval.
+    const flush = () => { _duty.checkAt = 0; _dutyTick(); _dutyBank(true); };
     window.addEventListener('pagehide', flush);
     document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+    setInterval(_dutyTick, DUTY_TICK_MS);
 
-    _mdwnhRosterReady.then(() => { _chal.rosterDone = true; _chal.lastPaintKey = ''; });
-    window.addEventListener('resize', () => { if (_chal.ready) { _chal.lastPaintKey = ''; _chalPaintCard(); } });
+    _mdwnhRosterReady.then(() => { _chal.rosterDone = true; });
+    window.addEventListener('resize', () => { if (_duty.ready) repaint(); });
 
-    /* ONE read, and deliberately NOT inside startGame's Promise.all: the login
-       path must not wait on it. The card simply stays hidden until it lands. */
+    /* Two reads, both deliberately NOT inside startGame's Promise.all: the login
+       path must not wait on them. The card stays hidden until the week lands. */
     if (!gameState.userId) return;
     get(ref(database, `dashboards/${gameState.userId}/challenge/${CHAL.round}`))
         .then(snap => {
@@ -28178,13 +28417,22 @@ function setupWorkChallenge() {
             _chal.claimed = v.claimed || 0;
         })
         .catch(() => {})
+        .finally(() => { _chal.ready = true; });
+
+    // Bounded: this week onward (date keys sort chronologically). That is all the
+    // card and the vacation count ever need.
+    const weekKey = _dutyKeyOf(_dutyWeekStart(new Date()));
+    get(query(ref(database, _dutyPath()), orderByKey(), startAt(weekKey)))
+        .then(snap => { _duty.days = snap.val() || {}; _duty.readOk = true; })
+        .catch(() => {})
         .finally(() => {
-            _chal.ready = true;
-            _chal.dayKey = _todayDateStr();
-            // A day already won before this tab opened must not celebrate again.
-            if (_chalDayMs(_chal.dayKey) >= CHAL.goalMs) _chal.celebrated[_chal.dayKey] = true;
-            _chal.lastPaintKey = '';
-            _chalPaintCard();
+            _duty.ready = true;
+            _duty.dayKey = _todayDateStr();
+            _duty.lastBankAt = Date.now();
+            // A day already won (or taken off) before this tab opened must not celebrate.
+            const r = _dutyTodayRec();
+            if (r.vac || r.ms >= DUTY.goalMs) _duty.celebrated[_duty.dayKey] = true;
+            repaint();
         });
 }
 
@@ -28854,7 +29102,7 @@ function _troProgress(t) {
    The session's OWN worked-ms counters are the source, never a frame timer: both
    are wall-clock and both FREEZE during a break, which is exactly the rule, and a
    backgrounded tab (which stops rAF) still gets credited in full. Identical
-   reasoning to _chalSessionWorkedMs — and the same clamp, for the same reason. */
+   reasoning to round one of تحدي المثابرة — and the same clamp, for the same reason. */
 function updateTrophies() {
     if (!_tro.ready || !gameState.userId) return;
     const now = Date.now();
@@ -30180,6 +30428,12 @@ function _awdWire() {
    the leader should be the one asking for them. `dashboards` carries no live
    listener anywhere in this app, so none of this streams to anyone.
 
+   Since the daily duty (see تحدي المثابرة) it also reads
+   `dashboards/{uid}/duty/days` — the same two-week key range for the list (date
+   keys sort chronologically), the whole node only for one opened member — and
+   judges every day with the member's own `_dutyDayState`, so the leader's dot and
+   the member's dot can never disagree.
+
    WHAT IT WRITES. Exactly one thing: an award of النقطة الماسية at
    `dashboards/{uid}/trophies/grants/diamond/{ts}`. The member's own shelf settles
    it through the claim handshake that was already there (see رف الجوائز) — this
@@ -30194,6 +30448,7 @@ const ADM_SEQ_MAX = 14;            // rows past this cascade silently (see _admR
 const ADM_WEEK_TTL_MS = 5 * 60000; // a list already this fresh is not re-fetched on open
 const ADM_BATCH = 5;               // members fetched at a time by the auto-load
 const ADM_DIAMOND_ID = 'diamond';
+const ADM_DUTY_WEEKS = 6;         // weeks of the daily duty the member detail lays out
 
 const _adm = {
     open: false, wired: false, uid: null,
@@ -30204,6 +30459,8 @@ const _adm = {
     week: new Map(), weekLoading: new Map(),
     confirmAt: 0, granting: false, bulk: false, doneN: 0, totalN: 0,
     btn: null,          // cached — updateAdminLifecycle runs every frame
+    filter: 'all',      // the duty chips: 'all' | 'done' | 'vac' | 'short'
+    sort: 'name',       // 'name' | 'duty' (this week's open time, busiest first)
 };
 
 function adminPanelIsOpen() { return !!_adm.open; }
@@ -30295,7 +30552,8 @@ function _admFetchMember(uid, force) {
     const job = Promise.all([
         get(ref(database, `${base}/sessions`)).then(s => s.val()).catch(() => null),
         get(ref(database, `${base}/trophies`)).then(s => s.val()).catch(() => null),
-    ]).then(([sessions, trophies]) => {
+        get(ref(database, `${base}/duty/days`)).then(s => s.val() || {}).catch(() => null),
+    ]).then(([sessions, trophies, duty]) => {
         const v = trophies || {};
         // Same legacy fold as _troAdoptAwards, on the leader's side of the glass.
         const grants = { ...((v.grants || {})[ADM_DIAMOND_ID] || {}) };
@@ -30304,11 +30562,11 @@ function _admFetchMember(uid, force) {
             grants.legacy = 1;
             if ((v.claimed || {})[ADM_DIAMOND_ID] && !taken.legacy) taken.legacy = (v.claimed || {})[ADM_DIAMOND_ID];
         }
-        const data = { uid, at: Date.now(), diamond: { grants, taken }, ..._admSummarise(sessions) };
+        const data = { uid, at: Date.now(), diamond: { grants, taken }, duty, ..._admSummarise(sessions) };
         _adm.cache.set(uid, data);
         // The list reads whichever of the two is present, so the fuller answer has to
         // replace the slice — otherwise a stale row would sit beside a fresh detail.
-        _adm.week.set(uid, { uid, thisWeek: data.thisWeek, prevWeek: data.prevWeek, last: data.last, at: Date.now() });
+        _adm.week.set(uid, { uid, thisWeek: data.thisWeek, prevWeek: data.prevWeek, last: data.last, duty, at: Date.now() });
         return data;
     }).finally(() => { _adm.loading.delete(uid); });
     _adm.loading.set(uid, job);
@@ -30334,9 +30592,15 @@ function _admFetchWeek(uid, force) {
     const cur  = _admWeekStart(Date.now());
     const prev = _admWeekBack(cur, 1);
     const q = query(ref(database, `dashboards/${uid}/sessions`), orderByKey(), startAt(String(prev)));
-    const job = get(q).then(snap => {
+    // The duty's days over the same two weeks — date keys sort chronologically too.
+    // Its own catch: a failed duty read must not throw away good work numbers.
+    const dq = query(ref(database, `dashboards/${uid}/duty/days`), orderByKey(), startAt(_dutyKeyOf(new Date(prev))));
+    const job = Promise.all([
+        get(q).then(s => s.val()),
+        get(dq).then(s => s.val() || {}).catch(() => null),
+    ]).then(([sessions, duty]) => {
         let thisWeek = 0, prevWeek = 0, last = 0;
-        for (const rec of Object.values(snap.val() || {})) {
+        for (const rec of Object.values(sessions || {})) {
             const fin = Number(rec && rec.finishMs) || 0;
             const dur = Math.max(0, Number(rec && rec.durMs) || 0);
             if (!fin || !dur) continue;
@@ -30345,7 +30609,7 @@ function _admFetchWeek(uid, force) {
             else if (w === prev) prevWeek += dur;
             if (fin > last) last = fin;
         }
-        const v = { uid, thisWeek, prevWeek, last, at: Date.now() };
+        const v = { uid, thisWeek, prevWeek, last, duty, at: Date.now() };
         _adm.week.set(uid, v);
         return v;
     }).catch(() => {
@@ -30424,22 +30688,99 @@ function _admAllUids() {
 
 function _admMembers() {
     const q = _fireNormName(_adm.q || '').trim();
-    return MDWNH_ROSTER.list
+    const today = _todayDateStr();
+    const list = MDWNH_ROSTER.list
         .filter(m => m.slug && !m.dummy && m.active !== false)
         .filter(m => !q || _fireNormName(m.name || '').includes(q) || String(m.slug).includes(q))
-        .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ar'));
+        .filter(m => _admPassesFilter(m, today));
+    const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ar');
+    if (_adm.sort !== 'duty') return list.sort(byName);
+    const wk = new Map(list.map(m => [m, _admWeekPresence(m.discordId ? String(m.discordId) : '')]));
+    return list.sort((a, b) => (wk.get(b) - wk.get(a)) || byName(a, b));
+}
+
+/* ── the daily duty, on the leader's side ─────────────────────────────────────
+   Read out of the same bounded slice as the work numbers (see _admFetchWeek) and
+   judged with the member's own `_dutyDayState`. */
+// Whichever copy of a member is fresher: the full history (opened) or the slice the
+// auto-load refreshes every few minutes. A failed slice (`at: 0`) never wins.
+function _admRowData(uid) {
+    const a = uid ? _adm.cache.get(uid) : null, b = uid ? _adm.week.get(uid) : null;
+    if (a && b) return b.at > a.at ? b : a;
+    return a || b || null;
+}
+function _admDutyOf(uid) {
+    const d = _admRowData(uid);
+    return d && !d.failed && d.duty ? d.duty : null;
+}
+// A filtered view only lists members whose day is KNOWN — one still loading is not
+// «لم يُتمّوا», it's unread.
+function _admPassesFilter(m, today) {
+    if (_adm.filter === 'all') return true;
+    const duty = m.discordId ? _admDutyOf(String(m.discordId)) : null;
+    if (!duty) return false;
+    const st = _dutyDayState(duty, today, today);
+    if (_adm.filter === 'done') return st === 'done';
+    if (_adm.filter === 'vac')  return st === 'vac';
+    return st !== 'done' && st !== 'vac';
+}
+// This week's open time, for the «الأعلى حضورًا» sort. Unknown sorts last.
+function _admWeekPresence(uid) {
+    const duty = _admDutyOf(uid);
+    if (!duty) return -1;
+    let ms = 0;
+    for (const k of _dutyWeekKeys(_dutyWeekStart(new Date()))) {
+        const r = _dutyRec(duty, k);
+        if (!r.vac) ms += r.ms;
+    }
+    return ms;
+}
+function _admRenderDutyBar() {
+    const host = document.getElementById('adm-duty-bar');
+    if (!host) return;
+    const today = _todayDateStr();
+    let done = 0, vac = 0, shortN = 0;
+    for (const uid of _admAllUids()) {
+        const duty = _admDutyOf(uid);
+        if (!duty) continue;
+        const st = _dutyDayState(duty, today, today);
+        if (st === 'done') done++; else if (st === 'vac') vac++; else shortN++;
+    }
+    const chip = (id, label, n) => `<button class="adm-chip is-${id}${_adm.filter === id ? ' is-on' : ''}" type="button" data-f="${id}">`
+        + `${label}${n === undefined ? '' : ` <b>${_libAr(n)}</b>`}</button>`;
+    const lbl = _dutyStarted() ? 'حضور اليوم — ٣ ساعات' : 'حضور اليوم — تجريبي حتى ' + _dutyStartLabel();
+    host.innerHTML = `<span class="adm-duty-lbl">${_libEsc(lbl)}</span>
+        <span class="adm-chips">${chip('all', 'الكل')}${chip('done', 'أتمّوا', done)}${chip('vac', 'في إجازة', vac)}${chip('short', 'لم يُتمّوا', shortN)}<button class="adm-chip is-sort${_adm.sort === 'duty' ? ' is-on' : ''}" type="button" data-sort="1">الأعلى حضورًا</button></span>`;
 }
 
 function _admRowHtml(m, i) {
     const uid = m.discordId ? String(m.discordId) : '';
-    // The full history wins when it has been read (opening a member refreshes both),
-    // otherwise the two-week slice the auto-load fetched.
-    const data = uid ? (_adm.cache.get(uid) || _adm.week.get(uid)) : null;
+    // The fresher of the full history and the two-week slice (see _admRowData).
+    const data = uid ? _admRowData(uid) : null;
     const right = !uid ? '<span class="adm-row-none">لا حساب في المقر</span>'
-        : (data && !data.failed) ? `<span class="adm-row-ms">${_libEsc(_admDur(data.thisWeek))}</span>
-                  <span class="adm-row-cap">هذا الأسبوع</span>`
+        : (data && !data.failed) ? (_adm.sort === 'duty'
+            ? `<span class="adm-row-ms">${_libEsc(_admDur(Math.max(0, _admWeekPresence(uid))))}</span>
+                  <span class="adm-row-cap">حضور هذا الأسبوع</span>`
+            : `<span class="adm-row-ms">${_libEsc(_admDur(data.thisWeek))}</span>
+                  <span class="adm-row-cap">عمل هذا الأسبوع</span>`)
         : data ? '<span class="adm-row-cap">تعذّرت القراءة</span>'
         : '<span class="adm-row-cap">جارٍ الحساب…</span>';
+    // Seven dots for this week (Sunday on the right), and one line about today.
+    const duty = uid ? _admDutyOf(uid) : null;
+    let strip = '';
+    if (duty) {
+        const today = _todayDateStr();
+        const dots = _dutyWeekKeys(_dutyWeekStart(new Date())).map((k, j) => {
+            const r = _dutyRec(duty, k);
+            const st = _dutyStateOf(r, k, today);
+            const tip = `${DUTY_DAY_NAMES[j]}: ${st === 'future' ? '—' : r.vac ? 'إجازة' : _dutyDur(r.ms)}`;
+            return `<i class="adm-dd is-${st}" title="${_libEsc(tip)}"></i>`;
+        }).join('');
+        const t = _dutyRec(duty, today);
+        const st = _dutyStateOf(t, today, today);
+        const cap = st === 'vac' ? 'إجازة اليوم' : st === 'done' ? 'أتمّ اليوم ✓' : `اليوم: ${_dutyDur(t.ms)}`;
+        strip = `<span class="adm-duty"><span class="adm-dd-row">${dots}</span><span class="adm-dd-cap is-${st}">${_libEsc(cap)}</span></span>`;
+    }
     /* Past ADM_SEQ_MAX the delay stops growing and the row goes `.quiet`, which
        swaps in an identical keyframe whose NAME is not registered for the blip —
        thirty simultaneous chirps is noise (the same cap the task pills use). */
@@ -30449,7 +30790,10 @@ function _admRowHtml(m, i) {
                     style="animation-delay:${Math.min(i, ADM_SEQ_MAX) * 26}ms">
         <img class="adm-row-av" src="${_libEsc(_libAvatar(m.slug))}" alt="" loading="lazy" decoding="async"
              onerror="this.style.visibility='hidden'">
-        <span class="adm-row-name">${_libEsc(m.name || m.slug)}</span>
+        <span class="adm-row-mid">
+            <span class="adm-row-name">${_libEsc(m.name || m.slug)}</span>
+            ${strip}
+        </span>
         <span class="adm-row-right">${right}</span>
     </button>`;
 }
@@ -30460,11 +30804,63 @@ function _admRowHtml(m, i) {
 function _admRenderList(animate) {
     const host = document.getElementById('adm-members');
     if (!host) return;
+    _admRenderDutyBar();
     const list = _admMembers();
     host.classList.toggle('is-still', !animate);
     host.innerHTML = list.length
         ? list.map(_admRowHtml).join('')
-        : '<p class="adm-empty">لا يوجد عضو بهذا الاسم.</p>';
+        : `<p class="adm-empty">${_adm.filter !== 'all' ? 'لا أحد في هذه القائمة.' : 'لا يوجد عضو بهذا الاسم.'}</p>`;
+}
+
+/* The member's duty as a calendar: ADM_DUTY_WEEKS rows of seven days with the
+   hours inside each cell. The totals count from the duty's start only — the trial
+   days are shown, never held against anyone. */
+function _admDutySection(days) {
+    const head = '<h4 class="adm-h">الحضور اليومي';
+    if (!days) return `${head}</h4><p class="adm-empty">تعذّرت قراءة الحضور.</p>`;
+    const today = _todayDateStr();
+    const cur = _dutyWeekStart(new Date());
+    let rows = '', thisWeekMs = 0;
+    for (let i = 0; i < ADM_DUTY_WEEKS; i++) {
+        const start = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() - 7 * i);
+        let ms = 0;
+        const cells = _dutyWeekKeys(start).map((k, j) => {
+            const r = _dutyRec(days, k);
+            const st = _dutyStateOf(r, k, today);
+            if (!r.vac) ms += r.ms;
+            const txt = st === 'future' ? '' : r.vac ? '🌴' : r.ms >= 60000 ? _dutyClock(r.ms) : '';
+            return `<span class="adm-cal-c is-${st}" title="${_libEsc(DUTY_DAY_NAMES[j] + ' ' + k)}">${txt}</span>`;
+        }).join('');
+        if (i === 0) thisWeekMs = ms;
+        let lbl = '';
+        try { lbl = start.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }); } catch (_) {}
+        rows += `<div class="adm-cal-row${i === 0 ? ' is-cur' : ''}">
+            <span class="adm-cal-lbl">${_libEsc(i === 0 ? 'هذا الأسبوع' : lbl)}</span>${cells}
+            <span class="adm-cal-ms">${_libEsc(_admDur(ms))}</span></div>`;
+    }
+    let done = 0, vac = 0, miss = 0;
+    const d = new Date(DUTY.start.getFullYear(), DUTY.start.getMonth(), DUTY.start.getDate());
+    for (let n = 0; n < 1000; n++) {
+        const k = _dutyKeyOf(d);
+        if (k > today) break;
+        const st = _dutyDayState(days, k, today);
+        if (st === 'done') done++; else if (st === 'vac') vac++; else if (st === 'miss') miss++;
+        d.setDate(d.getDate() + 1);
+    }
+    const dayHead = '<div class="adm-cal-row is-head"><span></span>'
+        + DUTY_DAY_SHORT.map(n => `<span class="adm-cal-h">${n}</span>`).join('') + '<span></span></div>';
+    return `${head}<i>الالتزام المتصل: ${_libEsc(_dutyDaysAr(_dutyStreak(days, today)))}</i></h4>
+        <div class="adm-stats">
+            <div class="adm-stat is-hero"><span class="adm-stat-v">${_libEsc(_admDur(thisWeekMs))}</span><span class="adm-stat-k">حضور هذا الأسبوع</span></div>
+            <div class="adm-stat"><span class="adm-stat-v">${_libAr(done)}</span><span class="adm-stat-k">أيام مكتملة</span></div>
+            <div class="adm-stat"><span class="adm-stat-v">${_libAr(vac)}</span><span class="adm-stat-k">إجازات</span></div>
+            <div class="adm-stat"><span class="adm-stat-v">${_libAr(miss)}</span><span class="adm-stat-k">أيام فائتة</span></div>
+        </div>
+        <div class="adm-cal">${dayHead}${rows}</div>
+        <div class="adm-cal-key">
+            <span><i class="is-done"></i>مكتمل</span><span><i class="is-vac"></i>إجازة</span>
+            <span><i class="is-miss"></i>فائت</span><span><i class="is-now"></i>اليوم</span>
+        </div>`;
 }
 
 /* ── one member ───────────────────────────────────────────────────────────── */
@@ -30521,6 +30917,9 @@ function _admRenderDetail() {
             <button id="adm-refresh" class="adm-refresh" type="button" title="تحديث" aria-label="تحديث">↻</button>
         </header>
 
+        ${_admDutySection(d.duty)}
+
+        <h4 class="adm-h">ساعات العمل</h4>
         <div class="adm-stats">
             <div class="adm-stat is-hero"><span class="adm-stat-v">${_libEsc(_admDur(d.thisWeek))}</span><span class="adm-stat-k">هذا الأسبوع</span></div>
             <div class="adm-stat"><span class="adm-stat-v">${_libEsc(_admDur(d.prevWeek))}</span><span class="adm-stat-k">الأسبوع الماضي</span></div>
@@ -30528,7 +30927,7 @@ function _admRenderDetail() {
             <div class="adm-stat"><span class="adm-stat-v">${_libAr(d.sessions)}</span><span class="adm-stat-k">جلسة</span></div>
         </div>
 
-        <h4 class="adm-h">الأسابيع</h4>
+        <h4 class="adm-h">أسابيع العمل</h4>
         <div class="adm-weeks">${weeks}</div>
 
         <h4 class="adm-h">أكثر ما عمل عليه</h4>
@@ -30668,6 +31067,16 @@ function setupAdminUI() {
         if (row && row.dataset.adm) _admOpenMember(row.dataset.adm);
     });
     document.getElementById('adm-back')?.addEventListener('click', _admBackToList);
+
+    // The duty chips: a filter (met today's three hours / took the day off / not yet)
+    // and a sort by this week's open time — the hard-workers float to the top.
+    document.getElementById('adm-duty-bar')?.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-f], [data-sort]');
+        if (!b) return;
+        if (b.dataset.f) _adm.filter = b.dataset.f;
+        else _adm.sort = _adm.sort === 'duty' ? 'name' : 'duty';
+        _admRenderList(false);
+    });
 
     // Delegated, because the detail view is re-rendered wholesale on every change.
     document.getElementById('adm-detail')?.addEventListener('click', (e) => {

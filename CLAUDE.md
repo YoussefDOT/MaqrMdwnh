@@ -89,10 +89,10 @@ Grep anchors for the major systems (all verified to exist):
 | Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession` |
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
-| Work streak challenge | `CHAL`, `updateWorkChallenge`, `_chalBank`, `_chalClaim` |
+| Daily duty (تحدي المثابرة) | `DUTY`, `updateWorkChallenge`, `_dutyTick`, `_dutySetVacation`, `_chalPayDue`, `_chalClaim` |
 | Trophy shelf | `TROPHIES`, `updateTrophies`, `_troBank`, `_troClaim`, `_troCeremony` |
 | جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
-| Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admGrantDiamond` |
+| Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admRenderDutyBar`, `_admDutySection`, `_admGrantDiamond` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
@@ -222,9 +222,9 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock; optional shuffled order; **after-prayer azkar** reachable from the prayer overlay |
 | **المدفئة / أعضاء الشهر** | Walk to the fireplace → a full-screen look at it with the month's top-3 point scorers framed on the mantel. Points come from a **separate Firebase project**. See **Fireplace / Members of the Month**. |
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
-| **تحدي المثابرة** | A seven-day work streak: ٥٠ دقيقة of work a day (breaks excluded) for ٧ أيام, ٣ → ٩ سبتمبر ٢٠٢٦. A foldable «فعالية» card under the azkar dock, a seven-dot ladder your avatar walks, and a payout claimed on the Points site through the library's own claim handshake. See **تحدي المثابرة**. |
+| **تحدي المثابرة** | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the azkar dock and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. See **تحدي المثابرة**. |
 | **رف الجوائز** | Seven trophies on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
-| **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. From the same panel he **gifts النقطة الماسية**, which may be given more than once. See **لوحة القائد**. |
+| **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. From the same panel he **gifts النقطة الماسية**, which may be given more than once. See **لوحة القائد**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٢٥ حرفًا, no more. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
@@ -1759,46 +1759,62 @@ measures the card and hangs the rest off it. Re-run by a **`ResizeObserver` on t
 
 ---
 
-## تحدي المثابرة — the seven-day work streak
+## تحدي المثابرة — ثلاث ساعات في المقر، كل يوم (the daily duty)
 
-**٥٠ دقيقة عمل يوميًا لسبعة أيام**, ٣ → ٩ سبتمبر ٢٠٢٦, paid out of the Points database
-through the claim loop a library task already uses. Code is the `تحدي المثابرة` block at
-the very end of `game.js`; markup is `#chal-dock` + `#chal-modal` in `index.html`; styles
-are the matching block at the foot of `style.css`. Grep anchors: `CHAL`,
-`updateWorkChallenge`, `_chalBank`, `_chalClaim`.
+Since ١٠ سبتمبر ٢٠٢٦ this block runs the **leader's mandatory rule**: the site **open for
+three hours every day**, mandatory from **Sunday ١٣ سبتمبر ٢٠٢٦** (`DUTY.start`; before it the
+card says «تجريبي» — counted, but nothing owed and no vacations). It reuses round one's card
+and modal. Round one itself — the seven-day **work** streak, ٣ → ٩ سبتمبر, `CHAL` — is
+**over**: its card is gone and all that is left is its payout popup (below). Code is the
+`تحدي المثابرة` block at the very end of `game.js`; markup is `#chal-dock` + `#chal-modal` in
+`index.html`; styles are the matching block at the foot of `style.css`. Grep anchors: `DUTY`,
+`_dutyTick`, `_dutyBank`, `_dutySetVacation`, `_chalPayDue`, `_chalClaim`.
 
-### The state lives in `dashboards`, and that is the whole cost decision
+### The duty's state — `dashboards/{uid}/duty/days`
 ```
-dashboards/{uid}/challenge/{round}/days/{YYYY-MM-DD} = ms worked that day (capped at the goal)
-dashboards/{uid}/challenge/{round}/claimed           = ms stamp of the claim
+dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, vac }   // ms the site was open; vac = ts when taken
+dashboards/{uid}/challenge/s1/{days, claimed}          // round one — read-only now
 ```
-Decision tree §5 case 4: private to one user, persistent, written more than once a day. One
-`get()` at setup, `runTransaction` at most once a minute, **no listener anywhere**. Nobody
-holds a live listener on `dashboards`, so the fan-out is zero. Under `users/{uid}` this
-would re-stream every member's every worked minute to every client in **both** lobbies —
-the single most expensive thing this feature could have been.
+Decision tree §5 case 4 — private, persistent, written more than once a day: one bounded
+`get()` at setup (this week onward — date keys sort chronologically, so `orderByKey()` +
+`startAt(weekStartKey)` is a range), a `runTransaction` that ADDS a delta at most once a
+minute (`_duty.liveMs` is the ledger, the `bankReadingProgress()` shape), **no listener**.
+Under `users/{uid}` this would re-stream every member's every minute to both lobbies.
 
-**The day value is CAPPED at the goal**, which is what bounds the cost: ~50 tiny
-transactions on a day someone works, and **none at all** once that day is won.
+- **`ms` is NOT capped at the goal** (only at 24 h). Round one capped at its goal to bound
+  writes; here the leader ranks members by how long they were really here, which a capped
+  value can't say. The cost is one tiny transaction a minute on a node nobody listens to.
+- **Open time, not session time.** `_dutyTick` credits the wall-clock gap between ticks while
+  `#game-screen` is `.active`. It runs per frame (throttled to 1/s) AND on a 15 s
+  `setInterval` — rAF stops in a hidden tab, the interval keeps going (~1/min at worst), so a
+  background tab still counts. **A gap over `DUTY_GAP_MAX_MS` (150 s) earns nothing** — that
+  is a sleeping laptop or an iOS-suspended tab, not an open site. Counting pauses under
+  `_dupSessionDetected` (two devices can't double-count) and while a vacation write is in
+  flight (`_duty.busy`). Banked on `pagehide` / `visibilitychange`→hidden.
+- **One state word per day, shared with the leader's panel** — `_dutyStateOf(rec, key, today)`
+  → `future · vac · done · now · pre · miss` (`pre` = a trial day before `DUTY.start`, never
+  held against anyone). Both sides call it, so the two dots can never disagree.
 
-### Counting the minutes — the session's own counters, never a frame timer
-`_chalSessionWorkedMs()` reads `pomoWorkedMsNow()` / `freeWorkedMsNow()`. Both are
-wall-clock and both **freeze during a break**, which is exactly the rule — breaks are not
-counted — and neither needed a line of new bookkeeping. A frame timer would have been
-wrong twice: a backgrounded tab stops rAF entirely (real work, silently discarded) and it
-would have had to learn the break rule by hand.
+### Vacations — two a WEEK, today only
+`DUTY.vacPerWeek` (2), weeks starting **Sunday** like the leader's panel. The button is in the
+modal (tap the card's progress bar): **two presses**, the second reading «تأكيد: سيُمسح تقدّم
+اليوم», then `{ms: 0, vac: ts}` REPLACES today's record — the brief says taking one removes
+today's progress. «إلغاء الإجازة» is one press, today only, and counting restarts from zero.
+Offered only when the duty has started, the week's read succeeded (`_duty.readOk` — a failed
+read must not let a third one through), today isn't already won, and one is left. Both
+directions apply locally **after** the write acks; busy is a `.is-busy` class, never
+`disabled`. Changing the allowance period (month, rolling…) means `_dutyVacLeft()` AND the
+bounded setup read — both assume a week.
 
-- **`_chal.liveMs` is the ledger.** Every bank adds a DELTA and zeroes it, never writes a
-  total, so two devices banking the same minute cannot double-count. Same shape as
-  `bankReadingProgress()`.
-- **The per-tick gain is clamped to the WALL time since the last tick (+2s).** Real work
-  advances both equally — a 30-minute backgrounded stretch arrives as ONE tick with a
-  30-minute wall gap and is credited in full. What the clamp catches is the **free-mode
-  reclaim dumping hours of away-credit into `totalWorkMs` in a single frame**: that is a
-  session credit, not fifty minutes spent at the desk, and without the clamp closing the
-  tab overnight would win the day.
-- Banked on `pagehide` and on `visibilitychange`→hidden, so a closed tab costs at most the
-  bank interval.
+### Round one's payout — a popup that only «استلام» closes
+A member who earned round-one points and hasn't claimed them gets `#chal-modal` in its `pay`
+face `CHAL_PAY_DELAY_MS` (2.5 s) after the boot screen lifts (`_boot.gateOpen`) — even
+mid-session, `_chalPayScreenOk` is deliberately looser than `_chalScreenIsClear`. No ✕
+(`.chal-modal.pay .chal-modal-close`), no «تمام», no backdrop: `_chalUserClose()` refuses in
+`pay` mode. Only the prayer/azkar/minigame guard closes it, and it reopens once that clears.
+«استلام» → `_chalClaim()`, which **re-reads `challenge/s1/claimed` from the server first** —
+the id is fixed per round and the Points site deletes a settled claim, so a second record
+would pay twice — then mints it and hands over to `_libShowClaim` (استلم الآن / لاحقًا).
 
 ### The card is the FOURTH rung of the HUD stack
 `#chal-dock` sits under `#azkar-dock` and is placed by `_hudPositionDock()` like its two
@@ -1822,20 +1838,18 @@ the tasks panel still starts below everything. Three things follow from that:
 - `_chalPaintCard()` runs ~1/s and only re-measures the stack when its own text changed
   (`_chal.lastPaintKey`).
 
-### One modal, two headers — the panel AND the celebration
-`#chal-modal` is the seven-dot ladder: stickers over days ٧/٦/٥, the member's avatar riding
-the day they are on, done/missed/now dots. `_chalOpenModal(win)` only swaps the header
-copy. `display` can't transition, so it is always laid out and `.active` lands after a
-double rAF (the azkar/fireplace pattern), and it is z-index **9990 — deliberately BELOW
-prayer and azkar (10000)**, with a lifecycle guard in `updateWorkChallenge` that closes it
-if either fires.
-
-**The celebration waits for a clear screen.** Crossing the goal only ARMS
-`_chal.pendingWin`; `_chalScreenIsClear()` (no session, no overlay, **no end card** — the
-success modal is shown with `.active`, not `.hidden`) is what finally shows it. That is one
-guard in the loop instead of a call at each of the three session-exit paths — the same
-shape `updatePiPLifecycle` uses. `_chal.celebrated[dayKey]` is primed at load from the
-banked value, so a day already won never re-celebrates on the next login.
+### One modal, three faces
+`#chal-modal` (`_chal.mode`): **`duty`** — this week's seven days Sunday → Saturday with the
+hours over each dot and the member's avatar on today, plus the vacation button; **`win`** —
+the same under «أحسنت!» once three hours are crossed; **`pay`** — round one's seven-dot ladder
+with its stickers and the claim, and nothing else. `display` can't transition, so it is always
+laid out and `.active` lands after a double rAF, z-index **9990 — BELOW prayer and azkar
+(10000)**, with a lifecycle guard in `updateWorkChallenge` that closes it if either fires.
+- **The track is built once per open; only `_chalPaintTally()` repaints (1/s).** Rebuilding
+  the track would replay the avatar's `chalMeIn` entrance every second.
+- **The celebration waits for a clear screen** (`_chalScreenIsClear()`: no session, no
+  overlay, no end card). `_duty.celebrated[dayKey]` is primed at load, so a day already won
+  (or taken off) never re-celebrates; cancelling a vacation un-primes it.
 
 ### The claim is the ecosystem handshake, UNCHANGED
 `mdwnhLibrary/claims/<NFC dbKey>/maqr-streak-<round>` = `{taskId,title,points,color,ts}` —
@@ -1849,7 +1863,7 @@ because «استلم الآن» navigates the tab away mid-write).
 - The `claimed` stamp is written the moment the record lands: «لاحقًا» is still a claim
   that has been made.
 - **`_chal.rosterDone` gates "this member has no library account".** Judging that before
-  `_mdwnhRosterReady` resolves hides the card from everyone for the first second.
+  `_mdwnhRosterReady` resolves would decide the payout popup on a roster that hasn't landed.
 
 ### The calendar
 `_chalMidnights()` counts LOCAL midnights, never a millisecond division — a DST hop is an
@@ -1860,6 +1874,7 @@ own midnight). Asking both the same way either opens the round a minute before i
 announced or closes it a minute into an eighth day — the rule صحبة الفجر settled on.
 
 ### Starting the next round
+*(Round one's machinery — kept for reference; the running system is the daily duty above.)*
 Pick a new `CHAL.round` key, move `start`, deploy. Nothing is migrated and nothing is
 "reset": the old round is still sitting at its own key and the new one is empty because
 nobody has written to it. `CHAL_CLAIM_ID` carries the round, so a second round claims at a
@@ -2273,6 +2288,26 @@ nothing in this app live-listens `dashboards`, so the fan-out is zero.
 - «تحديث الأرقام» is the FORCE, not the loader — the open already loaded.
 - `_admAllUids()` is deliberately **not** filtered by the search box: typing must change
   what is *shown*, never what is *fetched*.
+
+### The daily duty — who met today's three hours
+The list opens on a **حضور اليوم** bar (`#adm-duty-bar`, `_admRenderDutyBar`): chips that count
+and FILTER today — أتمّوا / في إجازة / لم يُتمّوا — plus «الأعلى حضورًا», a sort by this week's
+open time (the row's right column switches from work to presence with it). Every row carries
+this week's seven dots (Sunday on the right) and one line about today. An opened member gets
+a **الحضور اليومي** section above the work numbers (`_admDutySection`): this week's open time,
+days won / vacations / missed since `DUTY.start`, the unbroken streak (a vacation keeps it,
+adds nothing), and a six-week calendar (`ADM_DUTY_WEEKS`) with the hours in each cell.
+
+- **Same bounded read, one more query.** `_admFetchWeek` adds
+  `query(duty/days, orderByKey(), startAt(dateKey(prevWeekStart)))` beside the sessions range
+  — date keys sort chronologically. It has its OWN `catch`: a failed duty read must not throw
+  away good work numbers. The whole `duty/days` node is read only for one opened member.
+- **`_admRowData(uid)` picks the FRESHER copy** of a member (full history vs. the auto-load's
+  slice) by `at`. Rows used to prefer the full history outright — harmless for weekly totals,
+  but it froze «today» at whenever the member was last opened.
+- **A filtered view lists only members whose day is KNOWN** — one still loading is unread,
+  not «لم يُتمّوا».
+- Every day is judged by the member-side `_dutyStateOf`, never a copy of the rule.
 
 ### The one thing it writes
 `dashboards/{uid}/trophies/grants/diamond/{ts} = ts`. That is all. The member's own shelf
