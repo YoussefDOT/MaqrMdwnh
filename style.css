@@ -9217,11 +9217,14 @@ body.chal-modal-open.is-mobile #game-canvas { opacity: 0; pointer-events: none; 
 }
 
 .chat-input-box {
+    position: relative;
     display: flex;
-    align-items: center;
+    /* يكبر الصندوق سطرًا للأعلى حين تلتفّ الرسالة، وزر الإرسال يبقى في الأسفل */
+    align-items: flex-end;
     gap: 6px;
     padding: 6px 8px 6px 14px;
-    border-radius: 50px;
+    /* 21px = نصف ارتفاع السطر الواحد، فيبقى كبسولة؛ وبسطرين يصير مستطيلًا مستديرًا */
+    border-radius: 21px;
     background: rgba(18, 18, 18, 0.68);
     -webkit-backdrop-filter: blur(20px) saturate(1.6);
     backdrop-filter: blur(20px) saturate(1.6);
@@ -9232,9 +9235,18 @@ body.chal-modal-open.is-mobile #game-canvas { opacity: 0; pointer-events: none; 
 }
 .chat-input-wrap.active .chat-input-box { transform: scale(1); }
 
+/* خانة الكتابة contenteditable: ٥٠ حرفًا تلتفّ على سطرين، وثلاثة أسطر حدٌّ أعلى
+   (حين تزدحم الكبسولات) ثم تُمرَّر داخليًا. user-select: text ضروري — iOS لا يكتب
+   في عنصر يرث user-select: none. */
 #chat-input {
+    position: relative;
     width: 190px;
     min-width: 0;
+    min-height: 22px;
+    max-height: 66px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
     background: transparent;
     border: 0;
     outline: none;
@@ -9242,11 +9254,66 @@ body.chal-modal-open.is-mobile #game-canvas { opacity: 0; pointer-events: none; 
     font-family: inherit;
     font-size: 14px;
     font-weight: 500;
+    line-height: 22px;
     direction: rtl;
     text-align: right;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
     padding: 3px 6px;
+    cursor: text;
+    -webkit-user-select: text;
+    user-select: text;
+    caret-color: rgba(255, 255, 255, 0.9);
 }
-#chat-input::placeholder { color: rgba(255, 255, 255, 0.34); font-weight: 400; }
+#chat-input::-webkit-scrollbar { display: none; }
+/* نص الإرشاد مطلق الموضع حتى لا يزيح المؤشر */
+#chat-input.is-empty::before {
+    content: attr(data-placeholder);
+    position: absolute;
+    top: 3px;
+    right: 6px;
+    color: rgba(255, 255, 255, 0.34);
+    font-weight: 400;
+    white-space: nowrap;
+    pointer-events: none;
+}
+
+/* كبسولة الإشارة داخل خانة الكتابة — صورة العضو يمينًا ثم اسمه بلونه */
+#chat-input .chat-men {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 2px 0 8px;
+    margin: 0 1px;
+    border-radius: 50px;
+    background: var(--men-bg);
+    color: var(--men-fg);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 20px;
+    vertical-align: middle;
+    white-space: nowrap;
+    cursor: default;
+    -webkit-user-select: all;
+    user-select: all;
+    animation: chatMenPillIn .42s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+.chat-men-av {
+    flex: 0 0 auto;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--men-fg) center / cover no-repeat;
+    display: grid;
+    place-items: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: rgba(0, 0, 0, 0.65);
+}
+@keyframes chatMenPillIn {
+    0%   { opacity: 0; transform: scale(0.4); }
+    100% { opacity: 1; transform: scale(1); }
+}
 
 .chat-input-count {
     font-size: 11px;
@@ -9255,6 +9322,7 @@ body.chal-modal-open.is-mobile #game-canvas { opacity: 0; pointer-events: none; 
     font-variant-numeric: tabular-nums;
     min-width: 16px;
     text-align: center;
+    margin-bottom: 8px;
     transition: color .2s;
 }
 .chat-input-count.low { color: rgba(225, 53, 46, 0.85); }
@@ -9295,7 +9363,189 @@ body.is-mobile .chat-input-box {
     background: rgba(18, 18, 18, 0.93);
 }
 body.is-mobile .chat-input-tail { background: rgba(18, 18, 18, 0.93); }
-body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; }
+body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; line-height: 24px; max-height: 72px; }
+body.is-mobile #chat-input.is-empty::before { top: 3px; }
+
+/* ── الرفض: هزّة يمين-يسار ووميض أحمر (مهلة الإشارة، أو لا مساحة لها) ──
+   الهزّة تحرّك transform، فالإطار الأخير scale(1) نفسه الذي يحمله .active. */
+.chat-input-box::after {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    border-radius: inherit;
+    pointer-events: none;
+    background: rgba(255, 69, 58, 0.16);
+    box-shadow: 0 0 0 1.5px rgba(255, 69, 58, 0.9), 0 0 18px rgba(255, 69, 58, 0.45);
+    opacity: 0;
+}
+.chat-input-wrap.active .chat-input-box.refuse {
+    animation: chatRefuseShake .46s cubic-bezier(0.36, 0.07, 0.19, 0.97);
+}
+.chat-input-box.refuse::after { animation: chatRefuseFlash .6s ease-out; }
+@keyframes chatRefuseShake {
+    0%, 100% { transform: translateX(0) scale(1); }
+    15%      { transform: translateX(-9px) scale(1); }
+    30%      { transform: translateX(8px) scale(1); }
+    45%      { transform: translateX(-6px) scale(1); }
+    60%      { transform: translateX(4px) scale(1); }
+    75%      { transform: translateX(-2px) scale(1); }
+}
+@keyframes chatRefuseFlash {
+    0%   { opacity: 0; }
+    12%  { opacity: 1; }
+    100% { opacity: 0; }
+}
+
+/* ── قائمة الإشارة: فوق الصندوق، ثلاثة صفوف ظاهرة، الأقرب أولًا ──
+   opacity + visibility لا display — ارتفاعها يُقاس وهي مغلقة لتقرير فوق/تحت. */
+.chat-mention-list {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    width: 250px;
+    max-height: 144px;              /* ٣ صفوف × 44px + الحشوة */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    padding: 6px;
+    border-radius: 18px;
+    background: rgba(18, 18, 18, 0.82);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
+    direction: rtl;
+    transform-origin: 50% 100%;
+    transform: translateX(-50%) translateY(8px) scale(0.94);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .16s ease, transform .3s cubic-bezier(0.34, 1.56, 0.64, 1), visibility 0s linear .16s;
+}
+.chat-mention-list::-webkit-scrollbar { display: none; }
+.chat-mention-list.open {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0) scale(1);
+    transition: opacity .16s ease, transform .34s cubic-bezier(0.34, 1.56, 0.64, 1), visibility 0s;
+}
+.chat-mention-list.below {
+    bottom: auto;
+    top: calc(100% + 8px);
+    transform-origin: 50% 0;
+    transform: translateX(-50%) translateY(-8px) scale(0.94);
+}
+.chat-mention-list.below.open { transform: translateX(-50%) translateY(0) scale(1); }
+
+.chat-men-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 44px;
+    padding: 0 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: background .15s ease;
+}
+.chat-men-row.sel { background: rgba(255, 255, 255, 0.10); }
+/* الصفوف تنساب عند الفتح فقط — والظهور داخل الإطارات مع backwards (القاعدة ٢٠) */
+.chat-mention-list.anim .chat-men-row {
+    animation: chatMenRowIn .34s cubic-bezier(0.34, 1.56, 0.64, 1) backwards;
+}
+@keyframes chatMenRowIn {
+    0%   { opacity: 0; transform: translateY(8px) scale(0.96); }
+    100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+.chat-men-row-av {
+    flex: 0 0 auto;
+    width: 30px; height: 30px;
+    border-radius: 50%;
+    background: var(--men-bg) center / cover no-repeat;
+    box-shadow: 0 0 0 2px var(--men-fg);
+    display: grid;
+    place-items: center;
+    color: var(--men-fg);
+    font-size: 13px;
+    font-weight: 700;
+}
+.chat-men-row-txt {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+}
+.chat-men-row-name {
+    color: var(--men-fg);
+    font-size: 14px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.chat-men-row-sub {
+    color: rgba(255, 255, 255, 0.42);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.chat-men-row-near {
+    flex: 0 0 auto;
+    padding: 2px 8px;
+    border-radius: 50px;
+    background: rgba(255, 255, 255, 0.08);
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 10.5px;
+    font-weight: 600;
+}
+.chat-men-empty {
+    padding: 12px 10px;
+    color: rgba(255, 255, 255, 0.42);
+    font-size: 12.5px;
+    text-align: center;
+}
+
+/* ── تنبيه صغير فوق الصندوق (عدّاد مهلة الإشارة) ── */
+.chat-toast {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    width: max-content;
+    max-width: min(300px, 86vw);
+    padding: 7px 14px;
+    border-radius: 50px;
+    background: rgba(225, 53, 46, 0.94);
+    color: #fff;
+    font-size: 12.5px;
+    font-weight: 600;
+    text-align: center;
+    direction: rtl;
+    box-shadow: 0 6px 20px rgba(225, 53, 46, 0.35);
+    transform-origin: 50% 100%;
+    transform: translateX(-50%) translateY(6px) scale(0.9);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .2s ease, transform .34s cubic-bezier(0.34, 1.56, 0.64, 1), visibility 0s linear .2s;
+}
+.chat-toast.show {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0) scale(1);
+    transition: opacity .2s ease, transform .34s cubic-bezier(0.34, 1.56, 0.64, 1), visibility 0s;
+}
+.chat-toast.below { bottom: auto; top: calc(100% + 8px); transform-origin: 50% 0; }
+
+/* الجوال: لا backdrop-filter فوق الكانفس الحيّة (القاعدة ١٠) */
+body.is-mobile .chat-mention-list {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(18, 18, 18, 0.95);
+    width: min(270px, 80vw);
+}
+body.is-mobile .chat-men-row { height: 44px; }
 
 /* عصا التحكم تتوارى أثناء الكتابة — صنف مستقل عن focus-hidden و lib-hidden
    عمدًا، فالثلاثة أنظمة تعمل معًا وإغلاق أحدها يجب ألّا يُظهرها وسط الآخر. */

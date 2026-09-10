@@ -132,7 +132,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 285 · Updated 9/10 2:43 PM</div>
+    <div id="build-number" class="build-number">Build 286 · Updated 9/10 3:01 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -382,14 +382,20 @@
         <!-- ═══ الدردشة القريبة ═══
              صندوق كتابة يطفو فوق شخصيتك. يُفتح بالضغط على شخصيتك أو بمفتاح Enter.
              موضعه يُكتب من JS كل إطار (شاشة لا عالم)، ويُقصّ فوق لوحة مفاتيح الجوال
-             عبر visualViewport. الرسالة نفسها تُرسم على الكانفس لا هنا. -->
+             عبر visualViewport. الرسالة نفسها تُرسم على الكانفس لا هنا.
+             خانة الكتابة contenteditable لا input: الإشارة (@) كبسولة حقيقية فيها
+             بصورة العضو ولونه. قائمة الإشارة والتنبيه يطفوان فوق الصندوق. -->
         <div id="chat-input-wrap" class="chat-input-wrap">
+            <div id="chat-toast" class="chat-toast" role="status" aria-live="polite"></div>
+            <div id="chat-mention-list" class="chat-mention-list" role="listbox"
+                 aria-label="اختر عضوًا للإشارة إليه"></div>
             <div class="chat-input-box">
-                <input type="text" id="chat-input" maxlength="25" autocomplete="off"
-                       autocapitalize="off" autocorrect="off" spellcheck="false"
-                       enterkeyhint="send" placeholder="اكتب رسالة قصيرة..."
-                       aria-label="اكتب رسالة قصيرة">
-                <span id="chat-input-count" class="chat-input-count">25</span>
+                <div id="chat-input" class="is-empty" contenteditable="true" role="textbox"
+                     aria-multiline="false" inputmode="text" enterkeyhint="send"
+                     autocapitalize="off" autocorrect="off" spellcheck="false"
+                     data-placeholder="اكتب رسالة... و @ للإشارة"
+                     aria-label="اكتب رسالة قصيرة"></div>
+                <span id="chat-input-count" class="chat-input-count">50</span>
                 <button id="chat-input-send" class="chat-input-send" type="button" aria-label="إرسال">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
                          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -1972,7 +1978,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=274"></script>
+        <script type="module" src="game.js?v=275"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

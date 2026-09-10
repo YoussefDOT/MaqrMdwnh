@@ -931,6 +931,10 @@ class FocusAudioEngine {
             // Sofa relax seating
             sofaSit: null,
             sofaStand: null,
+            // الدردشة القريبة — mentions. Web Audio so a ping sounds in a background tab.
+            chatMention: null,
+            mentionPing: null,
+            mentionAlarm: null,
             // رف الجوائز — the award ceremony. Loaded lazily (ensureTrophySounds)
             // the moment the player walks up to the shelf, never on the login path:
             // Trophy_Collect alone is 400 KB.
@@ -1060,6 +1064,9 @@ class FocusAudioEngine {
             this.buffers.invoiceCardSave   = await loadBuffer('Sound/Invoice_Card_Sounds.mp3');
             this.buffers.sofaSit           = await loadBuffer('Sound/Sofa_Sit.mp3');
             this.buffers.sofaStand         = await loadBuffer('Sound/Sofa_Stand.mp3');
+            this.buffers.chatMention       = await loadBuffer('Sound/chat_mention.mp3');
+            this.buffers.mentionPing       = await loadBuffer('Sound/mention_ping.mp3');
+            this.buffers.mentionAlarm      = await loadBuffer('Sound/mention_alarm.mp3');
         } catch(e) {
             console.log("Failed to load Web Audio sound effects:", e);
         }
@@ -2393,6 +2400,10 @@ const gameState = {
         crowdShock:         _lazyAudio('Sound/LaptopMinigame/Crowd_Shock.mp3'),
         sofaSit:                 _lazyAudio('Sound/Sofa_Sit.mp3'),
         sofaStand:               _lazyAudio('Sound/Sofa_Stand.mp3'),
+        // الدردشة القريبة — mention cues (HTMLAudio fallback until the buffers decode)
+        chatMention:             _lazyAudio('Sound/chat_mention.mp3'),
+        mentionPing:             _lazyAudio('Sound/mention_ping.mp3'),
+        mentionAlarm:            _lazyAudio('Sound/mention_alarm.mp3'),
         // رف الجوائز — HTMLAudio fallbacks only; the ceremony itself always runs on
         // the Web Audio buffers (ensureTrophySounds) because it needs pitch control
         // and a handle to fade out.
@@ -2698,7 +2709,8 @@ function warmGameSounds() {
     };
     // Priority 1 — needed moments after spawn.
     ['kidnap', 'timeBreak', 'timeReturn', 'yipee', 'breakAdded', 'prayerCall',
-     'minigameReady', 'inviteSent', 'inviteAccepted', 'sofaSit', 'sofaStand'].forEach(warm);
+     'minigameReady', 'inviteSent', 'inviteAccepted', 'sofaSit', 'sofaStand',
+     'mentionPing', 'mentionAlarm'].forEach(warm);
     // Priority 2 — everything else, on idle (minigames + dashboard papers live
     // behind explicit user actions, so a few seconds of delay is invisible).
     // The trophy pair is half a megabyte and only ever plays inside the award
@@ -9260,7 +9272,7 @@ function onPresenceMessage(data) {
     if (msg.t === 'sit') { startRemoteSitAnim(player, msg); return; }
     // Proximity chat — also a one-off event, never a stream. Returns before the
     // position handling below for the same reason a sit message does.
-    if (msg.t === 'chat') { receiveChatMessage(player, msg.m); return; }
+    if (msg.t === 'chat') { receiveChatMessage(player, msg.m, msg.s); return; }
     // isMoving must update before pushing the sample — interpolateRemoteFromBuffer
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
@@ -28493,11 +28505,20 @@ function setupWorkChallenge() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-//  الدردشة القريبة — proximity chat
+//  الدردشة القريبة — proximity chat (+ الإشارات, mentions)
 //  ---------------------------------------------------------------------------
-//  A 25-character message that floats over your head and stacks upward when you
-//  send another. Someone standing near you gets a soft cue with it; someone across
-//  the building, or in a work session, gets nothing.
+//  A 50-character message that floats over your head — wrapping onto a second line
+//  when it needs one — and stacks upward when you send another. Someone standing
+//  near you gets a soft cue with it; someone across the building, or in a work
+//  session, gets nothing.
+//
+//  MENTIONS. Typing @ opens a picker of the ONLINE members, closest first, searched
+//  against the shared roster (name, points-DB spelling, slug, Telegram, email) as
+//  well as the display name. A picked member becomes a pill. The mentioned member
+//  hears mention_ping wherever they are and whatever they're doing — deeper and
+//  louder on each repeat from the same sender, the fourth being mention_alarm — and
+//  gets a system notification if the tab isn't focused. A message that is ONLY
+//  mentions "shouts" (iMessage's loud effect), harder with each repeat.
 //
 //  COST: **zero Firebase.** A chat line is the textbook case for decision-tree
 //  rule 1 — high-frequency, ephemeral, and worthless to a late joiner — so it
@@ -28506,13 +28527,16 @@ function setupWorkChallenge() {
 //  added. The relay forwards raw bytes without parsing, so the Worker needed no
 //  change. The trade: with the socket down your message simply isn't delivered —
 //  the same fallback contract positions already live under, and the right one for
-//  something that expires in seconds.
+//  something that expires in seconds. A mention is the same event with an `s`
+//  (segments) array beside the plain `m`, so a client that predates mentions still
+//  reads it as text.
 //
 //  Grep anchors: CHAT_, updateChatSystem, drawChatBubbles, receiveChatMessage,
-//  sendChatWS.
+//  sendChatWS, _chatMen, _chatMentionPing.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const CHAT_MAX_LEN      = 25;     // hard cap, enforced on send AND on receive
+const CHAT_MAX_LEN      = 50;     // hard cap, enforced on send AND on receive; a mention
+                                  // costs its name plus the @ (what an old client reads)
 const CHAT_STACK_MAX    = 3;      // bubbles kept above one head
 const CHAT_LIFE_MS      = 6200;   // base lifetime…
 const CHAT_LIFE_PER_CH  = 90;     // …plus reading time per character
@@ -28523,14 +28547,46 @@ const CHAT_COOLDOWN_MS  = 700;    // local anti-spam between sends
 const CHAT_HEAR_R       = 430;    // arrival cue: past this a message is silent
 const CHAT_SEE_R        = 760;    // bubbles are fully readable inside this…
 const CHAT_SEE_FADE     = 260;    // …and fade to nothing over this much more
-const CHAT_BUB_H        = 30;
 const CHAT_BUB_GAP      = 5;
 const CHAT_HEAD_GAP     = 30;     // clearance above the head — the tail tucks INTO
                                   // the hair a little, the way a speech bubble should
+// The bubble box. Its height follows its line count, so the stack is built from
+// each bubble's OWN height (see updateChatSystem) — never a fixed step, which is
+// what would make a two-line bubble overlap the one above it.
+const CHAT_WRAP_W       = 188;    // widest a line may run before it wraps
+const CHAT_LINE_H       = 20;
+const CHAT_PAD_X        = 13;
+const CHAT_PAD_Y        = 5;      // one line → 30 tall, the height the bubble always had
+const CHAT_FONT         = 'bold 13px Rubik';
+const CHAT_PILL_FONT    = 'bold 12px Rubik';
+// A mention pill, drawn inside a line: [avatar][gap][name], avatar on the reading-start side.
+const CHAT_PILL_H = 18, CHAT_PILL_AV = 14, CHAT_PILL_PAD_AV = 2, CHAT_PILL_GAP = 4, CHAT_PILL_PAD_END = 7;
 // Bubble springs. Damping < 1 on purpose: the stack overshoots a hair as it
 // settles, which is what gives it the iPad-ish bounce instead of a linear slide.
 const CHAT_OFF_K   = 0.21, CHAT_OFF_D  = 0.72;
 const CHAT_SCL_K   = 0.28, CHAT_SCL_D  = 0.68;
+
+// ── mentions ──
+const CHAT_MEN_COOLDOWN_MS = 1000;   // the same member can't be pinged twice inside this
+const CHAT_MEN_STREAK_MS   = 30000;  // a repeat ping inside this is the NEXT step up…
+const CHAT_MEN_ALARM_AT    = 4;      // …and the fourth is the alarm, after which it starts over
+const CHAT_MEN_MAX_Q       = 24;     // longest @query the picker still follows
+// The ping per step, on the MENTIONED member's end: rate < 1 is deeper and heavier,
+// and the peak climbs with it. Step 4 is mention_alarm instead.
+const CHAT_PING_STEPS = [null,
+    { rate: 1.00, peak: 0.72 },
+    { rate: 0.86, peak: 0.86 },
+    { rate: 0.74, peak: 1.00 },
+];
+// The "loud" bubble — a message that is nothing but mentions. amp = extra scale at
+// the peak, rot = widest tilt (radians), shake = px of jitter, hz = how fast it
+// shakes, dur = ms. Grows with the step like the ping; step 4 is the big one.
+const CHAT_LOUD = [null,
+    { amp: 0.30, rot: 0.09, shake: 0,   hz: 6.5, dur: 950  },
+    { amp: 0.48, rot: 0.14, shake: 1.5, hz: 7.5, dur: 1100 },
+    { amp: 0.70, rot: 0.20, shake: 3,   hz: 8.5, dur: 1250 },
+    { amp: 1.10, rot: 0.30, shake: 5.5, hz: 10,  dur: 1700 },
+];
 
 // How far MY OWN bubble stack is pushed up, in world units, so the type box floating
 // over my head never lands on top of it. Purely local — nobody else's client knows or
@@ -28538,10 +28594,21 @@ const CHAT_SCL_K   = 0.28, CHAT_SCL_D  = 0.68;
 let _chatSelfLift = 0;
 
 const _chatUi = {
-    wrap: null, input: null, count: null, send: null,
-    open: false, lastSentAt: 0,
+    wrap: null, input: null, count: null, send: null, box: null, toast: null,
+    open: false, lastSentAt: 0, composing: false,
     lastX: -1e9, lastY: -1e9, w: 240, h: 54, openedAt: 0, refocus: 0,
     cl: 0, ct: 0,   // cached canvas rect origin — see updateChatInputPos
+    toastTimer: 0, refuseTimer: 0,
+};
+
+// The @ picker, and MY OWN ping history (for the cooldown and the step).
+const _chatMen = {
+    list: null, open: false,
+    q: null,             // the live @query: { node, at, end, q }
+    rows: [], sel: 0, key: '',
+    dismissed: null,     // { node, at } — an @ whose picker was closed with Escape
+    wheelAcc: 0, wheelAt: 0,
+    last: {},            // uid → { at, lv }
 };
 
 function chatIsOpen() { return !!_chatUi.open; }
@@ -28557,23 +28624,214 @@ function _chatClean(t) {
         .trim()
         .slice(0, CHAT_MAX_LEN);
 }
+// Same, for one run INSIDE a message: no trim, or the space between a mention and
+// the word after it would vanish.
+function _chatCleanRun(t) {
+    return String(t == null ? '' : t).replace(_CHAT_STRIP_RE, ' ').replace(/\s+/g, ' ');
+}
+
+// What a part spends of the 50. A mention costs its name plus the @.
+function _chatPartLen(p) { return p.u ? p.n.length + 1 : p.t.length; }
+function _chatPlain(parts) { return parts.map(p => (p.u ? '@' + p.n : p.t)).join(''); }
+
+// Segments → a clean, bounded message, or null when nothing is left. A part is
+// { t } (text) or { u, n, l } (a mention: uid, name, step). `segs` is data from
+// another client — or from the contenteditable — so every field is re-checked.
+// Without `segs` it's a plain message (every non-mention, and every old client).
+function _chatCleanParts(segs, raw) {
+    if (!Array.isArray(segs)) {
+        const t = _chatClean(raw);
+        return t ? [{ t }] : null;
+    }
+    const out = [];
+    let budget = CHAT_MAX_LEN;
+    for (const s of segs.slice(0, 24)) {
+        if (!s || typeof s !== 'object' || budget <= 0) continue;
+        if (typeof s.u === 'string') {
+            const u = s.u.slice(0, 64);
+            const n = _chatClean(s.n).slice(0, 24);
+            if (!u || !n || n.length + 1 > budget) continue;
+            const l = Math.min(CHAT_MEN_ALARM_AT, Math.max(1, Math.round(+s.l) || 1));
+            out.push({ u, n, l });
+            budget -= n.length + 1;
+        } else if (typeof s.t === 'string') {
+            const t = _chatCleanRun(s.t).slice(0, budget);
+            if (!t) continue;
+            const last = out[out.length - 1];
+            if (last && last.t != null) last.t = (last.t + t).replace(/\s+/g, ' ');
+            else out.push({ t });
+            budget -= t.length;
+        }
+    }
+    const first = out[0], end = out[out.length - 1];
+    if (first && first.t != null) first.t = first.t.replace(/^\s+/, '');
+    if (end && end.t != null) end.t = end.t.replace(/\s+$/, '');
+    const res = out.filter(p => p.u || p.t);
+    return res.some(p => p.u || p.t.trim()) ? res : null;
+}
+
+// ─── Colours ─────────────────────────────────────────────────────────────────
+// A mention wears the member's own ring colour, pushed light enough to read on the
+// dark bubble; someone who never picked one gets a stable hue off their uid.
+const _chatColCache = {};
+function _chatHexToHsl(hex) {
+    const n = parseInt(hex.slice(1), 16);
+    const r = ((n >> 16) & 255) / 255, g = ((n >> 8) & 255) / 255, b = (n & 255) / 255;
+    const mx = Math.max(r, g, b), mn = Math.min(r, g, b), d = mx - mn;
+    const l = (mx + mn) / 2;
+    const s = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+    let h = 0;
+    if (d) {
+        if (mx === r) h = ((g - b) / d) % 6;
+        else if (mx === g) h = (b - r) / d + 2;
+        else h = (r - g) / d + 4;
+        h *= 60;
+        if (h < 0) h += 360;
+    }
+    return [h, s, l];
+}
+function _chatMenColor(uid) {
+    const p = gameState.players[uid];
+    const hex = _validHex(p && p.ringColor);
+    const key = uid + '|' + (hex || '');
+    if (_chatColCache[key]) return _chatColCache[key];
+    let h, s, l;
+    if (hex) {
+        [h, s, l] = _chatHexToHsl(hex);
+        s = s < 0.12 ? 0 : Math.max(s, 0.5);          // a grey ring stays grey
+        l = Math.min(0.8, Math.max(0.64, l));
+    } else {
+        let x = 0;
+        for (let i = 0; i < uid.length; i++) x = (x * 31 + uid.charCodeAt(i)) >>> 0;
+        h = x % 360; s = 0.72; l = 0.7;
+    }
+    const H = Math.round(h), S = Math.round(s * 100), L = Math.round(l * 100);
+    return (_chatColCache[key] = {
+        fg:   `hsl(${H}, ${S}%, ${L}%)`,
+        bg:   `hsla(${H}, ${S}%, ${L}%, 0.2)`,
+        ring: `hsla(${H}, ${S}%, ${L}%, 0.85)`,
+    });
+}
+
+// ─── Layout ──────────────────────────────────────────────────────────────────
+// Done ONCE per message, on arrival, off an offscreen context — so the per-frame
+// draw only places what was already measured, and the stack knows each bubble's
+// height before it is ever drawn.
+let _chatMeasureCtx = null;
+function _chatMCtx() {
+    if (!_chatMeasureCtx) {
+        try { _chatMeasureCtx = document.createElement('canvas').getContext('2d'); } catch (_) {}
+    }
+    return _chatMeasureCtx;
+}
+const _CHAT_RTL_CH = /[\u0590-\u08ff\ufb1d-\ufdff\ufe70-\ufefc]/;
+const _CHAT_LTR_CH = /[A-Za-z\u00c0-\u024f]/;
+// Reading direction = the first strong character, like the browser would decide.
+function _chatIsRtl(str) {
+    for (const ch of str) {
+        if (_CHAT_RTL_CH.test(ch)) return true;
+        if (_CHAT_LTR_CH.test(ch)) return false;
+    }
+    return true;
+}
+function _chatLayout(parts) {
+    const m = _chatMCtx();
+    const tw = (s) => { if (!m) return s.length * 7;   m.font = CHAT_FONT;      return m.measureText(s).width; };
+    const pw = (s) => { if (!m) return s.length * 6.5; m.font = CHAT_PILL_FONT; return m.measureText(s).width; };
+    const rtl = _chatIsRtl(parts.map(p => (p.u ? p.n : p.t)).join(' '));
+    const lines = [];
+    let line = null;
+    const newLine = () => { line = { items: [], w: 0 }; lines.push(line); };
+    newLine();
+    for (const p of parts) {
+        if (p.u) {
+            const nw = pw(p.n);
+            const w = CHAT_PILL_PAD_AV + CHAT_PILL_AV + CHAT_PILL_GAP + nw + CHAT_PILL_PAD_END;
+            if (line.w > 0 && line.w + w > CHAT_WRAP_W) newLine();
+            line.items.push({ pill: true, u: p.u, n: p.n, nw, w, col: _chatMenColor(p.u) });
+            line.w += w;
+            continue;
+        }
+        // A text run is kept WHOLE on a line whenever it fits, and otherwise split
+        // only at the wrap — so every piece is still one logical run and the
+        // browser does the bidi inside it (splitting word by word would reverse an
+        // English phrase inside an Arabic line).
+        let rest = p.t;
+        for (let guard = 0; rest && guard < 60; guard++) {
+            if (line.w === 0) rest = rest.replace(/^\s+/, '');   // a line never opens on a space
+            if (!rest) break;
+            const avail = CHAT_WRAP_W - line.w;
+            const w = tw(rest);
+            if (w <= avail) { line.items.push({ t: rest, w }); line.w += w; break; }
+            const words = rest.split(/(\s+)/);
+            let fit = '', i = 0;
+            for (; i < words.length; i++) {
+                const cand = fit + words[i];
+                if (tw(cand.replace(/\s+$/, '')) > avail) break;
+                fit = cand;
+            }
+            fit = fit.replace(/\s+$/, '');
+            if (!fit) {
+                if (line.w > 0) { newLine(); continue; }          // retry on a fresh line
+                // One word wider than a whole line: split it by characters.
+                const chars = Array.from(rest);
+                let k = 1;
+                while (k < chars.length && tw(chars.slice(0, k + 1).join('')) <= avail) k++;
+                fit = chars.slice(0, k).join('');
+                rest = chars.slice(k).join('');
+            } else {
+                rest = words.slice(i).join('');
+            }
+            const fw = tw(fit);
+            line.items.push({ t: fit, w: fw });
+            line.w += fw;
+            newLine();
+        }
+    }
+    const used = lines.filter(l => l.items.length);
+    if (!used.length) used.push({ items: [], w: 0 });
+    const inner = Math.max(...used.map(l => l.w));
+    return {
+        rtl, lines: used,
+        w: Math.ceil(inner) + CHAT_PAD_X * 2,
+        h: used.length * CHAT_LINE_H + CHAT_PAD_Y * 2,
+    };
+}
 
 // ─── Receiving ───────────────────────────────────────────────────────────────
-function receiveChatMessage(player, raw) {
+function receiveChatMessage(player, raw, segs) {
     if (!player) return;
-    const text = _chatClean(raw);
-    if (!text) return;
+    const parts = _chatCleanParts(segs, raw);
+    if (!parts) return;
+    // A pill shows the name THIS client knows the member by, when it knows them.
+    for (const p of parts) {
+        if (!p.u) continue;
+        const pl = gameState.players[p.u];
+        const nm = pl && _chatClean(pl.username).slice(0, 24);
+        if (nm) p.n = nm;
+    }
+    const mens = parts.filter(p => p.u);
+    const onlyMen = mens.length > 0 && parts.every(p => p.u || !p.t.trim());
+    const mine = gameState.userId ? mens.find(p => p.u === gameState.userId) : null;
+    const fromMe = player.userId === gameState.userId;
+    const text = _chatPlain(parts);
+    const loud = onlyMen ? Math.max(...mens.map(p => p.l)) : 0;
     const list = player._chat || (player._chat = []);
     list.push({
-        text, born: Date.now(),
-        life: CHAT_LIFE_MS + text.length * CHAT_LIFE_PER_CH,
+        parts, text, lay: _chatLayout(parts), born: Date.now(),
+        life: CHAT_LIFE_MS + text.length * CHAT_LIFE_PER_CH + (loud ? CHAT_LOUD[loud].dur : 0),
         off: -9, offV: 0,     // enters just under its slot and springs up into it
-        sc: 0.5, scV: 0,
-        a: 1, w: 0,           // w = cached measured text width
+        sc: loud ? 0.35 : 0.5, scV: 0,
+        a: 1,
+        loud,                 // 0, or the step (1-4) its shout is played at
+        forMe: !!mine && !fromMe,
+        accent: mens.length ? _chatMenColor(mens[0].u) : null,
     });
     while (list.length > CHAT_STACK_MAX) list.shift();
     // Only someone ELSE's message makes a sound. My own needs no cue — I pressed send.
-    if (player.userId !== gameState.userId) _chatArrivalCue(player);
+    if (fromMe) return;
+    if (mine) _chatMentionPing(player, mine.l, text);
+    else _chatArrivalCue(player);
 }
 
 // Everything that decides whether an incoming message makes a SOUND. Seeing a bubble
@@ -28593,26 +28851,580 @@ function _chatArrivalCue(player) {
     try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.05 + near * 0.22, 0.03 + near * 0.035); } catch (_) {}
 }
 
+// Someone mentioned ME. The exact opposite of the arrival cue: no distance, no work
+// session, no overlay is allowed to silence it — being reachable is the point. Web
+// Audio (playHandled), so it still sounds in a background tab.
+function _chatMentionPing(player, lv, text) {
+    if (lv >= CHAT_MEN_ALARM_AT) _chatSfx('mentionAlarm', 1, 0.9);
+    else {
+        const st = CHAT_PING_STEPS[lv] || CHAT_PING_STEPS[1];
+        _chatSfx('mentionPing', st.rate, st.peak);
+    }
+    _chatMentionNotify(player, lv, text);
+}
+
+// A one-shot through the focus engine, falling back to the HTMLAudio copy only while
+// the buffer is still decoding (right after spawn).
+function _chatSfx(name, rate, peak) {
+    const fe = gameState.focusAudioEngine;
+    try { if (fe && fe.playHandled(name, rate, peak)) return; } catch (_) {}
+    const a = gameState.sounds && gameState.sounds[name];
+    if (!a) return;
+    try {
+        a.pause();
+        a.currentTime = 0;
+        a.playbackRate = rate;
+        a.preservesPitch = false; a.mozPreservesPitch = false; a.webkitPreservesPitch = false;
+        a.volume = Math.min(1, peak);
+        a.play().catch(() => {});
+    } catch (_) {}
+}
+
+// The system notification. Only when the tab isn't what they're looking at — with it
+// focused, the bubble and the ping already reached them. Permission is asked once at
+// entry (maybeRequestNotificationPermission); this never asks.
+function _chatMentionNotify(player, lv, text) {
+    try {
+        if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+        if (!document.hidden && document.hasFocus()) return;
+        const name = _chatClean(player.username) || 'عضو';
+        const fem = gameState.selectedLobby === 'female';
+        const title = lv >= CHAT_MEN_ALARM_AT
+            ? `🚨 ${name} ${fem ? 'تناديكِ بإلحاح!' : 'يناديك بإلحاح!'}`
+            : `${name} ${fem ? 'أشارت إليكِ' : 'أشار إليك'}`;
+        const icon = (typeof player.avatar === 'string' && /^https:\/\//.test(player.avatar))
+            ? player.avatar : 'favicon-128.png';
+        // One tag per sender, so a burst replaces itself instead of stacking; renotify
+        // still makes each one sound.
+        const opts = { body: text, icon, badge: 'favicon-128.png', tag: 'maqr-mention-' + player.userId, renotify: true };
+        try {
+            const n = new Notification(title, opts);
+            n.onclick = () => { try { window.focus(); } catch (_) {} n.close(); };
+        } catch (_) {
+            // Android Chrome refuses the constructor; the service worker can still show it
+            // (sw.js focuses the tab on click).
+            navigator.serviceWorker?.getRegistration?.()
+                .then(reg => reg && reg.showNotification(title, opts))
+                .catch(() => {});
+        }
+    } catch (_) {}
+}
+
 // ─── Sending ─────────────────────────────────────────────────────────────────
-function sendChatWS(text) {
+function sendChatWS(parts) {
     const ws = presenceNet.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     try {
-        ws.send(JSON.stringify({ t: 'chat', uid: gameState.userId, m: text }));
+        // `m` is the plain reading (a mention as @name) for clients that predate
+        // mentions; `s` carries the segments, and only when there's a mention in it.
+        const msg = { t: 'chat', uid: gameState.userId, m: _chatPlain(parts) };
+        if (parts.some(p => p.u)) msg.s = parts;
+        ws.send(JSON.stringify(msg));
         return true;
     } catch (_) { return false; }
 }
 
 function _chatSend() {
-    const text = _chatClean(_chatUi.input ? _chatUi.input.value : '');
-    closeChatBox();
-    if (!text) return;
+    if (!_chatUi.open) return;
+    _chatMenClose();
+    // A pill for someone who has left since it was picked falls back to plain text —
+    // an offline member can't be pinged.
+    const read = _chatReadInput().map(p => ((p.u && !gameState.players[p.u]) ? { t: '@' + p.n } : p));
+    const parts = _chatCleanParts(read);
+    if (!parts) { closeChatBox(); return; }
     const now = Date.now();
-    if (now - _chatUi.lastSentAt < CHAT_COOLDOWN_MS) return;
+    const uids = [...new Set(parts.filter(p => p.u && p.u !== gameState.userId).map(p => p.u))];
+    // The one-second rule: refuse the WHOLE message (the box stays open with the text in
+    // it) rather than send it with the ping quietly dropped.
+    for (const u of uids) {
+        const st = _chatMen.last[u];
+        if (st && now - st.at < CHAT_MEN_COOLDOWN_MS) {
+            const p = parts.find(x => x.u === u);
+            _chatRefuse();
+            _chatCooldownToast(p ? p.n : '', st.at + CHAT_MEN_COOLDOWN_MS);
+            return;
+        }
+    }
+    if (now - _chatUi.lastSentAt < CHAT_COOLDOWN_MS) return;   // anti-spam: hold the text, send nothing
+    // The step: a repeat ping of the same member inside the streak window climbs one,
+    // and the one after the alarm starts over at 1.
+    for (const u of uids) {
+        const st = _chatMen.last[u];
+        const lv = (st && now - st.at < CHAT_MEN_STREAK_MS && st.lv < CHAT_MEN_ALARM_AT) ? st.lv + 1 : 1;
+        _chatMen.last[u] = { at: now, lv };
+    }
+    for (const p of parts) if (p.u) p.l = _chatMen.last[p.u] ? _chatMen.last[p.u].lv : 1;
     _chatUi.lastSentAt = now;
+    closeChatBox();
     const me = gameState.players[gameState.userId];
-    if (me) receiveChatMessage(me, text);   // show it locally at once — no round trip
-    sendChatWS(text);
+    if (me) receiveChatMessage(me, null, parts.map(p => ({ ...p })));   // show it locally at once — no round trip
+    sendChatWS(parts);
+    if (uids.length) _chatSfx('chatMention', 1, 0.75);
+}
+
+// ─── Refusal: shake, flash red, say no ───────────────────────────────────────
+function _chatRefuse() {
+    const box = _chatUi.box;
+    if (box) {
+        box.classList.remove('refuse');
+        void box.offsetWidth;            // restart it if a shake is already running
+        box.classList.add('refuse');
+        clearTimeout(_chatUi.refuseTimer);
+        _chatUi.refuseTimer = setTimeout(() => box.classList.remove('refuse'), 650);
+    }
+    _chatNoSound();
+}
+
+// "Uh-uh": two short buzzes, the second lower — a playful no, not an error beep.
+// Synthesised, so there's no file to load for it.
+function _chatNoSound() {
+    const fe = gameState.focusAudioEngine;
+    try { if (fe && !fe.ctx) fe.init(); } catch (_) {}
+    const ctx = fe && fe.ctx;
+    if (!ctx) return;
+    const play = () => {
+        try {
+            const t = ctx.currentTime;
+            const lp = ctx.createBiquadFilter();
+            lp.type = 'lowpass';
+            lp.frequency.value = 1500;
+            lp.connect(ctx.destination);
+            [[0, 311], [0.12, 233]].forEach(([dt, f]) => {
+                const o = ctx.createOscillator(), g = ctx.createGain();
+                o.type = 'square';
+                o.frequency.setValueAtTime(f, t + dt);
+                o.frequency.exponentialRampToValueAtTime(f * 0.84, t + dt + 0.09);
+                g.gain.setValueAtTime(0.0001, t + dt);
+                g.gain.exponentialRampToValueAtTime(0.085, t + dt + 0.01);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + dt + 0.1);
+                o.connect(g); g.connect(lp);
+                o.start(t + dt);
+                o.stop(t + dt + 0.11);
+            });
+            setTimeout(() => { try { lp.disconnect(); } catch (_) {} }, 500);
+        } catch (_) {}
+    };
+    // ctx.resume() is async — never fire-and-forget.
+    if (ctx.state === 'suspended') ctx.resume().then(play).catch(() => {});
+    else play();
+}
+
+// ─── The toast over the box ──────────────────────────────────────────────────
+const _CHAT_AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
+function _chatArNum(s) { return String(s).replace(/\d/g, d => _CHAT_AR_DIGITS[d]).replace('.', '٫'); }
+
+// `textOf(msLeft)` is re-run 10×/s, so a countdown ticks live.
+function _chatToast(textOf, ms) {
+    const el = _chatUi.toast;
+    if (!el) return;
+    clearInterval(_chatUi.toastTimer);
+    const until = Date.now() + ms;
+    const paint = () => {
+        const left = until - Date.now();
+        if (left <= 0) { _chatToastHide(); return; }
+        el.textContent = textOf(left);
+    };
+    paint();
+    el.classList.toggle('below', _chatFloatBelow(el));
+    el.classList.add('show');
+    _chatUi.toastTimer = setInterval(paint, 100);
+}
+function _chatToastHide() {
+    clearInterval(_chatUi.toastTimer);
+    _chatUi.toastTimer = 0;
+    _chatUi.toast?.classList.remove('show');
+}
+// Counts down to the moment the member can be pinged again, then says so for a beat —
+// a 50 ms wait must not flash past unread.
+function _chatCooldownToast(name, readyAt) {
+    const hold = Math.max(readyAt - Date.now(), 0) + 700;
+    _chatToast(() => {
+        const left = readyAt - Date.now();
+        if (left <= 0) return 'جاهز! أرسلها الآن';
+        return `مهلًا! انتظر ${_chatArNum((left / 1000).toFixed(1))} ث قبل الإشارة إلى ${name} مجددًا`;
+    }, hold);
+}
+
+// Would a float (the picker, the toast) run off the top of the screen above the box?
+// Then it hangs below instead. Both are `visibility: hidden`, never `display: none`,
+// while closed, so their height is measurable before they show.
+function _chatFloatBelow(el) {
+    const wrap = _chatUi.wrap;
+    if (!wrap || !el) return false;
+    const r = wrap.getBoundingClientRect();
+    const top = window.visualViewport ? window.visualViewport.offsetTop : 0;
+    return r.top - el.offsetHeight - 14 < top + 4;
+}
+
+// ─── The contenteditable: reading, limiting, inserting ───────────────────────
+// The box is a contenteditable (not an <input>) because a mention is a real pill in
+// it — avatar and colour — not "@name" text. A pill is a contenteditable=false span
+// carrying data-uid / data-name, so the browser deletes it as one piece.
+function _chatReadInput() {
+    const out = [];
+    const put = (t) => {
+        if (!t) return;
+        const l = out[out.length - 1];
+        if (l && l.t != null) l.t += t; else out.push({ t });
+    };
+    const walk = (node) => {
+        for (const c of node.childNodes) {
+            if (c.nodeType === 3) put(c.nodeValue);
+            else if (c.nodeType === 1) {
+                if (c.classList.contains('chat-men')) out.push({ u: c.dataset.uid || '', n: c.dataset.name || '', l: 1 });
+                else if (c.tagName !== 'BR') walk(c);
+            }
+        }
+    };
+    if (_chatUi.input) walk(_chatUi.input);
+    return out;
+}
+function _chatInputLen() { return _chatReadInput().reduce((s, p) => s + _chatPartLen(p), 0); }
+
+function _chatCaretToEnd() {
+    const input = _chatUi.input, sel = window.getSelection && window.getSelection();
+    if (!input || !sel) return;
+    try {
+        const r = document.createRange();
+        r.selectNodeContents(input);
+        r.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(r);
+    } catch (_) {}
+}
+
+// Over 50 (an IME composition can't be refused while it's running, so it's caught
+// here once it commits): trim from the END — text first, then whole pills.
+function _chatEnforceMax() {
+    const input = _chatUi.input;
+    if (!input) return;
+    let over = _chatInputLen() - CHAT_MAX_LEN;
+    if (over <= 0) return;
+    const texts = [];
+    const walk = (n) => {
+        for (const c of n.childNodes) {
+            if (c.nodeType === 3) texts.push(c);
+            else if (c.nodeType === 1 && !c.classList.contains('chat-men')) walk(c);
+        }
+    };
+    walk(input);
+    for (let i = texts.length - 1; i >= 0 && over > 0; i--) {
+        const v = texts[i].nodeValue;
+        const cut = Math.min(over, v.length);
+        texts[i].nodeValue = v.slice(0, v.length - cut).replace(/[\ud800-\udbff]$/, '');
+        over -= cut;
+    }
+    const pills = input.querySelectorAll('.chat-men');
+    for (let i = pills.length - 1; i >= 0 && over > 0; i--) {
+        over -= (pills[i].dataset.name || '').length + 1;
+        pills[i].remove();
+    }
+    _chatCaretToEnd();
+}
+
+function _chatInsertText(t) {
+    let ok = false;
+    try { ok = document.execCommand('insertText', false, t); } catch (_) {}
+    if (ok) return;                  // execCommand fires its own input event
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || !sel.rangeCount) return;
+    const r = sel.getRangeAt(0);
+    if (!_chatUi.input.contains(r.commonAncestorContainer)) return;
+    r.deleteContents();
+    const tn = document.createTextNode(t);
+    r.insertNode(tn);
+    r.setStartAfter(tn);
+    r.collapse(true);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    _chatAfterInput();
+}
+
+// Room left for an insertion, counting whatever it would replace.
+function _chatRoom() {
+    const sel = window.getSelection && window.getSelection();
+    const replaced = (sel && !sel.isCollapsed && _chatUi.input.contains(sel.anchorNode)) ? sel.toString().length : 0;
+    return CHAT_MAX_LEN - _chatInputLen() + replaced;
+}
+
+function _chatAfterInput() {
+    if (!_chatUi.composing) _chatEnforceMax();
+    _chatRefreshCount();
+    _chatRemeasure();
+    _chatMenUpdate();
+}
+
+// The box grows a line upward as the text wraps. Its bottom edge is what's anchored
+// (see updateChatInputPos), so nothing moves — only the height the clamp and my own
+// bubble lift are measured against changes, and that's re-read here, on input, never
+// per frame.
+function _chatRemeasure() {
+    if (!_chatUi.open || !_chatUi.wrap) return;
+    const h = _chatUi.wrap.offsetHeight || _chatUi.h;
+    if (Math.abs(h - _chatUi.h) < 0.5) return;
+    _chatUi.h = h;
+    updateChatInputPos(true);
+}
+
+// ─── The @ picker ────────────────────────────────────────────────────────────
+// The @query under the caret: an @ at the start or after a space (an @ mid-word is an
+// email, not a mention), and what's been typed after it.
+function _chatMenQuery() {
+    const input = _chatUi.input;
+    const sel = window.getSelection && window.getSelection();
+    if (!input || !sel || !sel.rangeCount || !sel.isCollapsed) return null;
+    const node = sel.anchorNode, off = sel.anchorOffset;
+    if (!node || node.nodeType !== 3 || !input.contains(node)) return null;
+    if (node.parentNode && node.parentNode.closest && node.parentNode.closest('.chat-men')) return null;
+    const before = node.nodeValue.slice(0, off);
+    const at = Math.max(before.lastIndexOf('@'), before.lastIndexOf('\uff20'));
+    if (at < 0) return null;
+    if (at > 0 && !/\s/.test(before[at - 1])) return null;
+    const q = before.slice(at + 1);
+    if (q.length > CHAT_MEN_MAX_Q || /^\s/.test(q) || /\s\s/.test(q)) return null;
+    return { node, at, end: off, q };
+}
+
+function _chatMenNorm(s) {
+    return _fireNormName(String(s || '').replace(/^[@\uff20]+/, '')).toLowerCase();
+}
+// The roster record behind a player: by Discord id (alts included), and the Siraj
+// ghost — whose id is a throwaway `siraj_*` — by its roster slug.
+function _chatMenRoster(uid) {
+    const rec = MDWNH_ROSTER.byDiscord[String(uid)];
+    if (rec) return rec;
+    return String(uid).startsWith('siraj_') ? (MDWNH_ROSTER.bySlug.siraj || null) : null;
+}
+
+// Online members matching the query, CLOSEST FIRST. `gameState.players` only ever
+// holds members who are in the site (activeInGame), which is what makes an offline
+// member impossible to pick. Names match anywhere in them; handles and emails only
+// from their start, or a two-letter query would match half the team's inboxes.
+function _chatMenCandidates(q) {
+    const me = gameState.players[gameState.userId];
+    const qn = _chatMenNorm(q).trim();
+    const out = [];
+    for (const p of Object.values(gameState.players)) {
+        if (!p || !p.userId || p.userId === gameState.userId) continue;
+        if (p._exitT != null) continue;                     // on the way out
+        const name = _chatClean(p.username).slice(0, 24);
+        if (!name) continue;
+        const rec = _chatMenRoster(p.userId);
+        let hit = !qn;
+        if (!hit) {
+            const names = [name];
+            const heads = [];
+            if (rec) {
+                names.push(rec.name, rec.dbKey, rec.telegramName, rec.slug && String(rec.slug).replace(/-/g, ' '));
+                heads.push(rec.telegramHandle, rec.email, rec.email && String(rec.email).split('@')[0]);
+            }
+            hit = names.some(k => k && _chatMenNorm(k).includes(qn))
+               || heads.some(k => k && _chatMenNorm(k).startsWith(qn));
+        }
+        if (!hit) continue;
+        const d = me ? Math.hypot((p.x || 0) - (me.x || 0), (p.y || 0) - (me.y || 0)) : 0;
+        // The second line names the member the way the team knows them, when the
+        // display name is something else (الشعيرة under "Mu"). Never the email.
+        const sub = (rec && rec.name && _chatMenNorm(rec.name) !== _chatMenNorm(name)) ? rec.name : '';
+        out.push({ uid: p.userId, name, sub, d, avatar: p.avatar });
+    }
+    out.sort((a, b) => a.d - b.d);
+    return out;
+}
+
+function _chatSetAvatar(el, url, name) {
+    const ok = typeof url === 'string' && (/^https:\/\//.test(url) || /^data:image\//.test(url) || /^Art\//.test(url));
+    if (ok) {
+        el.style.backgroundImage = 'url(' + JSON.stringify(url) + ')';
+        el.textContent = '';
+    } else {
+        el.style.backgroundImage = '';
+        el.textContent = Array.from(name || '؟')[0] || '؟';
+    }
+}
+
+// Re-read the query and re-fill the list. Rows are only rebuilt when WHO is in it
+// changed, and only an OPEN animates — a keystroke that narrows the list must not
+// replay the cascade.
+function _chatMenUpdate() {
+    const q = _chatUi.open ? _chatMenQuery() : null;
+    if (!q) { _chatMen.dismissed = null; _chatMen.q = null; _chatMenClose(); return; }
+    _chatMen.q = q;
+    const d = _chatMen.dismissed;
+    if (d && d.node === q.node && d.at === q.at) { _chatMenClose(); return; }
+    const rows = _chatMenCandidates(q.q);
+    const key = q.q + '|' + rows.map(r => r.uid).join(',');
+    const wasOpen = _chatMen.open;
+    if (wasOpen && key === _chatMen.key) return;
+    // Keep the highlighted member highlighted if they survived the narrowing.
+    const keep = wasOpen && _chatMen.rows[_chatMen.sel] ? _chatMen.rows[_chatMen.sel].uid : null;
+    _chatMen.rows = rows;
+    _chatMen.key = key;
+    const k = keep ? rows.findIndex(r => r.uid === keep) : -1;
+    _chatMen.sel = k >= 0 ? k : 0;
+    _chatMenRender(!wasOpen);
+    if (!wasOpen) _chatMenOpen();
+}
+
+function _chatMenRender(animate) {
+    const el = _chatMen.list;
+    if (!el) return;
+    el.classList.toggle('anim', !!animate);
+    el.textContent = '';
+    if (!_chatMen.rows.length) {
+        const anyone = Object.values(gameState.players).some(p => p && p.userId && p.userId !== gameState.userId);
+        const empty = document.createElement('div');
+        empty.className = 'chat-men-empty';
+        empty.textContent = anyone ? 'لا يوجد عضو متصل بهذا الاسم' : 'لا يوجد أحد متصل الآن';
+        el.appendChild(empty);
+        return;
+    }
+    _chatMen.rows.forEach((r, i) => {
+        const col = _chatMenColor(r.uid);
+        const row = document.createElement('div');
+        row.className = 'chat-men-row' + (i === _chatMen.sel ? ' sel' : '');
+        row.setAttribute('role', 'option');
+        row.dataset.i = String(i);
+        row.style.setProperty('--men-fg', col.fg);
+        row.style.setProperty('--men-bg', col.bg);
+        if (animate) row.style.animationDelay = (Math.min(i, 5) * 45) + 'ms';
+        const av = document.createElement('span');
+        av.className = 'chat-men-row-av';
+        _chatSetAvatar(av, r.avatar, r.name);
+        const txt = document.createElement('span');
+        txt.className = 'chat-men-row-txt';
+        const nm = document.createElement('span');
+        nm.className = 'chat-men-row-name';
+        nm.textContent = r.name;
+        txt.appendChild(nm);
+        if (r.sub) {
+            const sb = document.createElement('span');
+            sb.className = 'chat-men-row-sub';
+            sb.textContent = r.sub;
+            txt.appendChild(sb);
+        }
+        row.append(av, txt);
+        if (i === 0 && _chatMen.rows.length > 1) {
+            const near = document.createElement('span');
+            near.className = 'chat-men-row-near';
+            near.textContent = 'الأقرب';
+            row.appendChild(near);
+        }
+        el.appendChild(row);
+    });
+    el.scrollTop = 0;
+    _chatMenScrollToSel(false);
+}
+
+// Keep the highlighted row inside the three-row window. Scrolls the LIST itself —
+// never scrollIntoView, which walks up and scrolls whatever is scrollable above it.
+function _chatMenScrollToSel(smooth) {
+    const el = _chatMen.list;
+    const row = el && el.children[_chatMen.sel];
+    if (!row) return;
+    const pad = 6;
+    const vTop = el.scrollTop, vBot = vTop + el.clientHeight;
+    const rTop = row.offsetTop - pad, rBot = row.offsetTop + row.offsetHeight + pad;
+    let target = null;
+    if (rTop < vTop) target = rTop;
+    else if (rBot > vBot) target = rBot - el.clientHeight;
+    if (target == null) return;
+    try { el.scrollTo({ top: Math.max(0, target), behavior: smooth ? 'smooth' : 'auto' }); }
+    catch (_) { el.scrollTop = Math.max(0, target); }
+}
+
+function _chatMenMove(d, quiet) {
+    const n = _chatMen.rows.length;
+    if (!n) return;
+    const next = Math.max(0, Math.min(n - 1, _chatMen.sel + d));
+    if (next === _chatMen.sel) return;
+    _chatMen.sel = next;
+    for (const c of _chatMen.list.children) c.classList.toggle('sel', +c.dataset.i === next);
+    if (quiet) return;
+    _chatMenScrollToSel(true);
+    // A tick per step, climbing the further down the list you go.
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.08 + Math.min(next, 8) * 0.05, 0.04); } catch (_) {}
+}
+
+function _chatMenOpen() {
+    const el = _chatMen.list;
+    if (!el) return;
+    _chatMen.open = true;
+    _chatMen.wheelAcc = 0;
+    _chatToastHide();
+    el.classList.toggle('below', _chatFloatBelow(el));
+    el.classList.add('open');
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', 0.9, 0.05); } catch (_) {}
+}
+
+function _chatMenClose() {
+    if (!_chatMen.open) return;
+    _chatMen.open = false;
+    _chatMen.key = '';
+    _chatMen.list?.classList.remove('open');
+}
+
+// Enter / Tab / a press on a row. Returns false when there was nothing to pick, so an
+// Enter on the "nobody by that name" row still sends the message.
+function _chatMenPickSelected() {
+    if (!_chatMen.open) return false;
+    const r = _chatMen.rows[_chatMen.sel];
+    if (!r) { _chatMenClose(); return false; }
+    _chatMenInsert(r);
+    return true;
+}
+
+// Swap the "@query" under the caret for a pill, plus the space after it (a caret
+// can't sit after a trailing contenteditable=false span in every engine).
+function _chatMenInsert(r) {
+    let q = _chatMenQuery();
+    if (!q && _chatMen.q && _chatUi.input.contains(_chatMen.q.node)) q = _chatMen.q;
+    if (!q) { _chatMenClose(); return; }
+    const v = q.node.nodeValue;
+    const after = v.slice(q.end);
+    const addSpace = !/^\s/.test(after);
+    const len = _chatInputLen() - (q.end - q.at) + r.name.length + 1 + (addSpace ? 1 : 0);
+    if (len > CHAT_MAX_LEN) {
+        _chatRefuse();
+        _chatToast(() => 'لا مساحة كافية لهذه الإشارة', 1600);
+        return;
+    }
+    q.node.nodeValue = v.slice(0, q.at);
+    const pill = _chatMakePill(r.uid, r.name, r.avatar);
+    const tail = document.createTextNode((addSpace ? ' ' : '') + after);
+    q.node.parentNode.insertBefore(pill, q.node.nextSibling);
+    pill.parentNode.insertBefore(tail, pill.nextSibling);
+    const sel = window.getSelection && window.getSelection();
+    try {
+        const rg = document.createRange();
+        rg.setStart(tail, 1);
+        rg.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(rg);
+    } catch (_) {}
+    _chatMen.dismissed = null;
+    _chatMenClose();
+    _chatAfterInput();
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.32, 0.06); } catch (_) {}
+}
+
+function _chatMakePill(uid, name, avatar) {
+    const col = _chatMenColor(uid);
+    const pill = document.createElement('span');
+    pill.className = 'chat-men';
+    pill.contentEditable = 'false';
+    pill.dataset.uid = uid;
+    pill.dataset.name = name;
+    pill.style.setProperty('--men-fg', col.fg);
+    pill.style.setProperty('--men-bg', col.bg);
+    const av = document.createElement('span');
+    av.className = 'chat-men-av';
+    _chatSetAvatar(av, avatar, name);
+    const nm = document.createElement('span');
+    nm.className = 'chat-men-name';
+    nm.textContent = name;
+    pill.append(av, nm);
+    return pill;
 }
 
 // ─── The floating input ──────────────────────────────────────────────────────
@@ -28641,13 +29453,20 @@ function openChatBox() {
     _chatUi.open = true;
     _chatUi.openedAt = Date.now();
     _chatUi.refocus = 0;
+    _chatUi.composing = false;
     // A key still held when the box opens would otherwise stay "down" forever —
     // handleMovement stops reading them the moment chatIsOpen() goes true.
     gameState.keys = {};
-    _chatUi.input.value = '';
+    _chatUi.input.textContent = '';
+    _chatMen.dismissed = null;
+    _chatMen.q = null;
+    _chatMenClose();
+    _chatToastHide();
+    _chatUi.box?.classList.remove('refuse');
     _chatRefreshCount();
-    // Measured once: the input is a fixed width, so the box never resizes while
-    // open and the per-frame positioner can stay free of layout reads.
+    // Measured on open; after that only an input that changes the line count
+    // re-measures (_chatRemeasure), so the per-frame positioner stays free of layout
+    // reads.
     _chatUi.w = _chatUi.wrap.offsetWidth  || 240;
     _chatUi.h = _chatUi.wrap.offsetHeight || 54;
     updateChatInputPos(true);            // place it BEFORE it becomes visible
@@ -28664,6 +29483,8 @@ function openChatBox() {
 function closeChatBox() {
     if (!_chatUi.open) return;
     _chatUi.open = false;
+    _chatMenClose();
+    _chatToastHide();
     _chatUi.wrap?.classList.remove('active');
     document.getElementById('mobile-joystick')?.classList.remove('chat-hidden');
     try { _chatUi.input?.blur(); } catch (_) {}
@@ -28690,11 +29511,18 @@ function chatSelfPress(world) {
     return true;
 }
 
+// The counter, and the placeholder. A contenteditable has no placeholder of its own,
+// and an emptied one often keeps a stray <br> — which would stop `:empty` matching —
+// so emptiness is decided here and worn as a class.
 function _chatRefreshCount() {
     if (!_chatUi.count || !_chatUi.input) return;
-    const left = CHAT_MAX_LEN - _chatUi.input.value.length;
+    const parts = _chatReadInput();
+    const left = CHAT_MAX_LEN - parts.reduce((s, p) => s + _chatPartLen(p), 0);
     _chatUi.count.textContent = String(left);
-    _chatUi.count.classList.toggle('low', left <= 5);
+    _chatUi.count.classList.toggle('low', left <= 8);
+    const empty = !parts.some(p => p.u || p.t);
+    if (empty && _chatUi.input.firstChild && !_chatUi.composing) _chatUi.input.textContent = '';
+    _chatUi.input.classList.toggle('is-empty', empty);
 }
 
 // Screen-space placement over the local player's head. `left`/`top` only — the
@@ -28760,7 +29588,6 @@ function updateChatSystem() {
     if (Math.abs(liftTarget - _chatSelfLift) < 0.05) _chatSelfLift = liftTarget;
 
     const now = Date.now();
-    const step = CHAT_BUB_H + CHAT_BUB_GAP;
     for (const player of Object.values(gameState.players)) {
         const list = player._chat;
         if (!list || !list.length) continue;
@@ -28771,9 +29598,14 @@ function updateChatSystem() {
             b.a = age > b.life - CHAT_FADE_MS ? Math.max(0, (b.life - age) / CHAT_FADE_MS) : 1;
         }
         if (!list.length) { player._chat = null; continue; }
-        for (let i = 0; i < list.length; i++) {
+        // Newest sits lowest. Each bubble's slot is the stacked height of everything
+        // newer than it, so a two-line bubble pushes the older ones up by exactly its
+        // own height — and when it expires they spring back down the same amount.
+        let slot = 0;
+        for (let i = list.length - 1; i >= 0; i--) {
             const b = list[i];
-            const target = (list.length - 1 - i) * step;   // newest sits lowest
+            const target = slot;
+            slot += b.lay.h + CHAT_BUB_GAP;
             b.offV += (target - b.off) * CHAT_OFF_K * dt;
             b.offV *= Math.pow(CHAT_OFF_D, dt);
             b.off  += b.offV * dt;
@@ -28798,6 +29630,86 @@ function _chatRoundRect(ctx, x, y, w, h, r) {
     ctx.quadraticCurveTo(x, y, x + r, y);
 }
 
+// iMessage's "loud": a back-overshoot pop up to the peak, a short hold while it
+// shakes, then an ease home. Pure function of the bubble's age — no state — so the
+// PiP pass can draw it too without advancing anything.
+function _chatLoudFx(b, now) {
+    const P = CHAT_LOUD[b.loud];
+    const age = now - b.born;
+    if (!P || age >= P.dur) return null;
+    const t = age / P.dur;
+    let env;
+    if (t < 0.16) {
+        const k = t / 0.16 - 1, c = 1.9;
+        env = 1 + (c + 1) * k * k * k + c * k * k;          // ease-out-back
+    } else if (t < 0.5) {
+        env = 1;
+    } else {
+        const k = (t - 0.5) / 0.5;
+        env = 1 - (k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2);
+    }
+    const w = age / 1000 * Math.PI * 2 * P.hz;
+    const sh = env * (1 - t * 0.6);
+    return {
+        s: 1 + P.amp * env,
+        r: P.rot * Math.sin(w) * sh,
+        x: P.shake * (Math.sin(w * 1.7) + Math.sin(w * 2.3 + 1.1)) * 0.5 * sh,
+        y: P.shake * Math.sin(w * 1.3 + 0.4) * 0.5 * sh,
+        g: env,
+    };
+}
+
+function _chatDrawPill(ctx, it, cx, cy, rtl) {
+    const x0 = cx - it.w / 2, ph = CHAT_PILL_H;
+    ctx.fillStyle = it.col.bg;
+    _chatRoundRect(ctx, x0, cy - ph / 2, it.w, ph, ph / 2);
+    ctx.fill();
+    const ar = CHAT_PILL_AV / 2;
+    const ax = rtl ? x0 + it.w - CHAT_PILL_PAD_AV - ar : x0 + CHAT_PILL_PAD_AV + ar;
+    const img = gameState.avatarCache[it.u];
+    if (img && img !== 'failed' && img.complete && img.naturalWidth) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(ax, cy, ar, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(img, ax - ar, cy - ar, ar * 2, ar * 2);
+        ctx.restore();
+    } else {
+        ctx.fillStyle = it.col.fg;
+        ctx.beginPath();
+        ctx.arc(ax, cy, ar, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.font = CHAT_PILL_FONT;
+    ctx.fillStyle = it.col.fg;
+    const nx = rtl ? x0 + CHAT_PILL_PAD_END + it.nw / 2 : x0 + it.w - CHAT_PILL_PAD_END - it.nw / 2;
+    ctx.fillText(it.n, nx, cy + 0.5);
+}
+
+// Lines are centred; inside a line the pieces run in the message's own direction.
+// Each text piece is one logical run drawn centred in the width it was measured at,
+// so the browser still shapes and orders the letters inside it.
+function _chatDrawContent(ctx, L, h) {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    try { ctx.direction = L.rtl ? 'rtl' : 'ltr'; } catch (_) {}
+    let y = -h + CHAT_PAD_Y + CHAT_LINE_H / 2;
+    for (const line of L.lines) {
+        let x = L.rtl ? line.w / 2 : -line.w / 2;
+        for (const it of line.items) {
+            const cx = L.rtl ? x - it.w / 2 : x + it.w / 2;
+            if (it.pill) _chatDrawPill(ctx, it, cx, y, L.rtl);
+            else {
+                ctx.font = CHAT_FONT;
+                ctx.fillStyle = 'rgba(255,255,255,0.95)';
+                ctx.fillText(it.t, cx, y);
+            }
+            x += L.rtl ? -it.w : it.w;
+        }
+        y += CHAT_LINE_H;
+    }
+}
+
 // Drawn per floor, right after that floor's timers — same split as the avatars, so
 // a ground-floor bubble stays under the mezzanine and a mezzanine one fades with it.
 // NB this also runs in the PiP pass; updateChatSystem is called only from gameLoop,
@@ -28808,6 +29720,7 @@ function drawChatBubbles(floorFilter = null) {
     const f2vis = gameState.secondFloorVis ?? 1;
     const me = gameState.players[gameState.userId];
     const low = gameState._lowGfx;
+    const now = Date.now();
 
     for (const player of Object.values(gameState.players)) {
         const list = player._chat;
@@ -28820,15 +29733,13 @@ function drawChatBubbles(floorFilter = null) {
 
         // The "proximity" half of proximity chat: a bubble across the building
         // fades out rather than staying readable from anywhere. Never applied to my
-        // own messages — I always see what I said.
+        // own messages — I always see what I said — nor to one that mentions me.
         let distA = 1;
         if (me && player !== me) {
             const d = Math.hypot((player.x || 0) - (me.x || 0), (player.y || 0) - (me.y || 0));
-            if (d > CHAT_SEE_R) {
-                distA = Math.max(0, 1 - (d - CHAT_SEE_R) / CHAT_SEE_FADE);
-                if (distA <= 0.02) continue;
-            }
+            if (d > CHAT_SEE_R) distA = Math.max(0, 1 - (d - CHAT_SEE_R) / CHAT_SEE_FADE);
         }
+        if (distA <= 0.02 && !list.some(b => b.forMe)) continue;
 
         const rScale = player.renderScale || 1;
         const pos = getPlayerRenderPos(player);
@@ -28838,21 +29749,25 @@ function drawChatBubbles(floorFilter = null) {
 
         for (let i = 0; i < list.length; i++) {
             const b = list[i];
-            const a = b.a * distA * floorVis;
+            const a = b.a * (b.forMe ? 1 : distA) * floorVis;
             if (a <= 0.02) continue;
+            const L = b.lay, w = L.w, h = L.h;
+            const fx = b.loud ? _chatLoudFx(b, now) : null;
             ctx.save();
-            ctx.translate(pos.x, baseY - b.off);
-            ctx.scale(b.sc, b.sc);
+            ctx.translate(pos.x + (fx ? fx.x : 0), baseY - b.off + (fx ? fx.y : 0));
+            // Scaled about the bubble's BOTTOM (so a shout grows up, away from the
+            // head), tilted about its middle.
+            const s = b.sc * (fx ? fx.s : 1);
+            ctx.scale(s, s);
+            if (fx && fx.r) { ctx.translate(0, -h / 2); ctx.rotate(fx.r); ctx.translate(0, h / 2); }
             ctx.globalAlpha = a;
-            ctx.font = 'bold 13px Rubik';
-            if (!b.w) b.w = ctx.measureText(b.text).width;
-            const w = b.w + 26, h = CHAT_BUB_H;
+            const r = Math.min(15, h / 2);
 
             // Shadows are already forced to 0 on reduced tiers by
             // installLowGfxShadowGuard; the explicit gate keeps the intent local.
             if (!low) { ctx.shadowBlur = 12; ctx.shadowColor = 'rgba(0,0,0,0.45)'; }
             ctx.fillStyle = 'rgba(20,20,22,0.88)';
-            _chatRoundRect(ctx, -w / 2, -h, w, h, h / 2);
+            _chatRoundRect(ctx, -w / 2, -h, w, h, r);
             ctx.fill();
             ctx.shadowBlur = 0;
 
@@ -28864,15 +29779,24 @@ function drawChatBubbles(floorFilter = null) {
                 ctx.fill();
             }
 
-            ctx.strokeStyle = 'rgba(255,255,255,0.10)';
-            ctx.lineWidth = 1;
-            _chatRoundRect(ctx, -w / 2, -h, w, h, h / 2);
+            // A mention is ringed in the mentioned member's colour; the alarm in red,
+            // glowing while it shouts.
+            let stroke = 'rgba(255,255,255,0.10)', lw = 1;
+            if (b.loud >= CHAT_MEN_ALARM_AT) {
+                stroke = `rgba(255,69,58,${(0.6 + 0.4 * (fx ? fx.g : 0)).toFixed(3)})`;
+                lw = 1.6;
+                if (!low && fx) { ctx.shadowBlur = 16 * fx.g; ctx.shadowColor = 'rgba(255,69,58,0.8)'; }
+            } else if (b.accent) {
+                stroke = b.accent.ring;
+                lw = b.forMe ? 1.6 : 1.2;
+            }
+            ctx.strokeStyle = stroke;
+            ctx.lineWidth = lw;
+            _chatRoundRect(ctx, -w / 2, -h, w, h, r);
             ctx.stroke();
+            ctx.shadowBlur = 0;
 
-            ctx.fillStyle = 'rgba(255,255,255,0.95)';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(b.text, 0, -h / 2);
+            _chatDrawContent(ctx, L, h);
             ctx.restore();
         }
     }
@@ -28888,26 +29812,108 @@ function setupChatUI() {
     _chatUi.input = document.getElementById('chat-input');
     _chatUi.count = document.getElementById('chat-input-count');
     _chatUi.send  = document.getElementById('chat-input-send');
+    _chatUi.box   = wrap.querySelector('.chat-input-box');
+    _chatUi.toast = document.getElementById('chat-toast');
+    _chatMen.list = document.getElementById('chat-mention-list');
     if (!_chatUi.input) { _chatUi.wrap = null; return; }
+    const input = _chatUi.input;
 
-    _chatUi.input.setAttribute('maxlength', String(CHAT_MAX_LEN));
-    _chatUi.input.addEventListener('input', () => {
-        // maxlength already covers typing and paste; the clamp keeps the
-        // 25-character rule true even if that attribute is ever edited away.
-        if (_chatUi.input.value.length > CHAT_MAX_LEN) {
-            _chatUi.input.value = _chatUi.input.value.slice(0, CHAT_MAX_LEN);
+    input.addEventListener('input', _chatAfterInput);
+    input.addEventListener('compositionstart', () => { _chatUi.composing = true; });
+    input.addEventListener('compositionend', () => { _chatUi.composing = false; _chatAfterInput(); });
+    // The 50 is held at the door where it can be: a typed or replaced run that doesn't
+    // fit is cut to what does. Line breaks never go in — the mobile "send" key arrives
+    // here as insertParagraph when it doesn't send a keydown Enter — and nor does
+    // formatting (Ctrl+B would otherwise bold a chat line).
+    input.addEventListener('beforeinput', (e) => {
+        const t = e.inputType || '';
+        if (t === 'insertParagraph' || t === 'insertLineBreak') {
+            e.preventDefault();
+            if (!_chatMenPickSelected()) _chatSend();
+            return;
         }
-        _chatRefreshCount();
+        if (t === 'insertFromDrop' || t.startsWith('format')) { e.preventDefault(); return; }
+        if (e.isComposing || _chatUi.composing) return;
+        if (t === 'insertText' && typeof e.data === 'string') {
+            const room = _chatRoom();
+            if (e.data.length > room) {
+                e.preventDefault();
+                if (room > 0) _chatInsertText(e.data.slice(0, room));
+            }
+        }
     });
-    _chatUi.input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter')  { e.preventDefault(); e.stopPropagation(); _chatSend(); }
-        else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeChatBox(); }
+    // Paste is PLAIN TEXT only, on one line, cut to what fits.
+    input.addEventListener('paste', (e) => {
+        e.preventDefault();
+        const raw = (e.clipboardData && e.clipboardData.getData('text/plain')) || '';
+        const t = _chatCleanRun(raw).slice(0, Math.max(0, _chatRoom()));
+        if (t) _chatInsertText(t);
+    });
+    input.addEventListener('drop', (e) => e.preventDefault());
+    input.addEventListener('keydown', (e) => {
+        if (_chatMen.open) {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                e.preventDefault(); e.stopPropagation();
+                _chatMenMove(e.key === 'ArrowDown' ? 1 : -1);
+                return;
+            }
+            if ((e.key === 'Enter' || e.key === 'Tab') && !e.isComposing && _chatMenPickSelected()) {
+                e.preventDefault(); e.stopPropagation();
+                return;
+            }
+            if (e.key === 'Escape') {
+                // Closes the picker only; the box stays. It won't reopen for this @.
+                e.preventDefault(); e.stopPropagation();
+                _chatMen.dismissed = _chatMen.q ? { node: _chatMen.q.node, at: _chatMen.q.at } : null;
+                _chatMenClose();
+                return;
+            }
+        }
+        if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); return; }
+        if (e.key === 'Enter') {
+            if (e.isComposing) return;           // Enter that commits an IME word isn't a send
+            e.preventDefault(); e.stopPropagation(); _chatSend();
+        } else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeChatBox(); }
+    });
+    // The caret moving (arrow keys, a tap inside the text) can put it on or off an @.
+    document.addEventListener('selectionchange', () => {
+        if (_chatUi.open && document.activeElement === input) _chatMenUpdate();
     });
     _chatUi.send?.addEventListener('click', (e) => { e.preventDefault(); _chatSend(); });
-    // A press anywhere in the box (the send button, the counter, the padding) must not
-    // pull focus off the input — losing it drops the mobile keyboard mid-message.
-    // The input itself is excluded so tapping it can still place the caret.
-    _chatUi.wrap.addEventListener('mousedown', (e) => { if (e.target !== _chatUi.input) e.preventDefault(); });
+    // A press anywhere in the box (the send button, the counter, the padding, the
+    // picker) must not pull focus off the input — losing it drops the mobile keyboard
+    // mid-message. The input itself is excluded so tapping it can still place the caret.
+    _chatUi.wrap.addEventListener('mousedown', (e) => { if (!input.contains(e.target)) e.preventDefault(); });
+
+    // The picker: a press picks (click, not pointerdown — a drag that scrolls the list
+    // on a phone must not pick whoever it started on), a hovering mouse highlights, and
+    // the wheel steps the highlight one member at a time so Enter picks what you see.
+    const list = _chatMen.list;
+    if (list) {
+        list.addEventListener('click', (e) => {
+            const row = e.target.closest && e.target.closest('.chat-men-row');
+            if (!row) return;
+            _chatMen.sel = +row.dataset.i || 0;
+            _chatMenPickSelected();
+        });
+        list.addEventListener('pointermove', (e) => {
+            if (e.pointerType !== 'mouse') return;
+            const row = e.target.closest && e.target.closest('.chat-men-row');
+            if (row) _chatMenMove((+row.dataset.i || 0) - _chatMen.sel, true);
+        });
+        list.addEventListener('wheel', (e) => {
+            e.preventDefault(); e.stopPropagation();
+            // deltaMode 1 = lines (a physical wheel on some engines) → pixels.
+            const dy = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
+            _chatMen.wheelAcc += dy;
+            const now = performance.now();
+            if (Math.abs(_chatMen.wheelAcc) >= 40 && now - _chatMen.wheelAt > 70) {
+                _chatMenMove(Math.sign(_chatMen.wheelAcc));
+                _chatMen.wheelAcc = 0;
+                _chatMen.wheelAt = now;
+            }
+        }, { passive: false });
+    }
 
     // Enter opens the box — but only when nothing else is being typed into.
     // Escape closes it from here too: the input's own handler only fires while the
@@ -28944,12 +29950,12 @@ function setupChatUI() {
     // from the keyboard resizing the viewport — take it straight back. Bounded to two
     // attempts inside a 900 ms window so a device that simply refuses to focus can
     // never spin here, and only while the box is genuinely open.
-    _chatUi.input.addEventListener('blur', () => {
+    input.addEventListener('blur', () => {
         if (!_chatUi.open) return;
         if (Date.now() - _chatUi.openedAt > 900) return;
         if (_chatUi.refocus >= 2) return;
         _chatUi.refocus++;
-        try { _chatUi.input.focus({ preventScroll: true }); } catch (_) {}
+        try { input.focus({ preventScroll: true }); } catch (_) {}
     });
 
     // Belt and braces for the mobile keyboard. Cancelling the touchend (see the tap

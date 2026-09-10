@@ -52,6 +52,18 @@ self.addEventListener('activate', (e) => {
     })());
 });
 
+// A mention notification shown through the worker (Android Chrome refuses the page's
+// own `new Notification`): a press brings the site's tab forward, or opens one.
+self.addEventListener('notificationclick', (e) => {
+    e.notification.close();
+    e.waitUntil((async () => {
+        const wins = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+        const w = wins.find(c => 'focus' in c);
+        if (w) return w.focus();
+        if (self.clients.openWindow) return self.clients.openWindow('./');
+    })());
+});
+
 // Delete every cached copy of `url`'s path except `url` itself — i.e. the previous
 // content hashes of a file we just re-downloaded. Without this the cache would grow
 // a new ~3 MB entry per art edit and never shed the old ones.

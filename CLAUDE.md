@@ -225,7 +225,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **تحدي المثابرة** | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the azkar dock and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. See **تحدي المثابرة**. |
 | **رف الجوائز** | Seven trophies on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. From the same panel he **gifts النقطة الماسية**, which may be given more than once. See **لوحة القائد**. |
-| **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٢٥ حرفًا, no more. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
+| **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٥٠ حرفًا, wrapping onto two lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
 | **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
@@ -1129,10 +1129,11 @@ and a rare detour, so it warms on idle, not at spawn.
 
 ## الدردشة القريبة — proximity chat
 
-A **25-character** message that floats over your head. Code is the `الدردشة القريبة`
-block at the very end of `game.js`; markup is `#chat-input-wrap` in `index.html`; styles
-are the matching block at the foot of `style.css`. Grep anchors: `CHAT_`,
-`updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS`.
+A **50-character** message that floats over your head, wrapping onto a second line when
+it needs one. Code is the `الدردشة القريبة` block near the end of `game.js`; markup is
+`#chat-input-wrap` in `index.html`; styles are the matching block in `style.css`. Grep
+anchors: `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`,
+`sendChatWS`, `_chatMen`, `_chatMentionPing`.
 
 > **There is deliberately NO text-to-speech.** It was built (`speechSynthesis`, voice
 > picked by lobby, pitch hashed off the uid) and then **removed on purpose** — don't
@@ -1176,6 +1177,14 @@ message springs in from just under its slot while the older ones slide up.
 - **Two springs per bubble**, both damped **below 1 on purpose**: the stack overshoots a
   hair as it settles (scale peaks at ~1.13, off settles in ~25 frames) — that overshoot
   is the whole iPad feel. A linear slide reads as dead.
+- **A bubble is 1–3 lines tall, so the stack is built from HEIGHTS, never a fixed step.**
+  Each bubble's slot = the stacked height (+`CHAT_BUB_GAP`) of every bubble newer than
+  it. A fixed step is what would make a two-line bubble overlap the one above it.
+- **Layout is measured ONCE, on arrival** (`_chatLayout`, off an offscreen context) into
+  `b.lay = {rtl, lines, w, h}`; the draw only places it. Wrapping splits a text run only
+  at the wrap point, so every piece is still one logical run and the browser does the
+  bidi inside it — splitting word by word would reverse an English phrase inside an
+  Arabic line. Reading direction = the message's first strong character.
 - **`CHAT_HEAD_GAP` is deliberately small enough that the tail tucks INTO the hair.** A
   bubble floating clear above the head reads as a label, not as speech.
 - **`_chatSelfLift` eases MY OWN stack up while the type box is open** so the box never
@@ -1239,13 +1248,82 @@ box is always laid out and enter/exit is `opacity` + `visibility` + `.active`.
   Plus a forced reflow (`void wrap.offsetHeight`) before `focus()`, so the input isn't
   still computed as `visibility: hidden` when focus is requested, and `#chat-input` is
   **16px on mobile** so iOS doesn't zoom the page on focus.
+- **`#chat-input` is a `contenteditable` div, not an `<input>`** — a mention is a real
+  pill in it. Everything an `<input>` gave for free is rebuilt, and each piece is
+  load-bearing:
+  - It needs **`-webkit-user-select: text`** — iOS won't type into an element that
+    inherits `user-select: none`.
+  - No `maxlength`: the 50 is held in `beforeinput` (a run that doesn't fit is cut to
+    what does), paste is intercepted as **plain text**, and an IME composition — which
+    can't be refused mid-flight — is trimmed from the end on `compositionend`
+    (`_chatEnforceMax`).
+  - No line breaks ever go in. The mobile "send" key can arrive as **`beforeinput`
+    `insertParagraph`** with no keydown Enter, so that path sends too. `format*` input
+    types (Ctrl+B) are blocked.
+  - No placeholder attribute: `data-placeholder` shown by `.is-empty::before`, the class
+    decided in JS — an emptied contenteditable often keeps a stray `<br>`, which would
+    stop `:empty` matching. The pseudo is `position: absolute` so it can't push the caret.
+  - The box grows a line **upward** (its bottom is the anchor). `_chatUi.h` is re-read on
+    input only when the height changed (`_chatRemeasure`), never per frame.
+  - The outside-focus guard is now `!input.contains(target)` — a press on a pill is a
+    press IN the input.
+
+### Mentions (الإشارات)
+Typing `@` (at the start or after a space — an `@` mid-word is an email) opens
+`#chat-mention-list` above the box: **online members only, closest first**, three rows
+visible. Arrow keys and the **wheel step the highlight** (the wheel is `preventDefault`ed
+and stepped, so Enter always picks what you see); Enter/Tab/a press picks; Escape closes
+the picker for that `@` without closing the box.
+
+- **Online is structural:** candidates come from `gameState.players`, which only ever
+  holds `activeInGame` members (minus anyone mid-exit). A pill whose member left before
+  send degrades to plain `@name`.
+- **Search runs against the roster, not just the display name** (`_chatMenCandidates`):
+  display name, roster `name`, `dbKey`, `telegramName`, slug match anywhere;
+  `telegramHandle` and email match only from the start (a two-letter query would
+  otherwise match half the inboxes). Arabic is folded by `_fireNormName`. So «الشعيرة»
+  finds the member whose Discord name is "Mu". The row's second line shows the roster
+  name — **never the email**. The Siraj ghost resolves through `bySlug.siraj`.
+- **Wire format:** `{t:'chat',uid,m,s}` — `m` is the plain reading (`@name` text) for
+  clients that predate mentions, `s` the segments `[{t}|{u,n,l}]`, sent only when there
+  is a mention. `l` is the sender's **step** for that member. Still zero Firebase.
+- **The step** (`_chatMen.last[uid] = {at, lv}`, sender-side): a repeat ping of the same
+  member inside `CHAT_MEN_STREAK_MS` (30 s) climbs 1→2→3→4, and the one after 4 starts
+  over. The mentioned member hears `mention_ping` at `CHAT_PING_STEPS` (deeper + louder
+  each step) and **step 4 is `mention_alarm`**. Unlike the arrival cue, **nothing
+  silences a ping** — no distance, no work session, no overlay. It's Web Audio
+  (`playHandled`), so it sounds in a background tab.
+- **The one-second rule:** pinging the same member again inside `CHAT_MEN_COOLDOWN_MS`
+  refuses the WHOLE message — the box stays open with the text, shakes, flashes red
+  (`.refuse`), plays a synthesised "uh-uh" (`_chatNoSound`, no file), and a toast counts
+  the wait down live. The sender hears `chat_mention` on every send that pings someone.
+- **The loud bubble:** a message that is ONLY mentions shouts — iMessage's "loud"
+  effect, a back-overshoot pop with a shaking tilt (`_chatLoudFx`, `CHAT_LOUD[step]`),
+  harder each step, step 4 the biggest with a red glowing ring. It is a pure function of
+  the bubble's age, so the PiP pass can draw it without advancing anything. Scaled about
+  the bubble's bottom (it grows away from the head), tilted about its middle.
+- **A bubble that mentions me ignores the distance fade**, and every mention bubble is
+  ringed in the mentioned member's colour (`_chatMenColor`: their ring colour pushed
+  light enough to read, else a stable hue off the uid).
+- **System notification** (`_chatMentionNotify`) only when the tab isn't focused, only
+  with permission already granted (asked once at entry — this never asks). Gendered by
+  lobby (أشار إليك / أشارت إليكِ). `new Notification` first; Android Chrome throws on
+  it, so the fallback is `registration.showNotification`, and `sw.js` has a
+  `notificationclick` that focuses the tab. **Limit:** a tab the OS has frozen or killed
+  has no socket, so it hears nothing — reaching that would need Web Push and a server.
+- The picker's row cascade is deliberately **not** in `_JUICE_IN_ANIMS`: it re-opens on
+  every `@`, and a rising sweep per keystroke is noise. It plays one blip on open and a
+  tick per highlight step instead. Rows only animate on OPEN — narrowing the list while
+  typing rebuilds them still (`.anim` off).
 
 ### Sanitising is done on BOTH ends
 `_chatClean` strips control and **bidi-override** characters (an override scrambles the
-whole line), collapses whitespace and caps at `CHAT_MAX_LEN`. It runs on send **and on
-receive** — a relayed payload is data from another client and is never trusted to have
-been clamped. The `uid` in a relay payload is client-claimed and spoofable, the same
-known limit the position relay already carries.
+whole line), collapses whitespace and caps at `CHAT_MAX_LEN`; `_chatCleanParts` does the
+same per segment and re-checks every field of `s` (types, lengths, step clamped 1–4, the
+50 shared across segments). It runs on send **and on receive** — a relayed payload is
+data from another client and is never trusted to have been clamped. The `uid` in a relay
+payload is client-claimed and spoofable, the same known limit the position relay already
+carries — which also means a spoofed `l` could fake a step. Fine for the trusted group.
 
 ---
 
