@@ -28568,7 +28568,7 @@ const CHAT_SCL_K   = 0.28, CHAT_SCL_D  = 0.68;
 
 // ── mentions ──
 const CHAT_MEN_COOLDOWN_MS = 1000;   // the same member can't be pinged twice inside this
-const CHAT_MEN_STREAK_MS   = 30000;  // a repeat ping inside this is the NEXT step up…
+const CHAT_MEN_STREAK_MS   = 10000;  // a repeat ping inside this is the NEXT step up…
 const CHAT_MEN_ALARM_AT    = 4;      // …and the fourth is the alarm, after which it starts over
 const CHAT_MEN_MAX_Q       = 24;     // longest @query the picker still follows
 // The ping per step, on the MENTIONED member's end: rate < 1 is deeper and heavier,

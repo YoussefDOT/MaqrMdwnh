@@ -1288,7 +1288,7 @@ the picker for that `@` without closing the box.
   clients that predate mentions, `s` the segments `[{t}|{u,n,l}]`, sent only when there
   is a mention. `l` is the sender's **step** for that member. Still zero Firebase.
 - **The step** (`_chatMen.last[uid] = {at, lv}`, sender-side): a repeat ping of the same
-  member inside `CHAT_MEN_STREAK_MS` (30 s) climbs 1→2→3→4, and the one after 4 starts
+  member inside `CHAT_MEN_STREAK_MS` (10 s — wait longer and the count resets to step 1) climbs 1→2→3→4, and the one after 4 starts
   over. The mentioned member hears `mention_ping` at `CHAT_PING_STEPS` (deeper + louder
   each step) and **step 4 is `mention_alarm`**. Unlike the arrival cue, **nothing
   silences a ping** — no distance, no work session, no overlay. It's Web Audio
