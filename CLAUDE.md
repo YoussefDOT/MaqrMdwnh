@@ -1297,6 +1297,12 @@ the picker for that `@` without closing the box.
   refuses the WHOLE message — the box stays open with the text, shakes, flashes red
   (`.refuse`), plays a synthesised "uh-uh" (`_chatNoSound`, no file), and a toast counts
   the wait down live. The sender hears `chat_mention` on every send that pings someone.
+- **A member in a work session can be pinged once a MINUTE** (`CHAT_MEN_WORK_COOLDOWN_MS`,
+  `_chatMenIsWorking`): a pomodoro or free-mode WORK phase only — `isWorking && !isOnBreak
+  && (isLockedIn || inFreeMode)`. Breaks, the couch, reading and minigames don't count
+  (a minigame raises `isWorking` too, which is why the second half of that test exists).
+  The toast says they're working. Since a minute outlasts the 10 s streak window, a
+  working member never climbs past step 1 — they can't be alarmed. Sender-side only.
 - **The loud bubble:** a message that is ONLY mentions shouts — iMessage's "loud"
   effect, a back-overshoot pop with a shaking tilt (`_chatLoudFx`, `CHAT_LOUD[step]`),
   harder each step, step 4 the biggest with a red glowing ring. It is a pure function of

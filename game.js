@@ -28567,7 +28567,8 @@ const CHAT_OFF_K   = 0.21, CHAT_OFF_D  = 0.72;
 const CHAT_SCL_K   = 0.28, CHAT_SCL_D  = 0.68;
 
 // ── mentions ──
-const CHAT_MEN_COOLDOWN_MS = 1000;   // the same member can't be pinged twice inside this
+const CHAT_MEN_COOLDOWN_MS = 1000;   // the same member can't be pinged twice inside this…
+const CHAT_MEN_WORK_COOLDOWN_MS = 60000;  // …or inside a whole minute while they're WORKING
 const CHAT_MEN_STREAK_MS   = 10000;  // a repeat ping inside this is the NEXT step up…
 const CHAT_MEN_ALARM_AT    = 4;      // …and the fourth is the alarm, after which it starts over
 const CHAT_MEN_MAX_Q       = 24;     // longest @query the picker still follows
@@ -28924,6 +28925,17 @@ function sendChatWS(parts) {
     } catch (_) { return false; }
 }
 
+// Is this member heads-down in a pomodoro or free-mode WORK phase? Not a break, not a
+// couch, not a reading session — and not a minigame, which raises `isWorking` too
+// (hence the isLockedIn / inFreeMode test beside it). Read off the synced users node.
+function _chatMenIsWorking(uid) {
+    const p = gameState.players[uid];
+    return !!(p && p.isWorking && !p.isOnBreak && (p.isLockedIn || p.inFreeMode));
+}
+function _chatMenCooldown(uid) {
+    return _chatMenIsWorking(uid) ? CHAT_MEN_WORK_COOLDOWN_MS : CHAT_MEN_COOLDOWN_MS;
+}
+
 function _chatSend() {
     if (!_chatUi.open) return;
     _chatMenClose();
@@ -28934,14 +28946,17 @@ function _chatSend() {
     if (!parts) { closeChatBox(); return; }
     const now = Date.now();
     const uids = [...new Set(parts.filter(p => p.u && p.u !== gameState.userId).map(p => p.u))];
-    // The one-second rule: refuse the WHOLE message (the box stays open with the text in
-    // it) rather than send it with the ping quietly dropped.
+    // The cooldown — a second, or a minute for someone who's working: refuse the WHOLE
+    // message (the box stays open with the text in it) rather than send it with the
+    // ping quietly dropped. A working member therefore can't be walked up the steps to
+    // the alarm at all: a minute is always longer than the streak window.
     for (const u of uids) {
         const st = _chatMen.last[u];
-        if (st && now - st.at < CHAT_MEN_COOLDOWN_MS) {
+        const cd = _chatMenCooldown(u);
+        if (st && now - st.at < cd) {
             const p = parts.find(x => x.u === u);
             _chatRefuse();
-            _chatCooldownToast(p ? p.n : '', st.at + CHAT_MEN_COOLDOWN_MS);
+            _chatCooldownToast(p ? p.n : '', st.at + cd, cd > CHAT_MEN_COOLDOWN_MS);
             return;
         }
     }
@@ -29036,12 +29051,16 @@ function _chatToastHide() {
 }
 // Counts down to the moment the member can be pinged again, then says so for a beat —
 // a 50 ms wait must not flash past unread.
-function _chatCooldownToast(name, readyAt) {
+function _chatCooldownToast(name, readyAt, working) {
     const hold = Math.max(readyAt - Date.now(), 0) + 700;
     _chatToast(() => {
         const left = readyAt - Date.now();
         if (left <= 0) return 'جاهز! أرسلها الآن';
-        return `مهلًا! انتظر ${_chatArNum((left / 1000).toFixed(1))} ث قبل الإشارة إلى ${name} مجددًا`;
+        // Whole seconds on the long wait; tenths only once it's nearly over.
+        const s = left >= 10000 ? String(Math.ceil(left / 1000)) : (left / 1000).toFixed(1);
+        return working
+            ? `${name} في جلسة عمل — انتظر ${_chatArNum(s)} ث قبل الإشارة مجددًا`
+            : `مهلًا! انتظر ${_chatArNum(s)} ث قبل الإشارة إلى ${name} مجددًا`;
     }, hold);
 }
 
