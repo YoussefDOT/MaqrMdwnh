@@ -1434,7 +1434,10 @@ onDisconnect as a sofa, and **no new Firebase key or rules change exists**. Seat
   `updateChatInputPos` hands off to `_meetPlaceChatInput` while the overlay is up (the box
   sits over my seat), and `body.meet-active .chat-input-wrap` lifts it above the overlay.
   `receiveChatMessage` → `_meetOnChat` floats the line over the sender's seat and bounces
-  them (in the world too). Typing never draws the green ring — only voice does.
+  them (in the world too). A mention in that bubble is the chat's own pill
+  (`_meetFillBubble` → `_chatMakePill`: avatar + name in the member's colour, the
+  bubble ringed in it) — built from nodes, never innerHTML, since it's another
+  client's text. Typing never draws the green ring — only voice does.
 - **Reactions** (فرح، تصفيق، ضحك، حب، حزن، غضب): `{t:'react',uid,r}` on the relay, zero
   Firebase, accepted only from someone seated. In the world `_meetReactFx` is a pure
   function of the reaction's age (squash / hop / rock / heartbeat / droop / shake + a
@@ -1451,6 +1454,11 @@ Worker change** — the relay forwards raw bytes. `onPresenceMessage` hands both
 - `_meetSpeakState` → `'on'` (green ring + a hop on start), `'quiet'` (in the call and
   silent → faded to `MEET_QUIET_A`), or `null` — no live feed, or not in the call — which
   is **not faded**: a member who is only typing must not look absent.
+- **A quiet member fades back IN when they act** (`_meetLight` / `_meetIsQuiet`): starting
+  to talk, a reaction, or a chat line lights them, and they stay lit a moment after
+  (`MEET_LIT_*` — after a sentence, after the reaction ends, for a chat line) before
+  easing back to `MEET_QUIET_A`. In the world `_spkA` eases; in the overlay the
+  `.quiet` class drops and the 0.35 s opacity transition does the fade.
 - A speaker not re-asserted in `MEET_SPK_STALE_MS` drops; no bot word in
   `MEET_VC_STALE_MS` means no feed at all (the pill reads «ديسكورد: غير متصل»).
 - The bot's payloads are client-claimed like everything on the relay — every field is

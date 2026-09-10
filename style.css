@@ -11558,6 +11558,25 @@ body.is-mobile .adm-cal-ms { font-size: 0.62rem; }
     pointer-events: none;
     transition: opacity 0.22s ease, visibility 0s linear 0.22s;
 }
+/* A mention inside a table bubble — the same pill as the chat box's (#chat-input
+   .chat-men), sized for the bubble's line. Its avatar styling is the shared
+   .chat-men-av. The message's own reading direction comes from dir="auto". */
+.meet-bubble .chat-men {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    height: 20px;
+    padding: 0 2px 0 8px;
+    margin: 0 2px;
+    border-radius: 50px;
+    background: var(--men-bg);
+    color: var(--men-fg);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 20px;
+    vertical-align: middle;
+    white-space: nowrap;
+}
 .meet-bubble::after {
     content: '';
     position: absolute;

@@ -29058,7 +29058,7 @@ function receiveChatMessage(player, raw, segs) {
         accent: mens.length ? _chatMenColor(mens[0].u) : null,
     });
     while (list.length > CHAT_STACK_MAX) list.shift();
-    _meetOnChat(player, text);   // the same line over their seat at the meeting table
+    _meetOnChat(player, text, parts);   // the same line over their seat at the meeting table
     // Only someone ELSE's message makes a sound. My own needs no cue — I pressed send.
     if (fromMe) return;
     if (mine) _chatMentionPing(player, mine.l, text);
@@ -32231,6 +32231,11 @@ const MEET_SPK_STALE_MS = 9000;           // the bot re-asserts a live speaker e
 const MEET_HOP_MS = 420;
 const MEET_REACT_MS = 1600;
 const MEET_REACT_COOLDOWN_MS = 700;
+// A quiet member fades back IN whenever they do something — start talking, react or
+// send a chat line — and stays lit a moment after, so they don't blink straight out.
+const MEET_LIT_AFTER_SPEAK_MS = 1500;
+const MEET_LIT_AFTER_REACT_MS = 1500;     // counted from the reaction's end
+const MEET_LIT_CHAT_MS = 4000;
 const MEET_CANVAS_OFF_MS = 520;           // the world pass stops once the overlay covers it
 
 // The table's solid body in MAIN-scene source px, and its seats: four down each long
@@ -32508,6 +32513,16 @@ function _meetSpeakState(uid, now) {
     return _meet.vcIds.has(uid) ? 'quiet' : null;
 }
 
+// Keep a member lit (un-faded) for at least `ms` from now.
+function _meetLight(p, ms) {
+    if (!p) return;
+    p._meetLitUntil = Math.max(p._meetLitUntil || 0, performance.now() + ms);
+}
+// Faded = in the call, silent, and not lit up by something they just did.
+function _meetIsQuiet(p, st, pnow) {
+    return st === 'quiet' && !(p && (p._meetLitUntil || 0) > pnow);
+}
+
 // Pure reads for drawPlayers (safe on the PiP pass — updateMeeting advances them).
 function _meetSpeakFx(player) {
     if (!_meetSeated(player)) return MEET_FX_NONE;
@@ -32591,6 +32606,7 @@ function meetReact(k) {
     if (now - _meet.lastReactAt < MEET_REACT_COOLDOWN_MS) return;
     _meet.lastReactAt = now;
     me._react = { k: def.k, e: def.e, t0: now };
+    _meetLight(me, MEET_REACT_MS + MEET_LIT_AFTER_REACT_MS);
     _meetPlayReactDom(me.userId, def.k);
     _meetBlip(1.25, 0.05);
     sendMeetReactWS(def.k);
@@ -32602,21 +32618,41 @@ function receiveMeetReaction(player, r) {
     const def = MEET_REACT_BY_KEY[r];
     if (!def || !player || !_meetSeated(player)) return;   // only someone at the table reacts
     player._react = { k: def.k, e: def.e, t0: performance.now() };
+    _meetLight(player, MEET_REACT_MS + MEET_LIT_AFTER_REACT_MS);
     if (_meet.open) { _meetPlayReactDom(player.userId, def.k); _meetBlip(1.1, 0.03); }
 }
 
 // A chat line from someone at the table: their seat bounces (in the world and in the
 // overlay) and the line floats over their seat. Voice is what draws the green ring —
 // typing never does.
-function _meetOnChat(player, text) {
+// A table bubble speaks the chat's own language: a mention is the same pill the input
+// box and the world bubbles use (_chatMakePill — avatar + name in the member's
+// colour), and a bubble that mentions anyone is ringed in that member's colour.
+// Built from nodes, never innerHTML — every part is text another client sent.
+function _meetFillBubble(b, text, parts) {
+    const mens = Array.isArray(parts) ? parts.filter(p => p && p.u) : [];
+    b.style.borderColor = mens.length ? _chatMenColor(mens[0].u).ring : '';
+    if (!mens.length) { b.textContent = text || ''; return; }
+    b.textContent = '';
+    for (const p of parts) {
+        if (p.u) {
+            const pl = gameState.players[p.u];
+            b.appendChild(_chatMakePill(p.u, p.n || (pl && pl.username) || '', pl && pl.avatar));
+        } else if (p.t) {
+            b.appendChild(document.createTextNode(p.t));
+        }
+    }
+}
+function _meetOnChat(player, text, parts) {
     if (!player || !_meetSeated(player)) return;
     player._meetHopT = performance.now();
+    _meetLight(player, MEET_LIT_CHAT_MS);
     if (!_meet.open) return;
     const el = _meet.seatEls.get(player.userId);
     if (!el) return;
     const b = el.querySelector('.meet-bubble');
     if (b) {
-        b.textContent = text || '';
+        _meetFillBubble(b, text, parts);
         b.classList.remove('show'); void b.offsetWidth; b.classList.add('show');
         clearTimeout(el._bubT);
         el._bubT = setTimeout(() => b.classList.remove('show'),
@@ -32716,7 +32752,7 @@ function _meetMakeSeat(p) {
     const el = document.createElement('div');
     el.className = 'meet-seat' + (me ? ' me' : '');
     el.dataset.uid = p.userId;
-    el.innerHTML = '<div class="meet-bubble"></div>'
+    el.innerHTML = '<div class="meet-bubble" dir="auto"></div>'
                  + '<div class="meet-bob"><div class="meet-av"><span class="meet-emoji" aria-hidden="true"></span></div></div>'
                  + '<div class="meet-name"></div>';
     const av = el.querySelector('.meet-av');
@@ -32797,10 +32833,10 @@ function _meetSyncSeats(opening) {
             _meet.countEl.textContent = `${n.toLocaleString('ar-EG')} على الطاولة`;
         }
     }
-    const now = Date.now();
+    const now = Date.now(), pnow = performance.now();
     for (const [uid, el] of _meet.seatEls) {
         const st = _meetSpeakState(uid, now);
-        const spk = st === 'on', quiet = st === 'quiet';
+        const spk = st === 'on', quiet = _meetIsQuiet(gameState.players[uid], st, pnow);
         if (el._spk !== spk) { el._spk = spk; el.classList.toggle('spk', spk); if (spk) _meetHopEl(el); }
         if (el._quiet !== quiet) { el._quiet = quiet; el.classList.toggle('quiet', quiet); }
     }
@@ -32915,10 +32951,12 @@ function updateMeeting() {
         if (p._react && pnow - p._react.t0 >= MEET_REACT_MS) p._react = null;
         const st = _meetSeated(p) ? _meetSpeakState(p.userId, now) : null;
         const on = st === 'on';
-        const a0 = p._spkA ?? 1;
-        p._spkA = a0 + ((st === 'quiet' ? MEET_QUIET_A : 1) - a0) * k;
         if (on && !p._spkOn) p._meetHopT = pnow;
+        if (!on && p._spkOn) _meetLight(p, MEET_LIT_AFTER_SPEAK_MS);   // finished a sentence
         p._spkOn = on;
+        // Eased, never snapped — so a quiet member visibly fades IN when they act.
+        const a0 = p._spkA ?? 1;
+        p._spkA = a0 + ((_meetIsQuiet(p, st, pnow) ? MEET_QUIET_A : 1) - a0) * k;
     }
 
     if (_meet.open) {
