@@ -3162,6 +3162,12 @@ function syncEntityRenderToTarget(entity) {
 // When the buffer does starve we extrapolate with the velocity easing to zero
 // (a natural coast to a stop) instead of running flat out and then clamping
 // dead — the clamp was the visible half of the old jump.
+//
+// And two things that made a GOOD link still look faintly rougher than your own
+// avatar: the replay ran on performance.now() read mid-frame (an uneven step per
+// frame — see _netFrameNow), and it drew straight lines between samples (a corner
+// at every packet — see _netCurve). Both are fixed; the sender also stamps `w`
+// with its frame time and sends positions to a tenth of a unit.
 const NET_DELAY_MIN   = 130;  // ms behind real time on a clean link (≈1.4 send intervals)
 const NET_DELAY_MAX   = 520;  // ms ceiling — past this we'd rather look laggy than break
 const NET_JITTER_K    = 2.2;  // delay = MIN + jitter * K
@@ -3184,6 +3190,48 @@ const NET_BUF_MAX_AGE = 1600; // ms of history to retain
 
 function _netNow() {
     return (typeof performance !== 'undefined') ? performance.now() : Date.now();
+}
+
+/* The clock the REPLAY runs on: this frame's rAF timestamp (set at the top of
+   gameLoop, same origin as performance.now()), not performance.now() read
+   mid-frame. The local player moves by rAF-timestamp deltas, so it advances an
+   exactly even step per displayed frame; remotes rendered at `performance.now()`
+   advanced by however long the work BEFORE updatePlayerRenderPositions happened
+   to take that frame — 12 ms of motion one frame, 21 the next — and read as a
+   faint stutter next to the perfectly even local walk. The sender stamps `w` from
+   it too: a position is the one computed THIS frame, so the frame's time is its
+   true time. Arrivals (pushNetSample) stay on performance.now() — that is when a
+   packet actually landed. Falls back when no frame ran recently (hidden tab) or
+   when a browser's rAF timestamp isn't on the performance.now() timeline. */
+function _netFrameNow() {
+    const p = _netNow();
+    const f = gameState._frameT;
+    return (f > 0 && f <= p + 1 && p - f < 100) ? f : p;
+}
+
+/* Monotone cubic (Fritsch–Carlson / PCHIP) slope at a sample, per axis, from the
+   secants either side of it. Straight lines between ~11 packets a second put a
+   corner at every sample — every turn and every speed ramp replayed as a polygon.
+   A cubic through them is smooth; the MONOTONE one is zero wherever the motion
+   pauses or reverses, so it can never overshoot a sample (Catmull-Rom would, and a
+   stop would read as a rubber band past the spot and back). */
+function _netSlope(d0, d1, h0, h1) {
+    if (d0 * d1 <= 0) return 0;
+    const w1 = 2 * h1 + h0, w2 = h1 + 2 * h0;
+    return (w1 + w2) / (w1 / d0 + w2 / d1);
+}
+// Hermite between a and b (f ∈ [0,1]) on one axis; p / q are the neighbours
+// (null at the ends of the buffer → that end uses the plain secant). With both
+// ends on the secant this is exactly the old straight line.
+function _netCurve(p, a, b, q, f, span, k) {
+    const va = a[k], vb = b[k];
+    const d = (vb - va) / span;
+    let ma = d, mb = d;
+    if (p) { const h = (a.t - p.t) || 1; ma = _netSlope((va - p[k]) / h, d, h, span); }
+    if (q) { const h = (q.t - b.t) || 1; mb = _netSlope(d, (q[k] - vb) / h, span, h); }
+    const f2 = f * f, f3 = f2 * f;
+    return (2 * f3 - 3 * f2 + 1) * va + (f3 - 2 * f2 + f) * span * ma
+         + (3 * f2 - 2 * f3) * vb + (f3 - f2) * span * mb;
 }
 
 function _netClockFor(player) {
@@ -3273,7 +3321,7 @@ function interpolateRemoteFromBuffer(entity) {
     if (!buf || !buf.length) return false;
     const n = entity._netClock;
     if (!n) return false;
-    const now = _netNow();
+    const now = _netFrameNow();
     const dtF = Math.max(0.2, Math.min(6, gameState.dtFactor || 1));
 
     // Jitter evidence goes stale while someone stands still — nothing arrives, so
@@ -3317,8 +3365,10 @@ function interpolateRemoteFromBuffer(entity) {
         const a = buf[i], b = buf[i + 1];
         const span = b.t - a.t || 1;
         const f = Math.min(1, Math.max(0, (renderT - a.t) / span));
-        ix = a.x + (b.x - a.x) * f;
-        iy = a.y + (b.y - a.y) * f;
+        const p = i > 0 ? buf[i - 1] : null;
+        const q = i + 2 < buf.length ? buf[i + 2] : null;
+        ix = _netCurve(p, a, b, q, f, span, 'x');
+        iy = _netCurve(p, a, b, q, f, span, 'y');
         // Animation state belongs to playback time too — applying it on arrival
         // stopped a remote walk cycle a whole interpolation delay early.
         const act = (f < 1 ? a : b);
@@ -5217,7 +5267,7 @@ function sendSitWS(dir, sx, sy, tx, ty) {
             tx: Math.round(tx), ty: Math.round(ty),
             // Same sender clock as the position packets, so the receiver can slot
             // the hop into the replay timeline instead of playing it on arrival.
-            w: Math.round(_netNow()),
+            w: Math.round(_netFrameNow() * 10) / 10,
         }));
         return true;
     } catch (_) { return false; }
@@ -5272,7 +5322,7 @@ function _beginRemoteSitAnim(player, msg) {
 // skips anyone with a live _sitAnim so the two never fight over renderX/renderY.
 const _remoteSitOut = { x: 0, y: 0 };
 function updateRemoteSitAnims() {
-    const now = _netNow();
+    const now = _netFrameNow();   // the replay's clock — see _netFrameNow
     for (const player of Object.values(gameState.players)) {
         if (player.userId === gameState.userId) continue;
         // Fire a queued hop once the replay has caught up to it — one at a time,
@@ -9160,8 +9210,11 @@ function sendPositionWS(x, y, force) {
     presenceNet.lastVX = hx; presenceNet.lastVY = hy;
     const payload = JSON.stringify({
         uid: gameState.userId,
-        x: Math.round(x),
-        y: Math.round(y),
+        // A tenth of a unit, not a whole one: whole-unit rounding moved every
+        // sample up to half a unit, which over a ~27-unit packet spacing replayed
+        // as a few-percent speed wobble from one segment to the next.
+        x: Math.round(x * 10) / 10,
+        y: Math.round(y * 10) / 10,
         m: (p && p.isMoving) ? 1 : 0,
         s: (p && p.isSprinting) ? 1 : 0,
         fl: (p && p.floor) || 1,    // which floor I'm on → others scale me correctly
@@ -9169,7 +9222,9 @@ function sendPositionWS(x, y, force) {
         // onto its own clock with a minimum-filtered offset, so its jitter buffer
         // replays the samples at the spacing they were SENT at, not the spacing
         // the network happened to deliver them at. See pushNetSample.
-        w: Math.round(now),
+        // The FRAME's time, not now: this position was computed this frame, and
+        // performance.now() here also counts whatever ran before us in it.
+        w: Math.round(_netFrameNow() * 10) / 10,
     });
     try { ws.send(payload); return true; } catch (_) { return false; }
 }
@@ -9984,6 +10039,7 @@ function gameLoop(timestamp) {
     if (gameState._dupSessionDetected) return;
 
     if (!timestamp) timestamp = performance.now();
+    gameState._frameT = timestamp;   // the remote-player replay's clock (see _netFrameNow)
     if (!gameState.lastTime) gameState.lastTime = timestamp;
     let deltaTime = timestamp - gameState.lastTime;
     gameState.lastTime = timestamp;
