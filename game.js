@@ -3169,6 +3169,7 @@ const NET_JITTER_MIN  = 6;
 const NET_JITTER_MAX  = 220;
 const NET_JIT_ATTACK  = 0.40; // grow the jitter estimate fast…
 const NET_JIT_DECAY   = 0.015;// …shrink it slowly (one good packet proves nothing)
+const NET_JIT_HALFLIFE= 5000; // ms — stale jitter halves this fast with no new evidence
 const NET_OFF_CREEP   = 0.003;// clock-offset drift follow (a faster path snaps instantly)
 const NET_DELAY_SHRINK= 0.02; // per 60 fps frame, easing `delay` back down
 const NET_GAP_MULT    = 1.6;  // delay floor as a multiple of the sender's packet spacing
@@ -3191,6 +3192,7 @@ function _netClockFor(player) {
         n = player._netClock = {
             off: null,           // sender clock → local clock (minimum-filtered)
             lastW: 0,            // newest sender stamp seen (drops stale / duplicate)
+            lastRecv: 0,         // local arrival time of the newest packet (idle test)
             gap: POS_WS_MIN_INTERVAL, // observed sender packet spacing
             jitter: NET_JITTER_MIN,
             delay: NET_DELAY_MIN,
@@ -3210,6 +3212,7 @@ function pushNetSample(player, x, y, w) {
     const now = _netNow();
     if (player.renderX === undefined) { player.renderX = x; player.renderY = y; }
     const n = _netClockFor(player);
+    n.lastRecv = now;
 
     let t;
     if (typeof w === 'number' && isFinite(w)) {
@@ -3273,6 +3276,15 @@ function interpolateRemoteFromBuffer(entity) {
     const now = _netNow();
     const dtF = Math.max(0.2, Math.min(6, gameState.dtFactor || 1));
 
+    // Jitter evidence goes stale while someone stands still — nothing arrives, so
+    // nothing can lower it, and a spike from minutes ago would keep their next
+    // walk-off late. Decay it over time, but ONLY while the stream is silent: during
+    // a walk the arrivals themselves are the evidence, and bleeding it off between
+    // periodic spikes just set up the next starve.
+    if (now - n.lastRecv > NET_IDLE_GAP) {
+        n.jitter = Math.max(NET_JITTER_MIN, n.jitter * Math.pow(0.5, dtF * 16.667 / NET_JIT_HALFLIFE));
+    }
+
     // Grow the delay the instant the link demands it; give it back slowly.
     const target = Math.max(NET_DELAY_MIN, Math.min(NET_DELAY_MAX,
         Math.max(NET_DELAY_MIN + n.jitter * NET_JITTER_K, n.gap * NET_GAP_MULT)));
@@ -3292,8 +3304,13 @@ function interpolateRemoteFromBuffer(entity) {
     let ix, iy, starving = false;
 
     if (buf.length === 1 || renderT <= buf[0].t) {
+        // Playback hasn't reached the first sample yet — the buffer is still
+        // filling (a walk just started after standing still). The avatar is
+        // HOLDING here, so it must not play a walk cycle: the packet that says
+        // "walking" describes a moment the replay hasn't got to. Reading its flag
+        // is what started the legs a whole delay before the body moved.
         ix = buf[0].x; iy = buf[0].y;
-        if (buf[0].m !== undefined) { entity.isMoving = !!buf[0].m; entity.isSprinting = !!buf[0].s; }
+        if (buf[0].m !== undefined) { entity.isMoving = false; entity.isSprinting = false; }
     } else if (renderT <= lastS.t) {
         let i = buf.length - 2;
         while (i > 0 && buf[i].t > renderT) i--;
@@ -5198,35 +5215,78 @@ function sendSitWS(dir, sx, sy, tx, ty) {
             t: 'sit', uid: gameState.userId, d: dir,
             sx: Math.round(sx), sy: Math.round(sy),
             tx: Math.round(tx), ty: Math.round(ty),
+            // Same sender clock as the position packets, so the receiver can slot
+            // the hop into the replay timeline instead of playing it on arrival.
+            w: Math.round(_netNow()),
         }));
         return true;
     } catch (_) { return false; }
 }
 
+// Remote avatars are replayed `delay` ms in the past (see the jitter buffer), but a
+// sit event used to start the instant it ARRIVED — so the hop jumped ahead of the
+// replay: the avatar snapped forward to the sofa (skipping the last stretch of its
+// walk) and only then hopped. Now the event is stamped with the sender's clock and
+// QUEUED, then fired when playback reaches the moment it was sent, exactly like a
+// position sample. The walk plays out, and the hop starts where the avatar is.
+const SIT_QUEUE_MAX_MS = 900;   // failsafe: never hold a hop longer than this past arrival
+const SIT_ADOPT_R = 140;        // world units — within this, the hop starts from the avatar's own spot
+
 function startRemoteSitAnim(player, msg) {
     if (typeof msg.sx !== 'number' || typeof msg.tx !== 'number') return;
+    const n = player._netClock;
+    // `wt` = when it was sent, on OUR clock (null = no clock / older client → fire now).
+    const wt = (n && n.off !== null && typeof msg.w === 'number' && isFinite(msg.w))
+        ? msg.w + n.off : null;
+    if (!player._sitQueue) player._sitQueue = [];
+    player._sitQueue.push({ msg, wt, deadline: _netNow() + SIT_QUEUE_MAX_MS });
+}
+
+function _beginRemoteSitAnim(player, msg) {
+    // Start the hop from where the avatar actually IS on screen, not from the
+    // sender's start point — by now the replay has walked it there, so any
+    // leftover gap is a rounding error and must not show as a snap. A big gap
+    // means the replay really is elsewhere (socket hiccup): trust the sender then.
+    let sx = msg.sx, sy = msg.sy;
+    const rx = player.renderX, ry = player.renderY;
+    if (rx !== undefined && ry !== undefined) {
+        const dx = rx - msg.sx, dy = ry - msg.sy;
+        if (dx * dx + dy * dy <= SIT_ADOPT_R * SIT_ADOPT_R) { sx = rx; sy = ry; }
+    }
     player._sitAnim = {
         active: true, dir: msg.d === 'out' ? 'out' : 'in', stage: 'anticipate', stageT: 0,
-        startPos: { x: msg.sx, y: msg.sy },
+        startPos: { x: sx, y: sy },
         targetX: msg.tx, targetY: msg.ty,
         scaleX: 1, scaleY: 1, hopY: 0,
     };
-    // The hop owns this avatar's position for its duration, so start it from the
-    // sender's start point and drop the interpolation buffer — a queued sample
-    // landing mid-hop would drag the avatar off the arc.
-    player.renderX = msg.sx; player.renderY = msg.sy;
-    player.x = msg.sx; player.y = msg.sy;
+    // The hop owns this avatar's position for its duration — drop the
+    // interpolation buffer, or a queued sample landing mid-hop would drag the
+    // avatar off the arc.
+    player.renderX = sx; player.renderY = sy;
+    player.x = sx; player.y = sy;
     player._netBuf = null;
     player.isMoving = false;
     player.isSprinting = false;
 }
-
 // Drive every remote player's hop. Runs before updatePlayerRenderPositions, which
 // skips anyone with a live _sitAnim so the two never fight over renderX/renderY.
 const _remoteSitOut = { x: 0, y: 0 };
 function updateRemoteSitAnims() {
+    const now = _netNow();
     for (const player of Object.values(gameState.players)) {
         if (player.userId === gameState.userId) continue;
+        // Fire a queued hop once the replay has caught up to it — one at a time,
+        // so a quick sit-then-stand plays both hops in order instead of the
+        // second one cutting the first off mid-air.
+        const q = player._sitQueue;
+        if (q && q.length && !(player._sitAnim && player._sitAnim.active)) {
+            const it = q[0], n = player._netClock;
+            // Compared against the LIVE delay each frame, the same clock the
+            // position replay runs on, so the hop lands on the replay's timeline.
+            if (it.wt === null || !n || now >= it.deadline || now - n.delay >= it.wt) {
+                _beginRemoteSitAnim(player, q.shift().msg);
+            }
+        }
         const sa = player._sitAnim;
         if (!sa || !sa.active) continue;
         _stepSitAnim(sa, _remoteSitOut);
@@ -5234,8 +5294,20 @@ function updateRemoteSitAnims() {
         player.renderY = _remoteSitOut.y;
         player.x = _remoteSitOut.x;
         player.y = _remoteSitOut.y;
-        // Whatever Firebase says next is the truth; the buffer restarts from here.
-        if (!sa.active) { player._sitAnim = null; player._netBuf = null; }
+        if (!sa.active) {
+            player._sitAnim = null;
+            // Hand back to the replay without a seam. Packets that arrived DURING
+            // the hop (someone walking off the moment they land) are already on the
+            // right timeline — keep them, and let the continuity guard absorb any
+            // gap from the landing spot. Dropping them made the next packet start
+            // a fresh buffer somewhere down the path: a snap right after standing.
+            const n = player._netClock;
+            if (player._netBuf && player._netBuf.length && n) {
+                n.playing = true; n.resync = true; n.starved = false;
+            } else {
+                player._netBuf = null;
+            }
+        }
     }
 }
 
@@ -24560,7 +24632,8 @@ function _updateBookProp(player, isLocal) {
     // under a player who's still mid-air. Remotes read their own relayed hop.
     const seated = isLocal
         ? (gameState.reading.active && gameState.isSitting && !gameState.sitAnim.active)
-        : !!(player.isReading && player.sitSeatId && !(player._sitAnim && player._sitAnim.active));
+        : !!(player.isReading && player.sitSeatId && !(player._sitAnim && player._sitAnim.active)
+             && !(player._sitQueue && player._sitQueue.length));
     const target = seated ? 1 : 0;
     const cur = player._bookSlide || 0;
     // Retract fast (in sync with the camera zoom-out) while this player's own
