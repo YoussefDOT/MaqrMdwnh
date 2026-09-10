@@ -8776,8 +8776,8 @@ body.lib-panel-open.is-mobile #game-canvas {
    الهوية هوية المدونة، منقولة من دليل الفريق (mdwnstudio/Members): ورق ثلجي،
    حبر واحد وشفافيّاته بدل الرمادي، الألوان الأربعة (--brand-*)، رموز الفرشاة
    من «Icon Elements» مطليّة بـ mask، خطّ Baloo Bhaijaan 2، وخطّ ذهبي يُمسح تحت
-   الكلمة المهمّة في العنوان. البطاقة وحدها ورقٌ فاتح بين زجاج الواجهة الداكن —
-   مقصود: هي الشيء الوحيد المطلوب منك كل يوم.
+   الكلمة المهمّة في العنوان. الورق للّوحة وحدها؛ البطاقة والشكل المطويّ زجاجٌ
+   داكن كبقية الواجهة، بالخطّ نفسه ورموز الفرشاة نفسها (الرمز فيروزي).
 
    الرصيف الرابع في مكدّس الزاوية (بطاقة → أدوات → أذكار → حضور → لوحة المهام).
    موضعه يُحسب في JS من مستطيل البطاقة، تمامًا كرصيف الأذكار.
@@ -8785,7 +8785,8 @@ body.lib-panel-open.is-mobile #game-canvas {
    قواعد محفوظة هنا:
    • الظهور داخل البطاقة يعيش في الـ keyframes مع `backwards` — والأساس مرئي.
      أنيميشن لم يعمل (فايرفوكس) يترك المحتوى ظاهرًا، لا لوحةً فارغة.
-   • لا `backdrop-filter` إطلاقًا: الورق معتم، فلا شيء خلفه يستحق الطمس.
+   • الطمس (`backdrop-filter`) على زجاج البطاقة للحاسوب وحده — لا على الجوال
+     ولا الرسوميات المخفّضة: فوق اللوحة الحيّة يُعاد رسمه كل إطار.
    • لا letter-spacing على نص عربي — يفكّ وصل الحروف في سفاري.
    ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -8807,6 +8808,22 @@ body.lib-panel-open.is-mobile #game-canvas {
     --cd-pop:  cubic-bezier(0.34, 1.56, 0.64, 1);
     --cd-ease: cubic-bezier(0.22, 1, 0.36, 1);
     font-family: 'Baloo Bhaijaan 2', 'Rubik', system-ui, sans-serif;
+}
+/* البطاقة زجاج داكن: الرموز نفسها، مقلوبة إلى الأبيض وشفافيّاته. اللوحة
+   (#chal-modal) ليست داخل الرصيف، فتبقى على الورق. */
+.chal-dock {
+    --cd-snow:   #141414;
+    --cd-ink:    rgba(255, 255, 255, 0.92);
+    --cd-ink-70: rgba(255, 255, 255, 0.72);
+    --cd-ink-55: rgba(255, 255, 255, 0.50);
+    --cd-ink-40: rgba(255, 255, 255, 0.36);
+    --cd-ink-30: rgba(255, 255, 255, 0.28);
+    --cd-ink-12: rgba(255, 255, 255, 0.14);
+    --cd-ink-06: rgba(255, 255, 255, 0.07);
+    --cd-line:   rgba(255, 255, 255, 0.09);
+    --cd-teal-ink: var(--brand-teal);
+    --cd-blue-ink: #8ecbff;
+    --cd-glass:  rgba(18, 18, 18, 0.68);
 }
 
 .chal-dock {
@@ -8838,10 +8855,10 @@ body.lib-panel-open.is-mobile #game-canvas {
     width: 252px;
     padding: 9px 13px 10px 12px;
     border-radius: 22px;
-    background: var(--cd-snow);
+    background: var(--cd-glass);
     color: var(--cd-ink);
-    border: 2px solid var(--cd-line);
-    box-shadow: 0 12px 30px -16px rgba(0, 0, 0, 0.75);
+    border: 1px solid var(--cd-line);
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30);
     overflow: hidden;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
@@ -8853,12 +8870,27 @@ body.lib-panel-open.is-mobile #game-canvas {
     to   { opacity: 1; transform: none; }
 }
 @media (hover: hover) and (pointer: fine) {
-    .chal-card:hover { transform: translateY(-2px); border-color: rgba(38, 38, 38, 0.22); }
+    .chal-card:hover { transform: translateY(-2px); border-color: rgba(255, 255, 255, 0.18); }
 }
 /* الضغطة تنكمش — إلا إن كانت على زرّ الطيّ (بلا :has يسقط السطر كله، لا ضرر) */
 .chal-card:active:not(:has(.chal-fold:active)) { transform: scale(0.975); }
 .chal-card:focus-visible { outline: 3px solid var(--brand-blue); outline-offset: 3px; }
 .chal-card[hidden] { display: none; }
+/* الطمس للحاسوب وحده — على الجوال أو الرسوميات المخفّضة يُعاد رسمه كل إطار فوق
+   اللوحة الحيّة، فيأخذ الزجاج عتمة أكثر بدلًا منه. */
+@media (hover: hover) and (pointer: fine) {
+    .chal-card,
+    .chal-mini {
+        -webkit-backdrop-filter: blur(20px) saturate(1.6);
+        backdrop-filter: blur(20px) saturate(1.6);
+    }
+}
+body.reduced-gfx .chal-card, body.reduced-gfx .chal-mini,
+body.is-mobile .chal-card,   body.is-mobile .chal-mini {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(18, 18, 18, 0.80);
+}
 
 /* شريط الحافة يحمل معلومة، كبطاقات دليل الفريق: ذهبي = اليوم مفتوح،
    فيروزي = اكتمل، أزرق = إجازة. */
@@ -8887,7 +8919,7 @@ body.lib-panel-open.is-mobile #game-canvas {
     position: relative;
     display: flex; align-items: center; gap: 7px;
 }
-.chal-head-mark { width: 22px; height: 22px; }
+.chal-head-mark { width: 22px; height: 22px; background: var(--brand-teal); }
 .chal-head-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
 .chal-title {
     font-size: 0.92rem; font-weight: 800; line-height: 1.35; color: var(--cd-ink);
@@ -8970,19 +9002,19 @@ body.lib-panel-open.is-mobile #game-canvas {
     display: flex; align-items: center; gap: 6px;
     padding: 3px 11px 3px 9px;
     border-radius: 999px;
-    border: 2px solid var(--cd-line);
-    background: var(--cd-snow);
+    border: 1px solid var(--cd-line);
+    background: var(--cd-glass);
     color: var(--cd-ink);
     font-family: inherit;
     cursor: pointer;
-    box-shadow: 0 10px 22px -12px rgba(0, 0, 0, 0.75);
+    box-shadow: 0 4px 18px rgba(0, 0, 0, 0.30);
     animation: chalCardIn 0.42s var(--cd-pop) backwards;
     transition: transform 0.24s var(--cd-pop), border-color 0.18s;
 }
-.chal-mini:hover { border-color: rgba(38, 38, 38, 0.22); }
+.chal-mini:hover { border-color: rgba(255, 255, 255, 0.18); }
 .chal-mini:active { transform: scale(0.93); }
 .chal-mini[hidden] { display: none; }
-.chal-mini-mark { width: 16px; height: 16px; }
+.chal-mini-mark { width: 16px; height: 16px; background: var(--brand-teal); }
 .chal-mini-day {
     font-size: 0.74rem; font-weight: 800; line-height: 1.6; color: var(--cd-ink);
 }

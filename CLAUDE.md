@@ -1858,22 +1858,27 @@ and modal. Round one itself — the seven-day **work** streak, ٣ → ٩ سبت�
 `index.html`; styles are the matching block at the foot of `style.css`. Grep anchors: `DUTY`,
 `_dutyTick`, `_dutyBank`, `_dutySetVacation`, `_chalPayDue`, `_chalClaim`.
 
-### The look — the مدونة brand, not the HUD's dark glass
+### The look — the مدونة brand (the panel on paper, the card in HUD glass)
 Renamed from «تحدي المثابرة» (it is a mandatory rule now, not a challenge) and restyled
 after دليل الفريق (`../Members`, `css/members.css`): **snow paper `#faf9f7`, one ink
 `#262626` and its opacities instead of greys, the four `--brand-*` colours, brush marks
 from `Icon Elements` painted through `mask` (`--ico-0` / `--ico-3`), Baloo Bhaijaan 2
 (already loaded non-blocking for the library pills), and a gold highlighter swipe under
 the key word of the panel's head** (`<em>`, written by `_chalPaintModal` via `innerHTML`
-— static strings only). The card's inline-start edge stripe carries the day's state
+— static strings only). **The card and the folded pill are dark glass like the rest of the
+HUD** — the same `--cd-*` tokens are re-declared on `.chal-dock` as white-on-glass, so
+every rule serves both surfaces and the panel (`#chal-modal`, not inside the dock) stays
+on paper. The mark beside «حضور المقر» is **brand teal**. The card's inline-start edge stripe carries the day's state
 (gold open · teal done · blue vacation), the progress fill reveals the four colours
 right-to-left (fixed `background-size` = the bar's width, so filling uncovers rather than
 squashes the gradient). Tokens are scoped `--cd-*` on `.chal-dock` / `.chal-modal`.
 - **The whole card is the button** (`#chal-card`, `role="button"` + `tabindex`; it can't
   be a `<button>` because it holds the fold button). The fold button stops its own click.
   Enter/Space open it and are stopped so they never reach the chat's Enter.
-- **No `backdrop-filter` anywhere** — the paper is opaque; **no `letter-spacing`** on
-  its Arabic (Safari breaks the joins).
+- **`backdrop-filter` on the card's glass is desktop-only** (`hover: hover` +
+  `pointer: fine`); `body.is-mobile` / `body.reduced-gfx` drop it for a more opaque
+  background (invariant 10). The paper panel has none. **No `letter-spacing`** on its
+  Arabic (Safari breaks the joins).
 - A Baloo swap after first paint changes the card's height, so `document.fonts`
   `loadingdone` re-runs the paint + `_hudPositionDock`.
 - Internal ids/classes stay `chal-*`, the localStorage key stays `mdwnh_chal_minimized`,
@@ -1906,6 +1911,15 @@ Under `users/{uid}` this would re-stream every member's every minute to both lob
   held against anyone). Both sides call it, so the two dots can never disagree.
 
 ### Vacations — two a WEEK, today only
+
+**A day that ends short takes one by itself** (`_dutyAutoVac`). A finished day under
+three hours reads as `vac`, not `miss`, while that week still has a vacation left — the
+ones the member took are counted first, the rest go to the short days oldest first; with
+both spent, a short day is a real `miss`. It is **derived on read and never written**
+(pass the record map as `_dutyStateOf`'s 4th argument — `_dutyDayState` does), so the
+member's ladder, `_dutyVacLeft()` and the leader's panel agree, and it covers weeks the
+member never opened the site in. Its ms stay as recorded; the leader's calendar tooltips
+it «إجازة تلقائية». Today is never judged — it isn't over.
 `DUTY.vacPerWeek` (2), weeks starting **Sunday** like the leader's panel. The button is in the
 modal (tap anywhere on the card): **two presses**, the second reading «تأكيد: سيُمسح تقدّم
 اليوم», then `{ms: 0, vac: ts}` REPLACES today's record — the brief says taking one removes

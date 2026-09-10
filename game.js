@@ -27872,15 +27872,41 @@ function _dutyRec(days, key) {
 }
 /* One word per day, shared by the member's own ladder and the leader's panel so
    the two can never disagree: future · vac · done · now (today, still open) ·
-   pre (before the duty started — owed nothing) · miss. */
-function _dutyStateOf(rec, key, todayKey) {
+   pre (before the duty started — owed nothing) · miss.
+   Pass `days` (that member's record map) and a finished day that fell short of three
+   hours may read as `vac` — see _dutyAutoVac. Without it, it is always `miss`. */
+function _dutyStateOf(rec, key, todayKey, days) {
     if (key > todayKey) return 'future';
     if (rec.vac) return 'vac';
     if (rec.ms >= DUTY.goalMs) return 'done';
     if (key === todayKey) return 'now';
-    return key < DUTY_START_KEY ? 'pre' : 'miss';
+    if (key < DUTY_START_KEY) return 'pre';
+    return days && _dutyAutoVac(days, key, todayKey) ? 'vac' : 'miss';
 }
-function _dutyDayState(days, key, todayKey) { return _dutyStateOf(_dutyRec(days, key), key, todayKey); }
+function _dutyDayState(days, key, todayKey) { return _dutyStateOf(_dutyRec(days, key), key, todayKey, days); }
+
+/* A finished day that fell short of three hours SPENDS a vacation by itself, while
+   the week still has one. Derived on read, never written: the member's ladder, the
+   card's «الإجازات المتبقية» and the leader's panel all ask this, so they agree, and
+   it holds for weeks nobody opened the site in. The vacations the member TOOK are
+   counted first; what is left goes to the short days, oldest first. Once both are
+   gone, a short day is a real `miss`. Today is never judged — it isn't over. */
+function _dutyAutoVac(days, key, todayKey) {
+    if (key >= todayKey || key < DUTY_START_KEY) return false;
+    const [y, m, d] = key.split('-').map(Number);
+    const keys = _dutyWeekKeys(_dutyWeekStart(new Date(y, m - 1, d)));
+    let left = DUTY.vacPerWeek;
+    for (const k of keys) if (_dutyRec(days, k).vac) left--;
+    for (const k of keys) {
+        if (left <= 0 || k >= todayKey) return false;
+        if (k < DUTY_START_KEY) continue;
+        const r = _dutyRec(days, k);
+        if (r.vac || r.ms >= DUTY.goalMs) continue;
+        if (k === key) return true;
+        left--;
+    }
+    return false;
+}
 
 // Consecutive WON days ending today (or yesterday, while today is still open).
 // A vacation keeps the chain without adding to it; the trial never counts.
@@ -27927,9 +27953,11 @@ function _dutyTodayRec() {
     if (!r.vac && _duty.dayKey === key) r.ms += _duty.liveMs;
     return r;
 }
+// Taken AND automatic (a short day already spent one) — see _dutyAutoVac.
 function _dutyVacLeft() {
+    const today = _todayDateStr();
     let used = 0;
-    for (const k of _dutyWeekKeys(_dutyWeekStart(new Date()))) if (_dutyRec(_duty.days, k).vac) used++;
+    for (const k of _dutyWeekKeys(_dutyWeekStart(new Date()))) if (_dutyDayState(_duty.days, k, today) === 'vac') used++;
     return Math.max(0, DUTY.vacPerWeek - used);
 }
 // Today may be turned into a vacation: the duty has started, the week's count
@@ -28243,13 +28271,13 @@ function _dutyBuildTrack() {
     let html = '';
     _dutyWeekKeys(_dutyWeekStart(new Date())).forEach((key, i) => {
         const rec = key === today ? _dutyTodayRec() : _dutyRec(_duty.days, key);
-        const st  = _dutyStateOf(rec, key, today);
+        const st  = _dutyStateOf(rec, key, today, _duty.days);
         const cls = ['chal-step'];
         if (st === 'done' || st === 'miss' || st === 'vac' || st === 'pre') cls.push(st);
         if (key === today) cls.push('now');
         const wearsMe = key === today && !!avatar;
         if (wearsMe) cls.push('has-me');
-        const hrs = st === 'future' ? '' : rec.vac ? 'إجازة' : rec.ms >= 60000 ? _dutyClock(rec.ms) : '';
+        const hrs = st === 'future' ? '' : st === 'vac' ? 'إجازة' : rec.ms >= 60000 ? _dutyClock(rec.ms) : '';
 
         html += `<div class="${cls.join(' ')}">`;
         html += `<span class="chal-step-spacer chal-step-hrs">${hrs}</span>`;
@@ -28297,7 +28325,7 @@ function _chalPaintModal() {
             setHead('حضور <em>المقر</em>');
             set(sub, 'ثلاث ساعات في المقر كل يوم.');
         }
-        set(note, 'يُحسب كل وقتك داخل المقر، لا الجلسات وحدها — ولك إجازتان في الأسبوع.');
+        set(note, 'يُحسب كل وقتك داخل المقر، لا الجلسات وحدها. لك إجازتان في الأسبوع، ويُحتسب اليوم الناقص إجازةً تلقائيًا.');
         _dutyBuildTrack();
     }
     _chalPaintTally();
@@ -31712,8 +31740,8 @@ function _admRowHtml(m, i) {
         const today = _todayDateStr();
         const dots = _dutyWeekKeys(_dutyWeekStart(new Date())).map((k, j) => {
             const r = _dutyRec(duty, k);
-            const st = _dutyStateOf(r, k, today);
-            const tip = `${DUTY_DAY_NAMES[j]}: ${st === 'future' ? '—' : r.vac ? 'إجازة' : _dutyDur(r.ms)}`;
+            const st = _dutyStateOf(r, k, today, duty);
+            const tip = `${DUTY_DAY_NAMES[j]}: ${st === 'future' ? '—' : r.vac ? 'إجازة' : st === 'vac' ? 'إجازة تلقائية' : _dutyDur(r.ms)}`;
             return `<i class="adm-dd is-${st}" title="${_libEsc(tip)}"></i>`;
         }).join('');
         const t = _dutyRec(duty, today);
@@ -31766,10 +31794,11 @@ function _admDutySection(days) {
         let ms = 0;
         const cells = _dutyWeekKeys(start).map((k, j) => {
             const r = _dutyRec(days, k);
-            const st = _dutyStateOf(r, k, today);
+            const st = _dutyStateOf(r, k, today, days);
             if (!r.vac) ms += r.ms;
-            const txt = st === 'future' ? '' : r.vac ? '🌴' : r.ms >= 60000 ? _dutyClock(r.ms) : '';
-            return `<span class="adm-cal-c is-${st}" title="${_libEsc(DUTY_DAY_NAMES[j] + ' ' + k)}">${txt}</span>`;
+            const txt = st === 'future' ? '' : st === 'vac' ? '🌴' : r.ms >= 60000 ? _dutyClock(r.ms) : '';
+            const auto = st === 'vac' && !r.vac ? ' — إجازة تلقائية' : '';
+            return `<span class="adm-cal-c is-${st}" title="${_libEsc(DUTY_DAY_NAMES[j] + ' ' + k + auto)}">${txt}</span>`;
         }).join('');
         if (i === 0) thisWeekMs = ms;
         let lbl = '';
