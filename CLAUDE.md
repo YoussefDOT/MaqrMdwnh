@@ -1233,9 +1233,12 @@ too), nor during azkar/prayer/a minigame. That silence is the point: the bubble 
 appears, so a message is never lost, it just can't interrupt.
 
 ### The bubbles
-Drawn on the canvas (never DOM), **per floor, right after that floor's timers** — same
-split as the avatars, so a ground bubble stays under the mezzanine and a mezzanine one
-fades with it. Newest sits **lowest** (nearest the head) and carries the tail; a new
+Drawn on the canvas (never DOM), **last — over everything** (`_drawChatBubblesOnTop`,
+after the screen-space FX incl. the focus mask, with the world transform re-applied;
+only the teleport / minigame fades cover it). It used to be per floor right after that
+floor's timers, which put floor-2 players, the mezzanine art, prompts and the day
+overlays on top of the bubbles. Ground bubbles draw first so a mezzanine one sits above
+a ground one, and a mezzanine one still fades with its floor. Newest sits **lowest** (nearest the head) and carries the tail; a new
 message springs in from just under its slot while the older ones slide up.
 
 - **Two springs per bubble**, both damped **below 1 on purpose**: the stack overshoots a
@@ -1765,6 +1768,8 @@ Figs fall from the top into a bowl held in two hands. `progress = (serverNow() -
 5. `drawDayOverlays` — day-lighting overlays (one normal, one `overlay`-blend)
 6. `drawFocusMask` — dark vignette around the active laptop (also draws the laptop prompt)
 7. `drawWindParticles`, `drawFocusFog`, `drawCloudShadows`, `drawVignette` — screen-space FX
+8. `_drawChatBubblesOnTop` — chat bubbles, world transform re-applied, over everything
+   (only `drawTeleportOverlay` / `drawMinigameLoadFade` go above them)
 
 `drawPlayers(onlyLocal, floorFilter)` and `drawTimers(floorFilter)` take a floor filter
 so ground avatars render **below** the mezzanine and floor-2 avatars **above** it (and

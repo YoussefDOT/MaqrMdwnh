@@ -10459,7 +10459,6 @@ function render() {
     if (_kidnapLineActive && (gameState.anim.laptop.floor || 1) === 1) drawKidnapLine();
     drawPlayers(false, 1);      // ground-floor players (under the mezzanine)
     drawTimers(1);
-    drawChatBubbles(1);         // proximity chat bubbles (ground floor)
 
     // Height fog sits BETWEEN the floors — over the ground, UNDER the mezzanine — so
     // the second floor stays above it and isn't fogged. Only shows on floor 2.
@@ -10472,7 +10471,6 @@ function render() {
     drawDustParticles(2);       // mezzanine dust — above the floor art, UNDER the players
     drawPlayers(false, 2);      // players standing on the platform
     drawTimers(2);
-    drawChatBubbles(2);         // proximity chat bubbles (mezzanine)
 
     drawCoopEmojiFloats();
     drawCoopGroupLabels();
@@ -10509,12 +10507,31 @@ function render() {
     drawFocusFog(W, H);
     drawSunRays(W, H);
     drawVignette(W, H);
+    _drawChatBubblesOnTop(W, H); // over EVERYTHING — players, mezzanine, overlays, focus mask
     drawTeleportOverlay(W, H);
     drawMinigameLoadFade(W, H);
 
     ctx.restore();  // undo DPR scale
 
     _renderPanelToggles();
+}
+
+// Chat bubbles are the last thing painted in the world: they used to be drawn per
+// floor right after that floor's players, so the mezzanine art, the floor-2 players,
+// the prompts, the day overlays and the focus mask all painted over them. Re-applies
+// the world transform (same order as render()'s) AFTER the screen-space FX so a
+// bubble is never under anything but the teleport / minigame fades. Ground bubbles
+// first, so a mezzanine one still sits above a ground one.
+function _drawChatBubblesOnTop(W, H) {
+    const ctx = gameState.ctx;
+    ctx.save();
+    ctx.translate(W / 2, H / 2);
+    if (_entrance.shakeX || _entrance.shakeY) ctx.translate(_entrance.shakeX, _entrance.shakeY);
+    ctx.scale(gameState.zoom, gameState.zoom);
+    ctx.translate(gameState.camera.x, gameState.camera.y);
+    drawChatBubbles(1);
+    drawChatBubbles(2);
+    ctx.restore();
 }
 
 // DOM panel visibility that render() drives every frame — split out so the
@@ -14437,14 +14454,12 @@ function renderPiPInto(ctx, canvas, dpr) {
         drawDustParticles(1);
         drawPlayers(false, 1);
         drawTimers(1);
-        drawChatBubbles(1);
         drawSecondFloorFog();
         drawSecondFloor();
         drawLaptopLights(2, gameState.secondFloorVis ?? 1);
         drawDustParticles(2);
         drawPlayers(false, 2);
         drawTimers(2);
-        drawChatBubbles(2);
         drawCoopEmojiFloats();
         drawCoopGroupLabels();
         drawDayOverlays();
@@ -14455,6 +14470,7 @@ function renderPiPInto(ctx, canvas, dpr) {
         drawFocusFog(W, H);
         drawSunRays(W, H);
         _pipVignette(ctx, W, H);
+        _drawChatBubblesOnTop(W, H); // over everything, same as render()
         // Video PiP has no DOM overlay — paint the timer + label onto the frame.
         if (s.pip.mode === 'video') _pipDrawCanvasChrome(ctx, W, H);
         // Prayer time → draw the prayer card over everything (all PiP modes).
@@ -30166,8 +30182,8 @@ function _chatDrawContent(ctx, L, h) {
     }
 }
 
-// Drawn per floor, right after that floor's timers — same split as the avatars, so
-// a ground-floor bubble stays under the mezzanine and a mezzanine one fades with it.
+// Drawn LAST, over everything (see _drawChatBubblesOnTop) — the floor filter now only
+// orders ground bubbles under mezzanine ones; a mezzanine one still fades with its floor.
 // NB this also runs in the PiP pass; updateChatSystem is called only from gameLoop,
 // so the springs are never advanced twice (same rule as Lemo and the hat springs).
 function drawChatBubbles(floorFilter = null) {
