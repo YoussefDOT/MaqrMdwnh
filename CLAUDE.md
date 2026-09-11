@@ -1445,12 +1445,41 @@ onDisconnect as a sofa, and **no new Firebase key or rules change exists**. Seat
 
 ### The voice feed — MdwnhBot (`../MdwnhBot`, Render, auto-deploys from GitHub main)
 The bot sits **muted, not deafened** (deafened bots receive no packets, and speaking is
-detected from packets) in the most-populated voice channel (or `MEETING_CHANNEL_IDS`),
-and relays into the lobby room(s) of that channel's category:
+detected from packets — **it can't be deafened without killing the feature**; it reads
+only each packet's header and never decrypts audio) and relays into the lobby room(s) of
+that channel's category:
 `{t:'spk',uid:'mdwnhbot',s:<discordId>,on:1|0}` on change (re-asserted every 4 s while
 talking) and `{t:'vc',ids:[in call],sp:[talking]}` every 15 s. **Zero Firebase and no
 Worker change** — the relay forwards raw bytes. `onPresenceMessage` hands both to
 `onMeetVoiceMsg` BEFORE its player lookup (the sender is the bot, not a player).
+
+**It is in NO call unless it's wanted** (one bot = one voice channel per server, so it
+has to choose):
+1. **Summoned** — an @mention of the bot (or its role) anywhere in the server brings it
+   to the mentioner's current call, whatever the site is doing; it stays while they're
+   in it. Reacts 🎧 (coming) / 🤷 (you're not in a call). Needs the `GuildMessages`
+   intent (not privileged — mentions arrive without Message Content).
+2. **Following the meeting** — a member seated at the table sends
+   `{t:'meet',uid,on:1}` on the relay on sitting and every `MEET_SEAT_PING_MS` (20 s),
+   `on:0` on standing (`_meetUpdateSeatPing`, called from `updateMeeting`). The bot joins
+   the call most seated members are in (`MEETING_CHANNEL_IDS` optionally limits this),
+   never hops mid-meeting, and forgets a seat after **150 s** of silence — or at once on
+   the relay's `{t:'bye'}` for that member (socket closed). The ping runs per frame
+   (instant on sit/stand) **and** on a 5 s `setInterval` in `setupMeetingUI`: rAF stops
+   in a background tab, people at the table flip to Discord constantly, and Chrome
+   throttles background timers to ~1/min — which is why the bot's timeout is 150 s,
+   not 50. On opening a room it sends `{t:'meetq'}`, and seated clients re-announce at
+   once (`_meetOnBotQuery`, throttled). Siraj ghosts never announce — they aren't
+   Discord accounts. Dragged into another call by hand, it goes along with the move
+   and won't follow the table back into the old call for 10 min.
+3. **Leaving** — a minute after the table empties (so standing up briefly or reloading
+   doesn't make it leave and rejoin — Discord plays the join sound each time), at once
+   if the call empties. **Disconnected by hand** → it stays out of that call for 10 min
+   (a new mention overrides).
+
+Its relay sockets are open only while someone is in a voice call at all (it must hear
+the seat pings before it's in a call). A `meet` from another player is returned from
+`onPresenceMessage` after the proof-of-life stamp — nothing else reads it.
 - `_meetSpeakState` → `'on'` (green ring + a hop on start), `'quiet'` (in the call and
   silent → faded to `MEET_QUIET_A`), or `null` — no live feed, or not in the call — which
   is **not faded**: a member who is only typing must not look absent.

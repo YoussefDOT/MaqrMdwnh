@@ -9375,6 +9375,7 @@ function onPresenceMessage(data) {
     // Discord voice state from MdwnhBot (its `uid` is the bot, not a player — the
     // member is `s` / `ids`). See الاجتماع → the voice feed.
     if (msg.t === 'spk' || msg.t === 'vc') { onMeetVoiceMsg(msg); return; }
+    if (msg.t === 'meetq') { _meetOnBotQuery(); return; }
     if (!msg.uid || msg.uid === gameState.userId) return;
     if (msg.t === 'bye') {
         // Firebase presence owns add/remove; just stop their walk animation so
@@ -9395,6 +9396,8 @@ function onPresenceMessage(data) {
     // updatePresenceGrace).
     player._lastWsSampleAt = (typeof performance !== 'undefined') ? performance.now() : Date.now();
     player._presenceLostAt = null;
+    // "I'm at the meeting table" — only MdwnhBot uses it (it follows the meeting).
+    if (msg.t === 'meet') return;
     // Sofa hop — a one-off event, not a position stream. Must return before the
     // isMoving/position handling below: a sit message carries neither.
     if (msg.t === 'sit') { startRemoteSitAnim(player, msg); return; }
@@ -32237,6 +32240,7 @@ const MEET_LIT_AFTER_SPEAK_MS = 1500;
 const MEET_LIT_AFTER_REACT_MS = 1500;     // counted from the reaction's end
 const MEET_LIT_CHAT_MS = 4000;
 const MEET_CANVAS_OFF_MS = 520;           // the world pass stops once the overlay covers it
+const MEET_SEAT_PING_MS = 20000;          // re-announce my seat to the bot (it forgets one after 50 s)
 
 // The table's solid body in MAIN-scene source px, and its seats: four down each long
 // side, one at each end. The order is the order new arrivals fill them — alternating
@@ -32287,6 +32291,8 @@ const _meet = {
     vcAt: 0, vcIds: new Set(), spk: new Map(),
     voiceShown: null, voiceAt: 0,
     lastReactAt: 0,
+    // My seat, announced to the bot so it follows the meeting into our call
+    pingOn: false, pingAt: 0, pingWs: null, queryAt: 0,
 };
 const MEET_FX_NONE = Object.freeze({ a: 1, hop: 0, on: false });
 
@@ -32511,6 +32517,34 @@ function _meetSpeakState(uid, now) {
     const s = _meet.spk.get(uid);
     if (s && s.on && now - s.at < MEET_SPK_STALE_MS) return 'on';
     return _meet.vcIds.has(uid) ? 'quiet' : null;
+}
+
+// The bot isn't in any call until it's wanted — it FOLLOWS the meeting: seated
+// members tell it {t:'meet',uid,on:1} (on sitting, then every MEET_SEAT_PING_MS) and
+// on:0 on standing, and it joins the Discord call most of them are in. Relay only,
+// zero Firebase. A new socket (a reconnect) or the bot's {t:'meetq'} (it just joined
+// the room) re-announces straight away. A missed on:0 just expires on the bot's side.
+function _meetSendSeat(on) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try { ws.send(JSON.stringify({ t: 'meet', uid: gameState.userId, on: on ? 1 : 0 })); return true; } catch (_) { return false; }
+}
+function _meetUpdateSeatPing(me) {
+    if (gameState.isSirajGhost) return;     // not a Discord account — nothing to follow
+    if (me && _meetSeated(me)) {
+        const now = Date.now();
+        if (_meet.pingOn && _meet.pingWs === presenceNet.ws && now - _meet.pingAt < MEET_SEAT_PING_MS) return;
+        if (_meetSendSeat(true)) { _meet.pingOn = true; _meet.pingAt = now; _meet.pingWs = presenceNet.ws; }
+    } else if (_meet.pingOn) {
+        _meetSendSeat(false);
+        _meet.pingOn = false;
+    }
+}
+function _meetOnBotQuery() {
+    const now = Date.now();
+    if (now - _meet.queryAt < 2000) return;   // client-claimed like the rest of the relay
+    _meet.queryAt = now;
+    _meet.pingAt = 0;                          // seated → the next frame re-announces
 }
 
 // Keep a member lit (un-faded) for at least `ms` from now.
@@ -32959,6 +32993,8 @@ function updateMeeting() {
         p._spkA = a0 + ((_meetIsQuiet(p, st, pnow) ? MEET_QUIET_A : 1) - a0) * k;
     }
 
+    _meetUpdateSeatPing(me);
+
     if (_meet.open) {
         // One guard closes it: the moment I'm no longer seated at the table (left,
         // kidnapped back to work, disconnected), the overlay goes with it.
@@ -32991,6 +33027,10 @@ function setupMeetingUI() {
         });
     }
     document.getElementById('meet-leave')?.addEventListener('click', leaveMeetingTable);
+    // rAF stops in a background tab — and people at the table flip to Discord all the
+    // time. This keeps the seat announced there (Chrome throttles it to ~1/min after a
+    // while; the bot waits 150 s before forgetting a seat for exactly that reason).
+    setInterval(() => _meetUpdateSeatPing(gameState.players[gameState.userId]), 5000);
     const hint = document.getElementById('meet-hint');
     if (hint) hint.textContent = isMobile() ? 'انقر صورتك للكتابة' : 'اضغط Enter للكتابة';
 
