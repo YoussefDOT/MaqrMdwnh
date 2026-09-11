@@ -6332,8 +6332,8 @@ function startGame(userData) {
         // Hats are tiny, but the manifest read is a network hop — keep it off the
         // spawn path. Nothing waits on it: a hat draws the moment its asset lands.
         loadHatManifest().catch(() => {});
-        // Lemo: decides asleep-vs-awake and kicks his sheets. Nothing waits on it —
-        // he simply isn't drawn until a sheet lands.
+        // Lemo: listens to the lobby's lemo doc and kicks his sheets. Nothing waits
+        // on it — he simply isn't drawn until the doc and a sheet land.
         startLemo();
         // Race-track preload only while minigames are reachable — the 6 MB PNG +
         // its full-image getImageData/classification is a big main-thread spike
@@ -8919,6 +8919,7 @@ function doLogout() {
     _azkarFakeHour = null;
     _azkarFakeMin  = null;
     disconnectPresenceSocket();   // close the live-position relay; don't reconnect
+    stopLemo();                   // his lobby doc listener
     // Explicit logout — don't auto-resume on the next load.
     try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
     clearPendingEndCard();
@@ -9242,6 +9243,9 @@ function listenToPlayers() {
             const countElem = document.getElementById('player-count');
             if (countElem) countElem.textContent = `${playerCount} مستخدم${playerCount > 10 ? '' : (playerCount > 2 ? 'ين' : '')}`;
         }
+        // Lemo's empty-lobby check waits on this: "is anyone else here?" can only be
+        // answered once the first snapshot has been through.
+        if (!gameState._playersSnapAt) gameState._playersSnapAt = Date.now();
     });
 }
 
@@ -10356,7 +10360,7 @@ function gameLoop(timestamp) {
 
         handleMovement();
         updateAnimation();
-        updateLemo(deltaTime);       // the robot's wander state machine (client-only)
+        updateLemo();                // the robot — the lobby's shared timeline (see Lemo)
         updateSitAnimation();        // sofa sit-in / stand-up tween (local)
         updateRemoteSitAnims();      // ...and the same hop for everyone else's
         updateMinigameLobbyProximity(); // auto-leave a race/coffee lobby if you wander off
@@ -19099,9 +19103,9 @@ function updateAzkarButton() {
         hideAzkarConfirm();
     }
 
-    /* The button now lives on its own dock UNDER the user card, so it appearing
-       or vanishing changes how far down the HUD stack reaches — and the challenge
-       card and the tasks panel are both placed off that. Only on the frame it
+    /* The button now lives on its own dock at the foot of the HUD stack (under
+       the حضور المقر card), so it appearing or vanishing changes how far down
+       the stack reaches — and the tasks panel is placed off that. Only on the frame it
        actually flips; the ResizeObserver in `setupLibraryPanel` is what follows
        the button's own ~0.4s height animation the rest of the way down. */
     if (shouldShow !== wasShown) {
@@ -26367,10 +26371,20 @@ function setupFireplaceUI() {
 // ════════════════════════════════════════════════════════════════════════════
 // Lemo — the office robot
 // ════════════════════════════════════════════════════════════════════════════
-// A client-only ambient character: nothing about him is written to Firebase, so
-// every player meets him somewhere different and he costs zero download budget.
-// He sleeps at LEMO_SPAWN until someone walks up, wakes, then wanders LEMO_SPOTS
-// forever — idle → walk → idle, with a rare Play detour.
+// ONE Lemo per lobby — everyone sees him in the same place doing the same thing —
+// and it costs next to nothing, because his wandering is never sent anywhere.
+// The lobby holds one tiny doc (lobbyPath('lemo') = { s: 'sleep'|'awake', at, seed })
+// that only changes when he's woken or put to bed. Everything he does after waking
+// is a pure function of (seed, server time): every client runs the same seeded
+// state machine forward from `at` with serverNow(), so they all land on the same
+// segment of the same walk. No position stream, no per-frame anything — the doc is
+// written a handful of times a day and read by a single listener per client.
+//
+// Sleep: he sleeps at LEMO_SPAWN until someone walks up. A player who arrives to an
+// EMPTY lobby puts him back to bed (_lemoMaybeReset) — so "nobody online" always
+// means the next person finds him asleep, without anyone having to write on exit.
+// Awake: he wanders the break room (LEMO_SPOTS); now and then he walks LEMO_ROUTE to
+// the meeting room, roams its LEMO_MEET_SPOTS for a while, and walks back.
 //
 // SPRITE GEOMETRY. The five sheets were sliced out of 2048² source cells, each
 // cropped to its OWN tight alpha box (`box`, still in source-cell px). Cropping
@@ -26414,6 +26428,16 @@ const LEMO_ANIMS = {
 // in place as he settles. One walk = one playthrough, whatever the distance.
 const LEMO_WALK_MOVE_FRAMES = 45;
 
+// Segment lengths — every one is a whole playthrough, which is what lets the
+// timeline be computed rather than stepped frame by frame.
+const _lemoAnimMs = (n) => LEMO_ANIMS[n].frames * 1000 / LEMO_ANIMS[n].fps;
+const LEMO_SLEEP_CYCLE_MS = _lemoAnimMs('Sleeping');   // 5000
+const LEMO_WAKE_MS        = _lemoAnimMs('WakeUp');     // 3375
+const LEMO_IDLE_CYCLE_MS  = _lemoAnimMs('Idle');       // 3000
+const LEMO_WALK_MS        = _lemoAnimMs('Walk');       // 6000
+const LEMO_PLAY_MS        = _lemoAnimMs('Play');       // 6500
+const LEMO_WALK_TRAVEL_MS = LEMO_WALK_MOVE_FRAMES * 1000 / LEMO_ANIMS.Walk.fps;   // 4500
+
 // Spawn + wander spots, in source-art px (measured off Art/Lemo/reff.png, which is
 // the same 2210×3160 space as the workspace layers — hence sx2w/sy2w straight through).
 const LEMO_SPAWN = { x: sx2w(137), y: sy2w(2711) };
@@ -26421,12 +26445,75 @@ const LEMO_SPOTS = [
     [363, 2169], [1645, 2320], [604, 2698], [1259, 2758], [191, 2952],
 ].map(([px, py]) => ({ x: sx2w(px), y: sy2w(py) }));
 
+// The walk to the meeting room, in order from the break room: through the gap in
+// the divider, across the work room, up to its right-hand doorway. Drawn by the
+// owner on the world map. He walks STRAIGHT lines, so this only works because each
+// hop was checked clear of the walls + furniture art (and every break-room spot
+// sees ROUTE[0] cleanly) — keep that true if a point moves.
+const LEMO_ROUTE = [
+    [1473, 1797], [1251, 1338], [1821, 1131],
+].map(([px, py]) => ({ x: sx2w(px), y: sy2w(py) }));
+
+// Meeting-room spots, in MEET-LOCAL px (see MEET_OX). [0] is the one just inside
+// the doorway and the only one ROUTE's last point reaches through the opening — the
+// others would clip the wall — so he always enters and leaves by it.
+const LEMO_MEET_SPOTS = [
+    [172, 840], [118, 216], [925, 225], [817, 753], [925, 1260], [547, 1338], [166, 1311],
+].map(([px, py]) => ({ x: sx2w(MEET_OX + px), y: sy2w(MEET_OY + py) }));
+
+// Which meeting-room spots see each other without walking through the table or the
+// wall screen — a hop is sampled along his body line and his feet line. Indices.
+const LEMO_MEET_LINKS = (() => {
+    const pad = LEMO_W * 0.3;
+    const rects = [MEET_TABLE_SOLID, MEET_TV_SOLID].map(([x0, y0, x1, y1]) => [
+        sx2w(MEET_OX + x0) - pad, sy2w(MEET_OY + y0), sx2w(MEET_OX + x1) + pad, sy2w(MEET_OY + y1)]);
+    const blocked = (a, b) => {
+        for (let i = 0; i <= 40; i++) {
+            const t = i / 40, x = a.x + (b.x - a.x) * t, yc = a.y + (b.y - a.y) * t;
+            for (const y of [yc, yc + LEMO_H / 2]) {
+                for (const r of rects) if (x >= r[0] && x <= r[2] && y >= r[1] && y <= r[3]) return true;
+            }
+        }
+        return false;
+    };
+    return LEMO_MEET_SPOTS.map((a, i) => LEMO_MEET_SPOTS.map((b, j) => j)
+        .filter(j => j !== i && !blocked(a, LEMO_MEET_SPOTS[j])));
+})();
+
+// The way back to the door from each meeting-room spot (fewest hops, spots after
+// the start, ending on [0]). Precomputed so the timeline never searches.
+const LEMO_MEET_HOME = LEMO_MEET_SPOTS.map((_, from) => {
+    const prev = LEMO_MEET_SPOTS.map(() => -1);
+    prev[from] = from;
+    const q = [from];
+    while (q.length) {
+        const i = q.shift();
+        for (const j of LEMO_MEET_LINKS[i]) if (prev[j] < 0) { prev[j] = i; q.push(j); }
+    }
+    if (prev[0] < 0) return [LEMO_MEET_SPOTS[0]];     // unreachable — walk straight rather than stall
+    const out = [];
+    for (let j = 0; j !== from; j = prev[j]) out.unshift(LEMO_MEET_SPOTS[j]);
+    return out;
+});
+
 const LEMO_WAKE_R = 170;          // world px — how close you must get to wake him
 // He still has to finish the running Idle cycle (3s) before he'll move, so these are
 // a floor, not the whole wait — the effective idle rounds up to the next cycle.
 const LEMO_IDLE_MIN_MS = 600;
 const LEMO_IDLE_MAX_MS = 3200;
 const LEMO_PLAY_CHANCE = 0.12;    // chance an idle ends in Play instead of a walk
+const LEMO_REST_MIN_WALKS = 8;    // break-room hops before a meeting-room trip can start
+const LEMO_MEET_CHANCE    = 0.06; // ...then the chance, per idle, that he sets off
+const LEMO_MEET_MIN_WALKS = 3;    // hops around the table before he may head back
+const LEMO_MEET_MAX_WALKS = 6;
+// Arriving to an empty lobby puts him to bed — unless he was woken under a minute
+// ago: then someone else is arriving at the same moment and just isn't in our users
+// snapshot yet, and a reset would steal their wake.
+const LEMO_RESET_GRACE_MS = 60000;
+// Timeline steps one frame may take while catching up. A lobby that stayed occupied
+// for days has tens of thousands of segments behind it; spread over a few frames
+// that is invisible, in one it's a hitch. He isn't drawn until caught up.
+const LEMO_STEP_BUDGET = 20000;
 
 // Travel easing — ease in AND out, but NOT as two power curves stitched at t=0.5
 // (that was tried and it visibly kicked: a piecewise 0.5*(2t)^p1 / 1-0.5*(2(1-t))^p2
@@ -26449,19 +26536,24 @@ const _lemo = {
     state: 'sleeping',            // sleeping | waking | idle | walking | playing
     anim: 'Sleeping',
     frame: 0,
-    animT: 0,                     // ms into the current animation
-    wakePending: false,
-    idleUntil: 0,
-    spot: null,
-    prevSpot: null,                // the spot he was at before `spot` — see _lemoStartWalk
-    walk: null,
+    idleFrame: 0,                 // Idle's frame at this moment — Play's stand-in until its sheet lands
     face: 1,                      // 1 = facing right (the art's default), -1 = mirrored
     sheets: {},
     started: false,
+    doc: null,                    // the lobby doc, sanitised: { s, at, seed }
+    docKey: '',
+    docReady: false,
+    sim: null,                    // the timeline since his last wake; null = asleep
+    caughtUp: false,
+    resetChecked: false,          // the empty-lobby check runs once, on arrival
+    shown: false,
+    wakeReqAt: 0,
+    sleepFreed: false,
+    unsub: null,
 };
 
 function ensureLemoSheet(name) {
-    if (_lemo.sheets[name]) return;                 // loaded, loading, or freed
+    if (_lemo.sheets[name]) return;                 // loaded or loading
     const img = new Image();
     img.decoding = 'async';
     try { img.fetchPriority = 'low'; } catch (_) {}
@@ -26477,54 +26569,206 @@ function _lemoSheet(name) {
     return (img && img.complete && img.naturalWidth) ? img : null;
 }
 
-// He only ever sleeps once per session, so Sleeping + WakeUp are ~15 MB of decoded
-// frames that can never be needed again — free them the moment he's up. Same reason
-// the world drops its source layers once the cache is composited (Safari OOM).
-// The entries stay behind as tombstones so _lemoSheet can't re-fetch them.
+// Sleeping + WakeUp are ~15 MB of decoded frames he has no use for while he's up —
+// free them the moment he is. Same reason the world drops its source layers once
+// the cache is composited (Safari OOM). He CAN go back to bed now (an empty lobby
+// puts him there), so the entries are dropped, not tombstoned: _lemoSheet fetches
+// them again only if he's actually asleep again.
 function _lemoReleaseSleepSheets() {
     for (const n of ['Sleeping', 'WakeUp']) {
         const s = _lemo.sheets[n];
         if (s && s.img) { try { s.img.src = ''; } catch (_) {} }
-        _lemo.sheets[n] = { img: null, freed: true };
+        delete _lemo.sheets[n];
     }
 }
 
-function _lemoSetAnim(name, state) {
-    _lemo.anim = name;
-    _lemo.state = state;
-    _lemo.animT = 0;
-    _lemo.frame = 0;
+// mulberry32 — every client seeded from the same doc makes the same choices.
+function _lemoRng(seed) {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6D2B79F5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
 }
 
-function _lemoGoIdle() {
-    _lemoSetAnim('Idle', 'idle');
-    _lemo.idleUntil = Date.now() + LEMO_IDLE_MIN_MS + Math.random() * (LEMO_IDLE_MAX_MS - LEMO_IDLE_MIN_MS);
-}
-
-function _lemoStartWalk() {
-    // Nearest spot, not a random one — but picking the single nearest EVERY time
-    // ping-pongs him between two neighbours forever once he's settled into a
-    // pocket of the room. Sort by distance, take the closest 2, then roll between
-    // those — close enough to always read as "he went to the nearby spot" while
-    // the coin flip keeps him from a permanent back-and-forth.
-    //
-    // That alone still allowed a tight A → B → A loop (nothing stopped B's
-    // closest-2 from including A right back), so the spot he was at immediately
-    // before the current one is excluded too, not just the current one.
-    const excl = new Set([_lemo.spot, _lemo.prevSpot].filter(Boolean));
-    let cands = LEMO_SPOTS.filter(s => !excl.has(s));
-    if (!cands.length) cands = LEMO_SPOTS.filter(s => s !== _lemo.spot);  // too few spots to exclude both
-    cands.sort((a, b) => ((a.x - _lemo.x) ** 2 + (a.y - _lemo.y) ** 2)
-                        - ((b.x - _lemo.x) ** 2 + (b.y - _lemo.y) ** 2));
+// Nearest spot, not a random one — but picking the single nearest EVERY time
+// ping-pongs him between two neighbours forever once he's settled into a pocket of
+// the room. Sort by distance, take the closest 2, then roll between those — close
+// enough to always read as "he went to the nearby spot" while the coin flip keeps
+// him from a permanent back-and-forth. The spot he was at immediately before the
+// current one is excluded too, or A → B → A could still loop.
+function _lemoPick(list, x, y, spot, prevSpot, rand) {
+    let cands = list.filter(s => s !== spot && s !== prevSpot);
+    if (!cands.length) cands = list.filter(s => s !== spot);   // too few spots to exclude both
+    if (!cands.length) cands = list.slice();
+    cands.sort((a, b) => ((a.x - x) ** 2 + (a.y - y) ** 2) - ((b.x - x) ** 2 + (b.y - y) ** 2));
     const pool = cands.slice(0, Math.min(2, cands.length));
-    const spot = pool[Math.floor(Math.random() * pool.length)];
-    _lemo.prevSpot = _lemo.spot;
-    _lemo.spot = spot;
-    _lemo.walk = { sx: _lemo.x, sy: _lemo.y, tx: spot.x, ty: spot.y };
+    return pool[Math.floor(rand() * pool.length)];
+}
+
+function _lemoWalk(s, t, to) {
+    s.kind = 'walk'; s.t0 = t; s.end = t + LEMO_WALK_MS;
+    s.sx = s.x; s.sy = s.y; s.tx = to.x; s.ty = to.y;
     // The walk art faces RIGHT, so a leftward trip mirrors him on the spot; he
     // snaps back to the default once the animation finishes.
-    _lemo.face = (spot.x < _lemo.x) ? -1 : 1;
-    _lemoSetAnim('Walk', 'walking');
+    s.face = (to.x < s.x) ? -1 : 1;
+    s.prevSpot = s.spot;
+    s.spot = to;
+}
+
+function _lemoIdle(s, t) {
+    const floor = LEMO_IDLE_MIN_MS + s.rand() * (LEMO_IDLE_MAX_MS - LEMO_IDLE_MIN_MS);
+    s.kind = 'idle'; s.t0 = t;
+    s.end = t + Math.ceil(floor / LEMO_IDLE_CYCLE_MS) * LEMO_IDLE_CYCLE_MS;
+}
+
+// Advance the timeline by one segment. PURE in (seed, previous segment): no clock,
+// no player, no sheet state may be read here, or two clients would part ways.
+function _lemoStep(s) {
+    const t = s.end;
+    if (s.kind === 'walk') {
+        s.x = s.tx; s.y = s.ty; s.face = 1;
+        // On a route he keeps going — no idle between hops, he's on his way somewhere.
+        if (s.queue.length) { _lemoWalk(s, t, s.queue.shift()); return; }
+        if (s.mode === 'toMeet') {
+            s.mode = 'meet';
+            s.meetLeft = LEMO_MEET_MIN_WALKS + Math.floor(s.rand() * (LEMO_MEET_MAX_WALKS - LEMO_MEET_MIN_WALKS + 1));
+        } else if (s.mode === 'toRest') {
+            s.mode = 'rest';
+            s.restWalks = 0;
+        }
+    }
+    if (s.kind !== 'idle') { _lemoIdle(s, t); return; }   // woke / played / arrived → idle
+
+    if (s.rand() < LEMO_PLAY_CHANCE) { s.kind = 'play'; s.t0 = t; s.end = t + LEMO_PLAY_MS; return; }
+
+    if (s.mode === 'rest') {
+        if (s.restWalks >= LEMO_REST_MIN_WALKS && s.rand() < LEMO_MEET_CHANCE) {
+            s.mode = 'toMeet';
+            s.queue = [LEMO_ROUTE[1], LEMO_ROUTE[2], LEMO_MEET_SPOTS[0]];
+            _lemoWalk(s, t, LEMO_ROUTE[0]);
+            return;
+        }
+        s.restWalks++;
+        _lemoWalk(s, t, _lemoPick(LEMO_SPOTS, s.x, s.y, s.spot, s.prevSpot, s.rand));
+        return;
+    }
+
+    // mode 'meet' — he always roams a while first; he can't enter and turn round.
+    const i = Math.max(0, LEMO_MEET_SPOTS.indexOf(s.spot));
+    if (s.meetLeft <= 0) {
+        const r0 = LEMO_ROUTE[0];
+        const home = _lemoPick(LEMO_SPOTS, r0.x, r0.y, null, null, s.rand);
+        const q = LEMO_MEET_HOME[i].concat([LEMO_ROUTE[2], LEMO_ROUTE[1], r0, home]);
+        s.mode = 'toRest';
+        _lemoWalk(s, t, q.shift());
+        s.queue = q;
+        return;
+    }
+    s.meetLeft--;
+    _lemoWalk(s, t, _lemoPick(LEMO_MEET_LINKS[i].map(j => LEMO_MEET_SPOTS[j]), s.x, s.y, s.spot, s.prevSpot, s.rand));
+}
+
+// The doc, sanitised — it's lobby data any client can write. A change rebuilds the
+// timeline from its wake; an unchanged one (a re-sent value) is ignored.
+function _lemoApplyDoc(v) {
+    const s = (v && v.s === 'awake') ? 'awake' : 'sleep';
+    const at = (v && Number.isFinite(v.at)) ? v.at : 0;
+    const seed = (v && Number.isFinite(v.seed)) ? (v.seed | 0) : 0;
+    _lemo.docReady = true;
+    const key = s + ':' + at + ':' + seed;
+    if (key === _lemo.docKey) return;
+    _lemo.docKey = key;
+    _lemo.doc = { s, at, seed };
+    _lemo.wakeReqAt = 0;
+    _lemo.sim = (s !== 'awake') ? null : {
+        rand: _lemoRng(seed),
+        kind: 'wake', t0: at, end: at + LEMO_WAKE_MS,
+        x: LEMO_SPAWN.x, y: LEMO_SPAWN.y, sx: 0, sy: 0, tx: 0, ty: 0, face: 1,
+        mode: 'rest', spot: null, prevSpot: null, queue: [], restWalks: 0, meetLeft: 0,
+    };
+}
+
+// Nobody else is here → he goes back to bed. Runs once, on arrival, after the first
+// users snapshot — that is the only moment "0 players online" is knowable without
+// anyone writing on their way out.
+function _lemoMaybeReset(t) {
+    const d = _lemo.doc;
+    if (!d || d.s !== 'awake' || t - d.at < LEMO_RESET_GRACE_MS) return;
+    for (const id in gameState.players) if (id !== gameState.userId) return;
+    _lemoApplyDoc({ s: 'sleep', at: t });          // snap now; the transaction confirms
+    runTransaction(ref(database, lobbyPath('lemo')), (cur) => {
+        if (!cur || cur.s !== 'awake' || serverNow() - (cur.at || 0) < LEMO_RESET_GRACE_MS) return;
+        return { s: 'sleep', at: serverNow() };
+    }).then(r => { if (r && r.snapshot) _lemoApplyDoc(r.snapshot.val()); }).catch(() => {});
+}
+
+// The local player walked up to him. The wake lands on the next sleep-loop boundary
+// (no mid-cycle cut) — computed in server time, so every client starts it together.
+function _lemoMaybeWake() {
+    const p = gameState.players[gameState.userId];
+    if (!p || p.floor === 2) return;
+    const dx = p.x - _lemo.x, dy = p.y - _lemo.y;
+    if (dx * dx + dy * dy >= LEMO_WAKE_R * LEMO_WAKE_R) return;
+    const now = performance.now();
+    if (now - _lemo.wakeReqAt < 4000) return;        // one attempt in flight
+    _lemo.wakeReqAt = now;
+    runTransaction(ref(database, lobbyPath('lemo')), (cur) => {
+        if (cur && cur.s === 'awake') return;        // someone beat us to it
+        const base = (cur && Number.isFinite(cur.at)) ? cur.at : 0;
+        const wakeAt = base + Math.ceil((serverNow() - base) / LEMO_SLEEP_CYCLE_MS) * LEMO_SLEEP_CYCLE_MS;
+        return { s: 'awake', at: wakeAt, seed: Math.floor(Math.random() * 2147483647) };
+    }).then(r => { if (r && r.snapshot) _lemoApplyDoc(r.snapshot.val()); }).catch(() => {});
+}
+
+// Where he is and what he's doing at server time t.
+function _lemoPose(t) {
+    const s = _lemo.sim;
+    if (!s || t < s.t0) {
+        // Asleep — or woken, but finishing the loop he was in. `at` sits on the
+        // loop grid either way, so every client shows the same frame.
+        const base = s ? s.t0 : (_lemo.doc ? _lemo.doc.at : 0);
+        const a = LEMO_ANIMS.Sleeping;
+        const ph = (((t - base) % LEMO_SLEEP_CYCLE_MS) + LEMO_SLEEP_CYCLE_MS) % LEMO_SLEEP_CYCLE_MS;
+        _lemo.x = LEMO_SPAWN.x; _lemo.y = LEMO_SPAWN.y; _lemo.face = 1;
+        _lemo.state = 'sleeping'; _lemo.anim = 'Sleeping';
+        _lemo.frame = Math.min(a.frames - 1, Math.floor(ph * a.fps / 1000));
+        _lemo.sleepFreed = false;
+        _lemo.caughtUp = true;
+        ensureLemoSheet('Sleeping');
+        ensureLemoSheet('WakeUp');
+        return;
+    }
+    let n = 0;
+    while (t >= s.end && n++ < LEMO_STEP_BUDGET) _lemoStep(s);
+    _lemo.caughtUp = t < s.end;
+    const el = t - s.t0;
+    const frameAt = (name, loop) => {
+        const a = LEMO_ANIMS[name];
+        const f = Math.floor((loop ? el % (a.frames * 1000 / a.fps) : el) * a.fps / 1000);
+        return Math.max(0, Math.min(a.frames - 1, f));
+    };
+    _lemo.x = s.x; _lemo.y = s.y; _lemo.face = 1;
+    _lemo.idleFrame = frameAt('Idle', true);
+    if (s.kind === 'wake') {
+        _lemo.state = 'waking'; _lemo.anim = 'WakeUp'; _lemo.frame = frameAt('WakeUp', false);
+        return;
+    }
+    if (!_lemo.sleepFreed) { _lemo.sleepFreed = true; _lemoReleaseSleepSheets(); }
+    if (s.kind === 'idle') {
+        _lemo.state = 'idle'; _lemo.anim = 'Idle'; _lemo.frame = _lemo.idleFrame;
+    } else if (s.kind === 'play') {
+        _lemo.state = 'playing'; _lemo.anim = 'Play'; _lemo.frame = frameAt('Play', false);
+    } else {
+        const e = _lemoEase(Math.min(1, el / LEMO_WALK_TRAVEL_MS));
+        _lemo.x = s.sx + (s.tx - s.sx) * e;
+        _lemo.y = s.sy + (s.ty - s.sy) * e;
+        _lemo.face = s.face;
+        _lemo.state = 'walking'; _lemo.anim = 'Walk'; _lemo.frame = frameAt('Walk', false);
+    }
 }
 
 function startLemo() {
@@ -26532,30 +26776,19 @@ function startLemo() {
     _lemo.started = true;
     ensureLemoSheet('Idle');
     ensureLemoSheet('Walk');
-
-    // 50/50: either he's still curled up at his spot and you have to walk over to
-    // him, or he's already been up a while — drop him on a random spot, awake.
-    if (Math.random() < 0.5) {
-        const spot = LEMO_SPOTS[Math.floor(Math.random() * LEMO_SPOTS.length)];
-        _lemo.spot = spot;
-        _lemo.x = spot.x;
-        _lemo.y = spot.y;
-        _lemoReleaseSleepSheets();      // tombstones them before they ever load
-        _lemoGoIdle();
-    } else {
-        ensureLemoSheet('Sleeping');
-        ensureLemoSheet('WakeUp');
-        _lemo.x = LEMO_SPAWN.x;
-        _lemo.y = LEMO_SPAWN.y;
-        _lemoSetAnim('Sleeping', 'sleeping');
+    if (!_lemo.unsub && gameState.selectedLobby) {
+        // Unreadable → he just sleeps, locally. Never worth an error on screen.
+        _lemo.unsub = onValue(ref(database, lobbyPath('lemo')),
+            (snap) => _lemoApplyDoc(snap.val()),
+            () => _lemoApplyDoc(null));
     }
 
     // Play is a rare detour (LEMO_PLAY_CHANCE, 12%) and by far the heaviest sheet —
     // 1368×4394, ~24 MB decoded. Warming it is a desktop-only luxury: on a phone
     // that is 24 MB held speculatively against a tab budget the world art is already
     // straining, to save a one-off hitch that most sessions never even reach. On the
-    // reduced tiers it loads on first actual Play instead (_lemoSheet self-kicks
-    // ensureLemoSheet and just skips a frame of drawing until it lands).
+    // reduced tiers it loads on first actual Play instead (drawLemo stands him in
+    // Idle until it lands — the timeline can't wait on a sheet).
     if (!isReducedGraphics()) {
         const warmPlay = () => ensureLemoSheet('Play');
         if (window.requestIdleCallback) requestIdleCallback(warmPlay, { timeout: 20000 });
@@ -26563,78 +26796,44 @@ function startLemo() {
     }
 }
 
-function updateLemo(dt) {
-    // Hidden: freeze him rather than keep simulating an invisible robot. He picks up
-    // wherever he was if it's turned back on.
-    if (!_lemo.started || gameState._hideLemo) return;
-    const a = LEMO_ANIMS[_lemo.anim];
-    const frameMs = 1000 / a.fps;
+function stopLemo() {
+    if (_lemo.unsub) { try { _lemo.unsub(); } catch (_) {} _lemo.unsub = null; }
+}
 
-    _lemo.animT += dt;
-    let f = Math.floor(_lemo.animT / frameMs);
-    let justLooped = false, done = false;
-    if (f >= a.frames) {
-        if (a.loop) {
-            _lemo.animT -= a.frames * frameMs;
-            f = Math.floor(_lemo.animT / frameMs);
-            justLooped = true;
-        } else {
-            f = a.frames - 1;
-            done = true;                 // latches until the state handler moves on
-        }
+function updateLemo() {
+    if (!_lemo.started || !_lemo.docReady) return;
+    const t = serverNow();
+    // Not drawn until the empty-lobby check has run, or a new arrival would see him
+    // up and about for a frame before he's put to bed.
+    if (!_lemo.resetChecked && gameState._playersSnapAt) {
+        _lemo.resetChecked = true;
+        _lemoMaybeReset(t);
     }
-    _lemo.frame = Math.max(0, Math.min(a.frames - 1, f));
-
-    switch (_lemo.state) {
-        case 'sleeping': {
-            if (!_lemo.wakePending) {
-                const p = gameState.players[gameState.userId];
-                if (p) {
-                    const dx = p.x - _lemo.x, dy = p.y - _lemo.y;
-                    if (dx * dx + dy * dy < LEMO_WAKE_R * LEMO_WAKE_R) _lemo.wakePending = true;
-                }
-            }
-            // Let the current sleep cycle finish before he stirs — no mid-loop cut.
-            if (_lemo.wakePending && justLooped) _lemoSetAnim('WakeUp', 'waking');
-            break;
-        }
-        case 'waking':
-            if (done) { _lemoReleaseSleepSheets(); _lemoGoIdle(); }
-            break;
-        case 'idle':
-            // Idle for 3–10s, then let the cycle land before deciding what's next.
-            if (Date.now() >= _lemo.idleUntil && justLooped) {
-                if (Math.random() < LEMO_PLAY_CHANCE && _lemoSheet('Play')) _lemoSetAnim('Play', 'playing');
-                else _lemoStartWalk();
-            }
-            break;
-        case 'playing':
-            if (done) _lemoGoIdle();     // a play always drops back into more idling
-            break;
-        case 'walking': {
-            const w = _lemo.walk;
-            const moveMs = LEMO_WALK_MOVE_FRAMES * frameMs;
-            const e = _lemoEase(Math.min(1, _lemo.animT / moveMs));
-            _lemo.x = w.sx + (w.tx - w.sx) * e;
-            _lemo.y = w.sy + (w.ty - w.sy) * e;
-            if (done) { _lemo.face = 1; _lemoGoIdle(); }                    // snap back to default
-            break;
-        }
-    }
+    // Hidden only hides him: his timeline is the lobby's, not ours, and picks up
+    // exactly where everyone else sees him when he's shown again.
+    if (gameState._hideLemo) { _lemo.shown = false; return; }
+    _lemoPose(t);
+    _lemo.shown = _lemo.resetChecked && _lemo.caughtUp;
+    if (_lemo.shown && _lemo.state === 'sleeping' && _lemo.doc.s !== 'awake') _lemoMaybeWake();
 }
 
 function drawLemo() {
-    if (!_lemo.started || gameState._hideLemo) return;
-    const sheet = _lemoSheet(_lemo.anim);
+    if (!_lemo.shown || gameState._hideLemo) return;
+    // In the meeting room he fades with the room — hidden until you reach its door.
+    const fade = _meetFadeAt(_lemo.x);
+    if (fade < 0.01) return;
+    let name = _lemo.anim, frame = _lemo.frame;
+    let sheet = _lemoSheet(name);
+    if (!sheet && name === 'Play') { name = 'Idle'; frame = _lemo.idleFrame; sheet = _lemoSheet('Idle'); }
     if (!sheet) return;
     const ctx = gameState.ctx;
-    const a = LEMO_ANIMS[_lemo.anim];
+    const a = LEMO_ANIMS[name];
 
     // Soft contact shadow on the floor — the same ellipse the avatars get, but
     // tighter than theirs: he stands on small feet, not a full body footprint.
     const shW = LEMO_W * 0.30;
     ctx.save();
-    ctx.globalAlpha = 0.28;
+    ctx.globalAlpha = 0.28 * fade;
     ctx.fillStyle = '#000';
     ctx.beginPath();
     ctx.ellipse(_lemo.x, _lemo.y + LEMO_H / 2 - 2, shW, shW * 0.32, 0, 0, Math.PI * 2);
@@ -26642,9 +26841,10 @@ function drawLemo() {
     ctx.restore();
 
     const [bx0, by0, bx1, by1] = a.box;
-    const col = _lemo.frame % a.cols;
-    const row = (_lemo.frame / a.cols) | 0;
+    const col = frame % a.cols;
+    const row = (frame / a.cols) | 0;
     ctx.save();
+    if (fade < 1) ctx.globalAlpha = fade;
     ctx.translate(_lemo.x, _lemo.y);
     ctx.scale(_lemo.face, 1);           // mirrors around his own anchor
     // Drop shadow, matching the avatars' (drawPlayers uses the same values on the
@@ -27585,9 +27785,10 @@ function _libPaintDot() {
     dot.hidden = !(n > 0) || _lib.open;
 }
 
-/* ── the HUD stack: card → tools → azkar dock → panel ────────────────────────
+/* ── the HUD stack: card → tools → حضور المقر → azkar dock → panel ──────────
    The user card is "who I am" and nothing else now. The gear and تخصيص live in
-   their own circle box beside it, and the azkar button on a dock under it. None
+   their own circle box beside it, the duty card under it, and the azkar button
+   on a dock under that. None
    of that can be expressed in CSS alone: the card's width changes with the name
    and with the points chip appearing, and no CSS rule can read a sibling's box.
    So one function measures the card and places the other two off it. */
@@ -27623,21 +27824,21 @@ function _hudPositionDock() {
         }
     }
     let base = (below && tools) ? tools.getBoundingClientRect().bottom : r.bottom;
-    if (dock) {
-        dock.style.top = Math.round(base + HUD_GAP) + 'px';
-        dock.style.right = Math.round(window.innerWidth - r.right) + 'px';
-        // The azkar dock collapses to nothing when its button is hidden, so it
-        // only pushes the challenge card down when it actually has height.
-        if (dock.offsetHeight > 0) base = dock.getBoundingClientRect().bottom;
-    }
-    /* حضور المقر sits on the fourth rung. It is a SIBLING of the other two,
-       not a child, for the same reason the tasks panel is: on mobile the user
-       card carries `will-change: transform`, which makes it the containing
-       block for any fixed descendant. */
+    /* حضور المقر sits right under the card, the azkar dock under IT. It is a
+       SIBLING of the card, not a child, for the same reason the tasks panel is:
+       on mobile the user card carries `will-change: transform`, which makes it
+       the containing block for any fixed descendant. */
     const chal = document.getElementById('chal-dock');
     if (chal && !chal.hidden) {
         chal.style.top = Math.round(base + HUD_GAP) + 'px';
         chal.style.right = Math.round(window.innerWidth - r.right) + 'px';
+        if (chal.offsetHeight > 0) base = chal.getBoundingClientRect().bottom;
+    }
+    // The azkar dock collapses to nothing when its button is hidden; it hangs
+    // off whatever is above it and pushes nothing but the tasks panel down.
+    if (dock) {
+        dock.style.top = Math.round(base + HUD_GAP) + 'px';
+        dock.style.right = Math.round(window.innerWidth - r.right) + 'px';
     }
 }
 
@@ -27864,9 +28065,10 @@ function setupLibraryPanel() {
        appearing, a rotation, and (this is the one that bit) the azkar button
        animating itself in. That button collapses its own max-height over ~0.4s,
        so the dock under it grows over many frames; a single reposition on the
-       frame the button flips reads a mid-animation height, and the challenge
-       card lands on top of the azkar button until something else re-measures —
-       which is exactly why folding and unfolding the card "fixed" it.
+       frame the button flips reads a mid-animation height, and whatever hangs
+       under it lands on top of the button until something else re-measures.
+       The duty card is observed for the same reason now that the azkar dock
+       hangs off IT: folding it, or its font swapping in, moves the dock.
        Observing every rung catches every frame of that growth for free.
        A ResizeObserver fires on first observation too, which is also what
        places them the moment the game screen becomes visible (until then the
@@ -27874,7 +28076,7 @@ function setupLibraryPanel() {
        No loop: `_hudPositionDock` writes only `top`/`right`, never a size. */
     if (window.ResizeObserver) {
         const ro = new ResizeObserver(() => _hudPositionDock());
-        for (const id of ['user-card', 'hud-tools', 'azkar-dock']) {
+        for (const id of ['user-card', 'hud-tools', 'chal-dock', 'azkar-dock']) {
             const el = document.getElementById(id);
             if (el) ro.observe(el);
         }

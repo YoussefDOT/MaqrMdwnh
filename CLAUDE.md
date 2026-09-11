@@ -156,7 +156,10 @@ Walk this top-down for ANY new piece of state; when in doubt read **Firebase Cos
 5. Must be seen live by everyone to render another player (avatar ring, hat, floor,
    task) → **`users/{uid}/…`** — the documented exception; keep writes rare and small.
 6. Lobby-shared feature state → **`lobbyPath('…')`** so male/female never mix.
-7. Client-only ambience nobody needs synced (Lemo) → **plain `gameState`, no network.**
+7. Client-only ambience nobody needs synced → **plain `gameState`, no network.**
+   Shared ambience that must look the same for everyone (Lemo) → **one tiny
+   `lobbyPath` doc that changes only on rare events + a seeded timeline computed
+   locally from `serverNow()`** — never a position stream.
 
 ### 6. Hard Invariants — scan every diff against ALL of these
 
@@ -223,12 +226,12 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Azkar (أذكار)** | Morning/evening dhikr overlay with per-item count buttons, Firebase completion tracking, timer lock; optional shuffled order; **after-prayer azkar** reachable from the prayer overlay |
 | **المدفئة / أعضاء الشهر** | Walk to the fireplace → a full-screen look at it with the month's top-3 point scorers framed on the mantel. Points come from a **separate Firebase project**. See **Fireplace / Members of the Month**. |
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
-| **حضور المقر** (was تحدي المثابرة) | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the azkar dock and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. Styled in the مدونة brand; pressing anywhere on the card opens the week panel. See **حضور المقر**. |
+| **حضور المقر** (was تحدي المثابرة) | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the user card (the azkar dock hangs under it) and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. Styled in the مدونة brand; pressing anywhere on the card opens the week panel. See **حضور المقر**. |
 | **رف الجوائز** | Three trophies (and four hidden, blacked-out ones) on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. It is read-only. See **لوحة القائد**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٥٠ حرفًا, wrapping onto two lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **غرفة الاجتماعات** | A room snapped onto the top-right of the scene, hidden behind a doorway that glows white until you walk up to it. Press its table → a seat (the sofa hop) and a full-screen look at the real table with everyone round it: six reactions, the proximity chat, and a **green ring on whoever is talking in the Discord call** — fed live by MdwnhBot over the relay, zero Firebase. See **غرفة الاجتماعات**. |
-| **Lemo (the robot)** | An ambient robot who sleeps in the break room until you walk up, then wanders between hand-picked spots forever. **Client-only — never touches Firebase**, so every player sees him somewhere different. See **Lemo**. |
+| **Lemo (the robot)** | An ambient robot who sleeps in the break room until someone walks up, then wanders it — and now and then walks the owner-drawn route to the meeting room, roams round the table and walks back. **One Lemo per lobby**: everyone sees the same robot, from a seeded timeline off one tiny Firebase doc that only changes when he's woken or put to bed. Arrive to an empty lobby → he's asleep. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
 | **Two floors** | Ground rooms + a raised **second floor** (mezzanine) reached by stairs; players grow to 1.25× up there and the floor fades out when someone walks under it |
 | **Mobile mode** | Full touch support — virtual joystick, pull-up sounds drawer, focus-mode UI |
@@ -1078,20 +1081,56 @@ prayer/azkar overlays (10000), which must cover it.
 An ambient character in the break room. Code is the `Lemo` block at the end of
 `game.js`; there is **no markup and no CSS** — he's drawn straight onto the canvas.
 
-**Client-only, on purpose.** Nothing about him is written to Firebase and nothing is
-read back, so every player meets him in a different place and he costs **zero** of the
-10 GB download budget. Don't "fix" this by syncing him — a wandering entity would be
-the most expensive write pattern in the app (see the Firebase Cost Rules).
+**One Lemo per lobby — and still next to free.** Everyone sees him in the same place
+doing the same thing, yet his wandering is **never sent anywhere**. The lobby holds one
+tiny doc, `lobbyPath('lemo') = { s: 'sleep'|'awake', at, seed }`, that only changes
+when he's woken or put to bed (a handful of writes a day, one listener per client).
+Everything after a wake is a **pure function of `(seed, serverNow())`**: every client
+runs the same seeded state machine (`_lemoStep`, mulberry32 `_lemoRng`) forward from
+`at` and lands on the same segment of the same walk. **Never sync his position** — a
+wandering entity streamed through Firebase would be the most expensive write pattern
+in the app, and the relay would still leave late joiners out of step.
 
-### Behaviour (`updateLemo`, one state machine)
+### The timeline (`_lemoStep`, `_lemoPose`) — keep it PURE
+Every segment is one whole playthrough (wake 3.375 s, idle 3 or 6 s, walk 6 s, play
+6.5 s), so the timeline is **computed, not ticked**: `_lemoPose(t)` steps segments until
+`t` falls inside one, then reads the frame off the elapsed time. `_lemoStep` may read
+**nothing but the segment and its rng** — no clock, no players, no sheet state (Play
+used to wait for its sheet; now drawLemo just stands him in Idle until it lands). One
+impure read and two clients part ways for the rest of the day. A lobby occupied for
+days has tens of thousands of segments behind it: ~33 ms per 100k steps, spread by
+`LEMO_STEP_BUDGET` per frame, and he's not drawn until `caughtUp`.
+
+### Behaviour
 `sleeping → waking → idle ⇄ walking`, with a rare `playing` detour.
-- **50/50 at login**: either asleep at `LEMO_SPAWN`, or already awake on a random spot.
-- **Waking**: the local player inside `LEMO_WAKE_R` sets `wakePending`; he only stirs
-  once the current sleep loop **finishes** (no mid-cycle cut), then plays WakeUp once.
-- **Idle**: `LEMO_IDLE_MIN/MAX_MS` is a **floor, not the whole wait** — he still has
-  to finish the running 3 s Idle cycle before he'll move, so the effective idle rounds
-  up to the next cycle. Then he chooses: a `LEMO_PLAY_CHANCE` (12%) detour into Play,
-  else a new spot.
+- **Sleep**: at `LEMO_SPAWN`, the frame phased off `at` so everyone breathes together.
+- **Nobody online → asleep** (`_lemoMaybeReset`): once, on arrival, after the first users
+  snapshot (`gameState._playersSnapAt`), a player who finds **no one else** in the lobby
+  puts him to bed. That's the only moment "0 online" is knowable without anyone writing
+  on their way out. It skips a wake under `LEMO_RESET_GRACE_MS` (60 s) old — that's
+  someone arriving at the same moment who isn't in our snapshot yet. It applies locally
+  at once and a transaction confirms; the result is re-applied either way, since an
+  aborted transaction fires no listener event.
+- **Waking** (`_lemoMaybeWake`): the local player inside `LEMO_WAKE_R` (floor 1) writes
+  the wake by transaction — `at` = the **next sleep-loop boundary** in server time (no
+  mid-cycle cut, every client starts it together) plus a fresh seed. Aborts if he's
+  already awake; one attempt per 4 s.
+- **Idle**: `LEMO_IDLE_MIN/MAX_MS` is a **floor, not the whole wait** — it rounds up to
+  the next 3 s Idle cycle. Then: `LEMO_PLAY_CHANCE` (12%) Play, else a walk.
+- **Break room** (`mode 'rest'`, `LEMO_SPOTS`): nearest-2 of the spots, never the one he
+  just left. After `LEMO_REST_MIN_WALKS` hops, each idle has `LEMO_MEET_CHANCE` of a
+  trip — he's in the break room ~¾ of the time.
+- **The trip**: `LEMO_ROUTE` (owner-drawn: break room → divider gap → work room →
+  doorway) then `LEMO_MEET_SPOTS[0]`, the spot just inside the door and the ONLY one
+  the route reaches through the opening. Route hops chain with no idle. He then roams
+  `LEMO_MEET_MIN..MAX_WALKS` hops (he can't enter and turn round), moving only along
+  `LEMO_MEET_LINKS` — pairs whose straight line clears the table and the wall screen,
+  built once at load. Home = `LEMO_MEET_HOME[i]` (fewest hops to the door) → the route
+  backwards → a break-room spot.
+- **Straight lines only.** Every route hop was checked against the walls + furniture
+  art; a moved or added point has to keep that true (the break-room spots all see
+  `LEMO_ROUTE[0]` cleanly).
+- **In the meeting room he fades with it** (`_meetFadeAt`), like a player.
 - **Walking**: the cycle can't be looped — it opens with a warm-up and closes with an
   overshoot. So the **travel is bound to frames 0→45** (`LEMO_WALK_MOVE_FRAMES`) and the
   last 15 frames play **in place** as he settles. One walk = one playthrough, whatever
@@ -1127,16 +1166,19 @@ resizing him means editing **`LEMO_H` alone**.
 ### Hiding him
 `SETTINGS_LEMO_KEY` (العرض والأداء → ليمو). Cached per-frame as `gameState._hideLemo`
 like every other settings flag — **never call `getHideLemo()` from draw code**, it hits
-localStorage. Hidden **freezes** him (`updateLemo` early-returns) rather than simulating
-an invisible robot; he resumes wherever he was.
+localStorage. Hidden only **hides** him — his timeline is the lobby's, so when he's
+shown again he's wherever everyone else sees him. A hidden Lemo can't be woken by you.
 
 ### Cost
+Firebase: one ~60-byte doc per lobby, written on wake / empty-lobby reset only, one
+listener per client (unsub'd in `doLogout` via `stopLemo`). No rules change — it lives
+under `lobbies`.
 ~2.4 MB over 5 sheets, all lazy (`ensureLemoSheet`) and never on the login path; a
 missing sheet just skips a frame of drawing. **Sleeping + WakeUp are freed the moment
-he's up** (`_lemoReleaseSleepSheets` — he only sleeps once per session, so that's ~19 MB
-of decoded frames that can never be needed again; same reason the world frees its
-layers). They're left as tombstones so they can't re-fetch. Play is the heaviest sheet
-and a rare detour, so it warms on idle, not at spawn.
+he's up** (`_lemoReleaseSleepSheets` — ~19 MB of decoded frames; same reason the world
+frees its layers). He can go back to bed now, so they're **dropped, not tombstoned** —
+`_lemoPose` re-kicks them only while he's asleep. Play is the heaviest sheet and a rare
+detour, so it warms on idle, not at spawn (desktop only).
 
 ### Gotchas
 - `drawLemo` is called from **both** `render()` and `renderPiPInto` — `updateLemo` runs
@@ -1972,15 +2014,16 @@ Mock data is **no longer seeded**. `dashClearSeedData()` runs once on login (for
 
 ---
 
-## The HUD stack (top-right) — card → tools → azkar → tasks panel
+## The HUD stack (top-right) — card → tools → حضور المقر → azkar → tasks panel
 
-Four separate fixed elements, stacked, and **none of them is inside another**:
+Five separate fixed elements, stacked, and **none of them is inside another**:
 
 | element | what it is |
 |---|---|
 | `#user-card` | identity ONLY — avatar, name, points + rank chip, and the tasks chevron. The player count is gone; the gear and تخصيص moved out. |
 | `#hud-tools` | a glass box of **circle buttons** (تخصيص، الإعدادات) to the card's **left** |
-| `#azkar-dock` | the azkar button + the Siraj time-spoof button, on a dock **under** the card |
+| `#chal-dock` | the حضور المقر card, straight **under** the user card |
+| `#azkar-dock` | the azkar button + the Siraj time-spoof button, on a dock **under** the حضور المقر card (under the user card when that card is hidden) |
 | `#lib-panel` | the tasks panel, under the whole stack |
 
 **They're placed by JS, not CSS** (`_hudPositionDock`, `_hudStackBottom`,
@@ -1991,8 +2034,8 @@ measures the card and hangs the rest off it. Re-run by a **`ResizeObserver` on t
 `resize`, and the frame the azkar button appears/disappears.
 
 - **The tools box drops UNDER the card when it would collide with the الخروج pill** — a long
-  name on a narrow phone pushes the card wide enough for that to happen. The azkar dock
-  moves down with it. `offsetParent` is null for a `position: fixed` element, so "is the
+  name on a narrow phone pushes the card wide enough for that to happen. The duty card
+  and the azkar dock move down with it. `offsetParent` is null for a `position: fixed` element, so "is the
   pill on screen" is a **width test on its rect**, not an offsetParent test.
 - **The settings panel follows its gear** (`_hudPositionSettings`, called from
   `openSettingsPanel`) instead of staying pinned to the corner the gear used to be in. It
@@ -2103,21 +2146,22 @@ mid-session, `_chalPayScreenOk` is deliberately looser than `_chalScreenIsClear`
 the id is fixed per round and the Points site deletes a settled claim, so a second record
 would pay twice — then mints it and hands over to `_libShowClaim` (استلم الآن / لاحقًا).
 
-### The card is the FOURTH rung of the HUD stack
-`#chal-dock` sits under `#azkar-dock` and is placed by `_hudPositionDock()` like its two
-siblings — a sibling of the user card, never a child (`will-change: transform` on the
+### The card is the THIRD rung of the HUD stack
+`#chal-dock` sits straight under the user card (and the tools box, when that drops
+under it), with `#azkar-dock` hung under **it** — the owner moved azkar below the duty
+card. Placed by `_hudPositionDock()` like its two siblings — a sibling of the user card, never a child (`will-change: transform` on the
 mobile card would make it the containing block). It is counted in `_hudStackBottom()`, so
 the tasks panel still starts below everything. Three things follow from that:
 - **`setMobileFocusMode` has to carry it too.** Four elements slide now, not three;
   forgetting one leaves it floating alone on screen.
-- **Every rung of the stack is `ResizeObserver`d, not just the user card.** The azkar
-  button animates its OWN `max-height` from 0 to 80px over 0.44s (`azkarBtnEnter`), so the
-  dock above this card grows across ~26 frames. Placing the card once, on the frame the
-  button flips, reads a height of nearly zero and drops the card **on top of the azkar
-  button** — where it stays until something else re-measures, which is why folding and
-  unfolding the card appeared to "fix" it. Observing `user-card`, `hud-tools` AND
-  `azkar-dock` follows every frame of that growth for free. No loop: `_hudPositionDock`
-  writes only `top`/`right`, never a size.
+- **Every rung of the stack is `ResizeObserver`d, not just the user card.** Anything
+  placed once, off a rung that is still animating its height, lands on top of it until
+  something else re-measures. It bit when azkar sat ABOVE this card: the azkar button
+  animates its OWN `max-height` from 0 to 80px over 0.44s (`azkarBtnEnter`), and the card
+  dropped onto it (folding and unfolding the card appeared to "fix" it). Now the azkar
+  dock hangs off THIS card, so the card's own folding and its Baloo swap are what move it.
+  Observing `user-card`, `hud-tools`, `chal-dock` AND `azkar-dock` follows every frame for
+  free. No loop: `_hudPositionDock` writes only `top`/`right`, never a size.
 - **It is FOLDED by default on mobile, open by default on desktop** (`_chalMinimized()`),
   and only an explicit press writes the key — so "never touched it" and "chose the open
   one" stay two different answers. A full card on a phone pushed the tasks panel down the
