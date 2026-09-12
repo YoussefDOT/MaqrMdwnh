@@ -93,12 +93,13 @@ Grep anchors for the major systems (all verified to exist):
 | Trophy shelf | `TROPHIES`, `updateTrophies`, `_troBank`, `_troClaim`, `_troCeremony` |
 | جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
 | Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admRenderDutyBar`, `_admDutySection` |
-| Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS` |
+| Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS`, `drawChatBeacons` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
 | Success card | `setupSuccessCardUI` |
 | UI cascade blips | `setupJuiceUi` |
+| Background memory release | `_memReleaseIdle`, `_memRestore`, `MEM_IDLE_MS` |
 
 ### 2. Before touching a feature
 
@@ -228,8 +229,8 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **Reading (القراءة)** | Timed reading sessions from the books library. A shelf of the user's own books (each a procedurally-drawn 3D cover), a random sofa seat, a cinematic camera, the `Art/Book.png` prop sliding out from under the reader, and a lobby leaderboard. See **Reading Session**. |
 | **حضور المقر** (was تحدي المثابرة) | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the user card (the azkar dock hangs under it) and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. Styled in the مدونة brand; pressing anywhere on the card opens the week panel. See **حضور المقر**. |
 | **رف الجوائز** | Three trophies (and four hidden, blacked-out ones) on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
-| **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. It is read-only. See **لوحة القائد**. |
-| **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٥٠ حرفًا, wrapping onto two lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
+| **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar whose cells he can press to **اعتماد** a day as done (even one taken off or never opened) or **رفع الإجازة** off a past one. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. See **لوحة القائد**. |
+| **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٥٠ حرفًا, wrapping onto two lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, a قوس on the screen edge pointing at whoever called you (it stays until you see them), a شريط at the bottom, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **غرفة الاجتماعات** | A room snapped onto the top-right of the scene, hidden behind a doorway that glows white until you walk up to it. Press its table → a seat (the sofa hop) and a full-screen look at the real table with everyone round it: six reactions, the proximity chat, and a **green ring on whoever is talking in the Discord call** — fed live by MdwnhBot over the relay, zero Firebase. See **غرفة الاجتماعات**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until someone walks up, then wanders it — and now and then walks the owner-drawn route to the meeting room, roams round the table and walks back. **One Lemo per lobby**: everyone sees the same robot, from a seeded timeline off one tiny Firebase doc that only changes when he's woken or put to bed. Arrive to an empty lobby → he's asleep. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
@@ -355,6 +356,52 @@ before the game is playable.** The current model:
   `onDisconnect` ops cover the cleanup server-side).
 
 ---
+
+## Background memory release (تخفيف الذاكرة في الخلفية)
+
+**The bug:** a member left maqr open in the PWA on his phone, backgrounded it, and the
+OS **killed the tab**. He lost his mention notifications (no socket) and his حضور المقر
+hours (no tick) for the whole stretch, and came back to a reload.
+
+A phone evicts whichever tab is holding the most memory. rAF stops in a hidden tab —
+but **a hidden tab, exactly like بطاطس, gates DRAWING, not HOLDING** (the same asymmetry
+**The World → Perf notes** is about). So a backgrounded maqr was sitting on ~60–70 MB of
+decoded art it could not possibly be drawing.
+
+`MEM_IDLE_MS` (60 s) after `visibilitychange` → hidden, `_memReleaseIdle()` drops:
+
+| freed | ~MB | rebuilt by |
+|---|---|---|
+| fireplace flame, 29 × 512×525 | 31 | `_fireEnsureFrames()`, re-kicked by `updateInteractions` on walk-up |
+| race track 2048×2054 + its classified copy | 17 | `loadRaceTrackAsset()` — re-warmed on idle by `_memRestore`, and both race-entry paths already ensure it |
+| Lemo's sheets | 10–24 | `_lemoSheet()` per frame (asleep: `_lemoPose` re-ensures Sleeping/WakeUp) |
+| `gameState.maskCanvas` | ≤3 | `drawFocusMask`'s own null + size checks |
+| the visible canvas's backing store | ~3 | `resizeCanvas()` in `_memRestore` |
+
+**Nothing here is a new load path** — every rebuild is a lazy path that already existed
+and already handled "not loaded yet". That is the entire reason returning is safe.
+
+Rules, all load-bearing:
+- **Shrinking the canvas MUST reset `_lastCanvasBW/_lastCanvasBH` to −1.** `resizeCanvas`
+  skips a redundant resize by comparing against them, so leaving the old size on record
+  makes the restore a no-op and strands the canvas at 1×1 — a black screen on return.
+- **Touch devices only** (`isTouchDevice()`). Eviction is a phone/tablet OS behaviour; a
+  desktop alt-tab every thirty seconds would re-decode 17 MB for nothing.
+- **Never while PiP is active.** On Android that floating window is what the user is
+  actually watching while the tab reads as "hidden". Also never mid-minigame.
+- `_memCanRelease()` is asked **twice** — when arming the timer and when it fires.
+- **`worldCache` (~24 MB) is deliberately NOT freed.** Rebuilding it means re-running the
+  whole `loadWorldArt` pipeline, collision masks included, behind the boot screen. That
+  is a feature with its own failure modes, not a free win.
+- `pageshow` restores too — a bfcache return doesn't always fire `visibilitychange`.
+
+**What this does and does not fix.** It makes the tab a much smaller eviction target, so
+it is far more likely to survive in the background — where the hours and the pings both
+still work (the duty counter is a plain `setInterval(_dutyTick, 15000)`, and Chrome's
+~1/min background throttle stays under `DUTY_GAP_MAX_MS`). It does **nothing** for an iOS
+PWA that the OS merely *suspends*: timers frozen, socket dead, and the gap on wake
+exceeds `DUTY_GAP_MAX_MS` so that stretch earns nothing — by design. A killed or frozen
+tab can only be reached again by **Web Push**, which `sw.js` has no handler for yet.
 
 ## The World (new smooth-art scene, two floors)
 
@@ -1384,6 +1431,36 @@ the picker for that `@` without closing the box.
   it, so the fallback is `registration.showNotification`, and `sw.js` has a
   `notificationclick` that focuses the tab. **Limit:** a tab the OS has frozen or killed
   has no socket, so it hears nothing — reaching that would need Web Push and a server.
+
+#### بوصلة الإشارة — where the mention came from (`_chatBeacons`, `drawChatBeacons`)
+Hearing the ping doesn't tell you **where to look**; the mentioner can be on the other
+floor or across the building. So a mention also lights a **Fortnite-style arc** on the
+screen edge in their direction — a soft directional glow behind it, their avatar and
+ring colour on it, a small arrow outside it — and it **stays until you actually see
+them**. Plus `#mention-toast` at the bottom: «فلان أشار إليك».
+
+- **Zero Firebase, zero network, nothing relayed.** Every pixel is derived locally from
+  the position that already arrives over the relay. It is a pure display of state the
+  client already has — the cheapest possible way to answer "where".
+- **"Seen" is a real test, not a timer** (`_chatBeaconSeen`): inside the canvas with a
+  `CHAT_BEACON_MARGIN` inset, AND not drawn at near-zero alpha (floor 2 while you're
+  under it, the hidden meeting room), AND `_chatWorldVisible()` — an overlay over the
+  canvas means you are looking at *it*, not at anyone, so the beacon waits. Looking away
+  again before `CHAT_BEACON_SEEN_MS` is up **re-arms it** (`seenAt` back to 0).
+  `CHAT_BEACON_MAX_MS` (45 s) is the ceiling so it can never glow forever.
+- **One beacon per member** — a repeat mention refreshes it, never stacks a second arc.
+  It drops itself when the member leaves.
+- **Drawn in `render()` only, never in the PiP pass** (a small player-centred window has
+  no useful edge), and advanced only from `updateChatSystem` — so nothing integrates
+  twice (the Lemo / hat-chain rule).
+- **The glow is the one real cost**: a clipped full-screen radial-gradient fill, which is
+  the same shape as the focus fog that had to be frozen on weak phones. So it's 3 wedges
+  on عالية, 2 on متوسط, 1 on بطاطس, with the alpha divided by the count so the core keeps
+  its strength. No `shadowBlur` anywhere in it.
+- The toast is `pointer-events: none` — it floats over the world and a press must reach
+  the world under it. z-index **9600: above the HUD, below prayer/azkar (10000)**. The
+  step-4 shake is on the **avatar**, not the pill: the pill's own `transform` carries its
+  entrance and the two must never fight over one property.
 - The picker's row cascade is deliberately **not** in `_JUICE_IN_ANIMS`: it re-opens on
   every `@`, and a rising sweep per keystroke is noise. It plays one blip on open and a
   tick per highlight step instead. Rows only animate on OPEN — narrowing the list while
@@ -2098,7 +2175,7 @@ squashes the gradient). Tokens are scoped `--cd-*` on `.chal-dock` / `.chal-moda
 
 ### The duty's state — `dashboards/{uid}/duty/days`
 ```
-dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, vac }   // ms the site was open; vac = ts when taken
+dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, vac, ok }  // ms the site was open; vac = ts taken; ok = ts the leader approved it
 dashboards/{uid}/challenge/s1/{days, claimed}          // round one — read-only now
 ```
 Decision tree §5 case 4 — private, persistent, written more than once a day: one bounded
@@ -2119,7 +2196,17 @@ Under `users/{uid}` this would re-stream every member's every minute to both lob
   flight (`_duty.busy`). Banked on `pagehide` / `visibilitychange`→hidden.
 - **One state word per day, shared with the leader's panel** — `_dutyStateOf(rec, key, today)`
   → `future · vac · done · now · pre · miss` (`pre` = a trial day before `DUTY.start`, never
-  held against anyone). Both sides call it, so the two dots can never disagree.
+  held against anyone). Both sides call it, so the two dots can never disagree. **`ok` (the
+  leader's manual approval) is tested FIRST and outranks even `vac`** — that is its whole
+  purpose; see **لوحة القائد → الاعتماد**.
+- **`ok` is a field of its own — never fake `ms`.** The leader ranks members by real open
+  time, and writing the goal into `ms` to "mark a day done" would silently corrupt every
+  total on his screen. So an approved day keeps whatever it really earned and just reads
+  as `done`. It also stops consuming an automatic vacation (`_dutyAutoVac`), so the week's
+  allowance comes back with it.
+- **Nothing writes the whole day record.** `_dutySetVacation` and `_dutyBank` both write
+  leaf fields (`…/{key}/ms`, `…/{key}/vac`) — a member toggling their day off must not wipe
+  the leader's `ok` sitting in the same node.
 
 ### Vacations — two a WEEK, today only
 
@@ -2135,8 +2222,11 @@ it «إجازة تلقائية». Today is never judged — it isn't over.
 modal (tap anywhere on the card): **two presses**, the second reading «تأكيد: سيُمسح تقدّم
 اليوم», then `{ms: 0, vac: ts}` REPLACES today's record — the brief says taking one removes
 today's progress. «إلغاء الإجازة» is one press, today only, and counting restarts from zero.
-Offered only when the duty has started, the week's read succeeded (`_duty.readOk` — a failed
-read must not let a third one through), today isn't already won, and one is left. Both
+**The undo is never gated on the rule that allows TAKING one** — a vacation that exists can
+always be lifted, or a member would be stranded on a day off they can't cancel (before the
+duty starts, or once the week's allowance is spent). Taking one is
+offered only when the duty has started, the week's read succeeded (`_duty.readOk` — a failed
+read must not let a third one through), today isn't already won or approved, and one is left. Both
 directions apply locally **after** the write acks; busy is a `.is-busy` class, never
 `disabled`. Changing the allowance period (month, rolling…) means `_dutyVacLeft()` AND the
 bounded setup read — both assume a week.
@@ -2539,7 +2629,8 @@ them once.
 
 ## لوحة القائد — the leader's panel
 
-نواف's view of the whole team: who worked and how long. It is read-only.
+نواف's view of the whole team: who worked and how long. Read-only except for his verdict on
+a single duty day — see **الاعتماد** below.
 Code is the `لوحة القائد` block at the very end of `game.js`; markup is `#admin-btn` +
 `#admin-overlay` in `index.html`; styles are the matching block at the foot of `style.css`.
 Grep anchors: `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`.
@@ -2615,10 +2706,32 @@ adds nothing), and a six-week calendar (`ADM_DUTY_WEEKS`) with the hours in each
   not «لم يُتمّوا».
 - Every day is judged by the member-side `_dutyStateOf`, never a copy of the rule.
 
-### It writes nothing
-It used to award **النقطة الماسية** (`trophies/grants/diamond/{ts}`, behind a two-press
-confirm). That trophy and the award button were removed with the hidden trophies (see
-**رف الجوائز**), so the panel is read-only — one-shot `get()`s and nothing else.
+### الاعتماد — the one thing it writes
+Pressing any **past or current** cell in a member's six-week calendar selects it and opens a
+strip under the calendar (`_admDayEditor` → `_admSetDuty`) with the leader's two powers:
+
+| button | write | effect |
+|---|---|---|
+| «اعتماد اليوم مكتملًا» | `duty/days/{key}/ok = ts` **+** `…/vac = null` | the day counts as done whatever the member did — a day off, a short day, a day they never opened |
+| «إلغاء الاعتماد» | `…/ok = null` | back to being judged on its real hours |
+| «رفع الإجازة» | `…/vac = null` | the member's chosen day off is lifted; the week gets it back |
+
+- **Leaf fields, never a replace, and never `ms`.** `ms` is the honest open time every total
+  on this screen is derived from (see **حضور المقر**), and a bank landing at the same moment
+  must not be thrown away.
+- **A future day is not editable, nor a trial day** (`key > today`, `key < DUTY_START_KEY`) —
+  there is nothing to approve.
+- **An AUTOMATIC vacation has nothing to lift.** `_dutyAutoVac` derives it on read, so there
+  is no `vac` stored; the strip says so and offers اعتماد instead.
+- The member's own tab holds a **login-time** copy of this week, so an edit shows on their
+  card on their next reload — the leader's panel is the live record, not theirs.
+- Busy is a `.is-busy` class, never the `disabled` attribute (iOS touch leak).
+- Cost: one `update()` of one or two leaves on a node nobody live-listens to. Both local
+  copies of the member (the full history in `_adm.cache` and the list's slice in `_adm.week`)
+  are patched, or a stale row would sit beside a fresh calendar.
+
+It used to award **النقطة الماسية** (`trophies/grants/diamond/{ts}`) too. That trophy and the
+award button were removed with the hidden trophies (see **رف الجوائز**).
 
 ### Gotchas
 - **`.hud-tool-btn` sets `display: grid`, which beats the UA's `[hidden]{display:none}`.**

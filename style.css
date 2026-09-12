@@ -9696,6 +9696,94 @@ body.is-mobile .chat-men-row { height: 44px; }
     transform: translateY(24px);
 }
 
+/* ── شريط «أشار إليك» ─────────────────────────────────────────────────────────
+   يرافق قوس البوصلة المرسوم على الكانفس (drawChatBeacons): القوس يقول «من أين»،
+   وهذا يقول «مَن». أسفل الشاشة في المنتصف، بلون العضو نفسه المستعمل في الكبسولة
+   والقوس. z-index ٩٦٠٠: فوق واجهة اللعب، وتحت الصلاة والأذكار (١٠٠٠٠) فتغطّيه.
+   لا يستقبل ضغطًا أبدًا — ضغطة على العالم تحته يجب أن تصل إليه. */
+.mention-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 26px;
+    z-index: 9600;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    direction: rtl;
+    padding: 9px 16px 9px 12px;
+    border-radius: 50px;
+    background: rgba(18, 18, 18, 0.72);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid var(--mt-ring, rgba(255, 255, 255, 0.09));
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.30);
+    pointer-events: none;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateX(-50%) translateY(14px) scale(0.94);
+    transition: opacity .22s ease,
+                transform .42s cubic-bezier(0.34, 1.56, 0.64, 1),
+                visibility 0s linear .22s;
+}
+.mention-toast.show {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0) scale(1);
+    transition: opacity .22s ease,
+                transform .42s cubic-bezier(0.34, 1.56, 0.64, 1),
+                visibility 0s;
+}
+.mtoast-av {
+    width: 30px;
+    height: 30px;
+    flex: 0 0 30px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.10) center / cover no-repeat;
+    border: 2px solid var(--mt-col, rgba(255, 255, 255, 0.5));
+    display: grid;
+    place-items: center;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--mt-col, rgba(255, 255, 255, 0.85));
+}
+.mtoast-body { display: flex; align-items: baseline; gap: 6px; }
+.mtoast-name {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--mt-col, #fff);
+    max-width: 42vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.mtoast-act { font-size: 13px; font-weight: 600; color: rgba(255, 255, 255, 0.72); }
+
+/* الدرجة الرابعة (الإنذار): الحدّ أحمر ورجّة واحدة قصيرة على الصورة وحدها — لا على
+   الشريط، فحركة الشريط مكتوبة في transform الخاص به ولا يجوز أن يتنازعا. */
+.mention-toast.alarm { border-color: rgba(225, 53, 46, 0.85); }
+.mention-toast.alarm .mtoast-act { color: rgba(255, 190, 186, 0.95); }
+.mention-toast.alarm.show .mtoast-av { animation: mtoastShake .5s ease-out 1; }
+@keyframes mtoastShake {
+    0%, 100% { transform: translateX(0) }
+    15% { transform: translateX(-3px) }
+    35% { transform: translateX(3px) }
+    55% { transform: translateX(-2px) }
+    75% { transform: translateX(2px) }
+}
+
+/* الجوال: لا backdrop-filter فوق الكانفس الحيّة (القاعدة ١٠) */
+body.is-mobile .mention-toast,
+body.reduced-gfx .mention-toast {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(18, 18, 18, 0.93);
+}
+body.is-mobile .mention-toast { bottom: 18px; max-width: 92vw; }
+
+@media (prefers-reduced-motion: reduce) {
+    .mention-toast.alarm.show .mtoast-av { animation: none; }
+}
+
 /* ════════════════════════════════════════════════════════════════════════════
    رف الجوائز — the trophy room, its detail panel, and the award ceremony.
    The room is a lit display case rather than another dark-glass sheet: two
@@ -11303,6 +11391,56 @@ body.is-mobile .tro-paper-fly.is-drag  .tro-paper-sheen { opacity: 0.5; }
 .adm-cal-key span { display: inline-flex; align-items: center; gap: 5px; }
 .adm-cal-key i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
 
+/* ── the leader's verdict on one day (see _admDayEditor) ──────────────────── */
+/* An editable cell is a <button>; everything above styles it by class, so it only
+   needs the UA's own button look reset away. */
+button.adm-cal-c { font-family: inherit; padding: 0; cursor: pointer; appearance: none; -webkit-appearance: none; }
+button.adm-cal-c:hover { background: rgba(255, 255, 255, 0.12); }
+/* اعتماد يدوي — gold, so it never reads as an ordinary completed day. */
+.adm-cal-c.is-ok {
+    background: rgba(226, 169, 43, 0.18);
+    border-color: rgba(244, 200, 43, 0.5);
+    color: var(--adm-gold-hi);
+}
+.adm-cal-c.is-sel { box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.75); }
+.adm-cal-hint { margin: 10px 0 0; font-size: 0.68rem; font-weight: 500; color: rgba(255, 255, 255, 0.34); }
+.adm-day-edit {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 10px;
+    padding: 10px 12px;
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 14px;
+    background: rgba(255, 255, 255, 0.04);
+}
+.adm-day-txt { flex: 1 1 160px; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.adm-day-name { font-size: 0.82rem; font-weight: 700; color: rgba(255, 255, 255, 0.88); }
+.adm-day-state { font-size: 0.68rem; font-weight: 500; color: rgba(255, 255, 255, 0.42); }
+.adm-day-btns { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 6px; }
+.adm-day-btn {
+    padding: 7px 13px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 50px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(255, 255, 255, 0.82);
+    font-family: inherit;
+    font-size: 0.74rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.18s, border-color 0.18s, color 0.18s, transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.adm-day-btn:active { transform: scale(0.95); }
+.adm-day-btn.is-go {
+    background: rgba(127, 220, 154, 0.16);
+    border-color: rgba(127, 220, 154, 0.4);
+    color: #b5f0c6;
+}
+.adm-day-btn.is-go:hover { background: rgba(127, 220, 154, 0.26); }
+.adm-day-btn.is-warn:hover { background: rgba(255, 255, 255, 0.12); color: #fff; }
+.adm-day-btn.is-busy { opacity: 0.5; pointer-events: none; }
+
 /* ── mobile ──────────────────────────────────────────────────────────────── */
 body.admin-active { overflow: hidden; }
 body.is-mobile .adm-overlay { padding: 0; }
@@ -11328,6 +11466,8 @@ body.is-mobile .adm-cal-row { grid-template-columns: 56px repeat(7, minmax(0, 1f
 body.is-mobile .adm-cal-c { height: 24px; border-radius: 7px; font-size: 0.54rem; }
 body.is-mobile .adm-cal-lbl { font-size: 0.6rem; }
 body.is-mobile .adm-cal-ms { font-size: 0.62rem; }
+body.is-mobile .adm-day-edit { align-items: stretch; flex-direction: column; gap: 8px; }
+body.is-mobile .adm-day-btn { flex: 1 1 auto; padding: 9px 12px; }
 
 @media (prefers-reduced-motion: reduce) {
     .adm-row { animation: none; }

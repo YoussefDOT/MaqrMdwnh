@@ -10508,6 +10508,7 @@ function render() {
     drawSunRays(W, H);
     drawVignette(W, H);
     _drawChatBubblesOnTop(W, H); // over EVERYTHING — players, mezzanine, overlays, focus mask
+    drawChatBeacons(W, H);       // بوصلة من أشار إليّ من خارج الشاشة — فوق كل شيء كذلك
     drawTeleportOverlay(W, H);
     drawMinigameLoadFade(W, H);
 
@@ -28273,15 +28274,24 @@ function _dutyWeekKeys(start) {
 function _dutyStarted(key) { return (key || _todayDateStr()) >= DUTY_START_KEY; }
 function _dutyRec(days, key) {
     const r = days && days[key];
-    return { ms: Math.max(0, Number(r && r.ms) || 0), vac: Number(r && r.vac) || 0 };
+    return {
+        ms: Math.max(0, Number(r && r.ms) || 0),
+        vac: Number(r && r.vac) || 0,
+        // اعتماد القائد — the leader passed this day by hand (see _admSetDuty). It is a
+        // field of its own so `ms` stays the honest open time he ranks members by.
+        ok: Number(r && r.ok) || 0,
+    };
 }
 /* One word per day, shared by the member's own ladder and the leader's panel so
    the two can never disagree: future · vac · done · now (today, still open) ·
    pre (before the duty started — owed nothing) · miss.
    Pass `days` (that member's record map) and a finished day that fell short of three
-   hours may read as `vac` — see _dutyAutoVac. Without it, it is always `miss`. */
+   hours may read as `vac` — see _dutyAutoVac. Without it, it is always `miss`.
+   The leader's manual approval (`ok`) outranks everything below it — that is the
+   whole point of it: he may pass a day the member took off or never opened. */
 function _dutyStateOf(rec, key, todayKey, days) {
     if (key > todayKey) return 'future';
+    if (rec.ok) return 'done';
     if (rec.vac) return 'vac';
     if (rec.ms >= DUTY.goalMs) return 'done';
     if (key === todayKey) return 'now';
@@ -28301,12 +28311,13 @@ function _dutyAutoVac(days, key, todayKey) {
     const [y, m, d] = key.split('-').map(Number);
     const keys = _dutyWeekKeys(_dutyWeekStart(new Date(y, m - 1, d)));
     let left = DUTY.vacPerWeek;
-    for (const k of keys) if (_dutyRec(days, k).vac) left--;
+    // An approved day gives its vacation back — the leader forgave it, it isn't spent.
+    for (const k of keys) { const rr = _dutyRec(days, k); if (rr.vac && !rr.ok) left--; }
     for (const k of keys) {
         if (left <= 0 || k >= todayKey) return false;
         if (k < DUTY_START_KEY) continue;
         const r = _dutyRec(days, k);
-        if (r.vac || r.ms >= DUTY.goalMs) continue;
+        if (r.vac || r.ok || r.ms >= DUTY.goalMs) continue;
         if (k === key) return true;
         left--;
     }
@@ -28366,10 +28377,10 @@ function _dutyVacLeft() {
     return Math.max(0, DUTY.vacPerWeek - used);
 }
 // Today may be turned into a vacation: the duty has started, the week's count
-// is honest, today isn't one already, isn't won already, and one is left.
+// is honest, today isn't one already, isn't won (or approved) already, and one is left.
 function _dutyCanVacation() {
     const r = _dutyTodayRec();
-    return _duty.readOk && _dutyStarted() && !r.vac && r.ms < DUTY.goalMs && _dutyVacLeft() > 0;
+    return _duty.readOk && _dutyStarted() && !r.vac && !r.ok && r.ms < DUTY.goalMs && _dutyVacLeft() > 0;
 }
 
 /* ── counting the open time ───────────────────────────────────────────────────
@@ -28416,7 +28427,7 @@ function _dutyBank(force) {
     _duty.liveMs = 0;
     _duty.lastBankAt = Date.now();
     const r = _dutyRec(_duty.days, key);
-    _duty.days[key] = { ms: Math.min(DUTY_DAY_MAX_MS, r.ms + delta), vac: r.vac };
+    _duty.days[key] = { ms: Math.min(DUTY_DAY_MAX_MS, r.ms + delta), vac: r.vac, ok: r.ok };
     runTransaction(ref(database, `${_dutyPath()}/${key}/ms`),
         (curr) => Math.min(DUTY_DAY_MAX_MS, (Number(curr) || 0) + delta)).catch(() => {});
 }
@@ -28445,17 +28456,20 @@ function _dutySetVacation(on) {
     _duty.busy = true;
     _chalPaintTally();
     const ts = Date.now();
-    const write = on ? { [`${_dutyPath()}/${key}`]: { ms: 0, vac: ts } }
+    /* Field by field, never a replace of the whole record: the leader's `ok` lives in
+       the same node and must survive a member toggling their day off. */
+    const write = on ? { [`${_dutyPath()}/${key}/ms`]: 0, [`${_dutyPath()}/${key}/vac`]: ts }
                      : { [`${_dutyPath()}/${key}/vac`]: null };
     update(ref(database), write)
         .then(() => {
+            const prev = _dutyRec(_duty.days, key);
             if (on) {
-                _duty.days[key] = { ms: 0, vac: ts };
+                _duty.days[key] = { ms: 0, vac: ts, ok: prev.ok };
                 _duty.liveMs = 0;
                 _duty.pendingWin = false;
                 _libToast('إجازة اليوم محفوظة — لا شيء مطلوب منك اليوم');
             } else {
-                _duty.days[key] = { ms: _dutyRec(_duty.days, key).ms, vac: 0 };
+                _duty.days[key] = { ms: prev.ms, vac: 0, ok: prev.ok };
                 delete _duty.celebrated[key];   // three hours from here still earns the «أحسنت!»
                 _libToast('أُلغيت الإجازة — عاد عدّاد اليوم للعمل');
             }
@@ -28576,10 +28590,13 @@ function _chalPaintCard() {
 
     const r       = _dutyTodayRec();
     const started = _dutyStarted();
-    const done    = !r.vac && r.ms >= DUTY.goalMs;
+    // The leader's approval reads as a finished day and outranks a vacation.
+    const okd     = !!r.ok;
+    const onVac   = !!r.vac && !okd;
+    const done    = okd || (!r.vac && r.ms >= DUTY.goalMs);
     if (card) {
         card.classList.toggle('is-done', done);
-        card.classList.toggle('is-vac', !!r.vac);
+        card.classList.toggle('is-vac', onVac);
         card.classList.toggle('is-trial', !started);
     }
 
@@ -28592,18 +28609,20 @@ function _chalPaintCard() {
 
     if (tagEl)   tagEl.textContent = started ? 'إلزامي' : 'تجريبي';
     if (dayEl)   dayEl.textContent = DUTY_DAY_NAMES[new Date().getDay()];
-    if (stateEl) stateEl.textContent = r.vac ? 'إجازة اليوم'
+    if (stateEl) stateEl.textContent = onVac ? 'إجازة اليوم'
+        : okd ? 'يوم معتمد ✓'
         : done ? 'أتممت يومك ✓'
         : 'المتبقي: ' + _dutyDur(DUTY.goalMs - r.ms, true);
-    if (fillEl)  fillEl.style.width = r.vac ? '100%' : Math.min(100, Math.round((r.ms / DUTY.goalMs) * 100)) + '%';
+    if (fillEl)  fillEl.style.width = (onVac || okd) ? '100%' : Math.min(100, Math.round((r.ms / DUTY.goalMs) * 100)) + '%';
     if (noteEl)  noteEl.textContent = !started ? 'يصبح إلزاميًا ابتداءً من ' + _dutyStartLabel()
-        : r.vac ? 'اضغط لإلغاء الإجازة'
+        : okd ? 'اعتمد القائد يومك'
+        : onVac ? 'اضغط لإلغاء الإجازة'
         : `${_dutyDur(r.ms)} من ٣ ساعات · الإجازات المتبقية: ${_libAr(_dutyVacLeft())}`;
-    if (miniDay) miniDay.textContent = r.vac ? 'إجازة' : done ? '✓' : _dutyClock(r.ms);
+    if (miniDay) miniDay.textContent = onVac ? 'إجازة' : done ? '✓' : _dutyClock(r.ms);
 
     // The card is a rung of the HUD stack, so its height is part of where the
     // tasks panel starts. Only re-measure when something that can resize it changed.
-    const paintKey = [min, started, done, r.vac ? 1 : 0, dayEl ? dayEl.textContent : ''].join('|');
+    const paintKey = [min, started, done, onVac ? 1 : 0, dayEl ? dayEl.textContent : ''].join('|');
     if (paintKey !== _chal.lastPaintKey) {
         _chal.lastPaintKey = paintKey;
         _hudPositionDock();
@@ -28682,7 +28701,9 @@ function _dutyBuildTrack() {
         if (key === today) cls.push('now');
         const wearsMe = key === today && !!avatar;
         if (wearsMe) cls.push('has-me');
-        const hrs = st === 'future' ? '' : st === 'vac' ? 'إجازة' : rec.ms >= 60000 ? _dutyClock(rec.ms) : '';
+        const hrs = st === 'future' ? '' : st === 'vac' ? 'إجازة'
+            : (rec.ok && rec.ms < DUTY.goalMs) ? 'معتمد'
+            : rec.ms >= 60000 ? _dutyClock(rec.ms) : '';
 
         html += `<div class="${cls.join(' ')}">`;
         html += `<span class="chal-step-spacer chal-step-hrs">${hrs}</span>`;
@@ -28777,12 +28798,13 @@ function _chalPaintTally() {
     let wkMs = 0, wkDone = 0;
     for (const k of _dutyWeekKeys(_dutyWeekStart(new Date()))) {
         const rec = k === today ? r : _dutyRec(_duty.days, k);
-        if (rec.vac) continue;
+        if (rec.vac && !rec.ok) continue;
         wkMs += rec.ms;
-        if (rec.ms >= DUTY.goalMs) wkDone++;
+        if (rec.ok || rec.ms >= DUTY.goalMs) wkDone++;
     }
     if (tally) {
-        const todayLine = r.vac ? '<div class="vac">اليوم إجازة 🌴</div>'
+        const todayLine = r.ok ? '<div class="ok">اعتمد القائد يومك ✓</div>'
+            : r.vac ? '<div class="vac">اليوم إجازة 🌴</div>'
             : r.ms >= DUTY.goalMs ? `<div class="ok">أتممت ساعاتك اليوم ✓ — <b>${_dutyDur(r.ms)}</b></div>`
             : `<div>اليوم: <b>${_dutyDur(r.ms)}</b> من ٣ ساعات</div>`;
         const weekLine = `<div>في المقر هذا الأسبوع: <b>${_dutyDur(wkMs)}</b> · الأيام المكتملة: <b>${_libAr(wkDone)}</b></div>`;
@@ -28791,7 +28813,10 @@ function _chalPaintTally() {
         tally.innerHTML = todayLine + weekLine + vacLine;
     }
     if (vacBtn) {
-        const show = mode === 'duty' && (r.vac ? started : _dutyCanVacation());
+        /* A vacation that EXISTS can always be undone — the undo is never gated on the
+           rule that allows taking one (before the duty started, or with the week's
+           allowance spent, that would strand a member on a day off they can't lift). */
+        const show = mode === 'duty' && (r.vac ? !r.ok : _dutyCanVacation());
         vacBtn.hidden = !show;
         const confirming = !r.vac && _duty.confirmAt > Date.now();
         vacBtn.classList.toggle('is-confirm', confirming);
@@ -29039,6 +29064,20 @@ const CHAT_LOUD = [null,
     { amp: 1.10, rot: 0.30, shake: 5.5, hz: 10,  dur: 1700 },
 ];
 
+// ── بوصلة الإشارة: من أشار إليّ من خارج الشاشة ──
+// لا شيء من هذا يُرسل ولا يُحفظ — إشعار محلي بحت يُحسب من موضع العضو على الشاشة.
+const CHAT_BEACON_MAX_MS  = 45000;  // سقف: لا يبقى التوهّج إلى الأبد إن لم تلتفت أبدًا
+const CHAT_BEACON_SEEN_MS = 900;    // مهلة بعد ظهوره على الشاشة قبل أن ينطفئ
+const CHAT_BEACON_MARGIN  = 70;     // بكسل من الحافة: من كان عليها لم تره فعلًا
+const CHAT_BEACON_R       = 0.34;   // نصف قطر القوس من أصغر بُعد في الشاشة
+const CHAT_BEACON_SPREAD  = 0.30;   // نصف اتساع القوس بالراديان
+const CHAT_BEACON_SEGS    = 11;     // قطع القوس — تدرّج الشفافية يُرسم بها لا بتدرّج لوني
+const CHAT_BEACON_TOAST_MS = 4600;
+
+// حيّة ما دام صاحبها لم يُر: { uid, born, seenAt, a, lv }. واحد لكل عضو — إشارة
+// جديدة منه تُنعش القديمة ولا تُكدّس.
+const _chatBeacons = [];
+
 // How far MY OWN bubble stack is pushed up, in world units, so the type box floating
 // over my head never lands on top of it. Purely local — nobody else's client knows or
 // cares that I have a box open, so this is never relayed.
@@ -29046,6 +29085,7 @@ let _chatSelfLift = 0;
 
 const _chatUi = {
     wrap: null, input: null, count: null, send: null, box: null, toast: null,
+    mtoast: null, mtoastT: 0,        // شريط «أشار إليك» — عنصر مستقل أسفل الشاشة
     open: false, lastSentAt: 0, composing: false,
     lastX: -1e9, lastY: -1e9, w: 240, h: 54, openedAt: 0, refocus: 0,
     cl: 0, ct: 0,   // cached canvas rect origin — see updateChatInputPos
@@ -29312,6 +29352,7 @@ function _chatMentionPing(player, lv, text) {
         const st = CHAT_PING_STEPS[lv] || CHAT_PING_STEPS[1];
         _chatSfx('mentionPing', st.rate, st.peak);
     }
+    _chatAddBeacon(player, lv);      // من أين جاءت الإشارة + شريط بالأسفل
     _chatMentionNotify(player, lv, text);
 }
 
@@ -29360,6 +29401,251 @@ function _chatMentionNotify(player, lv, text) {
                 .catch(() => {});
         }
     } catch (_) {}
+}
+
+// ═══ بوصلة الإشارة — من أين جاءت، ويبقى التوهّج حتى تراه ═══════════════════════
+// المشكلة: الإشارة تُسمع ويُرى شريطها، لكن صاحبها قد يكون في الطرف الآخر من المبنى
+// فلا تعرف أين تنظر. الحل: قوس على حافة الشاشة في اتجاهه (كدائرة الضرر في فورتنايت)
+// مع توهّج خافت في ذلك الاتجاه، يبقى حتى يظهر العضو على شاشتك فعلًا.
+//
+// تكلفته صفر على فايربيس وصفر على الشبكة: كل ما يُرسم مشتقّ محليًا من موضع العضو
+// الذي يصل أصلًا عبر المُرحِّل. لا يُكتب شيء ولا يُقرأ شيء.
+
+function _chatAddBeacon(player, lv) {
+    if (!player || !player.userId) return;
+    const now = Date.now();
+    const old = _chatBeacons.find(b => b.uid === player.userId);
+    // إشارة جديدة من نفس العضو تُنعش القديمة ولا تُكدّس قوسًا فوق قوس.
+    if (old) { old.born = now; old.seenAt = 0; old.lv = Math.max(old.lv, lv); }
+    else _chatBeacons.push({ uid: player.userId, born: now, seenAt: 0, a: 0, lv });
+    _chatShowMentionToast(player, lv);
+}
+
+// تحويل نقطة من العالم إلى الشاشة — بنفس ترتيب تحويلات render()‏
+// ‏(‏translate نصف الشاشة ← zoom ← الكاميرا‏)‏، تمامًا كما في updateChatInputPos.
+function _chatScreenPos(p) {
+    const canvas = gameState.canvas;
+    if (!canvas) return null;
+    const dpr = gameState.dpr || 1;
+    const W = canvas.width / dpr, H = canvas.height / dpr;
+    const pos = getPlayerRenderPos(p);
+    return {
+        x: (pos.x + gameState.camera.x) * gameState.zoom + W / 2,
+        y: (pos.y + gameState.camera.y) * gameState.zoom + H / 2,
+        W, H,
+    };
+}
+
+// «هل العالم أمام عينيّ أصلًا؟» — لوحة مفتوحة فوق الكانفس تعني أنك لا ترى أحدًا،
+// مهما كان موضعه على الشاشة، فيبقى التوهّج بانتظارك.
+function _chatWorldVisible() {
+    if (typeof document !== 'undefined' && document.hidden) return false;
+    if (gameState.azkar.active || gameState.prayer.isOverlayActive) return false;
+    if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen()
+        || adminPanelIsOpen() || meetingIsOpen() || isMinigameOverlayOpen()) return false;
+    if (gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active) return false;
+    return true;
+}
+
+// «رأيتُه»: داخل الشاشة بهامش من الحافة، وغير متلاشٍ. الثانية شرط حقيقي لا تجميل —
+// عضو على الدور الثاني وأنت تحته، أو داخل غرفة الاجتماعات المخفية، مرسوم بشفافية
+// شبه معدومة: هو على شاشتك ولم تره.
+function _chatBeaconSeen(p) {
+    if (!_chatWorldVisible()) return false;
+    const sp = _chatScreenPos(p);
+    if (!sp) return false;
+    const m = CHAT_BEACON_MARGIN;
+    if (sp.x < m || sp.x > sp.W - m || sp.y < m || sp.y > sp.H - m) return false;
+    const me = gameState.players[gameState.userId];
+    if ((p.floor || 1) === 2 && (!me || (me.floor || 1) === 1) && gameState.secondFloorVis < 0.4) return false;
+    if (_meetFadeAt(p.x || 0) < 0.4) return false;
+    return true;
+}
+
+// تُستدعى من updateChatSystem فقط (أي من gameLoop) — فلا يتقدّم شيء مرتين في تمريرة PiP.
+function _chatUpdateBeacons(dt) {
+    if (!_chatBeacons.length) return;
+    const now = Date.now();
+    const me = gameState.players[gameState.userId];
+    for (let i = _chatBeacons.length - 1; i >= 0; i--) {
+        const bc = _chatBeacons[i];
+        const p = gameState.players[bc.uid];
+        let want = 1;
+        if (!p || !me) want = 0;                                  // غادر — لا اتجاه لتشير إليه
+        else if (now - bc.born > CHAT_BEACON_MAX_MS) want = 0;     // سقف: لا توهّج أبدي
+        else if (_chatBeaconSeen(p)) {
+            if (!bc.seenAt) bc.seenAt = now;
+            if (now - bc.seenAt > CHAT_BEACON_SEEN_MS) want = 0;
+        } else bc.seenAt = 0;   // التفتَّ بعيدًا قبل انقضاء المهلة — يعود التوهّج كما كان
+        bc.a += (want - bc.a) * 0.14 * dt;
+        if (want && bc.a > 0.995) bc.a = 1;
+        if (!want && bc.a < 0.02) _chatBeacons.splice(i, 1);
+    }
+}
+
+// hsl(…) → hsla(…, a). الصيغة من صنعنا في _chatMenColor فلا حاجة لمُحلّل.
+function _chatBeaconAlpha(fg, a) {
+    return fg.replace('hsl(', 'hsla(').replace(')', `, ${a.toFixed(3)})`);
+}
+
+// تُرسم في render() وحدها — بعد فقاعات الدردشة، فوق قناع التركيز وكل شيء. ليست في
+// تمريرة PiP: تلك نافذة صغيرة مركزها اللاعب، ولا حافة فيها تُفيد.
+function drawChatBeacons(W, H) {
+    if (!_chatBeacons.length) return;
+    const ctx = gameState.ctx;
+    const me = gameState.players[gameState.userId];
+    if (!ctx || !me) return;
+    const mine = _chatScreenPos(me);
+    if (!mine) return;
+    const mp = getPlayerRenderPos(me);
+    const R = Math.min(W, H) * CHAT_BEACON_R;
+    // الأصل أنا، مثبّتًا في وسط الشاشة تقريبًا: وقوفي عند حافة العالم يجب ألّا يدفع
+    // القوس خارج الشاشة.
+    const ox = Math.min(Math.max(mine.x, W * 0.32), W * 0.68);
+    const oy = Math.min(Math.max(mine.y, H * 0.32), H * 0.68);
+    const now = Date.now();
+    ctx.save();
+    for (const bc of _chatBeacons) {
+        const p = gameState.players[bc.uid];
+        if (!p || bc.a < 0.02) continue;
+        const pos = getPlayerRenderPos(p);
+        const dx = pos.x - mp.x, dy = pos.y - mp.y;
+        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;   // فوق بعضنا — لا اتجاه
+        const ang = Math.atan2(dy, dx);
+        const col = _chatMenColor(bc.uid);
+        // نبضة بطيئة تشتدّ مع درجة الإشارة: هي ما يجعل التوهّج يُلتقط بطرف العين.
+        const hz = 0.7 + (bc.lv - 1) * 0.22;
+        const puls = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin((now - bc.born) / 1000 * Math.PI * 2 * hz));
+        const A = bc.a * puls;
+        _chatDrawBeaconGlow(ctx, ox, oy, ang, R, col, A, W, H);
+        _chatDrawBeaconArc(ctx, ox, oy, ang, R, col, A, bc);
+    }
+    ctx.restore();
+}
+
+// التوهّج: ثلاث إسفينات متداخلة تضيق وتشتدّ نحو المنتصف. الإسفين الواحد حافّتاه
+// الجانبيتان مقصوصتان بحدّ حادّ؛ تداخل ثلاثة يعطي تدرّجًا جانبيًا بثلاث تعبئات
+// لا بتسع. التدرّج شعاعي فيخفت عند قدميك ويشتدّ عند الحافة.
+function _chatDrawBeaconGlow(ctx, ox, oy, ang, R, col, A, W, H) {
+    const far = Math.hypot(W, H);            // يبلغ الحافة مهما كان الاتجاه
+    // ثلاث تعبئات على الكامل، اثنتان على المتوسّط وواحدة على بطاطس: التعبئة الواحدة
+    // مقصوصة على الإسفين فلا تُرسّم الشاشة كلها، لكنها تعبئة تدرّج ثقيلة على الهاتف
+    // (نفس سبب تجميد ضباب التركيز على الطبقات المخفّضة). شفافية كل تعبئة تُقسَّم على
+    // عددها فيبقى قلب التوهّج بالقوّة نفسها مهما اختُصرت الطبقات.
+    const passes = gameState._potato ? [1.1] : gameState._lowGfx ? [1.5, 0.85] : [1.7, 1.15, 0.7];
+    const g = ctx.createRadialGradient(ox, oy, R * 0.45, ox, oy, far);
+    g.addColorStop(0, _chatBeaconAlpha(col.fg, 0));
+    g.addColorStop(1, _chatBeaconAlpha(col.fg, 0.38 * A / passes.length));
+    for (const k of passes) {
+        const sp = CHAT_BEACON_SPREAD * k;
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(ox, oy);
+        ctx.arc(ox, oy, far, ang - sp, ang + sp);
+        ctx.closePath();
+        ctx.clip();
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, W, H);
+        ctx.restore();
+    }
+}
+
+// القوس نفسه: قطع قصيرة شفافيتها تخفت نحو طرفيه — بغيرها يبدو شريطًا مقصوصًا —
+// وفي منتصفه صورة المُشير، لأن «من أشار» سؤال بقدر «من أين».
+function _chatDrawBeaconArc(ctx, ox, oy, ang, R, col, A, bc) {
+    const sp = CHAT_BEACON_SPREAD;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineWidth = 5;
+    ctx.strokeStyle = col.fg;
+    for (let i = 0; i < CHAT_BEACON_SEGS; i++) {
+        const t0 = i / CHAT_BEACON_SEGS, t1 = (i + 1) / CHAT_BEACON_SEGS;
+        const f = Math.cos(((t0 + t1) / 2 - 0.5) * Math.PI);   // ١ في المنتصف، صفر عند الطرفين
+        ctx.globalAlpha = A * f * f * 0.95;
+        ctx.beginPath();
+        ctx.arc(ox, oy, R, ang - sp + sp * 2 * t0, ang - sp + sp * 2 * t1);
+        ctx.stroke();
+    }
+    // سهم صغير خارج القوس — «من هنا»، لمن لم يقرأ القوس وحده.
+    const cx = ox + Math.cos(ang) * R, cy = oy + Math.sin(ang) * R;
+    ctx.globalAlpha = A * 0.95;
+    ctx.translate(cx, cy);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.moveTo(30, 0); ctx.lineTo(20, -7); ctx.lineTo(20, 7);
+    ctx.closePath();
+    ctx.fillStyle = col.fg;
+    ctx.fill();
+    ctx.restore();   // يُعيد الإزاحة والدوران معًا
+
+    // الصورة فوق منتصف القوس، مطوّقة بلونه.
+    const r = 16;
+    ctx.save();
+    ctx.globalAlpha = A;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(18,18,18,0.92)';
+    ctx.fill();
+    const img = gameState.avatarCache[bc.uid];
+    if (img && img !== 'failed' && img.complete && img.naturalWidth) {
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(cx, cy, r - 2.5, 0, Math.PI * 2);
+        ctx.clip();
+        ctx.drawImage(img, cx - r + 2.5, cy - r + 2.5, (r - 2.5) * 2, (r - 2.5) * 2);
+        ctx.restore();
+    } else {
+        const p = gameState.players[bc.uid];
+        const ch = ((p && p.username) || '?').trim().charAt(0) || '?';
+        ctx.fillStyle = col.fg;
+        ctx.font = 'bold 15px Rubik';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(ch, cx, cy + 1);
+    }
+    ctx.lineWidth = 2.5;
+    ctx.strokeStyle = col.fg;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r - 1.2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+}
+
+// ─── شريط «أشار إليك» ────────────────────────────────────────────────────────
+// عنصر DOM واحد أسفل الشاشة، لا يستقبل ضغطًا أبدًا (pointer-events: none) حتى لا
+// يبتلع ضغطة على العالم تحته.
+function _chatShowMentionToast(player, lv) {
+    const el = _chatUi.mtoast || (_chatUi.mtoast = document.getElementById('mention-toast'));
+    if (!el) return;
+    const nameEl = el.querySelector('.mtoast-name');
+    const actEl  = el.querySelector('.mtoast-act');
+    const avEl   = el.querySelector('.mtoast-av');
+    if (!nameEl || !actEl || !avEl) return;
+    const name = _chatClean(player.username) || 'عضو';
+    const fem  = gameState.selectedLobby === 'female';
+    const alarm = lv >= CHAT_MEN_ALARM_AT;
+    nameEl.textContent = name;
+    actEl.textContent = alarm ? (fem ? 'تناديكِ بإلحاح!' : 'يناديك بإلحاح!')
+                              : (fem ? 'أشارت إليكِ'     : 'أشار إليك');
+    // نصّ عضو آخر — عُقَد لا innerHTML، كما في فقاعات الدردشة.
+    avEl.textContent = '';
+    avEl.style.backgroundImage = '';
+    const url = player.avatar;
+    if (typeof url === 'string' && /^https:\/\//.test(url)) {
+        avEl.style.backgroundImage = `url("${encodeURI(url).replace(/"/g, '%22')}")`;
+    } else {
+        avEl.textContent = name.trim().charAt(0) || '?';
+    }
+    const col = _chatMenColor(player.userId);
+    el.style.setProperty('--mt-col', col.fg);
+    el.style.setProperty('--mt-ring', col.ring);
+    el.classList.toggle('alarm', alarm);
+    // إعادة تشغيل حركة الدخول عند تكرار الإشارة قبل اختفاء الشريط.
+    el.classList.remove('show');
+    void el.offsetWidth;
+    el.classList.add('show');
+    clearTimeout(_chatUi.mtoastT);
+    _chatUi.mtoastT = setTimeout(() => el.classList.remove('show'), CHAT_BEACON_TOAST_MS);
 }
 
 // ─── Sending ─────────────────────────────────────────────────────────────────
@@ -30050,6 +30336,7 @@ function updateChatSystem() {
     }
 
     const dt = gameState.dtFactor || 1;
+    _chatUpdateBeacons(dt);   // بوصلة الإشارة — من gameLoop وحده، فلا تتقدّم في تمريرة PiP
 
     // Push MY OWN stack up out of the way while the type box is open, and let it
     // settle back down when it closes. The box is a fixed number of SCREEN pixels
@@ -31823,8 +32110,12 @@ function _awdWire() {
    judges every day with the member's own `_dutyDayState`, so the leader's dot and
    the member's dot can never disagree.
 
-   WHAT IT WRITES. Nothing. It used to award النقطة الماسية; that trophy is gone
-   (see رف الجوائز) and the award with it, so the panel is read-only.
+   WHAT IT WRITES. One thing only: the leader's verdict on a single duty day —
+   `duty/days/{key}/ok` (اعتماد: this day counts, whatever the member did) and
+   `duty/days/{key}/vac` (رفع الإجازة). Leaf fields, never a replace, and never
+   `ms`: the open time stays honest so every total on this screen stays true. See
+   _admSetDuty. It used to award النقطة الماسية too; that trophy is gone (see
+   رف الجوائز) and the award with it.
    ═══════════════════════════════════════════════════════════════════════════════ */
 
 // نواف's Discord id, as a floor under the roster lookup: the roster's `admin` flag
@@ -31847,6 +32138,8 @@ const _adm = {
     btn: null,          // cached — updateAdminLifecycle runs every frame
     filter: 'all',      // the duty chips: 'all' | 'done' | 'vac' | 'short'
     sort: 'name',       // 'name' | 'duty' (this week's open time, busiest first)
+    day: '',            // the calendar cell the leader has selected (see _admSetDuty)
+    saving: false,      // a duty edit is in flight
 };
 
 function adminPanelIsOpen() { return !!_adm.open; }
@@ -32205,9 +32498,15 @@ function _admDutySection(days) {
             const r = _dutyRec(days, k);
             const st = _dutyStateOf(r, k, today, days);
             if (!r.vac) ms += r.ms;
-            const txt = st === 'future' ? '' : st === 'vac' ? '🌴' : r.ms >= 60000 ? _dutyClock(r.ms) : '';
-            const auto = st === 'vac' && !r.vac ? ' — إجازة تلقائية' : '';
-            return `<span class="adm-cal-c is-${st}" title="${_libEsc(DUTY_DAY_NAMES[j] + ' ' + k + auto)}">${txt}</span>`;
+            const txt = st === 'future' ? '' : st === 'vac' ? '🌴'
+                : (r.ok && r.ms < DUTY.goalMs) ? '✓'
+                : r.ms >= 60000 ? _dutyClock(r.ms) : '';
+            const note = r.ok ? ' — اعتماد يدوي' : st === 'vac' && !r.vac ? ' — إجازة تلقائية' : '';
+            const tip = _libEsc(DUTY_DAY_NAMES[j] + ' ' + k + note);
+            /* Only a real mandatory day that has already begun can be edited — a future
+               day has nothing to approve and a trial day is owed nothing. */
+            if (k > today || k < DUTY_START_KEY) return `<span class="adm-cal-c is-${st}" title="${tip}">${txt}</span>`;
+            return `<button class="adm-cal-c is-${st}${r.ok ? ' is-ok' : ''}${_adm.day === k ? ' is-sel' : ''}" type="button" data-dk="${_libEsc(k)}" title="${tip}">${txt}</button>`;
         }).join('');
         if (i === 0) thisWeekMs = ms;
         let lbl = '';
@@ -32238,7 +32537,103 @@ function _admDutySection(days) {
         <div class="adm-cal-key">
             <span><i class="is-done"></i>مكتمل</span><span><i class="is-vac"></i>إجازة</span>
             <span><i class="is-miss"></i>فائت</span><span><i class="is-now"></i>اليوم</span>
-        </div>`;
+        </div>
+        ${_admDayEditor(days)}`;
+}
+
+/* ── the leader's control over one day ────────────────────────────────────────
+   The ONLY thing this panel writes. Two independent powers, both on a past day or
+   today, never on a future one:
+
+     اعتماد    — `ok: ts`, which _dutyStateOf reads as a finished day whatever the
+                 member did (or didn't do). It is a field of its OWN: `ms` stays the
+                 honest open time, which is what the leader ranks people by, and a
+                 forged `ms` would quietly corrupt every total on this screen.
+                 Approving also lifts the day's vacation, so the week's allowance
+                 comes back with it.
+     رفع الإجازة — `vac: null` alone: the day goes back to being judged on its real
+                 hours (usually a miss, and the week gets its vacation back).
+
+   An AUTOMATIC vacation (a short day the week's allowance covered by itself, see
+   _dutyAutoVac) has nothing stored to remove — it is derived on read. The editor
+   says so and offers اعتماد instead.
+
+   Cost: one `update()` of one or two leaf fields, on a node nobody live-listens to.
+   The member's own tab keeps a login-time copy of this week, so a same-day edit
+   shows on their card after their next reload. */
+function _admDayEditor(days) {
+    const today = _todayDateStr();
+    const k = _adm.day;
+    if (!k || k > today || k < DUTY_START_KEY) {
+        return '<p class="adm-cal-hint">اضغط على أي يوم في التقويم لاعتماده أو لرفع الإجازة عنه.</p>';
+    }
+    const r    = _dutyRec(days, k);
+    const st   = _dutyDayState(days, k, today);
+    const auto = st === 'vac' && !r.vac;      // derived, not stored — nothing to remove
+    let lbl = k;
+    try {
+        const [y, mo, d] = k.split('-').map(Number);
+        lbl = new Date(y, mo - 1, d).toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' });
+    } catch (_) {}
+
+    const state = r.ok ? 'معتمد يدويًا'
+        : auto ? 'إجازة تلقائية — يوم ناقص غطّته إجازات الأسبوع'
+        : r.vac ? 'إجازة اختارها العضو'
+        : st === 'done' ? 'أتمّ ساعاته'
+        : st === 'now' ? 'اليوم، ما زال مفتوحًا'
+        : 'يوم فائت';
+    const btn = (act, txt, cls) => `<button class="adm-day-btn ${cls}${_adm.saving ? ' is-busy' : ''}" type="button" data-dact="${act}">${txt}</button>`;
+    let btns = r.ok ? btn('unok', 'إلغاء الاعتماد', 'is-warn') : btn('ok', 'اعتماد اليوم مكتملًا', 'is-go');
+    if (r.vac) btns += btn('unvac', 'رفع الإجازة', 'is-warn');
+
+    return `<div class="adm-day-edit">
+        <div class="adm-day-txt">
+            <span class="adm-day-name">${_libEsc(lbl)}</span>
+            <span class="adm-day-state">${_libEsc(state)} · الوقت المسجّل: ${_libEsc(_admDur(r.ms))}</span>
+        </div>
+        <div class="adm-day-btns">${btns}</div>
+    </div>`;
+}
+
+function _admSetDuty(uid, key, act) {
+    // The cache's copy, because that is the one _admRenderDetail drew the calendar from.
+    const d = uid ? _adm.cache.get(uid) : null;
+    const days = d && d.duty;
+    if (!uid || !key || !days || _adm.saving) return;
+    if (key > _todayDateStr() || key < DUTY_START_KEY) return;
+    const ts = Date.now();
+    const base = `dashboards/${uid}/duty/days/${key}`;
+    // Leaf fields only — never a replace of the record, or a bank landing at the same
+    // moment would be thrown away (the same rule _dutySetVacation follows).
+    const write = act === 'ok'    ? { [`${base}/ok`]: ts, [`${base}/vac`]: null }
+                : act === 'unok'  ? { [`${base}/ok`]: null }
+                : act === 'unvac' ? { [`${base}/vac`]: null }
+                : null;
+    if (!write) return;
+    _adm.saving = true;
+    _admRenderDetail();
+    update(ref(database), write)
+        .then(() => {
+            const r = _dutyRec(days, key);
+            const next = {
+                ms: r.ms,
+                vac: (act === 'ok' || act === 'unvac') ? 0 : r.vac,
+                ok: act === 'ok' ? ts : act === 'unok' ? 0 : r.ok,
+            };
+            days[key] = next;
+            /* The list keeps its OWN slice of the same member (see _admFetchWeek), which
+               is a different object whenever the two were fetched apart. */
+            const w = _adm.week.get(uid);
+            if (w && w.duty && w.duty !== days) w.duty[key] = { ...next };
+            _libToast(act === 'ok' ? 'اعتُمد اليوم مكتملًا' : act === 'unok' ? 'أُلغي اعتماد اليوم' : 'رُفعت الإجازة عن اليوم');
+        })
+        .catch(() => _libToast('تعذّر الحفظ، حاول مرة أخرى'))
+        .finally(() => {
+            _adm.saving = false;
+            if (!_adm.open) return;
+            if (_adm.uid === uid) _admRenderDetail();
+            _admRenderList(false);
+        });
 }
 
 /* ── one member ───────────────────────────────────────────────────────────── */
@@ -32306,6 +32701,7 @@ function _admRenderDetail() {
 function _admOpenMember(uid) {
     if (!uid) return;
     _adm.uid = uid;
+    _adm.day = '';
     document.getElementById('adm-list-view')?.setAttribute('hidden', '');
     document.getElementById('adm-detail-view')?.removeAttribute('hidden');
     _admRenderDetail();
@@ -32314,6 +32710,7 @@ function _admOpenMember(uid) {
 
 function _admBackToList() {
     _adm.uid = null;
+    _adm.day = '';
     document.getElementById('adm-detail-view')?.setAttribute('hidden', '');
     document.getElementById('adm-list-view')?.removeAttribute('hidden');
     _admRenderList(true);
@@ -32405,8 +32802,21 @@ function setupAdminUI() {
     document.getElementById('adm-detail')?.addEventListener('click', (e) => {
         if (e.target.closest('#adm-refresh')) {
             const uid = _adm.uid;
+            _adm.day = '';
             _admFetchMember(uid, true).then(() => { if (_adm.open && _adm.uid === uid) _admRenderDetail(); });
+            return;
         }
+        // A calendar cell selects (or deselects) the day the editor below acts on.
+        const cell = e.target.closest('[data-dk]');
+        if (cell) {
+            _adm.day = _adm.day === cell.dataset.dk ? '' : cell.dataset.dk;
+            _admRenderDetail();
+            return;
+        }
+        // Busy is a class, never the `disabled` attribute (iOS touch leak) — _admSetDuty
+        // re-checks `_adm.saving` itself.
+        const act = e.target.closest('[data-dact]');
+        if (act) _admSetDuty(_adm.uid, _adm.day, act.dataset.dact);
     });
 
     const search = document.getElementById('adm-search');
@@ -33282,3 +33692,111 @@ function setupMeetingUI() {
     if (window.requestIdleCallback) requestIdleCallback(_meetEnsureArt, { timeout: 15000 });
     else setTimeout(_meetEnsureArt, 8000);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   تخفيف الذاكرة في الخلفية — background memory release
+
+   A phone evicts whichever tab is holding the most memory. A backgrounded maqr
+   sits on ~60–70 MB of decoded art it cannot possibly be drawing: the race
+   track (2048×2054 + its classified copy, ~17 MB), the fireplace's 29 flame
+   frames (~31 MB), Lemo's sheets (~10–24 MB) and the two canvas backing
+   stores. rAF has already stopped — but a hidden tab, exactly like بطاطس,
+   gates DRAWING, not HOLDING. That asymmetry is the whole bug: the site was
+   killed while idle, so the member lost his notifications AND his duty hours.
+
+   So: MEM_IDLE_MS after the tab goes hidden, drop all of it. Every single one
+   is rebuilt by a lazy path that ALREADY exists and already handles "not
+   loaded yet" — `updateInteractions` re-kicking `_fireEnsureFrames()` on
+   walk-up, `_lemoSheet()` re-kicking any sheet it is asked for, the two race
+   entry paths' «جاري تحميل حلبة السباق» retry, `drawFocusMask`'s own null and
+   size checks, `resizeCanvas`. Nothing here is a new load path, and that is
+   the entire reason it is safe to return to.
+
+   Touch devices only: eviction is a phone/tablet OS behaviour, and a desktop
+   alt-tab every thirty seconds would re-decode 17 MB for nothing. Nothing is
+   released while PiP is up either — on Android that floating window is what
+   the user is actually watching while the tab reads as "hidden".
+
+   NOT released: `worldCache` (~24 MB, the biggest single lump). Rebuilding it
+   means re-running the whole `loadWorldArt` pipeline, collision masks and all,
+   behind the boot screen. That is a feature with its own failure modes, not a
+   free win, so it deliberately stays out of here.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const MEM_IDLE_MS = 60000;      // a quick tab switch must never pay a re-decode
+const _mem = { timer: 0, freed: false };
+
+function _memCanRelease() {
+    if (!isTouchDevice()) return false;
+    if (gameState.pip && gameState.pip.active) return false;   // still being watched
+    if (isMinigameOverlayOpen()) return false;
+    return true;
+}
+
+function _memReleaseIdle() {
+    _mem.timer = 0;
+    if (!_memCanRelease()) return;
+    _mem.freed = true;
+
+    // The flame — 29 × 512×525 ≈ 31 MB, the biggest lump here.
+    if (!_fire.open && _flame.frames) {
+        _fireStopFlame();
+        for (const img of _flame.frames) { try { img.src = ''; } catch (_) {} }
+        _flame.frames = null;
+        _flame.loading = null;
+    }
+
+    // The race track — held by everyone who has spawned, raced or not.
+    if (gameState.race && gameState.race.track && !gameState.race.active) {
+        gameState.race.track = null;
+        gameState.race._trackLoadStarted = false;   // let the next ensure re-load it
+    }
+
+    // Lemo's sheets. Asleep, `_lemoPose` re-ensures Sleeping + WakeUp itself;
+    // awake, `_lemoSheet` re-kicks whatever the current segment asks for and
+    // returns null meanwhile, which `drawLemo` already treats as skip-a-frame.
+    for (const n of Object.keys(_lemo.sheets)) {
+        const s = _lemo.sheets[n];
+        if (s && s.img) { try { s.img.src = ''; } catch (_) {} }
+        delete _lemo.sheets[n];
+    }
+
+    // The focus mask's offscreen copy (up to the canvas's own size).
+    gameState.maskCanvas = null;
+    gameState.maskCtx = null;
+    gameState._maskKey = null;
+
+    // The visible canvas's backing store. `_lastCanvasBW/BH` MUST be reset with
+    // it: resizeCanvas skips a redundant resize by comparing against them, so
+    // leaving the old size on record would make the restore a no-op and strand
+    // the canvas at 1×1 — a black screen on return.
+    const c = gameState.canvas;
+    if (c && c.width > 1) {
+        c.width = 1; c.height = 1;
+        _lastCanvasBW = _lastCanvasBH = -1;
+    }
+}
+
+// Put back only what must be back BEFORE the next frame; the rest stays lazy.
+function _memRestore() {
+    if (_mem.timer) { clearTimeout(_mem.timer); _mem.timer = 0; }
+    if (!_mem.freed) return;
+    _mem.freed = false;
+    resizeCanvas();          // the canvas is 1×1 — this has to land before rAF resumes
+    // The track is the one rebuild slow enough to be worth starting before it is
+    // asked for, so a race entry isn't met with the retry message. On idle, never
+    // on the critical path — the same warm `startGame` does after spawn.
+    if (MINIGAMES_ENABLED && gameState.race && !gameState.race._trackLoadStarted) {
+        if (window.requestIdleCallback) requestIdleCallback(() => loadRaceTrackAsset(), { timeout: 15000 });
+        else setTimeout(loadRaceTrackAsset, 4000);
+    }
+}
+
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+        if (!_mem.timer && _memCanRelease()) _mem.timer = setTimeout(_memReleaseIdle, MEM_IDLE_MS);
+    } else {
+        _memRestore();
+    }
+});
+// bfcache restore fires pageshow, not always visibilitychange.
+window.addEventListener('pageshow', _memRestore);
