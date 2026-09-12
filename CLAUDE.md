@@ -1448,6 +1448,13 @@ them**. Plus `#mention-toast` at the bottom: «فلان أشار إليك».
   canvas means you are looking at *it*, not at anyone, so the beacon waits. Looking away
   again before `CHAT_BEACON_SEEN_MS` is up **re-arms it** (`seenAt` back to 0).
   `CHAT_BEACON_MAX_MS` (45 s) is the ceiling so it can never glow forever.
+- **The arc points at their POSITION, not just their heading.** Its radius is clamped to
+  their real on-screen distance (`Rb`), so walking up to them pulls the arc and the arrow
+  tip *in* instead of letting them sail past the person. The floor under that clamp
+  shrinks with the distance too — a fixed floor would push the tip over them at
+  point-blank range, the one case the floor exists for. The angle is measured in **screen
+  space**, not world space: the origin is pinned inside the viewport, so a world-space
+  angle drifts off the visible direction as you near the edge of the world.
 - **One beacon per member** — a repeat mention refreshes it, never stacks a second arc.
   It drops itself when the member leaves.
 - **Drawn in `render()` only, never in the PiP pass** (a small player-centred window has

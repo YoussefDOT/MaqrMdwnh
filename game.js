@@ -29072,6 +29072,9 @@ const CHAT_BEACON_MARGIN  = 70;     // بكسل من الحافة: من كان �
 const CHAT_BEACON_R       = 0.34;   // نصف قطر القوس من أصغر بُعد في الشاشة
 const CHAT_BEACON_SPREAD  = 0.30;   // نصف اتساع القوس بالراديان
 const CHAT_BEACON_SEGS    = 11;     // قطع القوس — تدرّج الشفافية يُرسم بها لا بتدرّج لوني
+const CHAT_BEACON_TIP     = 30;     // بُعد رأس السهم عن القوس
+const CHAT_BEACON_CLEAR   = 26;     // خلوص يقف عنده رأس السهم قبل صاحب الإشارة
+const CHAT_BEACON_R_MIN   = 58;     // أرضية نصف القطر (تصغر بدورها مع المسافة)
 const CHAT_BEACON_TOAST_MS = 4600;
 
 // حيّة ما دام صاحبها لم يُر: { uid, born, seenAt, a, lv }. واحد لكل عضو — إشارة
@@ -29497,7 +29500,6 @@ function drawChatBeacons(W, H) {
     if (!ctx || !me) return;
     const mine = _chatScreenPos(me);
     if (!mine) return;
-    const mp = getPlayerRenderPos(me);
     const R = Math.min(W, H) * CHAT_BEACON_R;
     // الأصل أنا، مثبّتًا في وسط الشاشة تقريبًا: وقوفي عند حافة العالم يجب ألّا يدفع
     // القوس خارج الشاشة.
@@ -29508,17 +29510,28 @@ function drawChatBeacons(W, H) {
     for (const bc of _chatBeacons) {
         const p = gameState.players[bc.uid];
         if (!p || bc.a < 0.02) continue;
-        const pos = getPlayerRenderPos(p);
-        const dx = pos.x - mp.x, dy = pos.y - mp.y;
-        if (Math.abs(dx) < 1 && Math.abs(dy) < 1) continue;   // فوق بعضنا — لا اتجاه
+        // الزاوية تُقاس على الشاشة لا في العالم: الأصل مُثبّت داخل الشاشة (فوق)، فزاوية
+        // العالم تنحرف عن الاتجاه المرئي كلّما اقتربتُ من حافة العالم.
+        const sp = _chatScreenPos(p);
+        if (!sp) continue;
+        const dx = sp.x - ox, dy = sp.y - oy;
+        const dist = Math.hypot(dx, dy);
+        if (dist < 2) continue;                               // فوق بعضنا — لا اتجاه
         const ang = Math.atan2(dy, dx);
+        // القوس يشير إلى موضعه لا إلى جهته فحسب: نصف قطره محصور بمسافته الحقيقية على
+        // الشاشة، فإن اقترب سحبَ القوسَ ورأسَ السهم إليه بدل أن يتجاوزاه.
+        const reach = dist - CHAT_BEACON_TIP - CHAT_BEACON_CLEAR;
+        // الأرضية نفسها تصغر مع المسافة — أرضية ثابتة كانت ستدفع رأس السهم فوقه إن كان
+        // ملاصقًا لي تمامًا، وهي الحالة التي وُضعت الأرضية أصلًا لتفادي انهيار القوس فيها.
+        const floor = Math.min(CHAT_BEACON_R_MIN, dist * 0.4);
+        const Rb = Math.max(floor, Math.min(R, reach));
         const col = _chatMenColor(bc.uid);
         // نبضة بطيئة تشتدّ مع درجة الإشارة: هي ما يجعل التوهّج يُلتقط بطرف العين.
         const hz = 0.7 + (bc.lv - 1) * 0.22;
         const puls = 0.7 + 0.3 * (0.5 + 0.5 * Math.sin((now - bc.born) / 1000 * Math.PI * 2 * hz));
         const A = bc.a * puls;
-        _chatDrawBeaconGlow(ctx, ox, oy, ang, R, col, A, W, H);
-        _chatDrawBeaconArc(ctx, ox, oy, ang, R, col, A, bc);
+        _chatDrawBeaconGlow(ctx, ox, oy, ang, Rb, col, A, W, H);
+        _chatDrawBeaconArc(ctx, ox, oy, ang, Rb, col, A, bc);
     }
     ctx.restore();
 }
@@ -29566,13 +29579,17 @@ function _chatDrawBeaconArc(ctx, ox, oy, ang, R, col, A, bc) {
         ctx.arc(ox, oy, R, ang - sp + sp * 2 * t0, ang - sp + sp * 2 * t1);
         ctx.stroke();
     }
-    // سهم صغير خارج القوس — «من هنا»، لمن لم يقرأ القوس وحده.
+    // سهم صغير خارج القوس — «من هنا»، لمن لم يقرأ القوس وحده. رأسه عند
+    // CHAT_BEACON_TIP من القوس، وهي المسافة نفسها التي حُسب بها نصف القطر أعلاه، فلا
+    // يتجاوز الرأسُ صاحبَ الإشارة أبدًا مهما اقترب.
     const cx = ox + Math.cos(ang) * R, cy = oy + Math.sin(ang) * R;
     ctx.globalAlpha = A * 0.95;
     ctx.translate(cx, cy);
     ctx.rotate(ang);
     ctx.beginPath();
-    ctx.moveTo(30, 0); ctx.lineTo(20, -7); ctx.lineTo(20, 7);
+    ctx.moveTo(CHAT_BEACON_TIP, 0);
+    ctx.lineTo(CHAT_BEACON_TIP - 10, -7);
+    ctx.lineTo(CHAT_BEACON_TIP - 10, 7);
     ctx.closePath();
     ctx.fillStyle = col.fg;
     ctx.fill();
