@@ -193,7 +193,7 @@
 /* Fixed and on <body>: the pill is `overflow:hidden` inside a panel that
    scrolls, so nothing built inside it can escape. */
 .lib-who-pop {
-    position: fixed; z-index: 3000; left: 0; top: 0;
+    position: fixed; z-index: 6110; left: 0; top: 0;   /* فوق اللوحة نفسها (6100) */
     max-width: min(340px, 92vw); direction: rtl;
     display: flex; flex-wrap: wrap; gap: 6px; padding: 9px 10px;
     background: #151515; border: 1px solid rgba(255, 255, 255, .18);

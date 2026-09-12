@@ -8367,7 +8367,7 @@ body.is-mobile .fp-stage {
 /* ── اللوحة نفسها ─────────────────────────────────────────────────────────── */
 .lib-panel {
     position: fixed;
-    z-index: 205;                 /* فوق بطاقة المستخدم (200)، تحت كل تراكب */
+    z-index: 6100;                /* فوق كل اللوحات (الإعدادات ٦٠٠٠، أصوات التركيز ١٠٠١)، وتحت كل تراكب (٩٠٠٠+) */
     width: min(430px, calc(100vw - 36px));
     max-height: 62vh;
     display: flex; flex-direction: column;
