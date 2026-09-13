@@ -133,7 +133,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 302 · Updated 9/13 2:02 PM</div>
+    <div id="build-number" class="build-number">Build 303 · Updated 9/13 4:16 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -300,13 +300,31 @@
 
                 <div id="chal-track" class="chal-track" aria-hidden="true"></div>
 
+                <!-- وجه التصحيح: إضافة ما لم يُسجَّل من ساعات اليوم يدويًا -->
+                <div id="chal-fix" class="chal-fix" hidden>
+                    <div class="chal-fix-box">
+                        <button class="chal-fix-arrow" id="chal-fix-h-up" type="button" aria-label="زيادة الساعات">▲</button>
+                        <div class="chal-fix-num" id="chal-fix-hours">٠</div>
+                        <button class="chal-fix-arrow" id="chal-fix-h-down" type="button" aria-label="إنقاص الساعات">▼</button>
+                        <div class="chal-fix-unit">ساعة</div>
+                    </div>
+                    <div class="chal-fix-box">
+                        <button class="chal-fix-arrow" id="chal-fix-m-up" type="button" aria-label="زيادة الدقائق">▲</button>
+                        <div class="chal-fix-num" id="chal-fix-mins">٠٠</div>
+                        <button class="chal-fix-arrow" id="chal-fix-m-down" type="button" aria-label="إنقاص الدقائق">▼</button>
+                        <div class="chal-fix-unit">دقيقة</div>
+                    </div>
+                </div>
+
                 <div id="chal-tally" class="chal-tally"></div>
 
                 <div class="chal-modal-actions">
                     <button id="chal-claim-btn" class="chal-modal-btn primary" type="button" hidden>استلام</button>
+                    <button id="chal-fix-btn" class="chal-modal-btn primary" type="button" hidden>أضف إلى حضور اليوم</button>
                     <button id="chal-vac-btn" class="chal-modal-btn vac" type="button" hidden>خذ اليوم إجازة</button>
                     <button id="chal-ok-btn" class="chal-modal-btn" type="button">تمام</button>
                 </div>
+                <button id="chal-fix-link" class="chal-fix-link" type="button" hidden>لم تُسجل ساعاتك بشكل صحيح؟</button>
                 <p id="chal-modal-note" class="chal-modal-note"></p>
             </div>
         </div>
@@ -2016,7 +2034,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=291"></script>
+        <script type="module" src="game.js?v=292"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

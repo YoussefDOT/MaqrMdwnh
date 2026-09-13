@@ -89,7 +89,7 @@ Grep anchors for the major systems (all verified to exist):
 | Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession` |
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
-| Daily duty (حضور المقر — was تحدي المثابرة) | `DUTY`, `updateWorkChallenge`, `_dutyTick`, `_dutySetVacation`, `_chalPayDue`, `_chalClaim` |
+| Daily duty (حضور المقر — was تحدي المثابرة) | `DUTY`, `updateWorkChallenge`, `_dutyTick`, `_dutySetVacation`, `_dutyFixApply`, `_chalPayDue`, `_chalClaim` |
 | Trophy shelf | `TROPHIES`, `updateTrophies`, `_troBank`, `_troClaim`, `_troCeremony` |
 | جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
 | Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admRenderDutyBar`, `_admDutySection` |
@@ -2203,7 +2203,7 @@ squashes the gradient). Tokens are scoped `--cd-*` on `.chal-dock` / `.chal-moda
 
 ### The duty's state — `dashboards/{uid}/duty/days`
 ```
-dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, vac, ok }  // ms the site was open; vac = ts taken; ok = ts the leader approved it
+dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, vac, ok, fix }  // ms open; vac = ts taken; ok = ts the leader approved it; fix = ms the member added by hand
 dashboards/{uid}/challenge/s1/{days, claimed}          // round one — read-only now
 ```
 Decision tree §5 case 4 — private, persistent, written more than once a day: one bounded
@@ -2258,6 +2258,40 @@ read must not let a third one through), today isn't already won or approved, and
 directions apply locally **after** the write acks; busy is a `.is-busy` class, never
 `disabled`. Changing the allowance period (month, rolling…) means `_dutyVacLeft()` AND the
 bounded setup read — both assume a week.
+
+### «لم تُسجل ساعاتك بشكل صحيح؟» — the manual top-up (`_dutyFixApply`)
+
+The ticker is honest but not complete: a suspended phone tab, a slept laptop, a reload
+the site never saw the end of — each is a stretch the member really was here for and
+`DUTY_GAP_MAX_MS` refuses to credit. `_dutyCreditSession` recovers the **work** inside
+such a stretch; nothing recovers plain presence. So plain clickable text under the
+panel's buttons (`#chal-fix-link`, the shape of «تجاهل الجلسة» — never a button-looking
+thing, it must not compete with الإجازة for the eye) opens a **fourth face** of the same
+modal: hour and minute steppers like the long-free confirm, with a live «بعد الإضافة»
+line, and «أضف إلى حضور اليوم».
+
+- **The modal has four faces now** (`_chal.mode`: `duty` · `win` · `pay` · `fix`), and
+  `_chalSetMode()` swaps between them **without closing and reopening** — a reopen
+  replays the card's entrance and the avatar's `chalMeIn` with it. On the `fix` face the
+  «تمام» button becomes **«رجوع»** and steps back one face instead of closing; ✕ and the
+  backdrop still close outright. The week ladder and the steppers swap places by
+  `hidden` — both set a `display`, so **both need a `[hidden] { display: none }` rule**
+  (the `.hud-tool-btn[hidden]` trap).
+- **It can never push today past the time elapsed SINCE LOCAL MIDNIGHT** (`_dutyFixRoomMs`).
+  You cannot have attended ten hours by nine in the morning; that bound is what makes the
+  steppers' own ceilings (`DUTY_FIX_MAX_H` 12, `DUTY_FIX_STEP_M` 5) a convenience rather
+  than the real limit. An over-ask is clamped and the tally says so before the press.
+- **Every added millisecond also lands in `fix`, a leaf of its own.** `ms` stays the
+  single number the leader ranks by — the top-up is part of it, and *visibly* so: the
+  leader's calendar tooltip reads «منها ١ س مضافة يدويًا». Do **not** subtract `fix` from
+  `ms` anywhere, and do not fake a day by writing `ms` alone (the rule `ok` follows).
+- **Two leaf transactions that ADD a delta** (`ms`, `fix`) — never a write of a total and
+  never a replace of the day record: the leader's `ok` and a bank landing in the same
+  moment both live in that node. Counting pauses (`_duty.busy`) while they are in flight,
+  exactly as it does for a vacation, and `_duty.tickAt` is re-anchored after.
+- **Never offered on a day off** — nothing is being counted, so the vacation has to be
+  cancelled first — nor before the week's read succeeded (`_duty.readOk`).
+- Busy is a `.is-busy` class, never the `disabled` attribute (iOS touch leak).
 
 ### Round one's payout — a popup that only «استلام» closes
 A member who earned round-one points and hasn't claimed them gets `#chal-modal` in its `pay`
@@ -2348,11 +2382,12 @@ the tasks panel still starts below everything. Three things follow from that:
 - `_chalPaintCard()` runs ~1/s and only re-measures the stack when its own text changed
   (`_chal.lastPaintKey`).
 
-### One modal, three faces
+### One modal, four faces
 `#chal-modal` (`_chal.mode`): **`duty`** — this week's seven days Sunday → Saturday with the
-hours over each dot and the member's avatar on today, plus the vacation button; **`win`** —
-the same under «أحسنت!» once three hours are crossed; **`pay`** — round one's seven-dot ladder
-with its stickers and the claim, and nothing else. `display` can't transition, so it is always
+hours over each dot and the member's avatar on today, plus the vacation button and the
+top-up link; **`win`** — the same under «أحسنت!» once three hours are crossed; **`pay`** —
+round one's seven-dot ladder with its stickers and the claim, and nothing else; **`fix`** —
+the manual top-up steppers (see above). `display` can't transition, so it is always
 laid out and `.active` lands after a double rAF, z-index **9990 — BELOW prayer and azkar
 (10000)**, with a lifecycle guard in `updateWorkChallenge` that closes it if either fires.
 - **The track is built once per open; only `_chalPaintTally()` repaints (1/s).** Rebuilding

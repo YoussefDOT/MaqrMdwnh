@@ -28259,6 +28259,8 @@ const DUTY_TICK_MS    = 15000;      // background heartbeat — rAF stops in a h
 const DUTY_GAP_MAX_MS = 150000;     // a longer gap is sleep/suspension, not "open"
 const DUTY_DAY_MAX_MS = 24 * 3600000;
 const DUTY_CONFIRM_MS = 5000;       // the vacation's second press has to land inside this
+const DUTY_FIX_MAX_H  = 12;         // a correction bigger than half a day is not a correction
+const DUTY_FIX_STEP_M = 5;          // minutes step — a top-up is an estimate, not a stopwatch
 const DUTY_DAY_NAMES  = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت'];
 const DUTY_DAY_SHORT  = ['أحد', 'اثنين', 'ثلاثاء', 'أربعاء', 'خميس', 'جمعة', 'سبت'];
 
@@ -28294,6 +28296,9 @@ const _duty = {
     sessOn: false,      // a work session was running at the previous tick
     workAt: 0,          // when THIS device first saw the running session (0 = no ledger)
     workTicked: 0,      // ms the ticker already credited during it
+    // ── «لم تُسجل ساعاتك بشكل صحيح؟» — the manual top-up steppers ─────────────
+    fixH: 0,
+    fixM: 0,
 };
 
 /* ── calendars ────────────────────────────────────────────────────────────────
@@ -28354,6 +28359,10 @@ function _dutyRec(days, key) {
         // اعتماد القائد — the leader passed this day by hand (see _admSetDuty). It is a
         // field of its own so `ms` stays the honest open time he ranks members by.
         ok: Number(r && r.ok) || 0,
+        // ما أضافه العضو يدويًا من ساعات اليوم (see _dutyFixApply). It is folded INTO
+        // `ms` — this is only the ledger of how much of it was self-reported, so the
+        // leader can see it. Never subtract it from `ms`.
+        fix: Math.max(0, Number(r && r.fix) || 0),
     };
 }
 /* One word per day, shared by the member's own ladder and the leader's panel so
@@ -28551,7 +28560,7 @@ function _dutyBank(force) {
     _duty.liveMs = 0;
     _duty.lastBankAt = Date.now();
     const r = _dutyRec(_duty.days, key);
-    _duty.days[key] = { ms: Math.min(DUTY_DAY_MAX_MS, r.ms + delta), vac: r.vac, ok: r.ok };
+    _duty.days[key] = { ms: Math.min(DUTY_DAY_MAX_MS, r.ms + delta), vac: r.vac, ok: r.ok, fix: r.fix };
     runTransaction(ref(database, `${_dutyPath()}/${key}/ms`),
         (curr) => Math.min(DUTY_DAY_MAX_MS, (Number(curr) || 0) + delta)).catch(() => {});
 }
@@ -28582,18 +28591,20 @@ function _dutySetVacation(on) {
     const ts = Date.now();
     /* Field by field, never a replace of the whole record: the leader's `ok` lives in
        the same node and must survive a member toggling their day off. */
-    const write = on ? { [`${_dutyPath()}/${key}/ms`]: 0, [`${_dutyPath()}/${key}/vac`]: ts }
+    /* Taking one wipes the day's progress, so the manual top-up ledger goes with it —
+       leaving `fix` behind would claim hours that no longer exist in `ms`. */
+    const write = on ? { [`${_dutyPath()}/${key}/ms`]: 0, [`${_dutyPath()}/${key}/vac`]: ts, [`${_dutyPath()}/${key}/fix`]: null }
                      : { [`${_dutyPath()}/${key}/vac`]: null };
     update(ref(database), write)
         .then(() => {
             const prev = _dutyRec(_duty.days, key);
             if (on) {
-                _duty.days[key] = { ms: 0, vac: ts, ok: prev.ok };
+                _duty.days[key] = { ms: 0, vac: ts, ok: prev.ok, fix: 0 };
                 _duty.liveMs = 0;
                 _duty.pendingWin = false;
                 _libToast('إجازة اليوم محفوظة — لا شيء مطلوب منك اليوم');
             } else {
-                _duty.days[key] = { ms: prev.ms, vac: 0, ok: prev.ok };
+                _duty.days[key] = { ms: prev.ms, vac: 0, ok: prev.ok, fix: prev.fix };
                 delete _duty.celebrated[key];   // three hours from here still earns the «أحسنت!»
                 _libToast('أُلغيت الإجازة — عاد عدّاد اليوم للعمل');
             }
@@ -28605,6 +28616,81 @@ function _dutySetVacation(on) {
             _chal.lastPaintKey = '';
             _chalPaintCard();
             if (_chal.modalOpen) _chalPaintModal();
+        });
+}
+
+/* ── «لم تُسجل ساعاتك بشكل صحيح؟» — the manual top-up ─────────────────────────
+   The ticker is honest but not complete: a suspended phone tab, a laptop that
+   slept, a reload the site never saw the end of — each is a stretch the member
+   really was here for and DUTY_GAP_MAX_MS refuses to credit. `_dutyCreditSession`
+   recovers the WORK inside such a stretch; nothing recovers plain presence. So
+   the member may add it back by hand, from the same panel the day is shown on.
+
+   Three things keep it honest rather than a free points button:
+     • It can never push today past the time actually elapsed SINCE LOCAL
+       MIDNIGHT. You cannot have attended ten hours by nine in the morning.
+     • Every added millisecond is ALSO recorded in `fix`, a leaf of its own, so
+       the leader's panel can say how much of a day was self-reported. `ms` stays
+       the number he ranks by — the top-up is part of it, and visibly so.
+     • Never on a day off (nothing is being counted) — the vacation must be
+       cancelled first. */
+function _dutyFixRoomMs() {
+    const mid = new Date(); mid.setHours(0, 0, 0, 0);
+    const sinceMidnight = Math.min(DUTY_DAY_MAX_MS, Math.max(0, Date.now() - mid.getTime()));
+    return Math.max(0, sinceMidnight - _dutyTodayRec().ms);
+}
+function _dutyCanFix() {
+    const r = _dutyTodayRec();
+    return !!gameState.userId && _duty.readOk && !r.vac;
+}
+function _dutyFixMs() { return (_duty.fixH * 60 + _duty.fixM) * 60000; }
+function _dutyFixAdjust(which, delta) {
+    if (_duty.busy) return;
+    if (which === 'h') _duty.fixH = Math.max(0, Math.min(DUTY_FIX_MAX_H, _duty.fixH + delta));
+    else {
+        _duty.fixM += delta * DUTY_FIX_STEP_M;
+        if (_duty.fixM > 59) _duty.fixM = 0;
+        if (_duty.fixM < 0)  _duty.fixM = 60 - DUTY_FIX_STEP_M;
+    }
+    _chalPaintTally();
+}
+/* Two leaf transactions, never a write of a total and never a replace of the day
+   record — the leader's `ok` and a bank landing at the same moment both live in
+   that node. Counting pauses (`busy`) while they are in flight, exactly as it
+   does for a vacation. */
+function _dutyFixApply() {
+    if (!gameState.userId || _duty.busy || !_dutyCanFix()) return;
+    const want = _dutyFixMs();
+    if (want <= 0) { _libToast('اختر المدة التي تريد إضافتها أولًا'); return; }
+    const add = Math.min(want, _dutyFixRoomMs());
+    if (add <= 0) { _libToast('لا مجال لإضافة المزيد — ساعات اليوم مسجّلة بالكامل'); return; }
+
+    const key = _todayDateStr();
+    _duty.busy = true;
+    _chalPaintTally();
+    const p = _dutyPath();
+    Promise.all([
+        runTransaction(ref(database, `${p}/${key}/ms`),  (c) => Math.min(DUTY_DAY_MAX_MS, (Number(c) || 0) + add)),
+        runTransaction(ref(database, `${p}/${key}/fix`), (c) => Math.min(DUTY_DAY_MAX_MS, (Number(c) || 0) + add)),
+    ])
+        .then(() => {
+            const prev = _dutyRec(_duty.days, key);
+            _duty.days[key] = {
+                ms: Math.min(DUTY_DAY_MAX_MS, prev.ms + add),
+                vac: prev.vac, ok: prev.ok,
+                fix: Math.min(DUTY_DAY_MAX_MS, prev.fix + add),
+            };
+            _duty.fixH = 0; _duty.fixM = 0;
+            _libToast(`أُضيفت ${_dutyDur(add)} إلى حضور اليوم`);
+            _chalSetMode('duty');
+        })
+        .catch(() => _libToast('تعذّرت إضافة الساعات، حاول مرة أخرى'))
+        .finally(() => {
+            _duty.busy = false;
+            _duty.tickAt = 0;           // re-anchor: the pause is not open time to credit
+            _chal.lastPaintKey = '';
+            _chalPaintCard();
+            if (_chal.modalOpen) _chalPaintTally();
         });
 }
 
@@ -28845,7 +28931,13 @@ function _chalPaintModal() {
     if (modal) {
         modal.classList.toggle('win', mode === 'win');
         modal.classList.toggle('pay', mode === 'pay');
+        modal.classList.toggle('fix', mode === 'fix');
     }
+    // The week ladder and the steppers swap places — one is always the face.
+    const trackEl = document.getElementById('chal-track');
+    const fixEl   = document.getElementById('chal-fix');
+    if (trackEl) trackEl.hidden = mode === 'fix';
+    if (fixEl)   fixEl.hidden   = mode !== 'fix';
     const kicker = document.getElementById('chal-modal-kicker');
     const head   = document.getElementById('chal-modal-head');
     const sub    = document.getElementById('chal-modal-sub');
@@ -28855,7 +28947,12 @@ function _chalPaintModal() {
     // only — nothing user-typed ever goes through here.
     const setHead = (html) => { if (head) head.innerHTML = html; };
 
-    if (mode === 'pay') {
+    if (mode === 'fix') {
+        set(kicker, 'تصحيح الحضور');
+        setHead('أضف <em>ساعات اليوم</em>');
+        set(sub, 'إن لم يُسجَّل وقتك كاملًا — كأن نام الجهاز أو أُغلق التطبيق — فأضف ما ينقصه هنا.');
+        set(note, 'تُضاف المدة إلى حضور اليوم فقط، وتُسجَّل بوصفها إضافة يدوية يراها القائد.');
+    } else if (mode === 'pay') {
         set(kicker, 'الجولة الأولى');
         setHead('حصيلة <em>أسبوع العمل</em>');
         set(sub, 'انتهت الجولة الأولى، وهذه نقاطك.');
@@ -28889,6 +28986,39 @@ function _chalPaintTally() {
     const claimBtn = document.getElementById('chal-claim-btn');
     const okBtn    = document.getElementById('chal-ok-btn');
     const vacBtn   = document.getElementById('chal-vac-btn');
+    const fixBtn   = document.getElementById('chal-fix-btn');
+    const fixLink  = document.getElementById('chal-fix-link');
+
+    // ── the top-up face — the steppers and what they would make the day ──────
+    if (mode === 'fix') {
+        const hEl = document.getElementById('chal-fix-hours');
+        const mEl = document.getElementById('chal-fix-mins');
+        if (hEl) hEl.textContent = _libAr(_duty.fixH);
+        if (mEl) mEl.textContent = String(_duty.fixM).padStart(2, '0').replace(/\d/g, c => _libAr(+c));
+        const r    = _dutyTodayRec();
+        const want = _dutyFixMs();
+        const add  = Math.min(want, _dutyFixRoomMs());
+        if (tally) {
+            /* Two lines, never one with an arrow between them: an arrow is a
+               direction-neutral character between Arabic-Indic digits, and bidi
+               reorders the pair (the same trap the payout rungs are boxed for). */
+            let html = `<div>حضور اليوم الآن: <b>${_dutyDur(r.ms)}</b></div>`;
+            html += `<div class="ok">بعد الإضافة: <b>${_dutyDur(r.ms + add)}</b> من ٣ ساعات</div>`;
+            if (want > add) html += `<div class="vac">لا يمكن تجاوز ما مضى من اليوم — ستُضاف <b>${_dutyDur(add)}</b> فقط</div>`;
+            tally.innerHTML = html;
+        }
+        if (claimBtn) claimBtn.hidden = true;
+        if (vacBtn)   vacBtn.hidden = true;
+        if (fixLink)  fixLink.hidden = true;
+        if (fixBtn) {
+            fixBtn.hidden = false;
+            fixBtn.classList.toggle('is-busy', _duty.busy);
+        }
+        if (okBtn) { okBtn.hidden = false; okBtn.textContent = 'رجوع'; }
+        return;
+    }
+    if (fixBtn) fixBtn.hidden = true;
+    if (okBtn)  okBtn.textContent = 'تمام';
 
     if (mode === 'pay') {
         const done = _chalDoneCount();
@@ -28908,8 +29038,9 @@ function _chalPaintTally() {
             claimBtn.textContent = 'استلام ' + _chalPtsAr(pts);
             claimBtn.classList.toggle('is-busy', _chal.claiming);
         }
-        if (okBtn)  okBtn.hidden = true;
-        if (vacBtn) vacBtn.hidden = true;
+        if (okBtn)   okBtn.hidden = true;
+        if (vacBtn)  vacBtn.hidden = true;
+        if (fixLink) fixLink.hidden = true;
         return;
     }
 
@@ -28947,6 +29078,10 @@ function _chalPaintTally() {
         vacBtn.classList.toggle('is-busy', _duty.busy);
         vacBtn.textContent = r.vac ? 'إلغاء الإجازة' : confirming ? 'تأكيد: سيُمسح تقدّم اليوم' : 'خذ اليوم إجازة';
     }
+    /* Plain clickable text, not a button-shaped thing — it is the escape hatch for
+       a rare failure, and it must not compete with الإجازة for the eye. Hidden on
+       a day off: nothing is being counted, so there is nothing to correct. */
+    if (fixLink) fixLink.hidden = !(mode === 'duty' && _dutyCanFix());
 }
 
 function _chalOpenModal(mode) {
@@ -28955,12 +29090,25 @@ function _chalOpenModal(mode) {
     _chal.modalOpen = true;
     _chal.mode = mode || 'duty';
     _duty.confirmAt = 0;
+    _duty.fixH = 0; _duty.fixM = 0;
     _chalPaintModal();
     document.body.classList.add('chal-modal-open');
     // display can't transition — the element is always laid out and `.active`
     // lands after a double rAF, the same pattern the azkar/fireplace overlays use.
     requestAnimationFrame(() => requestAnimationFrame(() => { if (_chal.modalOpen) modal.classList.add('active'); }));
     if (_chal.mode !== 'duty') { try { gameState.focusAudioEngine?.playEffect('paperTaskComplete'); } catch (_) {} }
+}
+
+/* Swap the face WITHOUT closing and reopening — the modal's entrance would
+   replay and the avatar's `chalMeIn` with it. Entering the top-up always starts
+   the steppers at zero: a leftover value from a previous visit is a write nobody
+   asked for. */
+function _chalSetMode(mode) {
+    if (!_chal.modalOpen || _chal.mode === mode) return;
+    _chal.mode = mode;
+    _duty.confirmAt = 0;
+    if (mode === 'fix') { _duty.fixH = 0; _duty.fixM = 0; }
+    _chalPaintModal();
 }
 
 function _chalCloseModal() {
@@ -29050,7 +29198,20 @@ function setupWorkChallenge() {
         e.preventDefault(); e.stopPropagation(); _chalOpenModal('duty');
     });
     document.getElementById('chal-modal-close')?.addEventListener('click', _chalUserClose);
-    document.getElementById('chal-ok-btn')?.addEventListener('click', _chalUserClose);
+    // On the top-up face this button is «رجوع» — it steps back a face, it does not close.
+    document.getElementById('chal-ok-btn')?.addEventListener('click', () => {
+        if (_chal.mode === 'fix') _chalSetMode('duty'); else _chalUserClose();
+    });
+    document.getElementById('chal-fix-link')?.addEventListener('click', (e) => {
+        e.stopPropagation(); _chalSetMode('fix');
+    });
+    // Busy is a class, never the `disabled` attribute (iOS touch leak) — the
+    // handlers re-check the state themselves.
+    document.getElementById('chal-fix-h-up')?.addEventListener('click', (e) => { e.stopPropagation(); _dutyFixAdjust('h', 1); });
+    document.getElementById('chal-fix-h-down')?.addEventListener('click', (e) => { e.stopPropagation(); _dutyFixAdjust('h', -1); });
+    document.getElementById('chal-fix-m-up')?.addEventListener('click', (e) => { e.stopPropagation(); _dutyFixAdjust('m', 1); });
+    document.getElementById('chal-fix-m-down')?.addEventListener('click', (e) => { e.stopPropagation(); _dutyFixAdjust('m', -1); });
+    document.getElementById('chal-fix-btn')?.addEventListener('click', (e) => { e.stopPropagation(); _dutyFixApply(); });
     document.getElementById('chal-claim-btn')?.addEventListener('click', () => { _chalClaim(); });
     // Busy/confirm are classes, never the `disabled` attribute (iOS touch leak) —
     // the handler re-checks the state itself.
@@ -32649,7 +32810,10 @@ function _admDutySection(days) {
                 : (r.ok && r.ms < DUTY.goalMs) ? '✓'
                 : r.ms >= 60000 ? _dutyClock(r.ms) : '';
             const note = r.ok ? ' — اعتماد يدوي' : st === 'vac' && !r.vac ? ' — إجازة تلقائية' : '';
-            const tip = _libEsc(DUTY_DAY_NAMES[j] + ' ' + k + note);
+            // How much of the day the member added by hand (see _dutyFixApply) — `ms`
+            // includes it, so the leader is told rather than left to guess.
+            const fixNote = r.fix ? ' — منها ' + _dutyDur(r.fix) + ' مضافة يدويًا' : '';
+            const tip = _libEsc(DUTY_DAY_NAMES[j] + ' ' + k + note + fixNote);
             /* Only a real mandatory day that has already begun can be edited — a future
                day has nothing to approve and a trial day is owed nothing. */
             if (k > today || k < DUTY_START_KEY) return `<span class="adm-cal-c is-${st}" title="${tip}">${txt}</span>`;

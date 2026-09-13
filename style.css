@@ -9185,6 +9185,8 @@ body.is-mobile .chal-fill { background-size: 188px 100%; }
     gap: 2px;
     margin: 28px 4px 6px;
 }
+/* display: flex يتغلّب على [hidden] من متصفّح المستخدم — وجه التصحيح يخفي السلّم */
+.chal-track[hidden] { display: none; }
 /* الخيط الواصل — تحت النقاط تمامًا، ولا يمتدّ خارج أوّلها وآخرها */
 .chal-track::before {
     content: "";
@@ -9329,6 +9331,64 @@ body.is-mobile .chal-fill { background-size: 188px 100%; }
     margin-top: 11px; font-size: 0.7rem; font-weight: 600; line-height: 1.6;
     color: var(--cd-ink-40);
 }
+
+/* ── تصحيح الحضور — «لم تُسجل ساعاتك بشكل صحيح؟» ─────────────────────────────
+   الرابط نصّ يُضغط لا زرّ: مخرج لعطل نادر، فلا ينبغي أن ينافس زرّ الإجازة على
+   العين. وحقلا الساعة والدقيقة نفس فكرة نافذة الجلسة الحرّة الطويلة، بحبر الورق. */
+.chal-fix-link {
+    position: relative;
+    display: block; width: 100%;
+    margin-top: 12px; padding: 2px 0;
+    background: none; border: none;
+    font-family: inherit; font-size: 0.74rem; font-weight: 700; line-height: 1.6;
+    color: var(--cd-ink-40);
+    text-decoration: underline; text-underline-offset: 3px;
+    text-decoration-color: var(--cd-ink-12);
+    cursor: pointer;
+    transition: color 0.2s, text-decoration-color 0.2s;
+}
+.chal-fix-link:hover { color: var(--cd-ink-70); text-decoration-color: var(--cd-ink-30); }
+.chal-fix-link[hidden] { display: none; }
+
+.chal-fix {
+    position: relative;
+    display: flex; justify-content: center; gap: 12px;
+    margin-top: 18px;
+}
+.chal-fix[hidden] { display: none; }
+.chal-fix-box {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    min-width: 88px;
+    padding: 8px 6px 7px;
+    border-radius: 18px;
+    background: var(--cd-ink-06);
+    border: 1.5px solid var(--cd-line);
+}
+.chal-fix-arrow {
+    width: 34px; height: 26px;
+    display: grid; place-items: center;
+    background: none; border: none; border-radius: 10px;
+    color: var(--cd-ink-40);
+    font-size: 0.72rem; line-height: 1;
+    cursor: pointer;
+    transition: color 0.16s, background 0.16s, transform 0.22s var(--cd-pop);
+}
+.chal-fix-arrow:hover  { color: var(--cd-ink); background: var(--cd-ink-06); }
+.chal-fix-arrow:active { transform: scale(0.88); }
+.chal-fix-num {
+    font-size: 1.7rem; font-weight: 900; line-height: 1.25;
+    color: var(--cd-ink);
+    font-variant-numeric: tabular-nums;
+}
+.chal-fix-unit {
+    font-size: 0.66rem; font-weight: 700; line-height: 1.4;
+    color: var(--cd-ink-40);
+}
+/* على وجه التصحيح لا سلّم أسبوع، فلا حاجة لهامش السلّم الذي كان يعلو الحصيلة */
+.chal-modal.fix .chal-tally { margin-top: 14px; }
+
+body.is-mobile .chal-fix-box { min-width: 78px; }
+body.is-mobile .chal-fix-num { font-size: 1.5rem; }
 
 body.is-mobile .chal-modal-card { padding: 28px 15px 14px; border-radius: 24px; }
 body.is-mobile .chal-track { margin-inline: 0; }
