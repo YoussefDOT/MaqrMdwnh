@@ -21702,6 +21702,10 @@ function showSessionNotSavedToast() {
 
 function dashSaveSession(mode, task, workedMs) {
     if (!dashTrackingEnabled()) return;
+    // حضور المقر: credit the attendance the per-second ticker missed while the
+    // phone had this tab suspended. Deliberately ABOVE the 10-minute floor —
+    // that floor is a dashboard rule, not an attendance one.
+    _dutyCreditSession(workedMs);
     if (!(workedMs >= DASH_MIN_SESSION_MS)) return;        // 10-minute floor
     const uid = gameState.userId;
     const finishMs = Date.now();
@@ -28286,6 +28290,10 @@ const _duty = {
     confirmAt: 0,
     busy: false,        // a vacation write is in flight — counting pauses
     screenEl: null,
+    // ── the session ledger (see _dutyCreditSession) ──────────────────────────
+    sessOn: false,      // a work session was running at the previous tick
+    workAt: 0,          // when THIS device first saw the running session (0 = no ledger)
+    workTicked: 0,      // ms the ticker already credited during it
 };
 
 /* ── calendars ────────────────────────────────────────────────────────────────
@@ -28472,11 +28480,61 @@ function _dutyTick() {
     const last = _duty.tickAt;
     if (!_dutyCounting()) { _duty.tickAt = 0; return; }
     _duty.tickAt = now;
+    /* The session ledger. A rising edge — no session, then one — opens a fresh
+       one; `workAt` is the first moment THIS device saw it running, which is
+       what caps the credit at the end. See _dutyCreditSession. */
+    const inSess = !!(gameState.pomodoro.active || gameState.freeMode.active);
+    if (inSess && !_duty.sessOn) { _duty.workAt = now; _duty.workTicked = 0; }
+    _duty.sessOn = inSess;
     const gap = last ? now - last : 0;
     if (gap <= 0 || gap > DUTY_GAP_MAX_MS) return;
     if (_dutyRec(_duty.days, key).vac) return;      // a day off counts nothing
     _duty.liveMs += gap;
+    // Remember how much of this session the ticker managed to count, so the
+    // end-of-session credit adds only what it MISSED — never a total.
+    if (_duty.workAt && localInWorkPhase()) _duty.workTicked += gap;
     _dutyBank(false);
+}
+
+function _dutyResetSessionLedger() { _duty.sessOn = false; _duty.workAt = 0; _duty.workTicked = 0; }
+
+/* A finished work session credits the attendance the ticker could not see.
+
+   WHY THIS EXISTS. The ticker credits the wall-clock gap between its own ticks
+   and refuses any gap over DUTY_GAP_MAX_MS, because a 40-minute gap is a
+   sleeping laptop, not an open site. A phone that suspends a backgrounded PWA
+   produces exactly that shape — a member worked a full hour on his phone,
+   switched apps, came back and finished the session, and was credited EIGHT
+   MINUTES. The measure that is not a tick is the session itself: its worked
+   time is stamped at the phase transitions (`pomoWorkedMsNow` /
+   `freeWorkedMsNow`), never accumulated per frame, so it survives suspension
+   intact. So at the end we add `workedMs` MINUS whatever the ticker already
+   counted during it — the same ledger shape `bankReadingProgress` uses, so
+   nothing is ever counted twice.
+
+   Two clamps, both load-bearing:
+     • Capped by the WALL TIME since this device first saw the session running.
+       That is what stops a RECLAIMED session — whose `totalWorkMs` legitimately
+       includes hours the tab was CLOSED (see `_reclaimFreeTotalMs`) — from
+       buying attendance for time the site was not open at all.
+     • No ledger (`workAt` 0) credits nothing. No evidence of presence, no pay.
+
+   Called from `dashSaveSession`, the single funnel every finished session goes
+   through — but BEFORE its 10-minute floor, which is a dashboard rule, not an
+   attendance one. A discarded session never reaches it and is never credited. */
+function _dutyCreditSession(workedMs) {
+    if (!gameState.userId || !_duty.ready) return;
+    const ms = Number(workedMs);
+    if (!Number.isFinite(ms) || ms <= 0) { _dutyResetSessionLedger(); return; }
+    const key = _todayDateStr();
+    if (_duty.dayKey !== key) { _dutyBank(true); _duty.dayKey = key; _duty.liveMs = 0; }
+    if (_dutyRec(_duty.days, key).vac) { _dutyResetSessionLedger(); return; }
+    const cap = _duty.workAt ? Date.now() - _duty.workAt : 0;
+    const extra = Math.min(ms, cap) - _duty.workTicked;
+    _dutyResetSessionLedger();
+    if (!(extra > 0)) return;
+    _duty.liveMs += Math.min(extra, DUTY_DAY_MAX_MS);
+    _dutyBank(true);
 }
 
 function _dutyPath(uid) { return `dashboards/${uid || gameState.userId}/duty/days`; }
@@ -29007,6 +29065,12 @@ function setupWorkChallenge() {
     const flush = () => { _duty.checkAt = 0; _dutyTick(); _dutyBank(true); };
     window.addEventListener('pagehide', flush);
     document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+    /* The Page Lifecycle pair. `freeze` is the LAST callback a tab gets before the
+       browser freezes it — the only honest chance to bank. `resume` re-anchors the
+       ticker so the frozen stretch can't be read as a borderline countable gap
+       (the DUTY_GAP_MAX_MS bail would refuse it anyway; this is explicit). */
+    document.addEventListener('freeze', flush);
+    document.addEventListener('resume', () => { _duty.tickAt = 0; });
     setInterval(_dutyTick, DUTY_TICK_MS);
 
     _mdwnhRosterReady.then(() => { _chal.rosterDone = true; });
@@ -33883,3 +33947,61 @@ document.addEventListener('visibilitychange', () => {
 });
 // bfcache restore fires pageshow, not always visibilitychange.
 window.addEventListener('pageshow', _memRestore);
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   إبقاء الجلسة حيّة — keeping the tab alive through a session
+
+   A phone freezes, then kills, a backgrounded tab that is doing nothing. The
+   one thing a mobile OS will not freeze is a page that is PLAYING AUDIO — it
+   is the same reason `focusAudioEngine.playEffect` fires in a background tab
+   while an HTMLAudioElement gets throttled (see Focus Audio Engine).
+
+   So while a work session is running on a touch device, hold one inaudible
+   Web Audio source open: a 30 Hz tone at 0.0008 gain. Thirty hertz is below
+   anything a phone speaker reproduces and −62 dB is below anything at all —
+   but it is REAL output, so the OS sees a page that is playing and leaves it
+   alone. A zero-gain graph is not enough: browsers are free to optimise pure
+   silence away, and an optimised-away graph keeps nothing alive.
+
+   Wired to its own interval, not into `_dutyTick`: this must keep working even
+   if the duty week's read failed, and it must not care about the ticker's
+   throttle. It goes straight to `ctx.destination`, never through `masterGain`,
+   so turning the focus mixer's volume down cannot switch the protection off.
+
+   Best-effort, NOT a guarantee. It makes freezing much less likely; an OS
+   under real memory pressure can still kill the tab. That is why
+   `_dutyCreditSession` exists — the hours survive even when this doesn't.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const _ka = { src: null, gain: null, on: false };
+
+function _keepAliveSet(on) {
+    if (on === _ka.on) return;
+    const fe = gameState.focusAudioEngine;
+    const ctx = fe && fe.ctx;
+    if (!ctx) return;
+    if (on) {
+        try {
+            const gain = ctx.createGain();
+            gain.gain.value = 0.0008;              // inaudible, but real output
+            const osc = ctx.createOscillator();
+            osc.frequency.value = 30;              // under a phone speaker's floor
+            osc.connect(gain);
+            gain.connect(ctx.destination);
+            osc.start();
+            _ka.src = osc; _ka.gain = gain; _ka.on = true;
+            // ctx.resume() is async — but nothing here waits on it, the node is
+            // already scheduled and starts sounding the moment the ctx runs.
+            if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+        } catch (_) { _ka.src = null; _ka.gain = null; _ka.on = false; }
+    } else {
+        try { _ka.src.stop(); } catch (_) {}
+        try { _ka.src.disconnect(); _ka.gain.disconnect(); } catch (_) {}
+        _ka.src = null; _ka.gain = null; _ka.on = false;
+    }
+}
+
+if (isTouchDevice()) {
+    setInterval(() => {
+        _keepAliveSet(!!(gameState.pomodoro.active || gameState.freeMode.active));
+    }, 5000);
+}

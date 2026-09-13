@@ -100,6 +100,7 @@ Grep anchors for the major systems (all verified to exist):
 | Success card | `setupSuccessCardUI` |
 | UI cascade blips | `setupJuiceUi` |
 | Background memory release | `_memReleaseIdle`, `_memRestore`, `MEM_IDLE_MS` |
+| Session attendance credit / keep-alive | `_dutyCreditSession`, `_dutyResetSessionLedger`, `_keepAliveSet` |
 
 ### 2. Before touching a feature
 
@@ -2267,6 +2268,62 @@ mid-session, `_chalPayScreenOk` is deliberately looser than `_chalScreenIsClear`
 «استلام» → `_chalClaim()`, which **re-reads `challenge/s1/claimed` from the server first** —
 the id is fixed per round and the Points site deletes a settled claim, so a second record
 would pay twice — then mints it and hands over to `_libShowClaim` (استلم الآن / لاحقًا).
+
+### A finished session credits the attendance the ticker missed
+
+**The bug, twice reported:** a member worked a **full hour** on his phone, switched to
+another app, came back, finished the session — and was credited **eight minutes**.
+
+`_dutyTick` credits the wall-clock gap between its own ticks and refuses any gap over
+`DUTY_GAP_MAX_MS` (150 s), because a 40-minute gap is a sleeping laptop, not an open
+site. A phone that **suspends** a backgrounded PWA produces exactly that shape. Raising
+the cap is not the fix — it would hand a sleeping laptop the same hours.
+
+The measure that is **not a tick** is the session itself. Its worked time is stamped at
+the phase transitions (`pomoWorkedMsNow` / `freeWorkedMsNow`), never accumulated per
+frame, so it survives suspension intact. So `_dutyCreditSession(workedMs)` adds
+`workedMs` **minus whatever the ticker already counted during that session** — the same
+ledger shape `bankReadingProgress` uses, so nothing is counted twice.
+
+The ledger lives on `_duty`: a **rising edge** in `_dutyTick` (no session → session)
+stamps `workAt` and zeroes `workTicked`; every credited gap where `localInWorkPhase()`
+is true also adds to `workTicked`. Rules:
+
+- **Called from `dashSaveSession`, ABOVE its 10-minute floor.** That floor is a dashboard
+  rule, not an attendance one. `dashSaveSession` is the single funnel every finished
+  session goes through; a **discarded** free session never reaches it and is never
+  credited (correct — the member said they didn't work it).
+- **Capped by the WALL TIME since this device first saw the session running.** This is
+  what stops a **reclaimed** session — whose `totalWorkMs` legitimately includes hours
+  the tab was CLOSED (`_reclaimFreeTotalMs`) — from buying attendance for time the site
+  was not open at all. Without it, closing the tab for six hours would pay six hours.
+- **No ledger (`workAt` 0) credits nothing.** No evidence of presence, no pay.
+- It credits **worked** ms, not session wall time, so a break spent away from the phone
+  is never paid for. Under-credits by the break minutes when suspended; deliberate.
+- `_dutyResetSessionLedger()` on every exit path, so one session can't spend another's.
+
+**Only the WORK is recovered, not idle presence.** A phone suspended with the site merely
+open still earns nothing for that stretch — that is the rule, not a bug.
+
+### Keeping the tab alive — `_keepAliveSet`
+
+The one thing a mobile OS will not freeze is a page that is **playing audio** (the same
+reason `playEffect` fires in a background tab). So while a session runs on a touch
+device, one inaudible Web Audio source is held open: a **30 Hz tone at 0.0008 gain**,
+below a phone speaker's floor and ~−62 dB, but **real output** — a zero-gain graph is
+not enough, browsers may optimise pure silence away.
+
+- Straight to `ctx.destination`, **never through `masterGain`** — turning the focus
+  mixer down must not switch the protection off.
+- Its **own 5 s interval**, not folded into `_dutyTick`: it must survive a failed duty
+  read and must not inherit the ticker's throttle.
+- **Best-effort, not a guarantee.** It makes freezing much less likely; an OS under real
+  memory pressure can still kill the tab. That is exactly why `_dutyCreditSession`
+  exists — the hours survive even when this doesn't.
+
+Paired with `freeze` / `resume` (Page Lifecycle) on the duty block: `freeze` is the last
+callback a tab gets before the browser freezes it, so it banks; `resume` re-anchors
+`_duty.tickAt` so the frozen stretch can't read as a countable gap.
 
 ### The card is the THIRD rung of the HUD stack
 `#chal-dock` sits straight under the user card (and the tools box, when that drops
