@@ -7409,6 +7409,10 @@ function setMinigameHideUI(hidden) {
     // When the minigame ends, updateAzkarButton re-shows it on the next frame.
     const azkarBtn = document.getElementById('azkar-btn');
     if (azkarBtn) azkarBtn.style.visibility = hidden ? 'hidden' : '';
+    // صندوق الأدوات صار في عمود اليسار على الجوال — وهناك يقف زرّ الخروج من
+    // اللعبة، فيُخفى معه بدل أن يركبه.
+    const hudTools = document.getElementById('hud-tools');
+    if (hudTools) hudTools.style.visibility = hidden ? 'hidden' : '';
     if (hidden) {
         const azkarFloat = document.getElementById('azkar-focus-float-btn');
         if (azkarFloat) azkarFloat.style.display = 'none';
@@ -7498,6 +7502,10 @@ function setMobileFocusMode(active) {
     // lagging up to a second behind the 1/s throttle.
     gameState.azkar._lastButtonRefresh = 0;
     updateAzkarButton();
+    /* عمود اليسار ينزلق خارج الشاشة، فيرجع زرّ إنهاء الجلسة إلى مكانه (والعكس).
+       الاستدعاء الثاني بعد انتهاء الانزلاق لأن المواضع تُقاس بعد الحركة. */
+    _hudPositionDock();
+    setTimeout(_hudPositionDock, 520);
 }
 
 /** Show or hide the race d-pad, and toggle joystick visibility */
@@ -27810,6 +27818,24 @@ function _libPaintDot() {
    and with the points chip appearing, and no CSS rule can read a sibling's box.
    So one function measures the card and places the other two off it. */
 const HUD_GAP = 10;
+const HUD_EDGE_M = 14;   // نفس هامش بطاقة المستخدم وزرّ الخروج على الجوال
+
+/* يضع/يلغي موضع زرّ إنهاء الجلسة. على الجوال ينزل تحت عمود اليسار حتى لا
+   يركب صندوق الأدوات؛ في غير ذلك يعود إلى موضعه من الـ CSS. */
+function _hudSetLeaveTop(top) {
+    const lw = document.getElementById('leave-wrap');
+    if (!lw) return;
+    lw.style.top = (top == null) ? '' : Math.round(top) + 'px';
+}
+
+// حضور المقر: دائمًا تحت بطاقة المستخدم في العمود الأيمن.
+function _hudPositionChal(anchor, card) {
+    const chal = document.getElementById('chal-dock');
+    if (!chal || chal.hidden) return anchor.bottom;
+    chal.style.top = Math.round(anchor.bottom + HUD_GAP) + 'px';
+    chal.style.right = Math.round(window.innerWidth - (card || anchor).right) + 'px';
+    return chal.offsetHeight > 0 ? chal.getBoundingClientRect().bottom : anchor.bottom;
+}
 
 function _hudPositionDock() {
     const card  = document.getElementById('user-card');
@@ -27819,8 +27845,55 @@ function _hudPositionDock() {
     const r = card.getBoundingClientRect();
     if (!r.width) return;                 // not laid out yet (still on the menu)
 
+    /* ── الجوال: عمودان بدل عمود واحد ──────────────────────────────────────
+       العمود الأيمن كان يحمل البطاقة والأدوات وحضور المقر والأذكار فوق بعضها،
+       وتحتها عصا التحكم — فمال ثقل الواجهة كلّه إلى اليمين. الأدوات صارت في
+       صفّ زرّ الخروج على اليسار، والأذكار تحتهما، ويبقى اليمين للبطاقة وحضور
+       المقر. الرصف يُحسب من `top + offsetHeight` لا من `getBoundingClientRect`: وضع
+       التركيز يزيح العمود كلّه بـ transform، والمستطيل المحوَّل يخرّب الترتيب
+       بينما الطول الحقيقي لا يتغيّر. */
+    if (isMobile()) {
+        /* مقاسات زرّ الخروج لا مستطيله: هو `position: fixed` فـ`offsetTop` غير
+           موثوق، و`getBoundingClientRect` يحمل إزاحة وضع التركيز. قمّته ثابتة
+           في الـ CSS عند نفس هامش الحافة. */
+        const logout = document.getElementById('logout-btn');
+        const lw = (logout && logout.offsetWidth) || 0;
+        const lh = (logout && logout.offsetHeight) || 32;
+        let y = HUD_EDGE_M + lh;
+        if (tools) {
+            const tw = tools.offsetWidth || 84, th = tools.offsetHeight || 44;
+            /* الأدوات بجانب زرّ الخروج في صفّ واحد — صفّ أقلّ على شاشة صغيرة.
+               تنزل تحته فقط إن لم يبق للصندوق عرض (اسم طويل، تاج القائد ظاهر). */
+            if (lw && HUD_EDGE_M + lw + HUD_GAP + tw <= window.innerWidth - HUD_EDGE_M) {
+                tools.style.left = Math.round(HUD_EDGE_M + lw + HUD_GAP) + 'px';
+                tools.style.top  = Math.round(HUD_EDGE_M + (lh - th) / 2) + 'px';
+                y = Math.max(y, HUD_EDGE_M + (lh + th) / 2);
+            } else {
+                tools.style.left = HUD_EDGE_M + 'px';
+                tools.style.top  = Math.round(y + HUD_GAP) + 'px';
+                y = Math.round(y + HUD_GAP) + th;
+            }
+            tools.style.right = 'auto';
+        }
+        if (dock) {
+            const top = Math.round(y + HUD_GAP);
+            dock.style.top = top + 'px';
+            dock.style.left = HUD_EDGE_M + 'px';
+            dock.style.right = 'auto';
+            if (dock.offsetHeight > 0) y = top + dock.offsetHeight;
+        }
+        /* في وضع التركيز ينزلق العمود خارج الشاشة، فيعود زرّ إنهاء الجلسة
+           إلى موضعه من الـ CSS بدل أن يقف تحت فراغ. */
+        const away = !!tools && tools.classList.contains('focus-hidden');
+        _hudSetLeaveTop(away ? null : y + HUD_GAP);
+        _hudPositionChal(r, r);
+        return;
+    }
+
+    _hudSetLeaveTop(null);
     let below = false;
     if (tools) {
+        tools.style.left = '';            // قد تكون بقيت من تخطيط الجوال
         const tw = tools.offsetWidth || 84, th = tools.offsetHeight || 44;
         const right = window.innerWidth - r.left + HUD_GAP;
         const leftEdge = window.innerWidth - right - tw;
@@ -27840,20 +27913,16 @@ function _hudPositionDock() {
             tools.style.right = Math.round(right) + 'px';
         }
     }
-    let base = (below && tools) ? tools.getBoundingClientRect().bottom : r.bottom;
     /* حضور المقر sits right under the card, the azkar dock under IT. It is a
        SIBLING of the card, not a child, for the same reason the tasks panel is:
        on mobile the user card carries `will-change: transform`, which makes it
        the containing block for any fixed descendant. */
-    const chal = document.getElementById('chal-dock');
-    if (chal && !chal.hidden) {
-        chal.style.top = Math.round(base + HUD_GAP) + 'px';
-        chal.style.right = Math.round(window.innerWidth - r.right) + 'px';
-        if (chal.offsetHeight > 0) base = chal.getBoundingClientRect().bottom;
-    }
+    const base = _hudPositionChal(
+        (below && tools) ? tools.getBoundingClientRect() : r, r);
     // The azkar dock collapses to nothing when its button is hidden; it hangs
     // off whatever is above it and pushes nothing but the tasks panel down.
     if (dock) {
+        dock.style.left = '';
         dock.style.top = Math.round(base + HUD_GAP) + 'px';
         dock.style.right = Math.round(window.innerWidth - r.right) + 'px';
     }
@@ -27870,6 +27939,17 @@ function _hudPositionSettings() {
     const t = tools.getBoundingClientRect();
     if (!t.width) return;
     const w = panel.getBoundingClientRect().width || 270;
+    /* على الجوال صندوق الأدوات على اليسار، فاللوحة تُحاذيه يسارًا (وتُمسح
+       `right` وإلا غلبت قاعدة الـ CSS وشدّتها إلى الحافة الأخرى). */
+    if (isMobile()) {
+        const left = Math.min(Math.max(10, t.left),
+                              Math.max(10, window.innerWidth - w - 10));
+        panel.style.top = Math.round(t.bottom + HUD_GAP) + 'px';
+        panel.style.left = Math.round(left) + 'px';
+        panel.style.right = 'auto';
+        return;
+    }
+    panel.style.left = '';
     // Right-aligned with the tools box, then pulled back on so a narrow screen
     // can't push its far edge off the side.
     const right = Math.min(
@@ -27887,7 +27967,8 @@ function _hudStackBottom() {
     const card = document.getElementById('user-card');
     if (!card) return 0;
     let bottom = card.getBoundingClientRect().bottom;
-    for (const id of ['hud-tools', 'azkar-dock', 'chal-dock']) {
+    // على الجوال الأدوات والأذكار في عمود اليسار، فلا تدفع لوحة المهام لأسفل.
+    for (const id of (isMobile() ? ['chal-dock'] : ['hud-tools', 'azkar-dock', 'chal-dock'])) {
         const el = document.getElementById(id);
         if (el && el.offsetHeight > 0) bottom = Math.max(bottom, el.getBoundingClientRect().bottom);
     }

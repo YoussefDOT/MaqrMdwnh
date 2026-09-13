@@ -2157,10 +2157,13 @@ body.is-mobile .btn-discord { width: 100%; }
 body.is-mobile .settings-panel {
     top: auto;
     bottom: auto;
-    left: auto;
-    right: 10px;
+    /* صندوق الأدوات صار على اليسار على الجوال، واللوحة تتبعه — و`_hudPositionSettings`
+       يكتب `left` الحقيقي عند الفتح؛ هذه قيمة مبدئية فقط. */
+    right: auto;
+    left: 10px;
     top: 110px;
     max-height: calc(100dvh - 130px);
+    width: min(270px, calc(100vw - 20px));
 }
 
 /* Minigame leave button — same position as انهاء الجلسة but only during minigames */
@@ -8587,6 +8590,22 @@ body.is-mobile.azkar-active .azkar-dock.focus-hidden {
     pointer-events: none;
 }
 body.is-mobile.azkar-active .azkar-dock.focus-hidden > * { pointer-events: auto; }
+
+/* ── الجوال: الأدوات والأذكار في عمود اليسار ──────────────────────────────
+   كان العمود الأيمن يحمل أربعة صناديق فوق بعضها (البطاقة، الأدوات، حضور
+   المقر، الأذكار) وتحتها عصا التحكم، فمال ثقل الواجهة كلّه إلى جهة واحدة.
+   الأدوات انتقلت إلى يسار زرّ الخروج في صفّه نفسه (وتحته إن ضاق العرض)،
+   والأذكار تحتهما؛ ويبقى اليمين للبطاقة وحضور المقر وحدهما. المواضع يكتبها
+   `_hudPositionDock` في JS — هذه القواعد تضبط الجهة والمحاذاة فقط. */
+body.is-mobile .hud-tools,
+body.is-mobile .azkar-dock {
+    right: auto;
+    left: 14px;
+}
+body.is-mobile .azkar-dock { align-items: flex-start; }
+/* زرّ إنهاء الجلسة يقف تحت العمود نفسه، فيُحاذيه من الحافة (الـ`top` من JS). */
+body.is-mobile .leave-wrap,
+body.is-mobile .minigame-leave-btn { left: 14px; }
 
 /* ── عصا التحكم تتلاشى عند فتح لوحة المهام ───────────────────────────────── */
 /* صنف مستقل عن focus-hidden عمدًا: النظامان يشتغلان معًا، ولو تشاركا صنفًا
