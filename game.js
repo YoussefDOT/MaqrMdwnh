@@ -27847,40 +27847,25 @@ function _hudPositionDock() {
 
     /* ── الجوال: عمودان بدل عمود واحد ──────────────────────────────────────
        العمود الأيمن كان يحمل البطاقة والأدوات وحضور المقر والأذكار فوق بعضها،
-       وتحتها عصا التحكم — فمال ثقل الواجهة كلّه إلى اليمين. الأدوات صارت في
-       صفّ زرّ الخروج على اليسار، والأذكار تحتهما، ويبقى اليمين للبطاقة وحضور
+       وتحتها عصا التحكم — فمال ثقل الواجهة كلّه إلى اليمين. الأدوات نزلت تحت
+       زرّ الخروج على اليسار، والأذكار تحتها، ويبقى اليمين للبطاقة وحضور
        المقر. الرصف يُحسب من `top + offsetHeight` لا من `getBoundingClientRect`: وضع
        التركيز يزيح العمود كلّه بـ transform، والمستطيل المحوَّل يخرّب الترتيب
        بينما الطول الحقيقي لا يتغيّر. */
     if (isMobile()) {
-        /* مقاسات زرّ الخروج لا مستطيله: هو `position: fixed` فـ`offsetTop` غير
+        /* ارتفاع زرّ الخروج لا مستطيله: هو `position: fixed` فـ`offsetTop` غير
            موثوق، و`getBoundingClientRect` يحمل إزاحة وضع التركيز. قمّته ثابتة
            في الـ CSS عند نفس هامش الحافة. */
         const logout = document.getElementById('logout-btn');
-        const lw = (logout && logout.offsetWidth) || 0;
-        const lh = (logout && logout.offsetHeight) || 32;
-        let y = HUD_EDGE_M + lh;
-        if (tools) {
-            const tw = tools.offsetWidth || 84, th = tools.offsetHeight || 44;
-            /* الأدوات بجانب زرّ الخروج في صفّ واحد — صفّ أقلّ على شاشة صغيرة.
-               تنزل تحته فقط إن لم يبق للصندوق عرض (اسم طويل، تاج القائد ظاهر). */
-            if (lw && HUD_EDGE_M + lw + HUD_GAP + tw <= window.innerWidth - HUD_EDGE_M) {
-                tools.style.left = Math.round(HUD_EDGE_M + lw + HUD_GAP) + 'px';
-                tools.style.top  = Math.round(HUD_EDGE_M + (lh - th) / 2) + 'px';
-                y = Math.max(y, HUD_EDGE_M + (lh + th) / 2);
-            } else {
-                tools.style.left = HUD_EDGE_M + 'px';
-                tools.style.top  = Math.round(y + HUD_GAP) + 'px';
-                y = Math.round(y + HUD_GAP) + th;
-            }
-            tools.style.right = 'auto';
-        }
-        if (dock) {
+        let y = HUD_EDGE_M + ((logout && logout.offsetHeight) || 32);
+        // عمود واحد: الخروج ← الأدوات (التاج، التخصيص، الترس) ← الأذكار.
+        for (const el of [tools, dock]) {
+            if (!el) continue;
             const top = Math.round(y + HUD_GAP);
-            dock.style.top = top + 'px';
-            dock.style.left = HUD_EDGE_M + 'px';
-            dock.style.right = 'auto';
-            if (dock.offsetHeight > 0) y = top + dock.offsetHeight;
+            el.style.top = top + 'px';
+            el.style.left = HUD_EDGE_M + 'px';
+            el.style.right = 'auto';
+            if (el.offsetHeight > 0) y = top + el.offsetHeight;
         }
         /* في وضع التركيز ينزلق العمود خارج الشاشة، فيعود زرّ إنهاء الجلسة
            إلى موضعه من الـ CSS بدل أن يقف تحت فراغ. */

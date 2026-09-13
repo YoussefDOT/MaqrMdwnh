@@ -2124,15 +2124,15 @@ measures the card and hangs the rest off it. Re-run by a **`ResizeObserver` on t
 
 **On mobile it is TWO columns, not one.** All four boxes plus the joystick on the right
 made the whole face lean to one side. `_hudPositionDock` takes an `isMobile()` branch:
-the **tools box sits in the الخروج pill's own row** (to its inline-left, dropping under it
-only when the pill + box no longer fit the width — a long name, the crown showing) and the
-**azkar dock hangs under them**; the right column keeps only the **user card → حضور المقر**,
+the left column is **الخروج pill → tools box (crown, تخصيص, gear) → azkar dock**, each
+hung off the bottom of the one above it; the right column keeps only the **user card →
+حضور المقر**,
 with the tasks panel under that (`_hudStackBottom` counts `chal-dock` alone on mobile).
 Four things follow and are all load-bearing:
 - **The left column is stacked from `top + offsetHeight`, never `getBoundingClientRect`.**
   Focus mode slides the whole column off with a `transform`; the transformed rect would
   wreck the stacking while the real heights never change. Same reason the logout pill is
-  measured by `offsetWidth`/`offsetHeight` against its fixed CSS top, not by its rect.
+  measured by `offsetHeight` against its fixed CSS top, not by its rect.
 - **`leave-wrap` is placed by the same function** (`_hudSetLeaveTop`) so إنهاء الجلسة lands
   under the column instead of on top of it — and goes back to its CSS `top` the moment the
   column is `focus-hidden`, which is why `setMobileFocusMode` re-runs `_hudPositionDock`
