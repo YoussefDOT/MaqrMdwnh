@@ -791,11 +791,24 @@ YouTube embeds cannot remove ads. Instead, `FocusYouTubePlayer` detects pre-roll
 
 ## Azkar System (أذكار الصباح / أذكار المساء)
 
-### Time windows
+### Time windows — they pick the TYPE, they no longer hide the button
 - **Morning (صباح)**: Fajr → Dhuhr
 - **Evening (مساء)**: Asr → Isha
 - Falls back to Cairo times if no prayer API data: `{ Fajr: '04:30', Dhuhr: '12:00', Asr: '15:30', Isha: '19:30' }`
-- `getCurrentAzkarType()` → `'morning' | 'evening' | null`
+- `getCurrentAzkarType()` → `'morning' | 'evening' | null` — the **real window** only.
+
+**The button used to vanish when the window closed**, and a member who wasn't at the site
+during it came back to nothing to press. So the window now only **ranks** the two lists;
+what the button shows is **`azkarButtonType()`**, and the **only** thing that hides it is
+both lists being done today:
+1. the in-window type if it isn't done today,
+2. else `_azkarPreferredType()` (outside the windows: after Isha → المساء, otherwise الصباح),
+3. else the other list — **except المساء before Asr**, which hasn't arrived yet. الصباح is
+   offered at any hour: catching up the member who missed the press is the whole point.
+
+`azkarButtonType()` is what `updateAzkarButton`, `showAzkarConfirm` and both confirm
+buttons read — **keep those four agreeing**, or the button says one thing and «تم» marks
+another. `_azkarNowMin()` is the one clock (it honours the Siraj time-spoof).
 
 ### Firebase path
 `users/{uid}/azkarCompleted = { morning: 'YYYY-MM-DD', evening: 'YYYY-MM-DD' }`

@@ -19069,6 +19069,14 @@ const AZKAR_FALLBACK_TIMES = { Fajr: '04:30', Dhuhr: '12:00', Asr: '15:30', Magh
 let _azkarFakeHour = null; // 0-23, or null = use real time
 let _azkarFakeMin  = null;
 
+// Minutes since local midnight — honours the Siraj time-spoof so every azkar
+// window test (real window, preferred type) reads the same clock.
+function _azkarNowMin() {
+    if (_azkarFakeHour !== null) return _azkarFakeHour * 60 + (_azkarFakeMin || 0);
+    const now = new Date();
+    return now.getHours() * 60 + now.getMinutes();
+}
+
 // Returns 'morning' (Fajr→Dhuhr), 'evening' (Asr→Isha), or null
 function getCurrentAzkarType() {
     const times = (gameState.prayer && gameState.prayer.times) ? gameState.prayer.times : AZKAR_FALLBACK_TIMES;
@@ -19078,16 +19086,56 @@ function getCurrentAzkarType() {
     const asr   = toMin(times.Asr);
     const isha  = toMin(times.Isha);
     if (fajr == null || dhuhr == null || asr == null || isha == null) return null;
-    let cur;
-    if (_azkarFakeHour !== null) {
-        cur = _azkarFakeHour * 60 + (_azkarFakeMin || 0);
-    } else {
-        const now = new Date();
-        cur = now.getHours() * 60 + now.getMinutes();
-    }
+    const cur = _azkarNowMin();
     if (cur >= fajr && cur < dhuhr) return 'morning';
     if (cur >= asr && cur < isha)   return 'evening';
     return null;
+}
+
+/* الزر لم يعد يختفي خارج وقت الأذكار: العضو قد لا يكون متواجدًا داخل النافذة
+   ليضغط «تم»، فيعود بعدها فيجده وقد ذهب. فالنافذة الآن تُرجّح النوع فقط،
+   ولا تخفي الزر — يبقى ظاهرًا حتى تُقرأ أذكار الصباح والمساء معًا في اليوم نفسه.
+
+   `_azkarPreferredType()` يجيب عن سؤال واحد: خارج النافذتين، أيّهما أقرب إلى ما يريده
+   العضو الآن؟ قبل الفجر وبين الظهر والعصر → الصباح، وبعد العشاء → المساء. */
+function _azkarPreferredType() {
+    const isha = _azkarPrayerMin('Isha');
+    const cur  = _azkarNowMin();
+    // بلا مواقيت أصلًا: قبل الظهر صباح، وبعده مساء.
+    if (isha == null) return cur < 12 * 60 ? 'morning' : 'evening';
+    if (cur >= isha) return 'evening';   // انتهت نافذة المساء ولمّا يُعلِّمها
+    return 'morning';                    // قبل الفجر، أو بين الظهر والعصر
+}
+
+// وقت صلاة بالدقائق من منتصف الليل المحلي، أو null إن لم تصل المواقيت بعد.
+function _azkarPrayerMin(name) {
+    const times = (gameState.prayer && gameState.prayer.times) ? gameState.prayer.times : AZKAR_FALLBACK_TIMES;
+    const v = times && times[name];
+    if (!v) return null;
+    const [h, m] = String(v).split(':').map(Number);
+    if (!Number.isFinite(h) || !Number.isFinite(m)) return null;
+    return h * 60 + m;
+}
+
+/* النوع الذي يعرضه الزر الآن، أو null حين يكون الاثنان قد قُرئا اليوم — وهو
+   الشرط الوحيد الذي يخفي الزر بعد اليوم.
+
+   إن كان المرجَّح مقروءًا، ننتقل إلى الآخر… بشرط ألّا يكون المساء ما زال في
+   المستقبل: عرض «أذكار المساء» في العاشرة صباحًا دعوةٌ إلى تعليمها قبل وقتها.
+   أما الصباح فيُعرض في أي ساعة — تعويضُ من فاته الضغط هو أصل هذا التغيير. */
+function azkarButtonType() {
+    const today = _todayDateStr();
+    const done  = gameState.azkar.completed || {};
+    const isDone = (t) => done[t] === today;
+    const pref  = getCurrentAzkarType() || _azkarPreferredType();
+    if (pref && !isDone(pref)) return pref;
+    const other = pref === 'morning' ? 'evening' : 'morning';
+    if (isDone(other)) return null;
+    if (other === 'evening') {
+        const asr = _azkarPrayerMin('Asr');
+        if (asr != null && _azkarNowMin() < asr) return null;   // لم يدخل وقتها بعد
+    }
+    return other;
 }
 
 function _todayDateStr() {
@@ -19104,18 +19152,19 @@ function updateAzkarButton() {
     if (now - gameState.azkar._lastButtonRefresh < 1000) return;
     gameState.azkar._lastButtonRefresh = now;
 
-    const type = getCurrentAzkarType();
+    // النوع لم يعد يأتي من النافذة وحدها — `azkarButtonType()` يُرجع ما لم يُقرأ
+    // اليوم حتى خارج وقته، ويُرجع null حين يكتمل الصباح والمساء معًا (وهو ما
+    // يخفي الزر الآن بدل انقضاء الساعة).
+    const type = azkarButtonType();
     const inSharedPomo = gameState.sharedPomo && gameState.sharedPomo.phase && gameState.sharedPomo.phase !== 'idle';
     const inPrayerOverlay = gameState.prayer && gameState.prayer.isOverlayActive;
     const azkarOpen = gameState.azkar.active;
-    const today = _todayDateStr();
-    const doneToday = type && gameState.azkar.completed && gameState.azkar.completed[type] === today;
 
     // Gate on _completionLoaded so the button never flashes on start before we've
     // checked Firebase (it used to show, then snap away once "already read" loaded).
     const az = gameState.azkar;
     const shouldShow = az._completionLoaded
-        && !!type && !inSharedPomo && !inPrayerOverlay && !azkarOpen && !doneToday;
+        && !!type && !inSharedPomo && !inPrayerOverlay && !azkarOpen;
 
     const wasShown = az._btnShown === true;
     if (shouldShow && !wasShown) {
@@ -19184,7 +19233,7 @@ function updateAzkarButton() {
 }
 
 function showAzkarConfirm() {
-    const type = getCurrentAzkarType();
+    const type = azkarButtonType();
     const modal = document.getElementById('azkar-confirm-modal');
     if (!modal) return;
     const typeEl = document.getElementById('azkar-confirm-modal-type');
@@ -19776,13 +19825,13 @@ function setupAzkarUI() {
 
     // Confirm modal buttons
     document.getElementById('azkar-confirm-modal-yes')?.addEventListener('click', () => {
-        const type = getCurrentAzkarType();
+        const type = azkarButtonType();
         if (type) markAzkarCompleted(type);
         hideAzkarConfirm();
     });
 
     document.getElementById('azkar-confirm-modal-no')?.addEventListener('click', () => {
-        const type = getCurrentAzkarType();
+        const type = azkarButtonType();
         hideAzkarConfirm();
         if (type) openAzkarOverlay(type);
     });
