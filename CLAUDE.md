@@ -84,7 +84,7 @@ Grep anchors for the major systems (all verified to exist):
 | Reading | `startReadingSession`, `bookCoverSVG` |
 | Fireplace | `openFireplaceOverlay` |
 | Lemo | `updateLemo` |
-| Minigames | `joinOrCreateMinigameLobby`, `listenToRace` |
+| Minigames | `joinOrCreateMinigameLobby`, `listenToRace`, `gamesUnlocked` |
 | PiP | `openPiPMode`, `renderPiPInto` |
 | Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession` |
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
@@ -1791,7 +1791,8 @@ Prayer location stored in localStorage (`mdwnh_prayer_location`).
 ## Minigame Architecture
 
 > **Entry = the games table** (`Workspace_0006`, break room, bottom-left). Three zones
-> (`GAME_RACE_ZONE` / `GAME_COFFEE_ZONE` / `GAME_BOSS_ZONE`), floor 1, break-time only.
+> (`GAME_RACE_ZONE` / `GAME_COFFEE_ZONE` / `GAME_BOSS_ZONE`), floor 1, **on a break OR
+> after an hour of work today** (see **فتح الألعاب بساعة عمل** below).
 > Race + fig route through a shared host/ready lobby (`joinOrCreateMinigameLobby` →
 > `#race-panel`); laptop-boss is solo (confirm modal → straight in).
 >
@@ -1802,6 +1803,42 @@ Prayer location stored in localStorage (`mdwnh_prayer_location`).
 > ever appears — that exact bug shipped once. The OLD break-room teleport zones
 > (`RACE_ZONE_RECT` & co) are separately dead behind `MINIGAME_LEGACY_ZONES` (false);
 > their rects are at coordinates the new world doesn't have.
+
+### فتح الألعاب بساعة عمل — `gamesUnlocked()` / `gamesPlayAllowed()`
+The games used to be break-only. They now also open to anyone who has worked an
+**hour today** (`GAMES_WORK_UNLOCK_MS`), and stay open for the rest of the day — the
+counter resets at midnight with the duty's day key.
+
+- **`gamesUnlocked()`** = `isBreakActive() || gamesWorkMsToday() >= GAMES_WORK_UNLOCK_MS`
+  — it drives the games table's lock (`activeGameZone.locked`) and its prompt.
+- **`gamesPlayAllowed()`** = `!sessionBlocksInteraction() && gamesUnlocked()` — the entry
+  guards (`joinOrCreateMinigameLobby`, `openBossConfirm`) and the three **hard exits**
+  (`updateRaceMode` / `updateCoffeeMode` / `updateLaptopBoss`) ask this, **not
+  `isBreakActive()`**. For a member who is only on a break it is byte-identical to the
+  old rule (a break can't block interaction); for an hour-unlocked member with no
+  session, a break ending no longer throws them out of a running game, while starting a
+  work session still does. **Don't put the bare `isBreakActive()` back in an exit** —
+  that is what would kick an hour-unlocked player out on frame one.
+- **The counter is a new leaf on the duty node**, `dashboards/{uid}/duty/days/{key}/work`
+  — read by the week `get()` that already runs at setup and banked by the same
+  `_dutyBank()`, so there is **no new read, no new listener** and one extra transaction
+  a minute *only while actually working*. `ms` is the site's **open** time and `work` is
+  the **work** time; they are separate on purpose and `work` must never be derived from
+  `ms`. It ticks in `_dutyTick` under `localInWorkPhase()`, and `_dutyCreditSession`'s
+  recovered (suspended-phone) time credits it too.
+- **It counts on a vacation day** — the vacation rule is about attendance, not about
+  whether an hour of work happened. Taking a day off wipes `ms` and `fix`, never `work`.
+- **The manual top-up (`_dutyFixApply`) never touches `work`.** That is self-reported
+  attendance; letting it unlock the games would make the unlock self-serve.
+- **Before `_duty.ready`** the day reads as zero, so the old break-only rule is the
+  fallback on a failed or in-flight read.
+- **It is communicated in two places**: the games-table prompt grew a second line —
+  locked, «بقيت ٢٥ دقيقة من ساعة العمل»; open outside a break, «مفتوحة — أتممت ساعة عمل
+  اليوم». Those numbers are read **live at draw time** and are deliberately **not** in
+  the crossfade key (still `type|locked`), or the prompt would re-pop every minute. And
+  `_dutyTick` toasts once on the frame the hour is crossed (`_duty.gamesToldAt`, keyed by
+  day and primed at setup so a reload never re-announces it) — the member is mid-session
+  and won't be standing at the table to read the prompt.
 
 **Gender separation**: All minigame paths go through `lobbyPath()` — male/female never share sessions.
 
@@ -2203,7 +2240,7 @@ squashes the gradient). Tokens are scoped `--cd-*` on `.chal-dock` / `.chal-moda
 
 ### The duty's state — `dashboards/{uid}/duty/days`
 ```
-dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, vac, ok, fix }  // ms open; vac = ts taken; ok = ts the leader approved it; fix = ms the member added by hand
+dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, vac, ok, fix, work }  // ms open; vac = ts taken; ok = ts the leader approved it; fix = ms the member added by hand; work = ms actually WORKED — an hour of it unlocks the games (see Minigame Architecture)
 dashboards/{uid}/challenge/s1/{days, claimed}          // round one — read-only now
 ```
 Decision tree §5 case 4 — private, persistent, written more than once a day: one bounded

@@ -3102,6 +3102,20 @@ function isBreakActive() {
         || (gameState.freeMode.active && gameState.freeMode.phase === 'break');
 }
 
+/* ── ألعاب المقر: الاستراحة أو ساعة عمل ──────────────────────────────────────
+   اللعب كان محصورًا في الاستراحة. صار يُفتح أيضًا لمن أتمّ ساعةَ عملٍ اليوم — يبقى
+   مفتوحًا بقيّة اليوم، ويُقفل عند منتصف الليل مع عدّاد اليوم.
+   العدّاد هو `duty/days/{key}/work`: زمن العمل وحده، يتراكم في _dutyTick ويُبنَّك مع
+   الحضور في الطلب نفسه — فلا قراءة جديدة ولا مستمع جديد. قبل وصول قراءة الأسبوع
+   (`_duty.ready`) يُعامَل اليوم كصفر: الاستراحة وحدها تفتح، وهو الوضع القديم. */
+const GAMES_WORK_UNLOCK_MS = 3600000;
+function gamesWorkMsToday() { return _duty.ready ? _dutyTodayWorkMs() : 0; }
+function gamesUnlocked() { return isBreakActive() || gamesWorkMsToday() >= GAMES_WORK_UNLOCK_MS; }
+/* مفتوح فعلًا الآن: لا جلسةَ عملٍ تحجب التفاعل (الاستراحة لا تحجب)، والشرط متحقّق.
+   هذا ما تسأله مخارجُ الألعاب الثلاثة عند انتهاء الاستراحة: مَن فتحها بساعته لا
+   تُخرجه نهايةُ الاستراحة، ومن دخل جلسة عمل يخرج من اللعبة كما كان دائمًا. */
+function gamesPlayAllowed() { return !sessionBlocksInteraction() && gamesUnlocked(); }
+
 // True while the LOCAL user is in an active work phase (solo/shared pomo or free
 // mode). Used to suppress other players' distracting working-bounce animation
 // while I'm trying to focus — I only see their bounce when I'm idle / on break.
@@ -5495,7 +5509,7 @@ function updateRemoteSitAnims() {
 // showRaceLobby/showCoffeeLobby/setupRaceUI). First presser near a zone creates
 // the lobby and becomes host; later pressers join it. Host presses ابدأ to launch.
 function joinOrCreateMinigameLobby(type) {
-    if (!gameState.userId || !isBreakActive()) return;
+    if (!gameState.userId || !gamesPlayAllowed()) return;
     const st = gameState[type];
     if (st.active || st.teleportAnim) return;
     const alreadyIn = Object.values(st.activeSessions || {}).some(s => s?.participants?.[gameState.userId]);
@@ -5576,7 +5590,7 @@ function updateMinigameLobbyProximity() {
 }
 // Laptop-boss: solo, no lobby — just a confirm modal then straight in.
 function openBossConfirm() {
-    if (!isBreakActive()) return;
+    if (!gamesPlayAllowed()) return;
     const alreadyIn = Object.values(gameState.laptopBoss.activeSessions || {}).some(s => s?.participants?.[gameState.userId]);
     if (alreadyIn || gameState.laptopBoss.active || gameState.laptopBoss.teleportAnim) return;
     document.getElementById('boss-confirm-modal')?.classList.add('active');
@@ -8265,7 +8279,9 @@ function updateRaceMode() {
     const car = gameState.race.localCar;
     if (!session || !car) return;
 
-    if (!isBreakActive()) {
+    // Out when a work session takes the screen back (a break ending is exactly
+    // that) — but an hour-unlocked player with no session keeps playing.
+    if (!gamesPlayAllowed()) {
         if (session.hostId === gameState.userId) update(ref(database), { [raceSessionPath()]: null });
         returnFromRace(false);
         return;
@@ -9793,7 +9809,8 @@ function updateInteractions() {
 
     // Games table (race / boss / coffee triggers) — floor 1 only, one big room now
     // (no more separate break room), so proximity alone shows the prompt; whether
-    // it's actually usable depends on isBreakActive() (locked otherwise).
+    // it's actually usable depends on gamesUnlocked() — the break, or an hour of
+    // work today (locked otherwise, with the prompt saying how much is left).
     gameState.activeGameZone = null;
     if (pFloor === 1 && canSit()) {
         const zones = [
@@ -9806,7 +9823,7 @@ function updateInteractions() {
             const d = Math.hypot(player.x - z.x, player.y - z.y);
             if (d < bestDist) { bestDist = d; best = z; }
         }
-        if (best) gameState.activeGameZone = { ...best, locked: !isBreakActive() };
+        if (best) gameState.activeGameZone = { ...best, locked: !gamesUnlocked() };
     }
 
     // Minigame zone scans — 3 × Object.values().filter per frame during breaks,
@@ -11273,7 +11290,7 @@ function updateCoffeeMode() {
     const mug     = gameState.coffee.localMug;
     if (!session || !mug) return;
 
-    if (!isBreakActive()) {
+    if (!gamesPlayAllowed()) {
         if (session.hostId === gameState.userId) {
             update(ref(database), { [lobbyPath(`minigames/coffee/sessions/${gameState.coffee.sessionKey}`)]: null });
         }
@@ -20526,8 +20543,8 @@ function updateLaptopBoss() {
     const dt = Math.min(2, gameState.dtFactor || 1);
     const session = gameState.laptopBoss.session;
 
-    // Hard exit if break ends mid-fight
-    if (!isBreakActive()) {
+    // Hard exit when a work session takes over mid-fight (a break ending is that)
+    if (!gamesPlayAllowed()) {
         if (session && session.hostId === gameState.userId) {
             update(ref(database), { [lobbyPath(`minigames/laptop-boss/sessions/${gameState.laptopBoss.sessionKey}`)]: null });
         }
@@ -21948,10 +21965,24 @@ function drawStandUpButton() {
     ctx.restore();
 }
 
-// Games-table trigger prompt: "press to join" when it's break time, or a locked
-// "closed — opens on break" notice (with a 🔒) otherwise. Same fade/pop pattern.
+// Games-table trigger prompt: "press to join" when the games are open, or a locked
+// notice (with a 🔒) otherwise. Same fade/pop pattern.
+//
+// The second line is where the rule is COMMUNICATED, and it is the whole reason the
+// prompt grew one: locked, it says what opens the games and how much work is left
+// today; open outside a break, it says the hour is what opened them. The numbers are
+// read live at draw time rather than baked into the crossfade key — the key is still
+// only `type|locked`, or the prompt would re-pop every time a minute ticked over.
 const _GAME_ZONE_LABEL = { race: 'اضغط للانضمام لسباق السيارات', coffee: 'اضغط للانضمام للعبة التين', boss: 'اضغط لتحدي الحاسوب' };
 const _gameZonePrompt = { alpha: 0, pop: 0, x: 0, y: 0, shownKey: null, shown: null };
+// «بقيت ٢٥ دقيقة» — الدقائق المتبقية من ساعة العمل، مقرَّبة للأعلى فلا تُقرأ صفرًا قبل تمامها.
+function _gamesLeftLabel() {
+    const left = Math.max(0, GAMES_WORK_UNLOCK_MS - gamesWorkMsToday());
+    const mins = Math.ceil(left / 60000);
+    if (mins <= 1) return 'بقيت دقيقة واحدة من ساعة العمل';
+    if (mins === 2) return 'بقيت دقيقتان من ساعة العمل';
+    return `بقيت ${_libAr(mins)} ${mins <= 10 ? 'دقائق' : 'دقيقة'} من ساعة العمل`;
+}
 function drawGameZonePrompt() {
     const target = gameState.activeGameZone;
     const ctx = gameState.ctx;
@@ -21962,19 +21993,29 @@ function drawGameZonePrompt() {
     const a = _gameZonePrompt.alpha;
     const bob = Math.sin(Date.now() * 0.004) * 2.5;
     const pop = 0.82 + 0.18 * easeOutBack(Math.min(1, _gameZonePrompt.pop));
+    const locked = _gameZonePrompt.shown.locked;
+    // Second line only when it has something to say: locked, or open on the hour
+    // rather than on a break (during a break the games have always just been open).
+    const sub = locked ? _gamesLeftLabel()
+              : (!isBreakActive() ? 'مفتوحة — أتممت ساعة عمل اليوم' : '');
     ctx.save();
     ctx.translate(_gameZonePrompt.x, _gameZonePrompt.y - 60 - (1 - a) * 10 + bob);
     ctx.scale(pop, pop);
     ctx.textAlign = 'center';
     ctx.shadowBlur = 4; ctx.shadowColor = `rgba(0,0,0,${0.65 * a})`;
-    if (_gameZonePrompt.shown.locked) {
+    if (locked) {
         ctx.fillStyle = `rgba(255,190,90,${a})`;
         ctx.font = 'bold 16px Rubik';
-        ctx.fillText('🔒 مغلق - يفتح في الاستراحة', 0, 0);
+        ctx.fillText('🔒 تُفتح في الاستراحة أو بعد ساعة عمل اليوم', 0, 0);
     } else {
         ctx.fillStyle = `rgba(255,255,255,${a})`;
         ctx.font = 'bold 16px Rubik';
         ctx.fillText(_GAME_ZONE_LABEL[_gameZonePrompt.shown.type] || 'اضغط للدخول', 0, 0);
+    }
+    if (sub) {
+        ctx.fillStyle = `rgba(255,255,255,${0.62 * a})`;
+        ctx.font = '600 13px Rubik';
+        ctx.fillText(sub, 0, 19);
     }
     ctx.shadowBlur = 0;
     ctx.restore();
@@ -28284,6 +28325,8 @@ const _duty = {
     days: {},           // { 'YYYY-MM-DD': { ms, vac } } — this week onward, the banked mirror
     dayKey: '',         // the day `liveMs` belongs to
     liveMs: 0,          // unbanked open-time for `dayKey`
+    liveWorkMs: 0,      // unbanked WORK time for `dayKey` (see gamesUnlocked)
+    gamesToldAt: '',    // the day whose games-unlock toast has already been said
     tickAt: 0,          // last counted tick (0 = re-anchor on the next one)
     checkAt: 0,         // throttles the per-frame call to ~1/s
     lastBankAt: 0,
@@ -28363,6 +28406,9 @@ function _dutyRec(days, key) {
         // `ms` — this is only the ledger of how much of it was self-reported, so the
         // leader can see it. Never subtract it from `ms`.
         fix: Math.max(0, Number(r && r.fix) || 0),
+        // ساعات العمل الفعلية في هذا اليوم — عدّاد مستقل عن `ms` (وهو زمن فتح الموقع).
+        // ساعة منه تفتح ألعاب المقر خارج الاستراحة. انظر gamesUnlocked().
+        work: Math.max(0, Number(r && r.work) || 0),
     };
 }
 /* One word per day, shared by the member's own ladder and the leader's panel so
@@ -28452,6 +28498,14 @@ function _dutyTodayRec() {
     if (!r.vac && _duty.dayKey === key) r.ms += _duty.liveMs;
     return r;
 }
+/* ساعات العمل اليوم — البنك زائد ما لم يُبنَّك بعد. هذا ما تُقاس عليه الألعاب:
+   عملٌ فعليّ (طور العمل في البومودورو أو الجلسة الحرة)، لا مجرّد فتح الموقع. */
+function _dutyTodayWorkMs() {
+    const key = _todayDateStr();
+    let ms = _dutyRec(_duty.days, key).work;
+    if (_duty.dayKey === key) ms += _duty.liveWorkMs;
+    return ms;
+}
 // Taken AND automatic (a short day already spent one) — see _dutyAutoVac.
 function _dutyVacLeft() {
     const today = _todayDateStr();
@@ -28485,7 +28539,7 @@ function _dutyTick() {
     if (now - _duty.checkAt < 1000) return;
     _duty.checkAt = now;
     const key = _todayDateStr();
-    if (_duty.dayKey !== key) { _dutyBank(true); _duty.dayKey = key; _duty.liveMs = 0; }
+    if (_duty.dayKey !== key) { _dutyBank(true); _duty.dayKey = key; _duty.liveMs = 0; _duty.liveWorkMs = 0; }
     const last = _duty.tickAt;
     if (!_dutyCounting()) { _duty.tickAt = 0; return; }
     _duty.tickAt = now;
@@ -28497,11 +28551,22 @@ function _dutyTick() {
     _duty.sessOn = inSess;
     const gap = last ? now - last : 0;
     if (gap <= 0 || gap > DUTY_GAP_MAX_MS) return;
-    if (_dutyRec(_duty.days, key).vac) return;      // a day off counts nothing
-    _duty.liveMs += gap;
-    // Remember how much of this session the ticker managed to count, so the
-    // end-of-session credit adds only what it MISSED — never a total.
-    if (_duty.workAt && localInWorkPhase()) _duty.workTicked += gap;
+    if (!_dutyRec(_duty.days, key).vac) _duty.liveMs += gap;   // a day off counts nothing
+    if (localInWorkPhase()) {
+        /* ساعات العمل اليوم — عدّاد مستقل عن الحضور: `ms` زمن فتح الموقع، وهذا زمن
+           العمل وحده. يُحتسب حتى في يوم الإجازة، لأن فتح الألعاب لا علاقة له بقاعدة
+           الإجازات — عملُ ساعةٍ عملٌ مهما كان اليوم. */
+        _duty.liveWorkMs += gap;
+        // Remember how much of this session the ticker managed to count, so the
+        // end-of-session credit adds only what it MISSED — never a total.
+        if (_duty.workAt) _duty.workTicked += gap;
+        // The moment the hour is crossed, say so — the member is mid-session and will
+        // not be standing at the games table to read the prompt.
+        if (_duty.gamesToldAt !== key && _dutyTodayWorkMs() >= GAMES_WORK_UNLOCK_MS) {
+            _duty.gamesToldAt = key;
+            _libToast('أتممت ساعة عمل اليوم — ألعاب المقر مفتوحة لك حتى منتصف الليل 🎮');
+        }
+    }
     _dutyBank(false);
 }
 
@@ -28536,13 +28601,17 @@ function _dutyCreditSession(workedMs) {
     const ms = Number(workedMs);
     if (!Number.isFinite(ms) || ms <= 0) { _dutyResetSessionLedger(); return; }
     const key = _todayDateStr();
-    if (_duty.dayKey !== key) { _dutyBank(true); _duty.dayKey = key; _duty.liveMs = 0; }
-    if (_dutyRec(_duty.days, key).vac) { _dutyResetSessionLedger(); return; }
+    if (_duty.dayKey !== key) { _dutyBank(true); _duty.dayKey = key; _duty.liveMs = 0; _duty.liveWorkMs = 0; }
+    const onVac = !!_dutyRec(_duty.days, key).vac;
     const cap = _duty.workAt ? Date.now() - _duty.workAt : 0;
     const extra = Math.min(ms, cap) - _duty.workTicked;
     _dutyResetSessionLedger();
     if (!(extra > 0)) return;
-    _duty.liveMs += Math.min(extra, DUTY_DAY_MAX_MS);
+    const add = Math.min(extra, DUTY_DAY_MAX_MS);
+    // The recovered time IS work time — it credits the games counter even on a day
+    // off, exactly like the ticker above; only the attendance half is skipped there.
+    _duty.liveWorkMs += add;
+    if (!onVac) _duty.liveMs += add;
     _dutyBank(true);
 }
 
@@ -28554,15 +28623,24 @@ function _dutyPath(uid) { return `dashboards/${uid || gameState.userId}/duty/day
 function _dutyBank(force) {
     if (!gameState.userId || !_duty.ready) return;
     const key = _duty.dayKey;
-    const delta = Math.round(_duty.liveMs);
-    if (!key || delta <= 0) return;
+    const delta  = Math.round(_duty.liveMs);
+    const wDelta = Math.round(_duty.liveWorkMs);
+    if (!key || (delta <= 0 && wDelta <= 0)) return;
     if (!force && Date.now() - _duty.lastBankAt < DUTY_BANK_MS) return;
     _duty.liveMs = 0;
+    _duty.liveWorkMs = 0;
     _duty.lastBankAt = Date.now();
     const r = _dutyRec(_duty.days, key);
-    _duty.days[key] = { ms: Math.min(DUTY_DAY_MAX_MS, r.ms + delta), vac: r.vac, ok: r.ok, fix: r.fix };
-    runTransaction(ref(database, `${_dutyPath()}/${key}/ms`),
+    _duty.days[key] = {
+        ms: Math.min(DUTY_DAY_MAX_MS, r.ms + delta), vac: r.vac, ok: r.ok, fix: r.fix,
+        work: Math.min(DUTY_DAY_MAX_MS, r.work + wDelta),
+    };
+    if (delta > 0) runTransaction(ref(database, `${_dutyPath()}/${key}/ms`),
         (curr) => Math.min(DUTY_DAY_MAX_MS, (Number(curr) || 0) + delta)).catch(() => {});
+    // A second leaf, and only while actually working — so an idle tab still costs one
+    // transaction a minute, never two, on a node nobody live-listens to.
+    if (wDelta > 0) runTransaction(ref(database, `${_dutyPath()}/${key}/work`),
+        (curr) => Math.min(DUTY_DAY_MAX_MS, (Number(curr) || 0) + wDelta)).catch(() => {});
 }
 
 /* ── vacation ─────────────────────────────────────────────────────────────────
@@ -28599,12 +28677,12 @@ function _dutySetVacation(on) {
         .then(() => {
             const prev = _dutyRec(_duty.days, key);
             if (on) {
-                _duty.days[key] = { ms: 0, vac: ts, ok: prev.ok, fix: 0 };
+                _duty.days[key] = { ms: 0, vac: ts, ok: prev.ok, fix: 0, work: prev.work };
                 _duty.liveMs = 0;
                 _duty.pendingWin = false;
                 _libToast('إجازة اليوم محفوظة — لا شيء مطلوب منك اليوم');
             } else {
-                _duty.days[key] = { ms: prev.ms, vac: 0, ok: prev.ok, fix: prev.fix };
+                _duty.days[key] = { ms: prev.ms, vac: 0, ok: prev.ok, fix: prev.fix, work: prev.work };
                 delete _duty.celebrated[key];   // three hours from here still earns the «أحسنت!»
                 _libToast('أُلغيت الإجازة — عاد عدّاد اليوم للعمل');
             }
@@ -28679,6 +28757,8 @@ function _dutyFixApply() {
                 ms: Math.min(DUTY_DAY_MAX_MS, prev.ms + add),
                 vac: prev.vac, ok: prev.ok,
                 fix: Math.min(DUTY_DAY_MAX_MS, prev.fix + add),
+                // الإضافة اليدوية حضورٌ يُبلّغ عنه العضو، لا عملٌ مُقاس — فلا تفتح الألعاب.
+                work: prev.work,
             };
             _duty.fixH = 0; _duty.fixM = 0;
             _libToast(`أُضيفت ${_dutyDur(add)} إلى حضور اليوم`);
@@ -29266,6 +29346,9 @@ function setupWorkChallenge() {
             // A day already won (or taken off) before this tab opened must not celebrate.
             const r = _dutyTodayRec();
             if (r.vac || r.ms >= DUTY.goalMs) _duty.celebrated[_duty.dayKey] = true;
+            // Same for the games: an hour already earned before this tab opened is
+            // not news — the toast is for the moment it is CROSSED, not every reload.
+            if (r.work >= GAMES_WORK_UNLOCK_MS) _duty.gamesToldAt = _duty.dayKey;
             repaint();
         });
 }
