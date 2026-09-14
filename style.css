@@ -11988,3 +11988,28 @@ body.is-mobile .meet-bubble { max-width: 170px; font-size: 13px; }
 @media (prefers-reduced-transparency: reduce) {
     .meet-dock { -webkit-backdrop-filter: none; backdrop-filter: none; background: rgba(22, 22, 24, 0.96); }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   توفير الطاقة — body.power-save (touch devices by default; see game.js PERF)
+   ═══════════════════════════════════════════════════════════════════════════
+   A phone only cools when its compositor is allowed to stop producing frames.
+   ONE infinite CSS animation anywhere on the page keeps it producing 60 a second,
+   whatever the canvas is doing — and each of these sits on a surface that can stay
+   up for hours: the azkar button (visible most of the day), the PiP blackout (a
+   whole work session), the prayer sky (an unanswered adhan), the fireplace view. */
+body.power-save .azkar-btn:not(.azkar-entering) { animation: none; }
+body.power-save .pip-blackout-icon { animation: none; }
+body.power-save .prayer-overlay-bg,
+body.power-save .prayer-overlay-bg::after,
+body.power-save .prayer-fog-layer { animation: none; }
+body.power-save .fp-shake { animation: none; transform: scale(1.05); }
+
+/* The PiP blackout covers the whole page for as long as PiP is open. A live
+   backdrop blur under it re-blurs the full screen every time anything beneath it
+   changes — at 0.97 opacity there is nothing to see through it anyway. */
+body.is-mobile .pip-blackout,
+body.power-save .pip-blackout {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(5, 5, 8, 0.97);
+}

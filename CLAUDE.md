@@ -104,6 +104,7 @@ Grep anchors for the major systems (all verified to exist):
 | UI cascade blips | `setupJuiceUi` |
 | Background memory release | `_memReleaseIdle`, `_memRestore`, `MEM_IDLE_MS` |
 | Frame governor / dynamic res | `PERF`, `_perfSkipFrame`, `_perfEndFrame`, `_perfSyncTier`, `window.__perf()` |
+| توفير الطاقة (thermal profile) | `powerSaveEnabled`, `perfWake`, `_perfScanBusy`, `_loopNext`, `_perfCalmInterval`, `dtAmbient`, `isWeakDevice`, `body.power-save` |
 | Off-screen culling | `_viewRect`, `_offView` |
 | Cached text/badge/avatar sprites | `_spritesOk`, `_pillSprite`, `_fillTextCached`, `_avatarComposite`, `_fxSprite` |
 | Staggered logic tick | `SLOW_TASKS`, `runSlowTasks` |
@@ -223,6 +224,13 @@ Each one is a shipped bug (details in Common Bugs & the feature sections):
     what is actually drawn. Free it with `.close()` / `src=''` the moment it isn't.
     A phone near its canvas ceiling GC-thrashes *and* starts silently refusing
     decodes — lag no graphics tier can fix, plus a black world.
+26. **Nothing may keep the page producing frames while the screen is still.** No new
+    `requestAnimationFrame` loop of its own (use a `setTimeout` at the rate it needs,
+    or ride `gameLoop`), no infinite CSS animation on a surface that can stay up for
+    minutes without a `body.power-save` off-switch, and anything that animates the
+    world canvas must be seen by `_perfScanBusy` or call `perfWake()` — otherwise it
+    plays at the calm 15/6 fps. Always schedule the loop through `_loopNext()`, never
+    a bare `requestAnimationFrame(gameLoop)`. See **توفير الطاقة**.
 
 ---
 
@@ -2132,6 +2140,64 @@ lag for stutter).
 - `updatePomoLeaveBtn` is still called directly at the state transitions that matter,
   so its responsiveness is unchanged where it counts.
 
+### 8. توفير الطاقة — the thermal profile (calm frames, a sleeping loop)
+**The report:** a Galaxy A32 (Mali-G52) got hot enough that the member took its case
+off — in Chrome *and* Firefox, with or without PiP. The governor above never helped:
+it only reacts to *frame times*, and a phone that CAN hold 60 is exactly the one that
+runs its GPU flat out for hours. Heat is a duty-cycle problem, not a frame-cost one —
+so the fix is the one every console/mobile game and every OS compositor uses: **render
+only as fast as the screen is actually changing, and let the silicon sleep between.**
+
+`SETTINGS_POWER_KEY` (الإعدادات → توفير الطاقة, tri-state تلقائي/مفعّل/مغلق). Auto = ON on
+touch devices. Cached as `PERF.powerSave` (read by `_perfSyncTier` once a second).
+With it on:
+
+| lever | what |
+|---|---|
+| **30 fps from frame one** | `_perfSyncTier` caps immediately; the governor never uncaps (`!PERF.powerSave`) |
+| **calm / drowsy frames** | nothing moved for 2.5 s → 15 fps; another 45 s → 6 fps (`PERF_CALM_*`, `PERF_DROWSY_*`). PiP open → never drowsy |
+| **the loop sleeps** | a long interval is waited in a `setTimeout` then one rAF (`_loopNext`) — no vsync requested meanwhile, so the GPU/display pipeline can idle. Skipping rAF ticks does NOT do that |
+| **DPR** | ≤1.25 (بطاطس ≤1.0) in `resizeCanvas` |
+| **CSS** | `body.power-save` kills the azkar button pulse, PiP blackout pulse, prayer sky/fog/glow and the fireplace drift |
+| **PiP** | PiP world ≤15 fps (`_pipDueForFrame`), `captureStream(15)`, no pre-primed hidden playing `<video>` |
+
+Always on, every platform (these were plain waste):
+- **The main world isn't drawn under the PiP blackout** (`_pipCoversWorld` in
+  `_worldCanvasHidden`) — it drew a full frame nobody could see, plus a live backdrop
+  blur over it (now none on mobile/power-save).
+- **PiP renders from `gameLoop` every world frame** (`_pipRenderTick`); it used to ride
+  the SLOW_TASKS lifecycle guard (1 frame in 7). A primed video is **torn down** when the
+  button goes (`_pipUnprimeVideo`) — it used to play for the rest of the page's life.
+- **The YouTube waveform** was its own 60 fps rAF with a `getBoundingClientRect()` and a
+  `canvas.height =` (realloc) every frame, for as long as music played. Now a 24 fps
+  timer (12 on power-save), width measured twice a second.
+- **Prayer rain**: 4 banded paths instead of 110 strokes/frame, time-scaled; power-save
+  24 fps and 60 drops (the overlay can stay up for hours).
+- **The timer worker** skips `updatePomodoro` while the loop is rendering anyway.
+- **A weak phone GPU defaults to بطاطس** (`isWeakDevice`: WebGL renderer string vs
+  `_WEAK_GPU_RE` — entry Mali/Adreno/PowerVR; probed once per UA, cached in
+  localStorage). Never judge by `deviceMemory` (Android rounds 6 GB down to 4).
+
+Rules that hold it together:
+- **"Busy" is detected, not guessed.** `_perfScanBusy` (end of every world frame)
+  compares camera, zoom, `focusAlpha`, `secondFloorVis`, `_meet.vis`, Lemo, and every
+  on-screen player's render position, plus sit/jump/react/typing/exit/chat-spring state
+  and the player count. Input (`pointer*`/`touch*`/`wheel`/`keydown`/`input`/visibility)
+  and relayed events with a `t` call `perfWake()`. **A new world animation that none of
+  those see will play at 15/6 fps** — add it to the scan or call `perfWake(ms)`.
+- **Ambient motion uses `gameState.dtAmbient`** (real elapsed, clamped 250 ms), not
+  `dtFactor` (clamped at 2 → a 6 fps frame would run the wind at a third of its
+  speed). Only for motion with no lerp to snap (wind, motes, dust, clouds).
+- **Calm frames never feed the governor** (`PERF.effIv`/`prevEffIv` in
+  `_perfBeginFrame`) — a designed 15 fps would otherwise read as "can't hold 30".
+- **Minigames are never calm** (`_perfCalmInterval` checks `race/coffee/laptopBoss.active`
+  — their branches return before the scan).
+- `window.__perf()` shows `powerSave` and `paceMs` (the interval right now).
+- **Known remaining cost:** the radio. The 3 s WS proof-of-life ping and the 4 s/10 s
+  Firebase heartbeats keep a cellular modem out of its idle state; they carry presence
+  correctness and were not touched. The global `/users` `onValue` also materialises the
+  whole users tree on every change — a child-event rewrite is the next CPU lever.
+
 ### What is NOT done yet (the next lever, and why it wasn't taken)
 `drawDayOverlays` draws **two full-world images every frame, one with
 `globalCompositeOperation = 'overlay'`** — a non-source-over blend needs the
@@ -2145,7 +2211,7 @@ restore its alpha with `destination-in`. Ask the owner before doing it.
 
 ## Graphics Tiers & Mobile Performance
 
-Stored in `localStorage[SETTINGS_GRAPHICS_KEY]` as `'high' | 'low' | 'potato'`, or **absent = device-auto** (`graphicsTier()` → mobile `'low'`, desktop `'high'`). The settings toggle cycles only the three explicit tiers (عالية → متوسطة → بطاطس) — there is **no `'auto'` value/button** (it confused users: on a phone "auto" already = low, so the press looked like a no-op). The loop caches `gameState._lowGfx/_potato/_disableIdleAnim/_hideNames` and re-reads localStorage only **once per second** (the settings toggles zero `gameState._settingsFlagsAt` so a change still applies next frame); hot draw code reads those flags (never call the helpers per-draw — they hit localStorage).
+Stored in `localStorage[SETTINGS_GRAPHICS_KEY]` as `'high' | 'low' | 'potato'`, or **absent = device-auto** (`graphicsTier()` → weak phone GPU `'potato'` (`isWeakDevice`), mobile `'low'`, desktop `'high'`). The settings toggle cycles only the three explicit tiers (عالية → متوسطة → بطاطس) — there is **no `'auto'` value/button** (it confused users: on a phone "auto" already = low, so the press looked like a no-op). The loop caches `gameState._lowGfx/_potato/_disableIdleAnim/_hideNames` and re-reads localStorage only **once per second** (the settings toggles zero `gameState._settingsFlagsAt` so a change still applies next frame); hot draw code reads those flags (never call the helpers per-draw — they hit localStorage).
 
 | Helper | Meaning |
 |---|---|
@@ -2193,6 +2259,7 @@ Opens **under the gear button**, which now lives in `#hud-tools` to the left of 
 | `SETTINGS_LEMO_KEY` | show (`getHideLemo()`) | ليمو — hide the robot entirely (freezes him; see **Lemo**) |
 | `SETTINGS_PARTICLES_KEY` | absent = follow tier | الجسيمات — tri-state **تلقائي → مفعّلة → مغلقة**. **Overrides the graphics tier** (see Graphics Tiers → Effect overrides) |
 | `SETTINGS_OVERLAYS_KEY` | absent = follow tier | الطبقات الجوية — tri-state, same override semantics |
+| `SETTINGS_POWER_KEY` | absent = auto (on for touch devices) | توفير الطاقة — tri-state تلقائي → مفعّل → مغلق. 30 fps cap, calm 15 / drowsy 6 fps, DPR cap, `body.power-save`. See **مُنظّم الأداء → توفير الطاقة** |
 | `SETTINGS_LONGFREE_KEY` | absent = بعد ٣٠ دقيقة | تأكيد مدة الجلسة الحرة — tri-state **مغلق → بعد ٣٠ دقيقة → دائمًا** (`getLongFreeMode()`). Gates the free-mode idle-confirm via `shouldAskLongFreeConfirm()`; the user's `off` beats even the Siraj always-ask |
 | `SETTINGS_PRAYER_DELAY_KEY` | off (`getPrayerJamaahDelay()`) | "صلاة الجماعة" — when **on**, adds **+5 min** to every prayer time (`prayerJamaahExtraMin()`, applied in `computeNextPrayer`/`updatePrayerPanelDOM`). **Per-USER, not per-device**: source of truth is Firebase `users/{uid}/prayerJamaahDelay`, read on login and **mirrored into localStorage** so the getter stays a cheap sync read; the toggle writes both. |
 
@@ -2332,7 +2399,8 @@ Render is driven by the **PiP window's own `requestAnimationFrame`** (`_pipFrame
 | `togglePiPMode()` / `openPiPMode()` / `closePiPMode()` | entry / open (async, `_opening` guard) / teardown (`_closing` guard) |
 | `renderPiPInto()` | context-swap world render |
 | `updatePiPCamera()` | lerp camera to centre player + ease zoom |
-| `updatePiPLifecycle()` | per-frame button visibility + auto-close + fallback/watchdog render |
+| `updatePiPLifecycle()` | button visibility + auto-close + video prime/unprime (a SLOW_TASKS guard) |
+| `_pipRenderTick()` | the main loop's PiP render, every world frame (fallback/video; window mode only fills a >120 ms gap). ≤15 fps on توفير الطاقة |
 | `setupPiPUI()` | wires button, blackout end-btn, fallback drag/resize, main-window `pagehide` |
 
 `openPiPMode` is **async** (awaits `requestWindow`) — `pip.active` is only set after the await, so `_opening`/`_closing` flags prevent a close from being undone by an in-flight open (this was a real race: close appeared to "not work").
@@ -3582,6 +3650,7 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | World renders soft/blurry-wrong (nearest-neighbour) after playing a minigame | The race/fig/boss renderers set `ctx.imageSmoothingEnabled = false` for their pixel art and never restore it — it's one shared context, so the next world frame inherited it (violating hard invariant #16) | `render()` re-asserts `imageSmoothingEnabled = true` each frame rather than chasing every minigame exit path |
 | A player sits at a laptop with «أعمل على» and the 🌿 free-mode emoji but **no clock**, and doesn't answer a mention | `updateFreeMode` freezes the count-up under the prayer/azkar overlay by folding the elapsed ms into `totalWorkMs` and zeroing `workStartTime`, but leaves the phase at `work` — so the 4 s heartbeat kept writing `freeWorkStartTime: 0` and observers, whose only test was `freeWorkStartTime > 0`, drew the bare-🌿 fallback. An unanswered adhan leaves that overlay up for hours, so a member who was merely praying or away looked like a half-broken ghost | Publish the freeze (`users/{uid}/freePaused`) and draw the clock **stopped** at its real value (`⏸ <time>`); publish «بعيد» (`awaySince`) for a hidden tab or an open صلاة/أذكار overlay so presence answers "can they reply", not just "is the tab open". See **Player Position Sync → «بعيد» + the paused free clock** |
 | Disconnected user never leaves — others still see their avatar forever | Ending a reading session ran `onDisconnect(ref('users/{uid}')).cancel()` to disarm its own ghost-cleanup. **`cancel()` cancels the queued ops of that location AND all its children**, so it also wiped the presence handlers armed at login (`activeInGame` → false, `activeSession` → null). That user's tab close then cleared nothing, and `listenToPlayers` (which gates purely on `activeInGame === true`) kept rendering them. Only `.info/connected` re-armed it, so it self-healed only if they later had a network blip — hence "sometimes" | Arm/cancel the reading fields **individually on their own child refs** (`armReadingDisconnect` / `cancelReadingDisconnect` + `READING_DISCONNECT_FIELDS`). **Never `onDisconnect(...).cancel()` on `users/{uid}` or any other node that has child ops armed under it** |
+| Budget phone (Galaxy A32) gets hot enough to take the case off — Chrome and Firefox, with or without PiP | The page never let the GPU idle: the world redrew 30–60×/s even when nothing on screen changed (hours in a work session), the YouTube waveform ran its own 60 fps rAF with a forced layout + canvas realloc per frame, the world kept drawing under the PiP blackout (with a live backdrop blur over it), a primed hidden `<video>` kept playing a canvas stream forever, prayer rain stroked 110 paths/frame, and an infinite CSS pulse on the always-visible azkar button kept the compositor at 60 Hz. The governor only watched frame times, so a phone that *could* hold 60 was left at 60 | توفير الطاقة: 30 fps cap on touch devices from frame one, calm 15 / drowsy 6 fps when nothing moves (loop sleeps in a timer), DPR cap, `body.power-save` CSS off-switches, PiP/waveform/rain/worker fixes, weak GPUs default to بطاطس. See **مُنظّم الأداء → توفير الطاقة** |
 
 ---
 

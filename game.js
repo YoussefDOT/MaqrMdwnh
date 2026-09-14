@@ -52,6 +52,20 @@ const SETTINGS_OVERLAYS_KEY  = 'mdwnh_overlays';   // 'on' | 'off' | absent = fo
 // a free session keeps counting while the tab is closed — the away time is real
 // clock time, so the confirm is the one place the user can correct it.
 const SETTINGS_LONGFREE_KEY  = 'mdwnh_longfree_check'; // 'off' | '30' | 'always'
+// توفير الطاقة — the thermal/battery profile (see «توفير الطاقة» under مُنظّم الأداء).
+// Tri-state: absent = device-auto (ON for touch devices, OFF on desktop), 'on'/'off'.
+const SETTINGS_POWER_KEY     = 'mdwnh_power_save';  // 'on' | 'off' | absent = auto
+
+function getPowerSaveMode() {
+    let v = null;
+    try { v = localStorage.getItem(SETTINGS_POWER_KEY); } catch (_) {}
+    return (v === 'on' || v === 'off') ? v : 'auto';
+}
+// Hot code must read the cached PERF.powerSave — this getter hits localStorage.
+function powerSaveEnabled() {
+    const m = getPowerSaveMode();
+    return m === 'auto' ? isTouchDevice() : m === 'on';
+}
 
 function getDisableIdleAnim() { return localStorage.getItem(SETTINGS_NOIDLE_KEY) === '1'; }
 function getLongFreeMode() {
@@ -143,6 +157,11 @@ function applyGraphicsBodyClass() {
     const reduced = isReducedGraphics();
     document.body.classList.toggle('reduced-gfx', reduced);
     document.body.classList.toggle('potato-gfx', isPotato());
+    // توفير الطاقة: kills every infinite CSS animation on surfaces that can stay up
+    // for hours (the azkar button, the PiP blackout, the prayer sky). One running
+    // animation anywhere on the page keeps the compositor producing 60 frames a
+    // second, whatever the canvas is doing.
+    document.body.classList.toggle('power-save', powerSaveEnabled());
 }
 // ─── Lobby configuration ─────────────────────────────────────────────────────
 // To add a new lobby: add one entry.  The key is the internal lobby ID and is
@@ -2128,14 +2147,23 @@ class FocusYouTubePlayer {
     }
 
     _drawWaveform(progress) {
-        const canvas = document.getElementById('yt-waveform');
+        const canvas = this._waveCanvas || (this._waveCanvas = document.getElementById('yt-waveform'));
         if (!canvas) return;
-        // getBoundingClientRect forces layout reflow — always gives the rendered width
-        const W = canvas.getBoundingClientRect().width || canvas.parentElement?.getBoundingClientRect().width || 220;
+        // The width is re-measured at most twice a second. This runs for as long as
+        // music plays — hours — and a getBoundingClientRect() every frame forced a
+        // layout each time. A collapsed/hidden player measures 0 and draws nothing.
+        const nowMs = performance.now();
+        if (!this._waveWAt || nowMs - this._waveWAt > 500) {
+            this._waveWAt = nowMs;
+            this._waveW = canvas.clientWidth || canvas.parentElement?.clientWidth || 0;
+        }
+        const W = this._waveW;
         const H = 22;
         if (W <= 0) return;
         if (canvas.width !== Math.round(W)) canvas.width = Math.round(W);
-        canvas.height = H;
+        // Assigning a canvas dimension reallocates and clears its backing store even
+        // when the value is unchanged — it used to happen on every frame.
+        if (canvas.height !== H) canvas.height = H;
         const ctx = canvas.getContext('2d');
         ctx.clearRect(0, 0, W, H);
         const p = this._wavePhase;
@@ -2166,24 +2194,32 @@ class FocusYouTubePlayer {
         }
     }
 
+    // A 22px wiggle does not need 60fps — and as its own rAF loop it kept the whole
+    // page producing frames for as long as music played, which undid توفير الطاقة
+    // completely. A plain timer (no vsync request) at 24fps, 12 on توفير الطاقة;
+    // the phase advances by real elapsed time so the wiggle keeps its speed.
     _startWaveAnim() {
         if (this._waveAnimId) return;
+        let last = performance.now();
         const draw = () => {
-            this._wavePhase = (this._wavePhase + 0.04) % (Math.PI * 4);
-            if (this.player && this.ready) {
+            const now = performance.now();
+            const dt = Math.min(now - last, 250) / 16.666;
+            last = now;
+            this._wavePhase = (this._wavePhase + 0.04 * dt) % (Math.PI * 4);
+            if (this.player && this.ready && !document.hidden) {
                 try {
                     const dur = this.player.getDuration() || 0;
                     const cur = this.player.getCurrentTime() || 0;
                     this._drawWaveform(dur > 0 ? cur / dur : 0);
                 } catch(e) {}
             }
-            this._waveAnimId = requestAnimationFrame(draw);
+            this._waveAnimId = setTimeout(draw, PERF.powerSave ? 1000 / 12 : 1000 / 24);
         };
-        this._waveAnimId = requestAnimationFrame(draw);
+        this._waveAnimId = setTimeout(draw, 0);
     }
 
     _stopWaveAnim() {
-        if (this._waveAnimId) { cancelAnimationFrame(this._waveAnimId); this._waveAnimId = null; }
+        if (this._waveAnimId) { clearTimeout(this._waveAnimId); this._waveAnimId = null; }
         if (this.player && this.ready) {
             try {
                 const dur = this.player.getDuration() || 0;
@@ -4752,9 +4788,10 @@ function updateAmbientMotes() {
     const minX = -BG_WIDTH / 2, maxX = BG_WIDTH / 2;
     const minY = -BG_HEIGHT / 2, maxY = BG_HEIGHT * 1.5;
     const sway = Date.now() * 0.0006;
+    const dt = gameState.dtAmbient ?? gameState.dtFactor;   // see dtAmbient in gameLoop
     for (const m of gameState.ambientMotes) {
-        m.x += (m.driftX + Math.sin(sway + m.phase) * 0.12) * gameState.dtFactor;
-        m.y += m.driftY * gameState.dtFactor;
+        m.x += (m.driftX + Math.sin(sway + m.phase) * 0.12) * dt;
+        m.y += m.driftY * dt;
         // Wrap softly around the world so they never run out
         if (m.y < minY - 20) { m.y = maxY + 20; m.x = minX + Math.random() * (maxX - minX); }
         if (m.x < minX - 20) m.x = maxX + 20;
@@ -6410,7 +6447,11 @@ function startGame(userData) {
     const timerWorkerUrl = URL.createObjectURL(timerWorkerBlob);
     const timerWorker = new Worker(timerWorkerUrl);
     timerWorker.onmessage = () => {
-        updatePomodoro();
+        // updatePomodoro is here for the HIDDEN tab. While the loop itself is
+        // rendering (even at drowsy 6 fps) it already runs it every frame — doing it
+        // again twice a second is just more work on a phone that should be idle.
+        // updateFreeMode has no other caller: it always runs.
+        if (document.hidden || performance.now() - PERF.lastRender > 1000) updatePomodoro();
         updateFreeMode();
     };
     timerWorker.postMessage('start');
@@ -6929,6 +6970,14 @@ const PERF = {
     // the tier is on device-auto — an explicit choice in الإعدادات always wins, and
     // this never touches localStorage, so a reload re-earns it from scratch.
     forcePotato: false,
+    // توفير الطاقة (see below). `powerSave` is the cached powerSaveEnabled();
+    // `busyUntil` is the performance.now() until which the screen counts as busy;
+    // `effIv`/`prevEffIv` are the intervals the last two rendered frames were
+    // paced at, so a calm frame is never mistaken for the GPU failing to keep up.
+    powerSave: powerSaveEnabled(),
+    busyUntil: 0,
+    effIv: 0, prevEffIv: 0,
+    noDrowsy: false,
 };
 const PERF_RES_STEPS = [1, 0.85, 0.72];
 const PERF_CHECK_MS  = 1000;
@@ -6941,9 +6990,24 @@ const PERF_SLACK_MS  = 6;
 // on a desktop GPU is left completely alone; بطاطس is capped outright (that tier is
 // the user saying "this thing is weak" in as many words).
 function _perfSyncTier() {
-    PERF.on = isReducedGraphics();
+    const ps = powerSaveEnabled();
+    if (ps !== PERF.powerSave) {
+        PERF.powerSave = ps;
+        // Turned off: drop the cap this profile imposed and let the governor judge
+        // the device afresh. (Turned on: the cap is applied just below.)
+        if (!ps && !isPotato()) { _perfSetInterval(0); PERF.caps = 0; }
+        perfWake();
+        applyGraphicsBodyClass();
+        _lastCanvasBW = _lastCanvasBH = -1;   // its DPR cap just moved
+        resizeCanvas();
+    }
+    PERF.on = isReducedGraphics() || PERF.powerSave;
     if (!PERF.on) { _perfSetInterval(0); _perfSetRes(1); return; }
-    if (isPotato() && !PERF.interval) _perfSetInterval(1000 / 30);
+    // A battery device is capped at 30 from the first frame, not after it has proven
+    // it can't hold 60. A phone that CAN hold 60 is exactly the one that runs its GPU
+    // flat out for hours and cooks itself — the governor below only ever sees frame
+    // times, never temperature, so by the time it reacts the phone is already hot.
+    if ((isPotato() || PERF.powerSave) && !PERF.interval) _perfSetInterval(1000 / 30);
 }
 
 function _perfSetInterval(iv) {
@@ -6964,19 +7028,25 @@ function _perfSetRes(r) {
 // True when this rAF tick should be dropped to hold the target frame rate. Called
 // before anything else in the loop, so a skipped frame costs one function call.
 function _perfSkipFrame(ts) {
-    const iv = PERF.interval;
+    const iv = _perfEffInterval(ts);
+    PERF._skipIv = iv;
     if (!iv) return false;
-    return (ts - PERF.lastRender) < (iv - PERF_SLACK_MS);
+    return (ts - PERF.lastRender) < (iv - (iv > 40 ? PERF_CALM_SLACK_MS : PERF_SLACK_MS));
 }
 
 function _perfBeginFrame(ts) {
     const prev = PERF.lastRender;
     PERF.lastRender = ts;
+    PERF.prevEffIv = PERF.effIv;
+    PERF.effIv = PERF._skipIv || 0;
     if (!PERF.on || !prev) return;
     const d = ts - prev;
     // A hidden/throttled tab produces enormous deltas that say nothing about the
     // GPU. Never let one steer the governor.
     if (d > 200 || document.hidden) return;
+    // Neither does a frame the calm throttle spaced out on purpose — 15fps by
+    // design would read as "can't hold 30" and shed resolution for nothing.
+    if (PERF.effIv !== PERF.interval || PERF.prevEffIv !== PERF.interval) return;
     PERF.frame += (d - PERF.frame) * 0.08;
     PERF.samples++;
 }
@@ -7030,9 +7100,162 @@ function _perfEndFrame(startedAt) {
         if (++PERF.good < 3) return;
         PERF.good = 0;
         if (i > 0 && ts - PERF.resAt > 8000) { PERF.resAt = ts; _perfSetRes(PERF_RES_STEPS[i - 1]); return; }
-        if (i <= 0 && !isPotato() && PERF.caps < 2 && PERF.work < 5.5) _perfSetInterval(0);
+        if (i <= 0 && !isPotato() && !PERF.powerSave && PERF.caps < 2 && PERF.work < 5.5) _perfSetInterval(0);
     } else {
         PERF.good = 0;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  توفير الطاقة — the thermal profile: calm frames + a sleeping loop
+// ═══════════════════════════════════════════════════════════════════════════════
+// A Galaxy A32 member: "the phone gets as hot as if I were blowing up half of
+// Minecraft". A phone doesn't get hot from one expensive frame; it gets hot from a
+// GPU and a CPU that are NEVER allowed to go idle. And this app is, for hours at a
+// time, a picture that isn't changing — a member sitting at a laptop in a work
+// session, the phone face-up on the desk. Redrawing that identical picture 30 or 60
+// times a second is pure heat.
+//
+// So, the way console and mobile games do it (and every OS compositor does it for
+// its own UI): render only as fast as the SCREEN is actually changing.
+//
+//   • busy  — anything is moving on screen (you, someone near you, the camera, a
+//             chat bubble, a fade) or you touched the screen in the last 2.5 s:
+//             the normal cap (30 on a battery device).
+//   • calm  — nothing has moved for 2.5 s: 15 fps. Clocks, breathing and Lemo's
+//             sprite frames are all time-based, so they are still correct.
+//   • drowsy — nothing for another 45 s (the phone is lying on the desk): 6 fps.
+//
+// Any touch, key, wheel, a relayed event or a returning tab snaps it straight back
+// to busy on the next vsync (`perfWake`). And a long wait is spent in a TIMER, not
+// in a stream of skipped rAF ticks: with no frame requested, the browser stops
+// asking the GPU for vsync at all and the whole pipeline can drop into a low-power
+// state. That — not skipping draw calls — is what lets the silicon actually cool.
+//
+// Movement is detected, not guessed: every rendered frame `_perfScanBusy` compares
+// the camera, the big fades and every on-screen avatar's render position against
+// the last frame. Ambient motion (wind, motes, dust, clouds) advances on its own
+// uncapped clock (`gameState.dtAmbient`) so it keeps its real-time speed at 6 fps.
+const PERF_CALM_AFTER_MS   = 2500;
+const PERF_DROWSY_AFTER_MS = 45000;
+const PERF_CALM_IV         = 1000 / 15;
+const PERF_DROWSY_IV       = 1000 / 6;
+// A timer wakes up to ~16 ms before the vsync that renders, so a long interval
+// needs a wider acceptance window than PERF_SLACK_MS or it skips that vsync and
+// waits for the next one.
+const PERF_CALM_SLACK_MS   = 20;
+
+function _perfCalmInterval(now) {
+    if (!PERF.powerSave) return 0;
+    // A minigame returns from gameLoop before _perfScanBusy ever runs — it must
+    // never be mistaken for a still screen.
+    const gs = gameState;
+    if (gs.race.active || gs.coffee.active || gs.laptopBoss.active) return 0;
+    const quiet = now - PERF.busyUntil;
+    if (quiet < 0) return 0;
+    if (quiet < PERF_DROWSY_AFTER_MS || PERF.noDrowsy) return PERF_CALM_IV;
+    return PERF_DROWSY_IV;
+}
+function _perfEffInterval(now) {
+    return Math.max(PERF.interval, _perfCalmInterval(now));
+}
+
+// The one scheduler for gameLoop. Exactly one of the two handles is ever pending,
+// which also means a stray second gameLoop() call can no longer fork a second loop.
+let _loopRaf = 0, _loopTimer = 0;
+function _loopTick(ts) { _loopRaf = 0; gameLoop(ts); }
+function _loopNext() {
+    if (_loopRaf || _loopTimer) return;
+    const now = performance.now();
+    const iv = _perfEffInterval(now);
+    if (iv > 40) {
+        const wait = iv - (now - PERF.lastRender) - 12;
+        if (wait > 4) {
+            _loopTimer = setTimeout(() => { _loopTimer = 0; _loopRaf = requestAnimationFrame(_loopTick); }, wait);
+            return;
+        }
+    }
+    _loopRaf = requestAnimationFrame(_loopTick);
+}
+
+// Something visible is about to change (or the member just touched the screen):
+// back to the full frame rate, on the very next vsync.
+function perfWake(ms) {
+    const until = performance.now() + (ms || PERF_CALM_AFTER_MS);
+    if (until > PERF.busyUntil) PERF.busyUntil = until;
+    if (_loopTimer) {
+        clearTimeout(_loopTimer);
+        _loopTimer = 0;
+        if (!_loopRaf) _loopRaf = requestAnimationFrame(_loopTick);
+    }
+}
+
+// Passive, capture-phase, and nothing but a timestamp — these fire on every touch
+// move, so they must never cost more than that.
+(function _perfWireWake() {
+    if (typeof window === 'undefined') return;
+    const wake = () => perfWake();
+    const opt = { capture: true, passive: true };
+    for (const ev of ['pointerdown', 'pointermove', 'touchstart', 'touchmove', 'wheel', 'keydown', 'input', 'resize', 'focus', 'pageshow']) {
+        window.addEventListener(ev, wake, opt);
+    }
+    // A tab coming back must not wait out a timer the browser throttled while it
+    // was hidden (Chrome can hold a background timer for a minute).
+    document.addEventListener('visibilitychange', wake);
+})();
+
+// Compare this frame's picture-defining state against the last one. Cheap: a few
+// numbers plus one pass over the players. Only runs on the world path.
+const _calm = { cx: 0, cy: 0, z: 0, fa: 0, sf: 0, mv: 0, lx: 0, ly: 0, n: -1 };
+function _perfScanBusy(now, canvasHidden) {
+    if (!PERF.powerSave) return;
+    const gs = gameState;
+    const pip = gs.pip;
+    PERF.noDrowsy = !!(pip && pip.active);   // the PiP window is being watched
+    let busy = !!(gs.race.active || gs.coffee.active || gs.laptopBoss.active
+        || gs.anim.active || gs.sitAnim.active || _entrance.active || chatIsOpen()
+        || (gs.minigameLoadFade && gs.minigameLoadFade.alpha > 0.01));
+
+    const cam = gs.camera;
+    if (!canvasHidden) {
+        if (Math.abs(cam.x - _calm.cx) > 0.05 || Math.abs(cam.y - _calm.cy) > 0.05
+            || Math.abs(gs.zoom - _calm.z) > 0.0005) busy = true;
+        const fa = gs.focusAlpha || 0, sf = gs.secondFloorVis ?? 1, mv = _meet.vis || 0;
+        if (Math.abs(fa - _calm.fa) > 0.002 || Math.abs(sf - _calm.sf) > 0.002
+            || Math.abs(mv - _calm.mv) > 0.002) busy = true;
+        _calm.fa = fa; _calm.sf = sf; _calm.mv = mv;
+        if (!gs._hideLemo && (Math.abs(_lemo.x - _calm.lx) > 0.05 || Math.abs(_lemo.y - _calm.ly) > 0.05)) busy = true;
+        _calm.lx = _lemo.x; _calm.ly = _lemo.y;
+    }
+    _calm.cx = cam.x; _calm.cy = cam.y; _calm.z = gs.zoom;
+
+    const v = canvasHidden ? null : _viewRect();
+    const tNow = Date.now(), pNow = performance.now();
+    let n = 0;
+    for (const p of Object.values(gs.players)) {
+        n++;
+        const rx = p.renderX ?? p.x, ry = p.renderY ?? p.y;
+        const moved = p._calmX === undefined || Math.abs(rx - p._calmX) > 0.05 || Math.abs(ry - p._calmY) > 0.05;
+        p._calmX = rx; p._calmY = ry;
+        if (busy || !v || _offView(v, rx, ry, 160)) continue;
+        if (moved || p._sitAnim || p._exitT != null || p._typing
+            || (p._jump && tNow - p._jump.t0 < JUMP_MS + 300)
+            || (p._react && pNow - p._react.t0 < MEET_REACT_MS + 300)) { busy = true; continue; }
+        const list = p._chat;
+        if (list) {
+            for (const b of list) {
+                const age = tNow - b.born;
+                if (age < 1800 || b.morph || age > b.life - CHAT_FADE_MS - 100
+                    || Math.abs(b.offV) > 0.02 || Math.abs(b.sc - 1) > 0.01) { busy = true; break; }
+            }
+        }
+    }
+    if (n !== _calm.n) busy = true;   // someone arrived or left — their scale-in/out
+    _calm.n = n;
+
+    if (busy) {
+        const u = now + PERF_CALM_AFTER_MS;
+        if (u > PERF.busyUntil) PERF.busyUntil = u;
     }
 }
 
@@ -7068,6 +7291,8 @@ if (typeof window !== 'undefined') {
         autoPotato: PERF.forcePotato,
         dpr: +(gameState.dpr || 0).toFixed(2),
         sprites: _sprCache.size,
+        powerSave: PERF.powerSave,
+        paceMs: Math.round(_perfEffInterval(performance.now())),
     });
 }
 
@@ -7082,6 +7307,9 @@ function resizeCanvas() {
     // biggest mobile win — for only a slight sharpness loss.
     const reduced = isReducedGraphics();
     if (reduced) dpr = Math.min(dpr, isPotato() ? 1.25 : 1.5);
+    // توفير الطاقة: every backing-store pixel is filled up to 30 times a second on
+    // a panel that is already dense enough to hide the softness.
+    if (PERF.powerSave) dpr = Math.min(dpr, isPotato() ? 1.0 : 1.25);
     // Dynamic resolution (see PERF): the governor shrinks the BACKING STORE when
     // even the 30fps cap isn't being held. The CSS size below never changes, so the
     // browser upscales and the only cost is a little softness — much cheaper than
@@ -9652,9 +9880,13 @@ function onPresenceMessage(data) {
     if (msg.t === 'car') { onRaceCarWS(msg); return; }
     // Discord voice state from MdwnhBot (its `uid` is the bot, not a player — the
     // member is `s` / `ids`). See الاجتماع → the voice feed.
-    if (msg.t === 'spk' || msg.t === 'vc') { onMeetVoiceMsg(msg); return; }
+    if (msg.t === 'spk' || msg.t === 'vc') { if (msg.on === 1) perfWake(); onMeetVoiceMsg(msg); return; }
     if (msg.t === 'meetq') { _meetOnBotQuery(); return; }
     if (!msg.uid || msg.uid === gameState.userId) return;
+    // A one-off event (sit, chat, typing, reaction, jump, bye) is about to animate
+    // something — leave the calm frame rate now rather than on the next scan.
+    // Plain position packets carry no `t`; real movement is caught by the scan.
+    if (msg.t && msg.t !== 'meet') perfWake();
     if (msg.t === 'bye') {
         // Firebase presence owns add/remove; just stop their walk animation so
         // they don't keep "moonwalking" until the next Firebase update.
@@ -10015,8 +10247,9 @@ function updateWindParticles() {
     gameState.windSpeedMultiplier += (targetWindSpeed - gameState.windSpeedMultiplier) * lerpFactor;
     gameState.focusFogAlpha += (targetFogAlpha - gameState.focusFogAlpha) * lerpFactor;
 
+    const _dtA = gameState.dtAmbient ?? gameState.dtFactor;   // see dtAmbient in gameLoop
     gameState.windParticles.forEach(p => {
-        p.x -= p.speed * gameState.dtFactor * gameState.windSpeedMultiplier;
+        p.x -= p.speed * _dtA * gameState.windSpeedMultiplier;
         if (p.x < -100) {
             // Use logical viewport size (window.innerWidth = canvas.width / dpr)
             const dpr = gameState.dpr || 1;
@@ -10393,12 +10626,13 @@ function spawnImpactBurst(cx, groundY, count) {
 }
 
 function updateDustParticles() {
+    const dt = gameState.dtAmbient ?? gameState.dtFactor;   // see dtAmbient in gameLoop
     for (let i = gameState.dustParticles.length - 1; i >= 0; i--) {
         const p = gameState.dustParticles[i];
-        if (p.gravity) p.vy += p.gravity * gameState.dtFactor;
-        p.x += p.vx * gameState.dtFactor;
-        p.y += p.vy * gameState.dtFactor;
-        p.life -= p.decay * gameState.dtFactor;
+        if (p.gravity) p.vy += p.gravity * dt;
+        p.x += p.vx * dt;
+        p.y += p.vy * dt;
+        p.life -= p.decay * dt;
         if (p.life <= 0) {
             gameState.dustParticles.splice(i, 1);
         }
@@ -10565,7 +10799,7 @@ function gameLoop(timestamp) {
     // the dropped tick costs one comparison and nothing else — no update, no draw,
     // no DOM. `_frameT` deliberately stays on the last RENDERED frame, since that
     // is the clock the remote-player replay is played back against.
-    if (_perfSkipFrame(timestamp)) { requestAnimationFrame(gameLoop); return; }
+    if (_perfSkipFrame(timestamp)) { _loopNext(); return; }
     _perfBeginFrame(timestamp);
     // Measured from HERE, not from `timestamp`: the rAF argument is the vsync time,
     // so the gap before the callback ran is the browser's own work, not ours, and
@@ -10576,6 +10810,10 @@ function gameLoop(timestamp) {
     if (!gameState.lastTime) gameState.lastTime = timestamp;
     let deltaTime = timestamp - gameState.lastTime;
     gameState.lastTime = timestamp;
+    // Ambient motion (wind, motes, dust, clouds) has no lerp to snap, so it runs on
+    // the real elapsed time — a calm 15 fps or drowsy 6 fps frame (توفير الطاقة)
+    // must not slow the wind to a crawl. Clamped so a returning tab can't fling it.
+    gameState.dtAmbient = Math.min(Math.max(deltaTime, 0), 250) / 16.666;
 
     if (deltaTime > 100) deltaTime = 100; // Cap to avoid large jumps if tab is inactive
     gameState.dtFactor = deltaTime / 16.666; // Standardize to 60fps (1000ms / 60 = 16.666ms)
@@ -10712,7 +10950,7 @@ function gameLoop(timestamp) {
             updateLaptopBoss();
             renderLaptopBoss();
             _perfEndFrame(_frameStart);
-            requestAnimationFrame(gameLoop);
+            _loopNext();
             return;
         }
         if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'race') {
@@ -10721,7 +10959,7 @@ function gameLoop(timestamp) {
             updateRaceCamera();
             renderRace();
             _perfEndFrame(_frameStart);
-            requestAnimationFrame(gameLoop);
+            _loopNext();
             return;
         }
         if (gameState.race.active && gameState.race.session && gameState.race.session.phase === 'finished') {
@@ -10729,7 +10967,7 @@ function gameLoop(timestamp) {
             updateRaceCamera();
             renderRace();
             _perfEndFrame(_frameStart);
-            requestAnimationFrame(gameLoop);
+            _loopNext();
             return;
         }
         if (gameState.coffee.active && gameState.coffee.session &&
@@ -10737,7 +10975,7 @@ function gameLoop(timestamp) {
             updateCoffeeMode();
             renderCoffee();
             _perfEndFrame(_frameStart);
-            requestAnimationFrame(gameLoop);
+            _loopNext();
             return;
         }
 
@@ -10767,6 +11005,8 @@ function gameLoop(timestamp) {
         updatePrayerSystem();
         updateAzkarSystem();
         render();
+        if (gameState.pip.active) _pipRenderTick();
+        _perfScanBusy(performance.now(), _worldCanvasHidden());
     } catch (e) {
         console.error('[gameLoop crash — loop kept alive]', e);
         // Ensure isLockedIn doesn't stay stuck after a crash during break transition
@@ -10775,7 +11015,14 @@ function gameLoop(timestamp) {
         }
     }
     _perfEndFrame(_frameStart);
-    requestAnimationFrame(gameLoop);
+    _loopNext();
+}
+
+// True when nothing drawn into the world canvas can be seen — skip the whole pass.
+function _worldCanvasHidden() {
+    return gameState.azkar.active || troCeremonyIsRunning() || _meet.canvasOff || _pipCoversWorld() ||
+        (gameState._isMobile && (gameState.prayer.isOverlayActive
+            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen() || _lib.canvasOff));
 }
 
 function render() {
@@ -10784,13 +11031,11 @@ function render() {
     if (!ctx) return;
 
     // The canvas is display:none under the full-screen overlays (azkar everywhere;
-    // prayer/dashboard/customization/fireplace on mobile) — drawing the whole world
+    // prayer/dashboard/customization/fireplace on mobile), or sits under the opaque
+    // PiP blackout while the world is being drawn into the PiP window — drawing the whole world
     // into a hidden canvas still costs full CPU/GPU time per frame. Skip the world
     // pass entirely; the DOM panel toggles at the bottom still run every frame.
-    const _canvasHidden = gameState.azkar.active || troCeremonyIsRunning() || _meet.canvasOff ||
-        (gameState._isMobile && (gameState.prayer.isOverlayActive
-            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen() || _lib.canvasOff));
-    if (_canvasHidden) { _renderPanelToggles(); return; }
+    if (_worldCanvasHidden()) { _renderPanelToggles(); return; }
 
     const dpr = gameState.dpr || 1;
     const W = canvas.width  / dpr;  // logical (CSS-pixel) viewport width
@@ -11105,7 +11350,7 @@ function updateLaptopLights() {
 function updateCloudShadows() {
     if (!gameState._overlaysOn) return;
     if (!gameState.clouds) _initClouds();
-    const dt = gameState.dtFactor / 60;   // ~seconds
+    const dt = (gameState.dtAmbient ?? gameState.dtFactor) / 60;   // ~seconds (see dtAmbient)
     for (const c of gameState.clouds) {
         c.x -= c.vx * dt;                 // drift LEFT (world units)
         if (c.x + c.w < -WORLD_W / 2 - _CLOUD_MARGIN) Object.assign(c, _spawnCloud(true));
@@ -15473,10 +15718,12 @@ function _pipFrame() {
     const pip = gameState.pip;
     if (!pip.active || pip.mode !== 'window' || !pip.win || pip.win.closed) return;
     if (gameState._dupSessionDetected) { closePiPMode(); return; }
-    updatePiPCamera();
-    renderPiPInto(pip.ctx, pip.canvas, pip.dpr);
-    _pipUpdateChrome();
-    pip._lastFrameAt = performance.now();
+    if (_pipDueForFrame()) {
+        updatePiPCamera();
+        renderPiPInto(pip.ctx, pip.canvas, pip.dpr);
+        _pipUpdateChrome();
+        pip._lastFrameAt = performance.now();
+    }
     try { pip.rafId = pip.win.requestAnimationFrame(_pipFrame); } catch (e) { closePiPMode(); }
 }
 
@@ -15547,6 +15794,7 @@ function _pipSetupWindow(win) {
         }
         // Always render — no stale check. The main-loop watchdog also renders when
         // the opener is foregrounded, so this only adds cost when it is throttled.
+        if (!_pipDueForFrame()) return;
         try {
             updatePiPCamera();
             renderPiPInto(p.ctx, p.canvas, p.dpr);
@@ -15711,7 +15959,7 @@ function _pipBuildVideoPipeline() {
         });
     }
     if (!pip.stream) {
-        pip.stream = pip.srcCanvas.captureStream(30);
+        pip.stream = pip.srcCanvas.captureStream(PERF.powerSave ? 15 : 30);
         pip.video.srcObject = pip.stream;
     }
 }
@@ -15733,6 +15981,15 @@ function _pipPrimeVideo() {
         pip.video.play().catch(() => {});
         pip._videoPrimed = true;
     } catch (e) { /* best-effort */ }
+}
+
+function _pipUnprimeVideo() {
+    const pip = gameState.pip;
+    pip._videoPrimed = false;
+    try { if (pip.video) pip.video.pause(); } catch (e) {}
+    try { if (pip.stream) pip.stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+    try { if (pip.video) pip.video.srcObject = null; } catch (e) {}
+    pip.stream = null;
 }
 
 // Open a Video-PiP window: render the world+timer into the offscreen canvas,
@@ -15839,9 +16096,27 @@ function togglePiPMode() {
     else openPiPMode();
 }
 
+// While PiP is up, the main page is covered by #pip-blackout — so the main world
+// pass was drawing a full-resolution frame nobody could see, on top of the PiP
+// render (and, on Android, the video encode of it). Once the blackout has faded in,
+// stop drawing the main world at all; the PiP render doesn't depend on it.
+function _pipCoversWorld() {
+    const pip = gameState.pip;
+    return !!(pip && pip.active && pip._blackoutAt && performance.now() - pip._blackoutAt > 500);
+}
+
+// توفير الطاقة: the PiP world is re-rendered at most this often. Its timer ticks in
+// seconds and the camera eases slowly — 15 fps is indistinguishable in a tiny window.
+const PIP_POWER_MIN_MS = 1000 / 15;
+function _pipDueForFrame() {
+    if (!PERF.powerSave) return true;
+    return performance.now() - (gameState.pip._lastFrameAt || 0) >= PIP_POWER_MIN_MS - 4;
+}
+
 function _pipShowBlackout(show) {
     // Guard: never show the blackout unless PiP is genuinely active
     if (show && !gameState.pip.active) return;
+    gameState.pip._blackoutAt = show ? performance.now() : 0;
     const el = gameState.pip.blackout;
     if (el) {
         if (show) {
@@ -15964,11 +16239,23 @@ function updatePiPLifecycle() {
     // Pre-warm the Video-PiP pipeline while the button is available so the click
     // can enter PiP instantly (self-guards; only acts on the Video-PiP path —
     // i.e. Android Chrome and any browser with captureStream + PiP).
-    if (allowed && !pip.active) _pipPrimeVideo();
+    // Not on توفير الطاقة: a primed video is a hidden <video> PLAYING a canvas
+    // stream for as long as the button is up — the whole work session — just to
+    // shave the open. Android Chrome (the only browser that takes this path) opens
+    // fine without it. And a primed video is torn down the moment the button goes,
+    // or it kept playing for the rest of the page's life.
+    if (allowed && !pip.active && !PERF.powerSave) _pipPrimeVideo();
+    else if (!pip.active && pip._videoPrimed) _pipUnprimeVideo();
 
     if (pip.active && !allowed) { closePiPMode(); return; }
-    if (!pip.active) return;
+}
 
+// The main loop's PiP render. Called on every rendered world frame from gameLoop —
+// it used to live inside the lifecycle guard above, which rides SLOW_TASKS, i.e.
+// the PiP only got one frame in seven from here.
+function _pipRenderTick() {
+    const pip = gameState.pip;
+    if (!pip.active || !_pipDueForFrame()) return;
     if (pip.mode === 'fallback' || pip.mode === 'video') {
         // In-page surface / video-stream source: the main loop drives it each
         // frame (smooth while foregrounded; the video backstop covers hidden tabs).
@@ -15979,6 +16266,9 @@ function updatePiPLifecycle() {
     } else if (pip.mode === 'window') {
         // A popup the user closed via the OS chrome → tear down cleanly.
         if (pip.win && pip.win.closed) { closePiPMode(); return; }
+        // The popup's own rAF / interval is the primary driver; from here only fill
+        // a gap, or this renders every frame a second time on top of it.
+        if (performance.now() - (pip._lastFrameAt || 0) < 120) return;
         // Drive the popup from the main game loop every frame — consistent with
         // fallback/video modes. _pipFrame (popup rAF) runs in parallel and provides
         // smooth 60fps when the popup is the focused window; this watchdog ensures
@@ -16038,12 +16328,49 @@ function _isSafariBrowser() {
     return /^((?!chrome|chromium|android|crios|fxios|edg).)*safari/i.test(ua);
 }
 
-// Resolve to a concrete tier: an explicit choice, else the device default — mobile
-// or Firefox/Safari → 'low' (atmosphere gradients ON, cheap compositing), else
-// 'high'.
+// A budget phone GPU is told apart by its renderer string, never by RAM or core
+// count: Android rounds deviceMemory down (a 6 GB flagship-class phone reports 4)
+// and every current phone has 8 cores. The list is the entry-level Mali / Adreno /
+// PowerVR families (the Galaxy A32 that overheated is a Mali-G52). Probed ONCE per
+// browser and remembered, so the throwaway WebGL context is never on a later login.
+const _WEAK_GPU_KEY = 'mdwnh_weak_gpu_v1';
+const _WEAK_GPU_RE = /mali-(t\d|g31|g51|g52|g57)|adreno[^0-9]*([1-5]\d\d|60\d|61[0-2])\b|powervr|sgx|videocore|vivante/i;
+let _weakDeviceCache = null;
+function isWeakDevice() {
+    if (_weakDeviceCache !== null) return _weakDeviceCache;
+    if (!isTouchDevice()) return (_weakDeviceCache = false);
+    const ua = navigator.userAgent || '';
+    try {
+        const saved = JSON.parse(localStorage.getItem(_WEAK_GPU_KEY) || 'null');
+        if (saved && saved.ua === ua) return (_weakDeviceCache = !!saved.weak);
+    } catch (_) {}
+    let weak = false;
+    try {
+        const mem = navigator.deviceMemory;
+        if (mem && mem <= 2) weak = true;
+        const c = document.createElement('canvas');
+        const gl = c.getContext('webgl', { powerPreference: 'low-power' }) || c.getContext('experimental-webgl');
+        if (gl) {
+            const ext = gl.getExtension('WEBGL_debug_renderer_info');
+            const r = String((ext && gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) || gl.getParameter(gl.RENDERER) || '');
+            if (_WEAK_GPU_RE.test(r)) weak = true;
+            const lose = gl.getExtension('WEBGL_lose_context');
+            if (lose) lose.loseContext();
+        }
+    } catch (_) {}
+    try { localStorage.setItem(_WEAK_GPU_KEY, JSON.stringify({ ua, weak })); } catch (_) {}
+    return (_weakDeviceCache = weak);
+}
+
+// Resolve to a concrete tier: an explicit choice, else the device default — a weak
+// phone → 'potato', mobile or Firefox/Safari → 'low' (atmosphere gradients ON,
+// cheap compositing), else 'high'.
 function graphicsTier() {
     const explicit = getGraphicsQuality();
     if (explicit) return explicit;
+    // A weak phone GPU starts on بطاطس: it is the tier that thing can actually hold
+    // for hours without cooking itself (an explicit choice in الإعدادات still wins).
+    if (isMobile() && isWeakDevice()) return 'potato';
     const auto = (isMobile() || _isFirefoxBrowser() || _isSafariBrowser()) ? 'low' : 'high';
     // The governor's last rung (see PERF.forcePotato). Only reachable on device-auto,
     // and only after this device has failed the 30fps cap at 72% resolution.
@@ -16114,6 +16441,8 @@ function setupSettingsUI() {
     const particlesLabel= document.getElementById('settings-particles-label');
     const overlaysBtn   = document.getElementById('settings-overlays-btn');
     const overlaysLabel = document.getElementById('settings-overlays-label');
+    const powerBtn      = document.getElementById('settings-power-btn');
+    const powerLabel    = document.getElementById('settings-power-label');
     const lemoBtn       = document.getElementById('settings-lemo-btn');
     const lemoLabel     = document.getElementById('settings-lemo-label');
     const joystickBtn   = document.getElementById('settings-joystick-btn');
@@ -16175,6 +16504,15 @@ function setupSettingsUI() {
     }
     function _reflectParticles() { _reflectEffect(particlesBtn, particlesLabel, getParticlesMode(), particlesEnabled()); }
     function _reflectOverlays()  { _reflectEffect(overlaysBtn,  overlaysLabel,  getOverlaysMode(),  overlaysEnabled()); }
+    // توفير الطاقة: same tri-state shape, masculine labels (the noun is مذكّر).
+    function _reflectPower() {
+        if (!powerBtn) return;
+        const mode = getPowerSaveMode();
+        powerBtn.dataset.value = mode;
+        powerBtn.classList.toggle('settings-toggle-on',  mode === 'on' || (mode === 'auto' && powerSaveEnabled()));
+        powerBtn.classList.toggle('settings-toggle-low', mode === 'off');
+        powerLabel.textContent = mode === 'auto' ? 'تلقائي' : (mode === 'on' ? 'مفعّل' : 'مغلق');
+    }
 
     function _reflectIdle() {
         if (!idleBtn) return;
@@ -16252,6 +16590,18 @@ function setupSettingsUI() {
         particlesBtn.addEventListener('click', () => {
             _cycleEffect(SETTINGS_PARTICLES_KEY, getParticlesMode());
             _reflectParticles();
+        });
+    }
+    if (powerBtn) {
+        powerBtn.addEventListener('click', () => {
+            const next = { auto: 'on', on: 'off', off: 'auto' }[getPowerSaveMode()];
+            try {
+                if (next === 'auto') localStorage.removeItem(SETTINGS_POWER_KEY);
+                else                 localStorage.setItem(SETTINGS_POWER_KEY, next);
+            } catch (_) {}
+            _perfSyncTier();   // applies the cap, the DPR cap and the body class now
+            gameState._settingsFlagsAt = 0;
+            _reflectPower();
         });
     }
     if (overlaysBtn) {
@@ -16389,6 +16739,7 @@ function setupSettingsUI() {
     _reflectNames();
     _reflectParticles();
     _reflectOverlays();
+    _reflectPower();
     _reflectLemo();
     _reflectJoystick();
     _reflectIdle();
@@ -19449,32 +19800,52 @@ function startPrayerRain() {
     canvas._rainResizeHandler = debouncedResize;
     window.addEventListener('resize', debouncedResize);
 
-    // 110 gentle drops — thin, slow, slightly angled left
-    const drops = Array.from({ length: 110 }, () => ({
-        x:       Math.random() * canvas.width,
-        y:       Math.random() * canvas.height,
-        len:     7 + Math.random() * 13,
-        speed:   0.9 + Math.random() * 1.6,
-        opacity: 0.08 + Math.random() * 0.18,
-        width:   0.4 + Math.random() * 0.6,
+    // Gentle drops — thin, slow, slightly angled left. The overlay can stay up for
+    // HOURS when an adhan goes unanswered, so this loop is built to be cheap: drops
+    // are sorted into four opacity/width bands and each band is ONE path and ONE
+    // stroke (it used to be 110 separate stroke calls, each with a fresh colour
+    // string, 60 times a second), and on توفير الطاقة it runs at 24 fps with fewer
+    // drops. Motion is scaled by real elapsed time, so the rain falls at the same
+    // speed at any frame rate.
+    const powerSave = PERF.powerSave;
+    const BANDS = [
+        { a: 0.10, w: 0.45 }, { a: 0.15, w: 0.6 }, { a: 0.20, w: 0.75 }, { a: 0.25, w: 0.9 },
+    ];
+    const drops = Array.from({ length: powerSave ? 60 : 110 }, () => ({
+        x:     Math.random() * canvas.width,
+        y:     Math.random() * canvas.height,
+        len:   7 + Math.random() * 13,
+        speed: 0.9 + Math.random() * 1.6,
+        band:  (Math.random() * BANDS.length) | 0,
     }));
+    const minGap = powerSave ? 1000 / 24 : 0;
+    let lastT = 0;
 
     const ctx = canvas.getContext('2d');
-    const draw = () => {
+    const draw = (t) => {
+        _prayerRainRAF = requestAnimationFrame(draw);
+        t = t || performance.now();
+        if (lastT && t - lastT < minGap - 4) return;
+        const dt = lastT ? Math.min(t - lastT, 100) / 16.666 : 1;
+        lastT = t;
         ctx.clearRect(0, 0, canvas.width, canvas.height);
-        for (const d of drops) {
+        for (let b = 0; b < BANDS.length; b++) {
             ctx.beginPath();
-            ctx.strokeStyle = `rgba(180,230,225,${d.opacity})`;
-            ctx.lineWidth   = d.width;
-            ctx.moveTo(d.x, d.y);
-            ctx.lineTo(d.x - d.len * 0.18, d.y + d.len); // slight left lean
+            ctx.strokeStyle = `rgba(180,230,225,${BANDS[b].a})`;
+            ctx.lineWidth   = BANDS[b].w;
+            for (const d of drops) {
+                if (d.band !== b) continue;
+                ctx.moveTo(d.x, d.y);
+                ctx.lineTo(d.x - d.len * 0.18, d.y + d.len); // slight left lean
+            }
             ctx.stroke();
-            d.y += d.speed;
-            d.x -= d.speed * 0.18;
+        }
+        for (const d of drops) {
+            d.y += d.speed * dt;
+            d.x -= d.speed * 0.18 * dt;
             if (d.y > canvas.height + d.len) { d.y = -d.len; d.x = Math.random() * canvas.width; }
             if (d.x < -20)                   { d.x = canvas.width; }
         }
-        _prayerRainRAF = requestAnimationFrame(draw);
     };
     draw();
 }
