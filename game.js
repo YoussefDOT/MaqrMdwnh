@@ -8851,7 +8851,7 @@ function setupPomodoroUI() {
                 btns.forEach(b => b.classList.remove('active'));
                 if (type === 'break') {
                     const errEl = document.getElementById('break-max-error');
-                    if (errEl) errEl.textContent = parseInt(input.value) > 15 ? 'الحد الأقصى ١٥ دقيقة' : '';
+                    if (errEl) errEl.textContent = parseInt(input.value) > 60 ? 'الحد الأقصى ٦٠ دقيقة' : '';
                 }
             } else {
                 btns[0].classList.add('active');
@@ -8883,7 +8883,7 @@ function setupPomodoroUI() {
         };
 
         const workMins = getVal('work', 25);
-        const breakMins = Math.min(15, getVal('break', 5));
+        const breakMins = Math.min(60, getVal('break', 5));
         const sessions = getVal('session', 1);
 
         modal.classList.remove('active');
@@ -18117,18 +18117,18 @@ function setupFreeModeUI() {
     const customInput = document.getElementById('fbp-custom');
     if (customInput) {
         customInput.addEventListener('input', () => {
-            const val = Math.min(15, Math.max(1, parseInt(customInput.value) || 0));
+            const val = Math.min(60, Math.max(1, parseInt(customInput.value) || 0));
             const errEl = document.getElementById('fbp-max-error');
             if (customInput.value) {
                 gameState.freeMode.selectedBreakMins = val;
-                if (errEl) errEl.textContent = parseInt(customInput.value) > 15 ? 'الحد الأقصى ١٥ دقيقة' : '';
+                if (errEl) errEl.textContent = parseInt(customInput.value) > 60 ? 'الحد الأقصى ٦٠ دقيقة' : '';
             } else {
                 if (errEl) errEl.textContent = '';
             }
         });
         customInput.addEventListener('blur', () => {
             if (customInput.value) {
-                const clamped = Math.min(15, Math.max(1, parseInt(customInput.value) || 1));
+                const clamped = Math.min(60, Math.max(1, parseInt(customInput.value) || 1));
                 customInput.value = clamped;
                 gameState.freeMode.selectedBreakMins = clamped;
                 const errEl = document.getElementById('fbp-max-error');
