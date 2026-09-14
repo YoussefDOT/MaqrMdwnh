@@ -101,6 +101,10 @@ Grep anchors for the major systems (all verified to exist):
 | Success card | `setupSuccessCardUI` |
 | UI cascade blips | `setupJuiceUi` |
 | Background memory release | `_memReleaseIdle`, `_memRestore`, `MEM_IDLE_MS` |
+| Frame governor / dynamic res | `PERF`, `_perfSkipFrame`, `_perfEndFrame`, `_perfSyncTier`, `window.__perf()` |
+| Off-screen culling | `_viewRect`, `_offView` |
+| Cached text/badge/avatar sprites | `_spritesOk`, `_pillSprite`, `_fillTextCached`, `_avatarComposite`, `_fxSprite` |
+| Staggered logic tick | `SLOW_TASKS`, `runSlowTasks` |
 | Session attendance credit / keep-alive | `_dutyCreditSession`, `_dutyResetSessionLedger`, `_keepAliveSet` |
 
 ### 2. Before touching a feature
@@ -206,7 +210,12 @@ Each one is a shipped bug (details in Common Bugs & the feature sections):
     path without a re-check once the masks land (`_unstickLocalPlayer`).
 22. **Git**: never push unless the owner asks; when pushing, straight to `main`
     (`git push origin HEAD:main`); bump `?v=` with every `game.js` change.
-23. **Budget images by PIXELS, never by file size** — a 17 KB PNG and a 3.6 MB PNG at
+23. **A new per-frame update belongs in `SLOW_TASKS` unless it lerps.** If it has no
+    `dtFactor` in it, it is a DOM/lifecycle guard and runs round-robin at ~10Hz.
+24. **Anything cached for drawing must be invalidated by a KEY and freed in
+    `_memReleaseIdle`** — a font that loads late, a ring colour that changes, a
+    viewport that resizes. A cache that can't be invalidated is a bug with a delay.
+25. **Budget images by PIXELS, never by file size** — a 17 KB PNG and a 3.6 MB PNG at
     2210×3160 both decode to **27.9 MB**. Anything held for the whole session
     (`keep: true`, a sprite sheet, a cached canvas) must be cropped or downscaled to
     what is actually drawn. Free it with `.close()` / `src=''` the moment it isn't.
@@ -1914,6 +1923,141 @@ fade with it). `drawCoopGroupLabels` still runs in the world pass.
 **DPR scaling**: Canvas is `viewport * dpr` physical, `viewport` CSS. All drawing uses `ctx.scale(dpr, dpr)` so use logical pixels everywhere. `gameState.dpr` holds the ratio.
 
 ---
+
+## مُنظّم الأداء — the frame governor, culling, and the draw caches
+
+> **This section is the answer to "it still lags on low-end phones".** The graphics
+> tiers before it all attacked the *cost per pixel* (no backdrop-filter, no canvas
+> shadows, no live `ctx.filter`, smaller world cache). None of them touched the two
+> terms that actually bound a budget phone: **how many pixels are drawn** and **how
+> many times a second**. Everything below attacks those. Grep anchors: `PERF`,
+> `_perfSkipFrame`, `_viewRect`, `_spritesOk`, `SLOW_TASKS`.
+
+**The measurement that motivates it.** One world frame is ~12 full-screen passes
+(the black clear, two atmosphere gradients, the world blit, the two day overlays —
+one an `overlay` BLEND — the focus mask, fog, sun, vignette, the chat pass). At
+dpr 1.5 on a 412×915 phone that is **~10M blended pixels per frame**. A device that
+cannot afford them does not slow down gracefully: it burns 100% of its GPU chasing
+60fps, gets hot, throttles, and *then* janks. That is the "still lags so hard"
+report, and no per-pixel saving fixes it on its own.
+
+### 1. Frame pacing — `PERF.interval`, `_perfSkipFrame`
+A device that can't hold 60 is capped to a **locked 30**, and the dropped rAF tick
+costs one comparison: no update, no draw, no DOM. Half the pixels, and 30fps
+*evenly spaced* reads far smoother than an unstable 38–55 — the jitter is what
+people actually call lag.
+
+- **It needs no other change anywhere.** `dtFactor` is already clamped at 2, which
+  is EXACTLY one 30fps frame, so every lerp, velocity and fade keeps its real-time
+  speed. Don't raise that clamp without re-reading this.
+- **`PERF_SLACK_MS` (6) is load-bearing.** Without it a 33.33ms target misses the
+  33.3ms vsync by a hair and waits for the next one — a 30fps cap silently running
+  at 20. 30 also divides 60/90/120Hz cleanly, which is why the cap is 30 and **not
+  60**: a 60fps cap on a 90Hz panel renders 2 of every 3 frames and paces *worse*
+  than leaving it alone.
+- `gameState._frameT` deliberately stays on the last RENDERED frame — it's the clock
+  the remote-player replay is played back against.
+
+### 2. Dynamic resolution — `PERF.res`, `PERF_RES_STEPS`
+When even 30 isn't held, the canvas **backing store** shrinks (1 → 0.85 → 0.72)
+while the CSS size never moves, so the browser upscales. Quadratic, so 0.72 is half
+the pixels again. Applied inside `resizeCanvas` on top of the tier's dpr cap.
+
+### 3. Auto-بطاطس — `PERF.forcePotato`
+Last rung: after the cap AND both resolution steps have failed, the tier itself
+escalates to بطاطس. **Only on device-auto** — an explicit choice in الإعدادات always
+wins — and it never touches localStorage, so a reload re-earns it from scratch. This
+is the tier arrived at by *measurement* instead of guessing from a spec sheet.
+
+**The whole ladder is evidence-driven and hysteretic**, and the shape matters:
+capping needs **two consecutive bad seconds** (a panel animating in, or the world art
+landing, must not cap a phone that was fine), restoring needs **three consecutive
+good ones**, and `PERF.caps >= 2` means the device has given its final answer and
+stays at 30 for the session. A device that comfortably holds 60 is **never touched**.
+Simulated across fast/mid/slow/awful phones at 60/120Hz: no oscillation, `caps` = 1
+in every case that capped at all.
+
+`window.__perf()` prints what this device settled on — ask for it instead of guessing
+when someone reports lag.
+
+### 4. Off-screen culling — `_viewRect()` / `_offView()`
+At zoom 1 a phone sees **~18% of the world's area**, yet every mote, dust speck,
+cloud, fog puff, laptop glow, badge and avatar was being built and submitted. The
+rasteriser clips the *fill*, but it never saves you the **path construction**, and an
+avatar is a shadow ellipse + a clip + arcs + a hat chain + a shaped name. Now culled:
+players (never the local one — `drawFocusMask` re-draws it on its own pass), timer
+badges, ambient motes, dust, clouds, second-floor fog, laptop lights.
+
+`_viewRect()` is recomputed **per draw call, not per frame**, because `renderPiPInto`
+runs the same draw code with a different camera/zoom/canvas.
+
+### 5. Cached text, badge and avatar sprites — `_spritesOk()` and friends
+**The most expensive thing on this canvas is the thing nobody counts: TEXT.** Every
+`fillText` of an Arabic string re-runs bidi resolution, shaping and rasterisation —
+and `measureText` shapes the run too, so measuring is not the cheap half.
+
+| was, every frame | now |
+|---|---|
+| badge: 2 `measureText` + 2 `fillText` + 2 nine-segment paths + 4 font switches | 2 `drawImage` |
+| nametag: a shaped `fillText` per player for a string that never changes | 1 `drawImage`, tinted by `globalAlpha` |
+| avatar: ring fill + arc + **`clip()`** + image (+ a shaped letter) | 1 `drawImage` |
+
+Rules that hold this together:
+- **One pill per sprite, never one sprite per badge** (`_pillSprite`). The task row
+  is a long string that almost never changes; the timer row is short and changes
+  every SECOND. Baked together, the long one would re-bake 60×/minute and churn a
+  ~200 KB canvas each time — the cache would cost more than it saved.
+- **`_spritesOk()` is the single gate**: reduced tiers only, never the PiP pass (its
+  window runs at zoom 2.1–4.6), and never past `dpr × zoom > 2.2` — sprites are baked
+  at a fixed 2×, so past that the live path is both sharper and affordable (there is
+  far less on screen when you're zoomed in). It reads the cached `gameState._lowGfx`,
+  never the getter.
+- **Every helper returns falsy on failure and the caller draws live**, so a cache
+  miss can only cost a frame's work, never a missing badge.
+- **The caches are invalidated on `document.fonts` `loadingdone`** — a sprite baked
+  before Rubik downloaded would wear the fallback face for the whole session.
+- Avatar composites are cached **on the player**, not in the LRU, so a crowded lobby
+  can't evict the avatars it is actively drawing; the key is ring colour + picture +
+  gray state, so a تخصيص change shows on the very next frame.
+- All of it is dropped by `_memReleaseIdle` — every entry is a pure cache.
+
+### 6. Pre-composited screen-space FX — `_fxSprite`, `_drawStaticFx`
+On متوسط the frame paid **four** separate full-screen alpha blends before a single
+character was drawn: two atmosphere blobs before the world, the sun wash and the
+vignette after it. All four are static (they depend only on viewport size), so each
+side is flattened into **one half-res sprite** — four blends become two, and the
+softness is invisible because every one of these layers *is* a soft gradient (the
+same reasoning behind `drawFocusMask`'s half-res mask). **The trade is the gentle
+camera parallax** on the atmosphere and the sun; عالية keeps it.
+
+### 7. The staggered logic tick — `SLOW_TASKS` / `runSlowTasks()`
+The loop called ~30 update functions per frame, but most are DOM lifecycle guards
+("should the crown be visible", "has an overlay opened that must close the tasks
+panel"). Each is cheap; running all of them 60×/sec is not, because every
+classList touch is a style-recalc opportunity on a device already compositing a
+60fps canvas. They now run **round-robin, one per frame** (~10Hz each) — a 6× cut in
+how often the loop talks to the DOM, with no periodic spike (which would just trade
+lag for stutter).
+
+- **A function belongs there ONLY if it has no per-frame lerp.** Every entry was
+  checked for `dtFactor`; any addition must be too.
+- **`world: true`** marks the ones that used to be called AFTER the loop's minigame
+  early-returns. `runSlowTasks` runs before them, so the flag preserves that exactly.
+  (`updateMinigameLobbyProximity` still fires during a *lobby* — `race.active` is only
+  true once the race itself starts.)
+- `updatePomoLeaveBtn` is still called directly at the state transitions that matter,
+  so its responsiveness is unchanged where it counts.
+
+### What is NOT done yet (the next lever, and why it wasn't taken)
+`drawDayOverlays` draws **two full-world images every frame, one with
+`globalCompositeOperation = 'overlay'`** — a non-source-over blend needs the
+destination read back, which on many mobile drivers is the single most expensive op
+in the frame. Baking both into `worldCache.ground/second/meet` at load would make it
+free. It was **not** done because it is a visual decision, not an engineering one:
+baked, the wash would stop falling on players, Lemo and the prompts (it would still
+fall on all the art). It also needs care — `'overlay'` onto a cache's transparent
+regions paints where nothing should be, so the bake must snapshot the cache and
+restore its alpha with `destination-in`. Ask the owner before doing it.
 
 ## Graphics Tiers & Mobile Performance
 

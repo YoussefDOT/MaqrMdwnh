@@ -4767,8 +4767,13 @@ function drawAmbientMotes() {
     if (!gameState.ambientMotes.length) return;
     const ctx = gameState.ctx;
     const tw = Date.now() * 0.002;
+    // The motes are scattered across the whole world but a phone sees a fraction of
+    // it, so most of these 44 arc-fills were building paths for pixels nobody could
+    // ever see. Path construction is CPU work the clip test never saves you.
+    const v = _viewRect();
     ctx.save();
     for (const m of gameState.ambientMotes) {
+        if (_offView(v, m.x, m.y, m.r * 3)) continue;
         const flicker = 0.55 + 0.45 * Math.sin(tw * m.speed + m.phase);
         const a = m.baseAlpha * flicker;
         // Soft halo
@@ -6878,6 +6883,194 @@ function installLowGfxShadowGuard(ctx) {
 }
 
 let _lastCanvasBW = -1, _lastCanvasBH = -1;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  مُنظّم الأداء — adaptive frame pacing + dynamic resolution
+// ═══════════════════════════════════════════════════════════════════════════════
+// A budget phone is FILL-RATE bound here, not logic bound. One frame of this world
+// is ~12 full-screen passes (the black clear, two atmosphere gradients, the world
+// blit, the two day overlays — one of them an `overlay` BLEND — the focus mask,
+// fog, sun, vignette, the chat pass…). At dpr 1.5 on a 412×915 phone that is ~10M
+// blended pixels EVERY frame, and a device that can't afford them still burns 100%
+// of its GPU chasing 60 — which is what makes it hot, then slower, then janky. The
+// graphics tiers already cut per-pixel *cost*; nothing until now cut the number of
+// pixels, which is the term that actually dominates.
+//
+// So this pulls the two levers every real-time web game pulls, in payoff order:
+//
+//   1. FRAME PACING — a device that cannot hold 60 is capped to a locked 30. That
+//      is half the pixels, and 30fps *evenly spaced* reads far smoother than an
+//      unstable 38–55 (the jitter is what people call "lag"). It needs no other
+//      change anywhere: dtFactor is already clamped at 2, which is EXACTLY one
+//      30fps frame, so every lerp, velocity and fade keeps its real-time speed.
+//
+//   2. DYNAMIC RESOLUTION — when even 30 isn't held, shrink the canvas BACKING
+//      STORE while the CSS size stays put, so the browser upscales. Quadratic: a
+//      0.72 step is half the pixels again. Standard console/PC technique.
+//
+// Both are EVIDENCE-DRIVEN, never a blanket downgrade: a phone that comfortably
+// holds 60 is left at 60 forever, and resolution is only shed after the cap has
+// already failed. Judged on the real rAF interval rather than JS time, because the
+// cost being measured is GPU work that has NOT finished when the draw calls return.
+const PERF = {
+    interval: 0,        // 0 = uncapped; else min ms between RENDERED frames
+    lastRender: 0,
+    frame: 16.7,        // EWMA of the interval between rendered frames
+    work: 8,            // EWMA of the JS update+render cost (secondary signal)
+    res: 1,             // resolution multiplier applied on top of the tier's dpr cap
+    checkAt: 0,
+    resAt: 0,
+    samples: 0,
+    bad: 0, good: 0,    // consecutive verdicts — one bad second proves nothing
+    caps: 0,            // times we've capped; twice = this device has said enough
+    on: false,
+    // Last rung of the ladder: after the 30fps cap AND both resolution steps have
+    // failed, the device has *demonstrated* it belongs on بطاطس. Only ever set when
+    // the tier is on device-auto — an explicit choice in الإعدادات always wins, and
+    // this never touches localStorage, so a reload re-earns it from scratch.
+    forcePotato: false,
+};
+const PERF_RES_STEPS = [1, 0.85, 0.72];
+const PERF_CHECK_MS  = 1000;
+// Without slack a 33.33ms target misses the 33.3ms vsync by a hair and waits for
+// the NEXT one — a 30fps cap that silently runs at 20. Half a 60Hz frame of slack
+// makes it land on every other tick on 60/90/120Hz panels alike.
+const PERF_SLACK_MS  = 6;
+
+// The governor only runs where the device has already told us it needs help. عالية
+// on a desktop GPU is left completely alone; بطاطس is capped outright (that tier is
+// the user saying "this thing is weak" in as many words).
+function _perfSyncTier() {
+    PERF.on = isReducedGraphics();
+    if (!PERF.on) { _perfSetInterval(0); _perfSetRes(1); return; }
+    if (isPotato() && !PERF.interval) _perfSetInterval(1000 / 30);
+}
+
+function _perfSetInterval(iv) {
+    if (PERF.interval === iv) return;
+    PERF.interval = iv;
+    PERF.frame = iv || 16.7;   // don't judge the new mode on the old mode's samples
+    PERF.samples = 0; PERF.bad = 0; PERF.good = 0;
+    if (iv) PERF.caps++;
+}
+
+function _perfSetRes(r) {
+    if (PERF.res === r) return;
+    PERF.res = r;
+    _lastCanvasBW = _lastCanvasBH = -1;   // force resizeCanvas past its no-op guard
+    resizeCanvas();
+}
+
+// True when this rAF tick should be dropped to hold the target frame rate. Called
+// before anything else in the loop, so a skipped frame costs one function call.
+function _perfSkipFrame(ts) {
+    const iv = PERF.interval;
+    if (!iv) return false;
+    return (ts - PERF.lastRender) < (iv - PERF_SLACK_MS);
+}
+
+function _perfBeginFrame(ts) {
+    const prev = PERF.lastRender;
+    PERF.lastRender = ts;
+    if (!PERF.on || !prev) return;
+    const d = ts - prev;
+    // A hidden/throttled tab produces enormous deltas that say nothing about the
+    // GPU. Never let one steer the governor.
+    if (d > 200 || document.hidden) return;
+    PERF.frame += (d - PERF.frame) * 0.08;
+    PERF.samples++;
+}
+
+// Called once per rendered frame with the timestamp taken just before update().
+function _perfEndFrame(startedAt) {
+    if (!PERF.on) return;
+    const w = performance.now() - startedAt;
+    if (w < 200) PERF.work += (w - PERF.work) * 0.08;
+
+    const ts = PERF.lastRender;
+    if (ts - PERF.checkAt < PERF_CHECK_MS) return;      // decide about once a second
+    PERF.checkAt = ts;
+    if (PERF.samples < 20) return;                       // not enough evidence yet
+    PERF.samples = 0;
+
+    const iv = PERF.interval;
+    if (!iv) {
+        // Uncapped. Sustained worse than ~42fps means this device is never going to
+        // hold 60 here, and a locked 30 is both cheaper AND steadier. Two bad
+        // seconds in a row, so a one-off hitch (a panel animating in, the world art
+        // landing) can't cap a phone that was fine.
+        if (PERF.frame > 24) { if (++PERF.bad >= 2) _perfSetInterval(1000 / 30); }
+        else PERF.bad = 0;
+        return;
+    }
+
+    const i = PERF_RES_STEPS.indexOf(PERF.res);
+    // Capped and STILL missing the target: even half the pixels is too many, so
+    // shed resolution. Each step is a real canvas reallocation, hence the cooldown.
+    if (PERF.frame > iv * 1.35) {
+        PERF.good = 0;
+        if (i >= 0 && i < PERF_RES_STEPS.length - 1 && ts - PERF.resAt > 4000) {
+            PERF.resAt = ts;
+            _perfSetRes(PERF_RES_STEPS[i + 1]);
+        } else if (!PERF.forcePotato && !getGraphicsQuality() && ts - PERF.resAt > 4000) {
+            // Out of resolution to give. Drop the atmosphere layers too — this is
+            // بطاطس, arrived at by measurement instead of by guessing from a spec
+            // sheet. Zeroing the flag cache makes it take effect on the next frame.
+            PERF.forcePotato = true;
+            PERF.resAt = ts;
+            gameState._settingsFlagsAt = 0;
+            console.info('[perf] تم خفض الجودة تلقائيًا إلى بطاطس — الجهاز لم يستطع الثبات');
+        }
+        return;
+    }
+    // Comfortably holding it — give the quality back, resolution first. Capping
+    // twice is taken as this device's final answer: stop flip-flopping and stay at
+    // 30 for the session (a reload re-evaluates from scratch).
+    if (PERF.frame < iv * 1.08 && PERF.work < 7) {
+        if (++PERF.good < 3) return;
+        PERF.good = 0;
+        if (i > 0 && ts - PERF.resAt > 8000) { PERF.resAt = ts; _perfSetRes(PERF_RES_STEPS[i - 1]); return; }
+        if (i <= 0 && !isPotato() && PERF.caps < 2 && PERF.work < 5.5) _perfSetInterval(0);
+    } else {
+        PERF.good = 0;
+    }
+}
+
+// The world-space rect the camera can actually see, in the CURRENT context's terms
+// (render() and the PiP pass run the same draw code with different camera/zoom/
+// canvas, so this is recomputed per draw call rather than cached per frame).
+// render() maps a world point p to screen as W/2 + (p + camera) * zoom, so a point
+// is on screen while p ∈ [-cam - halfViewport/zoom, -cam + halfViewport/zoom].
+// `pad` is world units of slack for whatever the thing draws beyond its own point
+// (a hat stack, a name, a badge).
+const _cullRect = { x0: 0, y0: 0, x1: 0, y1: 0 };
+function _viewRect() {
+    const c = gameState.canvas, dpr = gameState.dpr || 1, z = gameState.zoom || 1;
+    const hw = (c.width / dpr / 2) / z, hh = (c.height / dpr / 2) / z;
+    _cullRect.x0 = -gameState.camera.x - hw; _cullRect.x1 = -gameState.camera.x + hw;
+    _cullRect.y0 = -gameState.camera.y - hh; _cullRect.y1 = -gameState.camera.y + hh;
+    return _cullRect;
+}
+function _offView(v, x, y, pad) {
+    return x < v.x0 - pad || x > v.x1 + pad || y < v.y0 - pad || y > v.y1 + pad;
+}
+
+// Read-only handle so "it lags on my phone" can be answered with numbers instead of
+// guesses: `__perf()` in the console reports the frame rate this device settled on,
+// the resolution it kept, and the measured frame interval.
+if (typeof window !== 'undefined') {
+    window.__perf = () => ({
+        fps: PERF.interval ? Math.round(1000 / PERF.interval) : 'غير مقيَّد',
+        frameMs: +PERF.frame.toFixed(1),
+        workMs: +PERF.work.toFixed(1),
+        res: PERF.res,
+        tier: graphicsTier(),
+        autoPotato: PERF.forcePotato,
+        dpr: +(gameState.dpr || 0).toFixed(2),
+        sprites: _sprCache.size,
+    });
+}
+
 function resizeCanvas() {
     if (!gameState.canvas) return;
     const w = Math.max(1, window.innerWidth);
@@ -6889,6 +7082,11 @@ function resizeCanvas() {
     // biggest mobile win — for only a slight sharpness loss.
     const reduced = isReducedGraphics();
     if (reduced) dpr = Math.min(dpr, isPotato() ? 1.25 : 1.5);
+    // Dynamic resolution (see PERF): the governor shrinks the BACKING STORE when
+    // even the 30fps cap isn't being held. The CSS size below never changes, so the
+    // browser upscales and the only cost is a little softness — much cheaper than
+    // the alternative, which is dropping frames. 1 on a device that's coping.
+    if (PERF.res !== 1) dpr = Math.max(0.5, dpr * PERF.res);
     // Hard cap on the backing-store size. A bad transient viewport mid-rotation
     // (Android briefly reports stale/oversized dimensions) could otherwise allocate
     // a huge canvas and tank performance until reload. Scale dpr down to fit budget.
@@ -10286,11 +10484,62 @@ function updateNametags() {
     }
 }
 
+
+// ── جدولة المهام البطيئة — the staggered logic tick ──────────────────────────
+// The loop calls ~30 update functions on every frame, but only a handful of them
+// are actually per-frame work. The rest are DOM lifecycle guards and proximity
+// checks: "should the crown be visible", "has an overlay opened that must close the
+// tasks panel", "is the PiP still allowed". Each one is cheap; running all of them
+// 60 times a second is not, because every classList/style touch they make is a
+// style-recalc opportunity on a device already busy compositing a 60fps canvas.
+//
+// So they move onto a ROUND-ROBIN: one per frame, which at 60fps gives each of them
+// ~10Hz — far faster than a human notices a panel closing, and a 6× cut in how often
+// the loop talks to the DOM at all. Staggering (rather than one "slow frame" where
+// they all fire together) is the point: it removes the work without ever creating a
+// periodic spike, which would just trade lag for stutter.
+//
+// A function belongs here ONLY if it has no per-frame lerp — every entry below was
+// checked for `dtFactor`, and any future addition must be too. Anything that eases,
+// fades or integrates stays in the main body of the loop.
+// `world: true` marks the four that used to be called AFTER the loop's minigame
+// early-returns, i.e. they only ever ran on a world frame. runSlowTasks is called
+// before those returns, so the flag preserves that exactly — each is a no-op inside
+// a race/fig/boss game anyway, but "no-op by inspection" is not a contract.
+const SLOW_TASKS = [
+    { f: updatePiPLifecycle },
+    { f: updateLibPanelLifecycle },
+    { f: updateAdminLifecycle },
+    { f: updateCoopTaskPanel,           world: true },
+    { f: updatePomoLeaveBtn,            world: true },
+    { f: updateSharedPomoProximity,     world: true },
+    { f: updateMinigameLobbyProximity,  world: true },
+];
+let _slowTaskI = 0;
+function runSlowTasks() {
+    const t = SLOW_TASKS[_slowTaskI];
+    _slowTaskI = (_slowTaskI + 1) % SLOW_TASKS.length;
+    if (t.world && isMinigameActive()) return;
+    try { t.f(); } catch (e) { console.error('[slow-task]', e); }
+}
+
 function gameLoop(timestamp) {
     // Stop the loop if this session was displaced by a newer login elsewhere.
     if (gameState._dupSessionDetected) return;
 
     if (!timestamp) timestamp = performance.now();
+
+    // Frame pacing. A device the governor has capped renders every OTHER vsync;
+    // the dropped tick costs one comparison and nothing else — no update, no draw,
+    // no DOM. `_frameT` deliberately stays on the last RENDERED frame, since that
+    // is the clock the remote-player replay is played back against.
+    if (_perfSkipFrame(timestamp)) { requestAnimationFrame(gameLoop); return; }
+    _perfBeginFrame(timestamp);
+    // Measured from HERE, not from `timestamp`: the rAF argument is the vsync time,
+    // so the gap before the callback ran is the browser's own work, not ours, and
+    // counting it would inflate every reading.
+    const _frameStart = performance.now();
+
     gameState._frameT = timestamp;   // the remote-player replay's clock (see _netFrameNow)
     if (!gameState.lastTime) gameState.lastTime = timestamp;
     let deltaTime = timestamp - gameState.lastTime;
@@ -10315,6 +10564,7 @@ function gameLoop(timestamp) {
         gameState._particlesOn = particlesEnabled();
         gameState._overlaysOn  = overlaysEnabled();
         gameState._isMobile    = isMobile();   // cached for hot draw code (touches window/screen)
+        _perfSyncTier();                      // a runtime tier switch re-arms/disarms the governor
     }
     // Cap dtFactor more aggressively to reduce stutters from dropped frames. Was
     // mobile-only, capped at the 100ms/16.666 ≈ 6× ceiling above on desktop — a
@@ -10414,9 +10664,7 @@ function gameLoop(timestamp) {
         updateReadingSession();
         updateReadingCamera();
         updatePomodoro();
-        updatePiPLifecycle();
-        updateLibPanelLifecycle();
-        updateAdminLifecycle();
+        runSlowTasks();              // one DOM-lifecycle guard per frame — see SLOW_TASKS
         updateChatSystem();          // chat bubble springs + the floating input's position.
                                      // Before the minigame early-returns, so entering a
                                      // race/fig/boss game still closes an open chat box.
@@ -10431,6 +10679,7 @@ function gameLoop(timestamp) {
             (gameState.laptopBoss.session.phase === 'active' || gameState.laptopBoss.session.phase === 'finished')) {
             updateLaptopBoss();
             renderLaptopBoss();
+            _perfEndFrame(_frameStart);
             requestAnimationFrame(gameLoop);
             return;
         }
@@ -10439,6 +10688,7 @@ function gameLoop(timestamp) {
             updateRaceCarVisuals();
             updateRaceCamera();
             renderRace();
+            _perfEndFrame(_frameStart);
             requestAnimationFrame(gameLoop);
             return;
         }
@@ -10446,6 +10696,7 @@ function gameLoop(timestamp) {
             updateRaceCarVisuals();
             updateRaceCamera();
             renderRace();
+            _perfEndFrame(_frameStart);
             requestAnimationFrame(gameLoop);
             return;
         }
@@ -10453,6 +10704,7 @@ function gameLoop(timestamp) {
             (gameState.coffee.session.phase === 'active' || gameState.coffee.session.phase === 'finished')) {
             updateCoffeeMode();
             renderCoffee();
+            _perfEndFrame(_frameStart);
             requestAnimationFrame(gameLoop);
             return;
         }
@@ -10462,7 +10714,6 @@ function gameLoop(timestamp) {
         updateLemo();                // the robot — the lobby's shared timeline (see Lemo)
         updateSitAnimation();        // sofa sit-in / stand-up tween (local)
         updateRemoteSitAnims();      // ...and the same hop for everyone else's
-        updateMinigameLobbyProximity(); // auto-leave a race/coffee lobby if you wander off
         updateFloorsAndScales();     // per-player floor + dynamic stair scale
         updateSecondFloorFade();     // fade the second floor when a ground player is under it
         updateSecondFloorFog();      // height fog while on the second floor
@@ -10480,10 +10731,7 @@ function gameLoop(timestamp) {
         updateDustParticles();
         updateInteractions();
         updateMeeting();             // meeting room reveal, voice state, table overlay
-        updateSharedPomoProximity();
         updateCoopAnimation();
-        updateCoopTaskPanel();
-        updatePomoLeaveBtn();
         updatePrayerSystem();
         updateAzkarSystem();
         render();
@@ -10494,6 +10742,7 @@ function gameLoop(timestamp) {
             gameState.isLockedIn = false;
         }
     }
+    _perfEndFrame(_frameStart);
     requestAnimationFrame(gameLoop);
 }
 
@@ -10604,8 +10853,14 @@ function render() {
 
     drawWindParticles(W, H);
     drawFocusFog(W, H);
-    drawSunRays(W, H);
-    drawVignette(W, H);
+    // Reduced tiers blend ONE pre-composited wash here instead of two (see
+    // _drawStaticFx). عالية keeps both, with their parallax.
+    if (gameState._lowGfx) {
+        _drawStaticFx(W, H);
+    } else {
+        drawSunRays(W, H);
+        drawVignette(W, H);
+    }
     _drawChatBubblesOnTop(W, H); // over EVERYTHING — players, mezzanine, overlays, focus mask
     drawChatBeacons(W, H);       // بوصلة من أشار إليّ من خارج الشاشة — فوق كل شيء كذلك
     drawTeleportOverlay(W, H);
@@ -10674,8 +10929,10 @@ function drawLaptopLights(floorFilter, groupAlpha) {
     const A = gameState.assets;
     const floorSheet = floorFilter === 1 ? A.wLaptopLights : A.wSecondLaptopLights;
     const ctx = gameState.ctx;
+    const v = _viewRect();
     for (const laptop of gameState.laptops) {
         if (laptop.floor !== floorFilter || !laptop.lightBox || laptop.lightAlpha <= 0.01) continue;
+        if (_offView(v, laptop.x, laptop.y, 200)) continue;
         // The extra table's laptops have a sheet of their own (see LAPTOP_DEFS `sheet`).
         const img = laptop.lightSheet === 'ext' ? A.wExtLaptopLights : floorSheet;
         if (!_layerReady(img)) continue;
@@ -10827,9 +11084,12 @@ function drawCloudShadows() {
     if (!gameState._overlaysOn || !gameState.clouds) return;
     const ctx = gameState.ctx;
     const spr = _getCloudSprite();
+    const v = _viewRect();
     ctx.save();
     for (const c of gameState.clouds) {
         const h = c.w * 0.66;
+        // c.x/c.y are the sprite's TOP-LEFT, so test its centre with a half-size pad.
+        if (_offView(v, c.x + c.w / 2, c.y + h / 2, Math.max(c.w, h) / 2)) continue;
         ctx.globalAlpha = c.a;
         ctx.drawImage(spr, c.x, c.y, c.w, h);
     }
@@ -10915,8 +11175,10 @@ function drawSecondFloorFog() {
     ctx.beginPath();
     ctx.rect(-WORLD_W / 2, -WORLD_H / 2, WORLD_W, WORLD_H);
     ctx.clip();
+    const v = _viewRect();
     for (const f of gameState.fogPuffs) {
         const h = f.w * 0.7;
+        if (_offView(v, f.x + f.w / 2, f.y + h / 2, Math.max(f.w, h) / 2)) continue;
         ctx.globalAlpha = f.a * A * 0.28;   // lower opacity soft haze
         ctx.drawImage(spr, f.x, f.y, f.w, h);
     }
@@ -12860,9 +13122,11 @@ function updateRaceHud(session, car) {
 function drawDustParticles(floorFilter) {
     if (!gameState._particlesOn) return;
     const ctx = gameState.ctx;
+    const v = _viewRect();
     ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
     gameState.dustParticles.forEach(p => {
         if (floorFilter && (p.floor || 1) !== floorFilter) return;
+        if (_offView(v, p.x, p.y, p.size + 4)) return;
         // Dust kicked up in the meeting room fades with the room.
         ctx.globalAlpha = Math.max(0, p.life) * (p.x >= MEET_X0 ? _meet.vis : 1);
         ctx.beginPath();
@@ -13378,10 +13642,184 @@ function getLaptopBadgePosition(laptop) {
     return { x: laptop.x, y: laptop.y - 70 };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ذاكرة الرسوم النصية — cached canvas text/badge sprites
+// ═══════════════════════════════════════════════════════════════════════════════
+// The most expensive thing on this canvas is the thing nobody counts: TEXT. Every
+// `fillText` of an Arabic string re-runs bidi resolution, shaping (the joining
+// forms are computed per run) and rasterisation — and `measureText` shapes the run
+// too, so measuring is not the cheap half. Today a badge over a working player
+// costs 2 measureText + 2 fillText + 2 nine-segment rounded-rect paths + 4 font
+// switches, EVERY frame, for a string whose only moving part changes once a
+// SECOND. A nametag costs a shaped fillText per player per frame for a string that
+// never changes at all.
+//
+// So rasterise each distinct badge/name ONCE into a small canvas and blit it: a
+// working player's badge drops from ~20 canvas ops per frame to one drawImage, and
+// its shaping cost drops by a factor of 60. This is pure cache — the pixels are the
+// same pixels — and it is the same trick `_tintedAvatar` and `worldCache` already
+// use, applied to the one hot path that was still doing the work live.
+//
+// Reduced tiers only. There `dpr` is capped at 1.5 AND canvas shadows are already
+// forced to 0 (installLowGfxShadowGuard), so a 2× supersampled flat sprite is
+// indistinguishable from the live draw. عالية keeps the original code path exactly
+// as it was, shadows and all.
+const _SPR_SS  = 2;      // supersample, so a sprite survives dpr×zoom up to ~2
+const _SPR_MAX = 48;     // LRU entries; see the size note on _pillSprite
+const _sprCache = new Map();
+
+// Sprites are baked at a FIXED 2× and stretched by the live transform, so they are
+// only honest while the device+camera stay under that. Past it (a hard zoom-in, or
+// the PiP window, which runs the same draw code at zoom 2.1–4.6) the live path is
+// both sharper and affordable — there is far less on screen when you are zoomed in.
+function _spritesOk() {
+    if (!gameState._lowGfx || gameState._pipPass) return false;
+    return (gameState.dpr || 1) * (gameState.zoom || 1) <= _SPR_SS + 0.2;
+}
+
+// `build()` runs ONLY on a miss and returns { w, h, base?, paint } in logical px.
+function _spr(key, build) {
+    let e = _sprCache.get(key);
+    if (e) { _sprCache.delete(key); _sprCache.set(key, e); return e; }   // LRU touch
+    let spec;
+    try { spec = build(); } catch (_) { return null; }
+    if (!spec || !(spec.w > 0) || !(spec.h > 0)) return null;
+    let c;
+    try {
+        c = document.createElement('canvas');
+        c.width  = Math.max(1, Math.ceil(spec.w * _SPR_SS));
+        c.height = Math.max(1, Math.ceil(spec.h * _SPR_SS));
+        const g = c.getContext('2d');
+        g.scale(_SPR_SS, _SPR_SS);
+        spec.paint(g);
+    } catch (_) { return null; }   // any failure → caller falls back to drawing live
+    e = { c, w: spec.w, h: spec.h, base: spec.base || 0 };
+    _sprCache.set(key, e);
+    if (_sprCache.size > _SPR_MAX) _sprCache.delete(_sprCache.keys().next().value);
+    return e;
+}
+function _sprDraw(ctx, e, x, y) { ctx.drawImage(e.c, x, y, e.w, e.h); }
+
+// A sprite baked before Rubik finished downloading would be stuck wearing the
+// fallback face for the rest of the session — caching is only safe if the cache
+// knows when the thing it baked has changed underneath it. Both the text sprites
+// and the avatar composites (whose placeholder letter is Rubik too) are dropped
+// whenever the font set finishes loading, so the next frame re-bakes them.
+function _sprInvalidateFonts() {
+    _sprCache.clear();
+    for (const pl of Object.values(gameState.players || {})) { pl._avSpr = null; pl._avSprKey = null; }
+}
+if (typeof document !== 'undefined' && document.fonts) {
+    try {
+        document.fonts.addEventListener('loadingdone', _sprInvalidateFonts);
+        document.fonts.ready.then(_sprInvalidateFonts).catch(() => {});
+    } catch (_) { /* no FontFaceSet — the sprites just bake once, as before */ }
+}
+
+// A scratch context purely for measuring on a cache MISS. Measuring on the live
+// canvas would mean setting (and restoring) its font mid-frame.
+let _sprMeasure = null;
+function _sprMeasureCtx() {
+    if (!_sprMeasure) {
+        const c = document.createElement('canvas');
+        c.width = c.height = 1;
+        _sprMeasure = c.getContext('2d');
+    }
+    return _sprMeasure;
+}
+
+// One rounded pill with centred text — the unit both badge rows are made of.
+//
+// Deliberately ONE PILL PER SPRITE rather than one sprite for the whole badge: the
+// task row is a long string that almost never changes, while the timer row is a
+// short string that changes every SECOND. Baking them together would re-bake the
+// long one 60 times a minute and churn a ~200 KB canvas each time — the cache would
+// cost more than it saved. Split, the churning half is a ~50 KB strip and the
+// expensive half is baked once per task.
+function _pillSprite(text, font, h, r, color, textColor) {
+    return _spr(`p|${font}|${h}|${r}|${color}|${textColor}|${text}`, () => {
+        const m = _sprMeasureCtx();
+        m.font = font;
+        const tw = m.measureText(text).width;
+        const w = tw + 24;
+        return { w, h, paint: (g) => {
+            g.beginPath();
+            g.moveTo(r, 0);
+            g.lineTo(w - r, 0);
+            g.quadraticCurveTo(w, 0, w, r);
+            g.lineTo(w, h - r);
+            g.quadraticCurveTo(w, h, w - r, h);
+            g.lineTo(r, h);
+            g.quadraticCurveTo(0, h, 0, h - r);
+            g.lineTo(0, r);
+            g.quadraticCurveTo(0, 0, r, 0);
+            g.fillStyle = color;
+            g.fill();
+            g.fillStyle = textColor;
+            g.font = font;
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.fillText(text, w / 2, h / 2);
+        } };
+    });
+}
+
+// One line of world-space label text (a nametag, an away line, a free-mode clock).
+// Baked WHITE-or-coloured and tinted by the caller's globalAlpha, so a fade costs no
+// re-rasterisation — that is exactly why the alpha is not part of the key. PAD keeps
+// glyph overhang (Arabic descenders, an emoji) inside the bitmap.
+const _SPR_TEXT_PAD = 6;
+function _textSprite(text, font, color) {
+    return _spr(`t|${font}|${color}|${text}`, () => {
+        const m = _sprMeasureCtx();
+        m.font = font;
+        const tm = m.measureText(text);
+        const asc  = tm.actualBoundingBoxAscent  || 12;
+        const desc = tm.actualBoundingBoxDescent || 5;
+        const w = Math.ceil(tm.width) + _SPR_TEXT_PAD * 2;
+        const h = Math.ceil(asc + desc) + _SPR_TEXT_PAD * 2;
+        return { w, h, base: asc + _SPR_TEXT_PAD, paint: (g) => {
+            g.font = font;
+            g.fillStyle = color;
+            g.textAlign = 'left';
+            g.textBaseline = 'alphabetic';
+            g.fillText(text, _SPR_TEXT_PAD, asc + _SPR_TEXT_PAD);
+        } };
+    });
+}
+// Places a text sprite exactly where textAlign:'center' + textBaseline:'alphabetic'
+// would have put it, so call sites keep the coordinates they already pass. Returns
+// false when the sprite couldn't be built — the caller then draws live, as before.
+function _fillTextCached(ctx, text, font, color, cx, baselineY) {
+    if (!_spritesOk()) return false;
+    const e = _textSprite(text, font, color);
+    if (!e) return false;
+    ctx.drawImage(e.c, cx - e.w / 2, baselineY - e.base, e.w, e.h);
+    return true;
+}
+
 function drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText, color, textColor = 'white' }) {
     const timerH = 26;
     const taskH = 24;
     const gap = 4;
+
+    // Reduced tiers blit baked pills instead (see _pillSprite): the same pixels,
+    // one drawImage per row instead of a measureText + a nine-segment path + a
+    // shaped fillText, and the Arabic shaped once per distinct string rather than
+    // 60 times a second. Both rows must bake, or neither — a half-baked badge would
+    // mix a crisp row with a stretched one.
+    if (_spritesOk()) {
+        const sPill = _pillSprite(statusText, 'bold 14px Rubik', timerH, 13, color, textColor);
+        const tPill = taskText ? _pillSprite(taskText, 'bold 12px Rubik', taskH, 12, color, textColor) : null;
+        if (sPill && (!taskText || tPill)) {
+            const totalH = taskText ? (taskH + gap + timerH) : timerH;
+            const top = renderY - (totalH - timerH);
+            if (tPill) _sprDraw(ctx, tPill, renderX - tPill.w / 2, top);
+            _sprDraw(ctx, sPill, renderX - sPill.w / 2, taskText ? top + taskH + gap : top);
+            return;
+        }
+        // else: fall through and draw it live this frame.
+    }
 
     ctx.font = 'bold 12px Rubik';
     const taskWidth = taskText ? ctx.measureText(taskText).width : 0;
@@ -13445,12 +13883,17 @@ function drawTimers(floorFilter = null) {
     const sp  = gameState.sharedPomo;
     // Second-floor laptop badges track the mezzanine (drop out with the fade).
     const f2vis = gameState.secondFloorVis ?? 1;
+    // A badge is a stack up to ~60 world px tall sitting above its anchor, so the
+    // pad is generous on top; off-screen ones cost nothing now.
+    const v = _viewRect();
+    const BADGE_PAD = 260;
 
     gameState.laptops.forEach(laptop => {
         const lf = laptop.floor || 1;
         if (floorFilter && lf !== floorFilter) return;
         if (lf === 2 && f2vis < 0.5) return;   // hidden with the second floor
         if (!laptop.claimedBy || laptop.claimedBy === gameState.userId) return;
+        if (_offView(v, laptop.x, laptop.y, BADGE_PAD)) return;
         // Hide badge if local player is IN this coop session
         if (sp.phase === 'active' && sp.sessionId === laptop.claimedBy) return;
 
@@ -13510,6 +13953,7 @@ function drawTimers(floorFilter = null) {
         if (floorFilter && pFloor !== floorFilter) return;
         if (pFloor === 2 && f2vis < 0.5) return;
         if (player.userId === gameState.userId) return; // Hide for self
+        if (_offView(v, player.x, player.y, BADGE_PAD)) return;
 
         if (player.isReading && player.readingEnd) {
             const renderX = player.x;
@@ -13668,6 +14112,38 @@ function drawWindParticles(W, H) {
     ctx.restore();
 }
 
+// ── دمج طبقات الجو — pre-composited screen-space FX ──────────────────────────
+// On متوسط the frame pays FOUR separate full-screen alpha blends before anyone has
+// drawn a character: two atmosphere blobs before the world, then the sun wash and
+// the vignette after it. Each one is cheap per pixel and ruinous in aggregate,
+// because fill rate is the term that actually bounds a budget phone.
+//
+// But all four are STATIC — they only depend on the viewport size. The two on each
+// side of the world are therefore flattened into one sprite each, rendered at HALF
+// resolution and upscaled: four blends become two, and the softness is invisible
+// because every one of these layers *is* a soft gradient (the same reasoning that
+// makes drawFocusMask's half-res mask invisible).
+//
+// The one thing given up is the gentle camera parallax on the atmosphere and the
+// sun — a depth cue in the black void around the world, at 0.14 and 0.055 of camera
+// speed. عالية keeps it, phones trade it for a sixth of the frame's fill. Rebuilt
+// only when the viewport changes size; cached on the ctx so the PiP window (its own
+// context and size) can never thrash the main one.
+const FX_SPRITE_DIV = 2;
+function _fxSprite(ctx, kind, W, H, paint) {
+    const key = '_fxSpr_' + kind;
+    let e = ctx[key];
+    if (e && e.w === W && e.h === H) return e.c;
+    const c = document.createElement('canvas');
+    c.width  = Math.max(1, Math.round(W / FX_SPRITE_DIV));
+    c.height = Math.max(1, Math.round(H / FX_SPRITE_DIV));
+    const g = c.getContext('2d');
+    g.scale(c.width / W, c.height / H);
+    paint(g);
+    ctx[key] = { w: W, h: H, c };
+    return c;
+}
+
 // ── Ambient void atmosphere ──────────────────────────────────────────────────
 // Deep colour blobs drawn in screen-space into the black void around the world.
 // They parallax with the camera so the empty space feels dimensional.
@@ -13685,6 +14161,30 @@ function drawBackgroundAtmosphere(W, H) {
     const px   = 0.14;               // parallax factor (0 = screen-fixed, 1 = world-speed)
     const ox   = -cam.x * zoom * px;
     const oy   = -cam.y * zoom * px;
+
+    if (gameState._lowGfx) {
+        // Both blobs, flattened and static (see _fxSprite). بطاطس keeps its single
+        // cheaper blob — the sprite just bakes whichever version the tier wants.
+        const spr = _fxSprite(ctx, 'atmo' + (gameState._potato ? 'P' : ''), W, H, (g) => {
+            if (!gameState._potato) {
+                const g1 = g.createRadialGradient(W * 0.05, H * 0.10, 0, W * 0.05, H * 0.10, W * 0.62);
+                g1.addColorStop(0, 'rgba(42, 18, 78, 0.58)');
+                g1.addColorStop(1, 'rgba(8, 4, 18, 0)');
+                g.fillStyle = g1; g.fillRect(0, 0, W, H);
+                const g2 = g.createRadialGradient(W * 0.94, H * 0.88, 0, W * 0.94, H * 0.88, W * 0.54);
+                g2.addColorStop(0, 'rgba(10, 24, 68, 0.52)');
+                g2.addColorStop(1, 'rgba(4, 8, 28, 0)');
+                g.fillStyle = g2; g.fillRect(0, 0, W, H);
+            } else {
+                const gm = g.createRadialGradient(0, 0, 0, 0, 0, Math.max(W, H) * 0.7);
+                gm.addColorStop(0, 'rgba(30, 14, 58, 0.45)');
+                gm.addColorStop(1, 'rgba(6, 3, 14, 0)');
+                g.fillStyle = gm; g.fillRect(0, 0, W, H);
+            }
+        });
+        ctx.drawImage(spr, 0, 0, W, H);
+        return;
+    }
 
     let _atmoCache = ctx._atmoCache;
     if (!_atmoCache || _atmoCache.w !== W || _atmoCache.h !== H) {
@@ -13754,6 +14254,39 @@ function drawSunRays(W, H) {
 }
 
 let _vignetteCache = null; // { w, h, grad } — rebuilt only on resize
+
+// The two post-world washes (sun + vignette), flattened into one half-res sprite —
+// see the _fxSprite note. Used by render() on reduced tiers only; the PiP pass
+// keeps calling drawSunRays + _pipVignette separately (its window is a different
+// size and has its own vignette), which is why this is a third function rather
+// than a branch inside those two.
+function _drawStaticFx(W, H) {
+    if (!gameState._overlaysOn) return;
+    const ctx = gameState.ctx;
+    const spr = _fxSprite(ctx, 'post', W, H, (g) => {
+        // Sun: a warm radial anchored just off the top-right, at its BASE position
+        // (the 0.055 camera parallax is what this tier trades away).
+        const cx = W * 0.90, cy = H * -0.08, r = Math.max(W, H) * 1.55;
+        const sun = g.createRadialGradient(cx, cy, 0, cx, cy, r);
+        sun.addColorStop(0,    'rgba(255, 220, 130, 0.16)');
+        sun.addColorStop(0.25, 'rgba(255, 195,  85, 0.10)');
+        sun.addColorStop(0.55, 'rgba(255, 165,  50, 0.04)');
+        sun.addColorStop(1,    'rgba(255, 140,  30, 0)');
+        g.fillStyle = sun;
+        g.fillRect(0, 0, W, H);
+        // Vignette: screen-fixed already, so it bakes exactly.
+        const vig = g.createRadialGradient(
+            W / 2, H / 2, Math.min(W, H) * 0.42,
+            W / 2, H / 2, Math.max(W, H) * 0.72
+        );
+        vig.addColorStop(0, 'rgba(0, 0, 0, 0)');
+        vig.addColorStop(1, 'rgba(0, 0, 0, 0.34)');
+        g.fillStyle = vig;
+        g.fillRect(0, 0, W, H);
+    });
+    ctx.drawImage(spr, 0, 0, W, H);
+}
+
 function drawVignette(W, H) {
     if (!gameState._overlaysOn) return;
     const ctx = gameState.ctx;
@@ -13883,9 +14416,75 @@ function _tintedAvatar(userId, img, kind) {   // kind: 'gray' (working)
     return c || img;
 }
 
+
+// ── Baked avatar composite ───────────────────────────────────────────────────
+// An avatar is not one draw: it is a shadowed ring fill, a second arc, a CLIP, the
+// image, and (when the picture never loaded) a shaped letter — per player, per
+// frame. `clip()` is the expensive one: every call makes the rasteriser build and
+// apply a mask. But the whole stack is STATIC — ring colour, picture and gray state
+// only change when the player changes them — so on reduced tiers it is baked once
+// into a single bitmap and blitted. The live transform (bob, lean, squash, floor
+// scale) still applies exactly as before; only the pixels inside the circle are
+// pre-composited. عالية keeps the original path, shadows and all.
+//
+// The sprite is cached ON the player (not in the LRU) so a crowded lobby can't
+// evict the avatars it is actively drawing, and it is invalidated by a key rather
+// than a timestamp — a changed ring colour or a picture that finished loading must
+// show up on the very next frame.
+const AV_SPR_R = PLAYER_SIZE / 2 + 4;     // the ring's radius — same as the live path
+function _avatarComposite(player, img, ringColor, gray, isCurrentUser) {
+    const hasImg = img && img !== 'failed';
+    const key = `${ringColor}|${gray ? 1 : 0}|${hasImg ? (img.src || 'i') : 'n'}|${hasImg ? '' : (player.username || '?').charAt(0)}|${isCurrentUser ? 1 : 0}`;
+    if (player._avSprKey === key && player._avSpr) return player._avSpr;
+    try {
+        const R = AV_SPR_R, S = Math.ceil(R * 2 * _SPR_SS);
+        const c = document.createElement('canvas');
+        c.width = c.height = S;
+        const g = c.getContext('2d');
+        g.scale(_SPR_SS, _SPR_SS);
+        g.translate(R, R);
+        // Ring (no shadow: the guard forces shadowBlur to 0 on these tiers anyway,
+        // so baking one would ADD something the live path doesn't draw).
+        g.beginPath();
+        g.arc(0, 0, R, 0, Math.PI * 2);
+        g.fillStyle = ringColor;
+        g.fill();
+        // Picture, clipped to the inner circle — done once, here, instead of 60×/s.
+        g.save();
+        g.beginPath();
+        g.arc(0, 0, PLAYER_SIZE / 2, 0, Math.PI * 2);
+        g.clip();
+        if (hasImg) {
+            const src = gray ? _tintedAvatar(player.userId, img, 'gray') : img;
+            g.drawImage(src, -PLAYER_SIZE / 2, -PLAYER_SIZE / 2, PLAYER_SIZE, PLAYER_SIZE);
+        } else {
+            g.fillStyle = isCurrentUser ? COLORS.blue : (gray ? '#9a9a9a' : '#ccc');
+            g.fill();
+            g.fillStyle = 'rgba(255, 255, 255, 1)';
+            g.font = 'bold 24px Rubik';
+            g.textAlign = 'center';
+            g.textBaseline = 'middle';
+            g.fillText((player.username || '?').charAt(0).toUpperCase(), 0, 0);
+        }
+        g.restore();
+        player._avSpr = c;
+        player._avSprKey = key;
+        return c;
+    } catch (_) {
+        player._avSpr = null; player._avSprKey = null;
+        return null;   // caller draws live, exactly as before
+    }
+}
+
 function drawPlayers(onlyLocal = false, floorFilter = null) {
     const ctx = gameState.ctx;
     const teleportAnim = gameState.race.teleportAnim || gameState.coffee.teleportAnim;
+    // At zoom 1 a phone sees ~18% of the world's area, so most of the crowd is
+    // off-screen — and an avatar is not one draw, it's a shadow ellipse, a clipped
+    // arc, the image, a hat chain and a name. The pad covers everything an avatar
+    // paints beyond its own point (a tall hat stack is the far end of that).
+    const _view = _viewRect();
+    const _pad = PLAYER_SIZE * 5;
 
     for (const player of Object.values(gameState.players)) {
         const isCurrentUser = player.userId === gameState.userId;
@@ -13901,6 +14500,9 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         if (player._pendingSpawn != null) continue;
 
         const { x: screenX, y: renderY } = getPlayerRenderPos(player);
+        // Never cull ME: drawFocusMask re-draws the local player on its own pass,
+        // and "am I visible" is not a question worth getting wrong.
+        if (!isCurrentUser && _offView(_view, screenX, renderY, _pad)) continue;
         // غرفة الاجتماعات: anyone in there fades with the room, and a member at the
         // table fades while the call says they're quiet (see _meetSpeakFx). Both are
         // pure reads — the PiP pass draws them without advancing anything.
@@ -14113,15 +14715,29 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             ctx.stroke();
         }
 
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
-        ctx.shadowOffsetY = 4 + (player.bobOffset || 0);
-        ctx.beginPath();
-        ctx.arc(0, 0, (PLAYER_SIZE / 2) + 4, 0, Math.PI * 2);
-        ctx.fillStyle = ringColor;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.shadowOffsetY = 0;
+        const img = gameState.avatarCache[player.userId];
+
+        // Reduced tiers: ring + clipped picture come off one baked bitmap (see
+        // _avatarComposite) — one drawImage instead of two arcs, a clip, a fill and
+        // an image. The green speaking ring is drawn after either way: it strokes
+        // OUTSIDE the ring's radius, so its order relative to the disc is moot.
+        let _avSpr = null;
+        if (_spritesOk()) _avSpr = _avatarComposite(player, img, ringColor, shouldGrayWorld, isCurrentUser);
+
+        if (_avSpr) {
+            ctx.drawImage(_avSpr, -AV_SPR_R, -AV_SPR_R, AV_SPR_R * 2, AV_SPR_R * 2);
+        } else {
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
+            ctx.shadowOffsetY = 4 + (player.bobOffset || 0);
+            ctx.beginPath();
+            ctx.arc(0, 0, (PLAYER_SIZE / 2) + 4, 0, Math.PI * 2);
+            ctx.fillStyle = ringColor;
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetY = 0;
+        }
+
         // Discord says they're talking (meeting table only) — the green outline.
         if (_spk.on) {
             ctx.beginPath();
@@ -14131,12 +14747,12 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             ctx.stroke();
         }
 
+        if (!_avSpr) {
         ctx.save();
         ctx.beginPath();
         ctx.arc(0, 0, PLAYER_SIZE / 2, 0, Math.PI * 2);
         ctx.clip();
 
-        const img = gameState.avatarCache[player.userId];
         if (img && img !== 'failed') {
             if (gameState._lowGfx) {
                 // No live ctx.filter on reduced tiers — draw a baked tinted copy.
@@ -14163,6 +14779,7 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             ctx.fillText((player.username || '?').charAt(0).toUpperCase(), 0, 0);
         }
         ctx.restore();
+        }
 
         ctx.filter = 'none';
         ctx.globalAlpha = 1;
@@ -14192,16 +14809,39 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             // line is the whole answer to "are they here or not".
             const _away = !isCurrentUser && player.awaySince > 0
                        && serverNow() - player.awaySince > AWAY_MIN_MS;
-            ctx.fillStyle = `rgba(255, 255, 255, ${nA * (_away ? 0.5 : 1)})`;
-            ctx.font = '500 14px Rubik';
-            ctx.textAlign = 'center';
-            ctx.fillText(player.username, screenX, nY);
+            // A nametag is a shaped Arabic run that never changes, re-rasterised
+            // once per player EVERY frame. On reduced tiers it comes off a baked
+            // sprite tinted by globalAlpha, so the fade needs no re-rasterisation.
+            // `_low` is captured per call so one failed bake can't half-switch a
+            // player's label between the two paths mid-frame.
+            const _low = _spritesOk();
+            const _prevA = ctx.globalAlpha;
+            let _named = false;
+            if (_low) {
+                ctx.globalAlpha = _prevA * nA * (_away ? 0.5 : 1);
+                _named = _fillTextCached(ctx, player.username, '500 14px Rubik', '#ffffff', screenX, nY);
+                ctx.globalAlpha = _prevA;
+            }
+            if (!_named) {
+                ctx.fillStyle = `rgba(255, 255, 255, ${nA * (_away ? 0.5 : 1)})`;
+                ctx.font = '500 14px Rubik';
+                ctx.textAlign = 'center';
+                ctx.fillText(player.username, screenX, nY);
+            }
 
             let _subY = nY + 16;
             if (_away) {
-                ctx.fillStyle = `rgba(255, 255, 255, ${nA * 0.42})`;
-                ctx.font = '500 12px Rubik';
-                ctx.fillText('بعيد', screenX, _subY);
+                let done = false;
+                if (_low) {
+                    ctx.globalAlpha = _prevA * nA * 0.42;
+                    done = _fillTextCached(ctx, 'بعيد', '500 12px Rubik', '#ffffff', screenX, _subY);
+                    ctx.globalAlpha = _prevA;
+                }
+                if (!done) {
+                    ctx.fillStyle = `rgba(255, 255, 255, ${nA * 0.42})`;
+                    ctx.font = '500 12px Rubik';
+                    ctx.fillText('بعيد', screenX, _subY);
+                }
                 _subY += 15;
             }
 
@@ -14214,9 +14854,18 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
                                     + (_running ? Date.now() - player.freeWorkStartTime : 0);
                 const freeTimeStr = formatTime(freeElapsedMs / 1000);
                 const taskStr = player.currentTask ? ` · ${player.currentTask.slice(0, 14)}` : '';
-                ctx.fillStyle = `rgba(59, 185, 171, ${nA * 0.9})`;
-                ctx.font = '500 12px Rubik';
-                ctx.fillText(`${_running ? '🌿' : '⏸'} ${freeTimeStr}${taskStr}`, screenX, _subY);
+                const _line = `${_running ? '🌿' : '⏸'} ${freeTimeStr}${taskStr}`;
+                let done = false;
+                if (_low) {
+                    ctx.globalAlpha = _prevA * nA * 0.9;
+                    done = _fillTextCached(ctx, _line, '500 12px Rubik', '#3bb9ab', screenX, _subY);
+                    ctx.globalAlpha = _prevA;
+                }
+                if (!done) {
+                    ctx.fillStyle = `rgba(59, 185, 171, ${nA * 0.9})`;
+                    ctx.font = '500 12px Rubik';
+                    ctx.fillText(_line, screenX, _subY);
+                }
             }
         }
     }
@@ -15329,7 +15978,13 @@ function _isSafariBrowser() {
 // or Firefox/Safari → 'low' (atmosphere gradients ON, cheap compositing), else
 // 'high'.
 function graphicsTier() {
-    return getGraphicsQuality() || ((isMobile() || _isFirefoxBrowser() || _isSafariBrowser()) ? 'low' : 'high');
+    const explicit = getGraphicsQuality();
+    if (explicit) return explicit;
+    const auto = (isMobile() || _isFirefoxBrowser() || _isSafariBrowser()) ? 'low' : 'high';
+    // The governor's last rung (see PERF.forcePotato). Only reachable on device-auto,
+    // and only after this device has failed the 30fps cap at 72% resolution.
+    if (PERF.forcePotato && auto !== 'high') return 'potato';
+    return auto;
 }
 
 // Reduced compositing: DPR cap, no live backdrop-filter, no canvas shadows, fewer
@@ -34310,6 +34965,17 @@ function _memReleaseIdle() {
     gameState.maskCtx = null;
     gameState._maskKey = null;
 
+    // The draw caches added for the reduced tiers. Each is small on its own, but
+    // they are all viewport- or player-sized bitmaps and every one of them is a
+    // pure cache — the next frame after a restore rebuilds whatever it asks for.
+    // The two half-res FX washes hang off the ctx; the badge/name sprites and the
+    // per-player avatar composites are keyed, so dropping them just costs one bake.
+    const _cx = gameState.ctx;
+    if (_cx) { _cx._fxSpr_atmo = null; _cx._fxSpr_atmoP = null; _cx._fxSpr_post = null; }
+    _sprCache.clear();
+    for (const pl of Object.values(gameState.players)) { pl._avSpr = null; pl._avSprKey = null; }
+    gameState._avatarTintCache = null;
+
     // The visible canvas's backing store. `_lastCanvasBW/BH` MUST be reset with
     // it: resizeCanvas skips a redundant resize by comparing against them, so
     // leaving the old size on record would make the restore a no-op and strand
@@ -34326,6 +34992,9 @@ function _memRestore() {
     if (_mem.timer) { clearTimeout(_mem.timer); _mem.timer = 0; }
     if (!_mem.freed) return;
     _mem.freed = false;
+    // The next second of frames pays for rebuilding everything that was freed, which
+    // is not evidence about the device — start the governor's measurement over.
+    PERF.samples = 0; PERF.bad = 0; PERF.good = 0; PERF.checkAt = 0;
     resizeCanvas();          // the canvas is 1×1 — this has to land before rAF resumes
     // The track is the one rebuild slow enough to be worth starting before it is
     // asked for, so a race entry isn't met with the retry message. On idle, never
