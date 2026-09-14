@@ -77,6 +77,7 @@ Grep anchors for the major systems (all verified to exist):
 |---|---|
 | World load / collision / cache | `loadWorldArt`, `worldCollision`, `worldCache`, `checkCollision` |
 | Movement + live sync | `handleMovement`, `ensurePresenceSocket`, `updatePlayerPosition`, `listenToPlayers` |
+| Away / paused-clock badges | `publishAwayState`, `localIsAway`, `AWAY_MIN_MS`, `freePaused` |
 | Pomodoro (solo) | `startPomodoroPhase`, `updatePomodoro` |
 | Shared pomo | `sendSpInvite`, `setupSpLiveListener` |
 | Azkar | `openAzkarOverlay`, `closeAzkarOverlay` |
@@ -2039,6 +2040,35 @@ All three bail if `gameState._dupSessionDetected` (another device took over — 
 
 **Removal is grace-period'd (`PRESENCE_GRACE_MS`, 8s) — never immediate.** `activeInGame` going false does **not** mean someone left: Firebase fires their `onDisconnect` server-side the instant their socket blips, and their own `.info/connected` sets it back to true a moment later. Deleting on the spot is what made players **pop out and back in mid-session** for everyone else. The users listener now only stamps `_presenceLostAt`; `updatePresenceGrace()` (every frame, from `updateLeavingPlayers`) commits the exit only if they're still gone when it expires. **Any WebSocket packet cancels it** — the relay has no presence concept, so anything arriving is proof of life that outranks Firebase. The check has to be time-driven and not live in the listener: a player who drops and never returns produces no further Firebase events, so nothing would ever finish the removal. Reconnect timer/task recovery also needs the laptop doc re-written: `reassertActiveSessionAfterReconnect()` (fired by `.info/connected`) does that.
 
+### «بعيد» + the paused free clock — "are they in the site or not?"
+Presence answers "their tab is open", which is **not** the question a member is
+actually asking when they look at someone sitting at a laptop. Two fields close that
+gap, both tiny and both written **only on a real state flip** (never per frame):
+
+| field | written when | drawn as |
+|---|---|---|
+| `users/{uid}/freePaused` | free mode, phase `work`, but `workStartTime === 0` | the badge / name line shows `⏸ <time>` — the clock **stopped at its real value** |
+| `users/{uid}/awaySince` | tab hidden, or the صلاة / أذكار overlay is up (PiP active is NOT away) | the name dims and a «بعيد» line appears under it after `AWAY_MIN_MS` (45 s) |
+
+**The bug this fixed:** `updateFreeMode` freezes the count-up under the prayer and
+azkar overlays by folding the elapsed ms into `totalWorkMs` and zeroing
+`workStartTime` — but the phase stays `work`, so the 4 s position heartbeat kept
+writing `freeWorkStartTime: 0`. Observers' only test was `freeWorkStartTime > 0`, so
+the badge fell through to a bare **🌿 with no clock** and the name line vanished
+entirely. An unanswered adhan leaves that overlay up for hours, so a member who was
+simply praying or away read as a half-broken ghost — present, labelled «أعمل على», no
+timer, no reply to a mention.
+
+- **`freePaused` is published, not derived.** `freeWorkStartTime === 0` is also what
+  the ~2 s kidnap window looks like (phase `idle`), where a `⏸ 0:00` would be wrong.
+- **`publishAwayState()` rides two existing call sites** — the 10 s presence heartbeat
+  (which catches prayer/azkar opening and closing without touching either) and the
+  `visibilitychange` handler. Going **hidden** must publish from the event itself:
+  rAF stops in a hidden tab, so the heartbeat cannot fire on the way out.
+- **The first publish of a session is forced** (`publishAwayState(true)`), or a stale
+  `awaySince` from the last session is skipped by the change guard and the member
+  comes back permanently «بعيد».
+
 ---
 
 ## Picture-in-Picture (الوضع المصغر)
@@ -3322,6 +3352,7 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | Timer reads `61:00` after an hour of work | Every clock was hand-built as `mm:ss` with no hour rollover | One `formatTime`/`formatTimeMs` that emits `h:mm:ss` past an hour, + `setTimerText()`'s `.has-hours` class so the wider string still fits the HUD |
 | Phone is laggy **even on بطاطس**, and sometimes opens into a black voided world with no elements at all | One cause, not two: the tab was sitting at ~200 MB of decoded canvas/bitmap memory, so it GC-thrashed constantly (lag no graphics tier could touch, because **بطاطس gates drawing, not holding**) and the browser started **refusing decodes** — silently, skipping that layer, and the layer that loses a memory race is the biggest one, i.e. the background. ~112 MB of it was pure waste: the four `keep: true` world layers were held at full 2210×3160 (27.9 MB each **regardless of file size**) even though two are 99.85% transparent and two are soft gradients | Shrink the resident layers at decode (`shrink` on `WORLD_LAYERS` → `_shrinkResidentLayer`): crop the lights sheets to their `lightBox` union, downscale the day overlays. Plus a tighter `worldCache` on reduced tiers, no speculative Lemo Play warm on mobile, and a bounded **re-decode pass for failed layers** at the end of `loadWorldArt` (memory is freest there). ~200 MB → ~50 MB. See **The World → Perf notes** |
 | World renders soft/blurry-wrong (nearest-neighbour) after playing a minigame | The race/fig/boss renderers set `ctx.imageSmoothingEnabled = false` for their pixel art and never restore it — it's one shared context, so the next world frame inherited it (violating hard invariant #16) | `render()` re-asserts `imageSmoothingEnabled = true` each frame rather than chasing every minigame exit path |
+| A player sits at a laptop with «أعمل على» and the 🌿 free-mode emoji but **no clock**, and doesn't answer a mention | `updateFreeMode` freezes the count-up under the prayer/azkar overlay by folding the elapsed ms into `totalWorkMs` and zeroing `workStartTime`, but leaves the phase at `work` — so the 4 s heartbeat kept writing `freeWorkStartTime: 0` and observers, whose only test was `freeWorkStartTime > 0`, drew the bare-🌿 fallback. An unanswered adhan leaves that overlay up for hours, so a member who was merely praying or away looked like a half-broken ghost | Publish the freeze (`users/{uid}/freePaused`) and draw the clock **stopped** at its real value (`⏸ <time>`); publish «بعيد» (`awaySince`) for a hidden tab or an open صلاة/أذكار overlay so presence answers "can they reply", not just "is the tab open". See **Player Position Sync → «بعيد» + the paused free clock** |
 | Disconnected user never leaves — others still see their avatar forever | Ending a reading session ran `onDisconnect(ref('users/{uid}')).cancel()` to disarm its own ghost-cleanup. **`cancel()` cancels the queued ops of that location AND all its children**, so it also wiped the presence handlers armed at login (`activeInGame` → false, `activeSession` → null). That user's tab close then cleared nothing, and `listenToPlayers` (which gates purely on `activeInGame === true`) kept rendering them. Only `.info/connected` re-armed it, so it self-healed only if they later had a network blip — hence "sometimes" | Arm/cancel the reading fields **individually on their own child refs** (`armReadingDisconnect` / `cancelReadingDisconnect` + `READING_DISCONNECT_FIELDS`). **Never `onDisconnect(...).cancel()` on `users/{uid}` or any other node that has child ops armed under it** |
 
 ---

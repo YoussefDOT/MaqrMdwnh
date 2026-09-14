@@ -5973,11 +5973,19 @@ function startGame(userData) {
             });
             const _p = gameState.players[gameState.userId];
             if (_p) updatePlayerPosition(_p.x, _p.y);
+            publishAwayState();
             ensurePresenceSocket();   // re-open the relay if the wake dropped it
         };
-        document.addEventListener('visibilitychange', () => { if (!document.hidden) _resyncPresence(); });
+        // Going hidden has to publish «بعيد» from the event itself — rAF stops in a
+        // hidden tab, so the 10s heartbeat below can't do it on the way OUT.
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) publishAwayState(); else _resyncPresence();
+        });
         window.addEventListener('focus', _resyncPresence);
         window.addEventListener('online', _resyncPresence);
+        // First publish of the session: clears an `awaySince` the LAST session left
+        // behind, which the change guard would otherwise skip as "no change".
+        publishAwayState(true);
     }
 
     document.getElementById('game-screen').classList.add('active');
@@ -9159,6 +9167,8 @@ function listenToPlayers() {
                             inFreeMode:         userData.inFreeMode || false,
                             freeWorkStartTime:  userData.freeWorkStartTime || 0,
                             freeTotalWorkMs:    userData.freeTotalWorkMs   || 0,
+                            freePaused:         userData.freePaused === true,
+                            awaySince:          userData.awaySince || 0,
                             coopHostId:         userData.coopHostId || null,
                             isReading:          userData.isReading || false,
                             readingBook:        userData.readingBook || null,
@@ -9251,6 +9261,8 @@ function listenToPlayers() {
                             player.inFreeMode        = userData.inFreeMode || false;
                             player.freeWorkStartTime = userData.freeWorkStartTime || 0;
                             player.freeTotalWorkMs   = userData.freeTotalWorkMs   || 0;
+                            player.freePaused        = userData.freePaused === true;
+                            player.awaySince         = userData.awaySince || 0;
                             player.coopHostId        = userData.coopHostId || null;
                             player.isReading          = userData.isReading || false;
                             player.readingBook        = userData.readingBook || null;
@@ -9473,6 +9485,39 @@ function onPresenceMessage(data) {
     }
 }
 
+// Don't call someone away for alt-tabbing for three seconds.
+const AWAY_MIN_MS = 45000;
+
+// «بعيد» — in the site, but not LOOKING at it: the tab is hidden, or a
+// full-screen overlay they have to dismiss themselves (الصلاة / الأذكار) is up.
+// This is the answer to "are they here or not" — presence alone can't tell a
+// member at the keyboard from one whose phone is in their pocket.
+function localIsAway() {
+    // PiP is the exception: the tab reads as hidden while the floating window is
+    // exactly what they're watching (same carve-out as _memCanRelease).
+    if (gameState.pip && gameState.pip.active) return false;
+    if (typeof document !== 'undefined' && document.hidden) return true;
+    if (gameState.prayer && gameState.prayer.isOverlayActive) return true;
+    if (gameState.azkar && gameState.azkar.active) return true;
+    return false;
+}
+
+// One tiny field, written ONLY when the state actually flips — never per frame.
+// `force` is for the first publish of a session, where a stale `awaySince` left
+// behind by the last one has to be cleared even though nothing "changed".
+function publishAwayState(force = false) {
+    if (!gameState.userId || gameState._dupSessionDetected) return;
+    const away = localIsAway();
+    if (!force && away === !!gameState._awayPublished) return;
+    gameState._awayPublished = away;
+    // serverNow(), not Date.now() — this stamp is READ by other clients against a
+    // 45 s threshold, so a device with a skewed clock would otherwise read as away
+    // forever (or never). Hard invariant 5.
+    update(ref(database), {
+        [`users/${gameState.userId}/awaySince`]: away ? serverNow() : null
+    }).catch(() => {});
+}
+
 function updatePlayerPosition(x, y) {
     if (!gameState.userId) return;
     const player = gameState.players[gameState.userId];
@@ -9500,6 +9545,14 @@ function updatePlayerPosition(x, y) {
         updates[`users/${gameState.userId}/inFreeMode`] = fm.active || false;
         updates[`users/${gameState.userId}/freeWorkStartTime`] = isFreeModeWork ? (fm.workStartTime || 0) : null;
         updates[`users/${gameState.userId}/freeTotalWorkMs`] = isFreeModeWork ? (fm.totalWorkMs || 0) : null;
+        // A free-mode count-up FROZEN by the prayer/azkar overlay still has
+        // phase 'work' but workStartTime 0, so the two fields above said "no
+        // clock" — and observers drew a bare 🌿 with no time, which read as
+        // "this person isn't really here". Publish the freeze explicitly so the
+        // badge can show the clock STOPPED at its real value instead. It flips a
+        // handful of times a day, so its fan-out is nothing.
+        updates[`users/${gameState.userId}/freePaused`] =
+            (isFreeModeWork && !(fm.workStartTime > 0)) ? true : null;
         // coopHostId drives external coop animation + labels:
         // — regular shared pomo (not free mode): always set when session active
         // — shared free mode: only set during work phase (hide animation during breaks)
@@ -10296,6 +10349,9 @@ function gameLoop(timestamp) {
         if (!gameState._lastPresenceHeartbeat || _now - gameState._lastPresenceHeartbeat > 10000) {
             gameState._lastPresenceHeartbeat = _now;
             update(ref(database), { [`users/${gameState.userId}/activeInGame`]: true });
+            // Picks up the prayer/azkar overlays opening & closing without adding a
+            // call site to either — it writes only when the state actually flipped.
+            publishAwayState();
             ensurePresenceSocket();   // self-heal the relay if it silently died
         }
     }
@@ -13416,6 +13472,12 @@ function drawTimers(floorFilter = null) {
                 const elapsedMs = (hostPlayer.freeTotalWorkMs || 0) + (now - hostPlayer.freeWorkStartTime);
                 const timeStr = `🌿 ${formatTime(elapsedMs / 1000)}`;
                 drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText: timeStr, color: '#3bb9ab' });
+            } else if (hostPlayer?.freePaused) {
+                // Session alive, count-up frozen behind الصلاة / الأذكار. Show the
+                // clock STOPPED at its real value — the old bare 🌿 with no time
+                // read as "they're not actually here".
+                const timeStr = `⏸ ${formatTime((hostPlayer.freeTotalWorkMs || 0) / 1000)}`;
+                drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText: timeStr, color: '#3bb9ab' });
             } else if (taskText) {
                 drawPomodoroBadgeStack(ctx, renderX, renderY, { taskText, statusText: '🌿', color: '#3bb9ab' });
             }
@@ -14125,19 +14187,36 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         if (player.nameAlpha > 0.01 && !tpData && !gameState._hideNames) {
             const nA = player.nameAlpha * floorVis;
             const nY = renderY + (PLAYER_SIZE / 2) * rScale + 25;
-            ctx.fillStyle = `rgba(255, 255, 255, ${nA})`;
+            // «بعيد» — they're in the site, but their tab is hidden or a صلاة /
+            // أذكار overlay is up, so they can't answer. The dimmed name plus this
+            // line is the whole answer to "are they here or not".
+            const _away = !isCurrentUser && player.awaySince > 0
+                       && serverNow() - player.awaySince > AWAY_MIN_MS;
+            ctx.fillStyle = `rgba(255, 255, 255, ${nA * (_away ? 0.5 : 1)})`;
             ctx.font = '500 14px Rubik';
             ctx.textAlign = 'center';
             ctx.fillText(player.username, screenX, nY);
 
-            // Free mode: show elapsed time + task in teal below the name
-            if (!isCurrentUser && player.inFreeMode && player.freeWorkStartTime > 0) {
-                const freeElapsedMs = (player.freeTotalWorkMs || 0) + (Date.now() - player.freeWorkStartTime);
+            let _subY = nY + 16;
+            if (_away) {
+                ctx.fillStyle = `rgba(255, 255, 255, ${nA * 0.42})`;
+                ctx.font = '500 12px Rubik';
+                ctx.fillText('بعيد', screenX, _subY);
+                _subY += 15;
+            }
+
+            // Free mode: elapsed time + task in teal below the name. A clock frozen
+            // by prayer/azkar still shows — it just stops and wears ⏸ instead of
+            // disappearing.
+            if (!isCurrentUser && player.inFreeMode && (player.freeWorkStartTime > 0 || player.freePaused)) {
+                const _running = player.freeWorkStartTime > 0;
+                const freeElapsedMs = (player.freeTotalWorkMs || 0)
+                                    + (_running ? Date.now() - player.freeWorkStartTime : 0);
                 const freeTimeStr = formatTime(freeElapsedMs / 1000);
                 const taskStr = player.currentTask ? ` · ${player.currentTask.slice(0, 14)}` : '';
                 ctx.fillStyle = `rgba(59, 185, 171, ${nA * 0.9})`;
                 ctx.font = '500 12px Rubik';
-                ctx.fillText(`🌿 ${freeTimeStr}${taskStr}`, screenX, nY + 16);
+                ctx.fillText(`${_running ? '🌿' : '⏸'} ${freeTimeStr}${taskStr}`, screenX, _subY);
             }
         }
     }
