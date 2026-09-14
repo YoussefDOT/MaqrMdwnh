@@ -7198,6 +7198,21 @@ function setupControls() {
         // into player movement or game-world keybinds while it's open.
         if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || readingEndCardOpen()
             || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen()) return;
+        // مسافة = قفزة. Space belongs to whatever is FOCUSED first, though: a field
+        // being typed into, or a button/link it activates (the settings rows, the
+        // meeting seat, the trophy slots are all focusable). Only a press that reaches
+        // the page itself is a jump — and that one cancels the default so the page
+        // can't scroll under the canvas.
+        if (e.code === 'Space') {
+            const ae = document.activeElement;
+            if (ae && ae !== document.body && (
+                ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'BUTTON'
+                || ae.tagName === 'A' || ae.tagName === 'SELECT' || ae.isContentEditable
+                || ae.hasAttribute('tabindex') || ae.getAttribute('role') === 'button')) return;
+            e.preventDefault();
+            if (!e.repeat) triggerJump();
+            return;
+        }
         gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
@@ -7256,6 +7271,9 @@ function setupControls() {
                 return;
             }
         }
+        // Two quick presses on yourself = a jump. Checked BEFORE the chat open, which
+        // the first of the two already fired — selfDoubleTapJump undoes it.
+        if (selfDoubleTapJump(clickWorld)) return;
         // Pressing your OWN character opens the chat box above your head. Checked
         // BEFORE handleClickOffSofa: while seated, a press on yourself lands ON the
         // sofa, and that helper swallows the click.
@@ -7958,6 +7976,10 @@ function initMobileControls() {
             // caused it is what made the keyboard flash up and drop straight back
             // down. This is the ONLY branch that cancels; every other path still
             // needs its click (the results buttons are wired to `click`).
+            // Two quick taps on yourself = a jump; the first one's chat box is closed
+            // again by selfDoubleTapJump. Cancel the tap for the same reason the chat
+            // branch below does — a synthesized click here would land on the canvas.
+            if (selfDoubleTapJump(clickWorld)) { e.preventDefault(); return; }
             if (chatWantsSelfPress(clickWorld)) { e.preventDefault(); openChatBox(); return; }
             // ...and tapping anywhere off the sofa does the same thing.
             if (handleClickOffSofa(clickWorld)) return;
@@ -9637,7 +9659,12 @@ function onPresenceMessage(data) {
         // Firebase presence owns add/remove; just stop their walk animation so
         // they don't keep "moonwalking" until the next Firebase update.
         const pl = gameState.players[msg.uid];
-        if (pl) { pl.isMoving = false; pl.isSprinting = false; }
+        if (pl) {
+            pl.isMoving = false; pl.isSprinting = false;
+            // …and drop their «يكتب الآن» at once rather than waiting out the stale
+            // timeout: the socket closing IS the answer to "are they still typing".
+            _chatSetTyping(pl, false);
+        }
         return;
     }
     // Ignore positions for players Firebase hasn't introduced yet — the users
@@ -9662,6 +9689,11 @@ function onPresenceMessage(data) {
     if (msg.t === 'chat') { receiveChatMessage(player, msg.m, msg.s); return; }
     // Meeting-table reaction — one-off, zero Firebase, same shape as a chat event.
     if (msg.t === 'react') { receiveMeetReaction(player, msg.r); return; }
+    // «يكتب الآن» — a flag, not a stream. Re-asserted by the sender, expired here.
+    if (msg.t === 'typ') { _chatSetTyping(player, msg.on === 1); return; }
+    // القفزة — one-off and half a second long, so it plays on arrival rather than
+    // being queued onto the replay timeline the way the sofa hop is.
+    if (msg.t === 'jmp') { receiveJump(player); return; }
     // isMoving must update before pushing the sample — interpolateRemoteFromBuffer
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
@@ -14558,6 +14590,19 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             workScaleX = 1.0 - breathe * 0.012;
         }
 
+        // Typing: a small, busy wiggle that REPLACES the idle breathing and the work
+        // bounce (pressing Enter mid-sprint used to leave the run cycle playing — see
+        // openChatBox for the movement half of that fix). Everyone sees it: mine comes
+        // from my own open box, theirs from the «يكتب الآن» flag on the relay.
+        const _typing = isCurrentUser ? _chatUi.open : !!(player._typing && player._typing.on);
+        if (_typing && !tpData) {
+            const tt = Date.now() * 0.011 + (player._breathePhase || 0);
+            workBob = -Math.abs(Math.sin(tt)) * 2.5;
+            workAngle = Math.sin(tt * 0.37) * 0.06;
+            workScaleX = 1 + Math.sin(tt) * 0.035;
+            workScaleY = 1 - Math.sin(tt) * 0.045;
+        }
+
         // Playful sit/stand hop — overrides the idle/work scale for the animation's
         // brief duration; normal breathing resumes once it finishes. Remote players
         // get theirs from the relayed sit event, so the squash/stretch everyone sees
@@ -14568,6 +14613,21 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
                 workScaleX = sa.scaleX;
                 workScaleY = sa.scaleY;
                 workBob = sa.hopY;
+            }
+        }
+
+        // القفزة — a pure function of its own age (see _jumpFx), so the PiP pass draws
+        // it without advancing it. `_jumpScale` is kept separate from the entrance
+        // juice below because the contact shadow has to be told about it too.
+        let _jumpScale = 1;
+        {
+            const jf = (!tpData && !(isCurrentUser ? gameState.sitAnim.active : (player._sitAnim && player._sitAnim.active)))
+                ? _jumpFx(player, Date.now()) : null;
+            if (jf) {
+                workBob += jf.dy;
+                workScaleX *= jf.sx;
+                workScaleY *= jf.sy;
+                _jumpScale = jf.s;
             }
         }
 
@@ -14648,8 +14708,11 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         // so walking avatars feel like they lift off the floor. Cheap (one ellipse).
         if (!tpData || tpFadeOut < 0.9) {
             // JUICE: the z-drop / scale-in shrinks the contact shadow (it stays on the floor).
+            // القفزة: the lift is already in workBob, but the scale-up is the bigger
+            // half of the illusion — the shadow has to shrink and fade with it or the
+            // avatar reads as growing on the spot instead of leaving the floor.
             const lift = (player.bobOffset || 0) + Math.abs(workBob) + tpFly * 110
-                + Math.abs(_juiceScale - 1) * 40;
+                + Math.abs(_juiceScale - 1) * 40 + Math.abs(_jumpScale - 1) * 110;
             const liftN = Math.min(1, lift / 24);
             // JUICE: the shadow stretches along the ground with speed and lags a hair
             // behind the direction of travel — reads as motion.
@@ -14678,7 +14741,8 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         ctx.globalAlpha = floorVis * (tpFadeOut > 0.01 ? (1 - tpFadeOut) : 1);
         ctx.translate(screenX + coopDX, screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY);
         ctx.rotate(workAngle);
-        ctx.scale(workScaleX * _juiceScale * _juiceSquashX * rScale, workScaleY * _juiceScale * _juiceSquashY * rScale);
+        ctx.scale(workScaleX * _juiceScale * _jumpScale * _juiceSquashX * rScale,
+                  workScaleY * _juiceScale * _jumpScale * _juiceSquashY * rScale);
 
         // Local-player ambient glow — a gentle breathing halo so "you" stand out.
         // Desktop only (radial gradient per avatar is the costly bit); skipped on mobile.
@@ -30159,6 +30223,131 @@ function setupWorkChallenge() {
         });
 }
 
+/* ═════════════════════════════════════════════════════════════════════════════
+   القفز — the jump
+   ═════════════════════════════════════════════════════════════════════════════
+   مسافة أو نقرتان على شخصيتك. لا فائدة منه ولا يحرّك أحدًا من مكانه — محض
+   متعة. ولأنه لا يغيّر موضعًا فلا علاقة له بالتصادم ولا بـ checkCollision.
+
+   تكلفته صفر على فايربيس: حدث واحد على المُرحّل {t:'jmp',uid} مثل الرسالة
+   والقفزة إلى الأريكة تمامًا — لا يُكتب شيء ولا يُقرأ ولا مُصغٍ جديد.
+
+   Grep anchors: _jumpFx, triggerJump, canJump, sendJumpWS, receiveJump.
+   ════════════════════════════════════════════════════════════════════════════ */
+
+const JUMP_MS           = 560;   // crouch → air → landing squash, all of it
+const JUMP_COOLDOWN_MS  = 430;   // a second press before this is ignored, not queued
+const JUMP_DBL_TAP_MS   = 340;   // two presses on your own character inside this = a jump
+let _selfTapAt = 0;
+
+// One frame of the jump, as a PURE function of its age — no state is advanced, so
+// the PiP pass draws it without running it twice (the Lemo / hat-chain rule).
+// `s` is the scale-up (the jump itself: the avatar comes toward the camera), `dy` the
+// lift, `sx`/`sy` the squash and stretch around it.
+function _jumpFx(player, now) {
+    const j = player && player._jump;
+    if (!j) return null;
+    const t = (now - j.t0) / JUMP_MS;
+    if (t < 0 || t >= 1) return null;
+    if (t < 0.15) {                       // crouch: wind up into it
+        const e = t / 0.15;
+        const k = 1 - (1 - e) * (1 - e);
+        return { dy: 0, s: 1 - 0.05 * k, sx: 1 + 0.13 * k, sy: 1 - 0.13 * k };
+    }
+    if (t < 0.72) {                       // airborne
+        const k = (t - 0.15) / 0.57;
+        const arc = Math.sin(k * Math.PI);        // 0 → 1 → 0 across the flight
+        // +1 at the launch, 0 at the apex, −1 on the way down: the stretch belongs to
+        // the release and to the fall, not to the top of the arc, so the crouch lets
+        // go INTO a stretch rather than snapping back through neutral.
+        const st = Math.cos(k * Math.PI);
+        return {
+            dy: -arc * 38,
+            s: 1 + arc * 0.26,
+            sx: 1 - 0.077 * st - 0.04 * arc,
+            sy: 1 + 0.091 * st + 0.05 * arc,
+        };
+    }
+    // Landing: squash flat on impact and spring back, with easeOutBack's overshoot
+    // giving the little reverse wobble instead of snapping still.
+    const r = 1 - easeOutBack(Math.max(0.0001, (t - 0.72) / 0.28));
+    return { dy: 0, s: 1 + 0.04 * r, sx: 1 + 0.20 * r, sy: 1 - 0.20 * r };
+}
+
+// Same guard list every other world interaction uses. _chatMustClose() already covers
+// azkar / prayer / the dashboard / the customizer / المدفأة / الجوائز / القائد /
+// المهام / حضور المقر / the minigames / the kidnap animation.
+function canJump() {
+    const p = gameState.players[gameState.userId];
+    if (!p) return false;
+    if (JUICE_ENTRANCE && _entrance.active) return false;
+    if (chatIsOpen() || _chatMustClose()) return false;
+    if (gameState.isLockedIn) return false;
+    if (gameState.isSitting || gameState.sitAnim.active) return false;
+    if (gameState.reading && gameState.reading.active) return false;
+    if (readingEndCardOpen()) return false;
+    if (document.querySelector('.modal-overlay.active')) return false;
+    return true;
+}
+
+function sendJumpWS() {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try { ws.send(JSON.stringify({ t: 'jmp', uid: gameState.userId })); return true; }
+    catch (_) { return false; }
+}
+
+// A jump kicks up a puff at the feet, on the JUMPER's floor — a remote jumper on the
+// mezzanine must not throw dust onto mine.
+function _jumpDust(player) {
+    const pos = getPlayerRenderPos(player);
+    spawnDust(pos.x, pos.y, 5, false, player.floor || 1);
+}
+
+function receiveJump(player) {
+    if (!player) return;
+    const now = Date.now();
+    if (player._jump && now - player._jump.t0 < JUMP_COOLDOWN_MS) return;
+    player._jump = { t0: now };
+    _jumpDust(player);
+}
+
+function triggerJump() {
+    const p = gameState.players[gameState.userId];
+    if (!p || !canJump()) return false;
+    const now = Date.now();
+    if (p._jump && now - p._jump.t0 < JUMP_COOLDOWN_MS) return false;
+    p._jump = { t0: now };
+    _jumpDust(p);
+    sendJumpWS();
+    // The couch hop's own sound — it is the same motion, so it is the same cue.
+    if (gameState.focusAudioEngine) gameState.focusAudioEngine.playEffect('sofaStand');
+    else playSoundRobust(gameState.sounds.sofaStand);
+    return true;
+}
+
+// Two presses on your own character. The FIRST one opens the chat box (that is what a
+// single press on yourself has always done), so the second has to undo it — unless
+// something is already typed in there, which must never be thrown away for a jump.
+function _pressIsOnMe(world) {
+    const me = gameState.players[gameState.userId];
+    if (!me || !world) return false;
+    const p = getPlayerRenderPos(me);
+    return Math.hypot(world.x - p.x, world.y - p.y) <= PLAYER_SIZE * 0.62 * (me.renderScale || 1);
+}
+function selfDoubleTapJump(world) {
+    if (!_pressIsOnMe(world)) return false;
+    const now = Date.now();
+    const dbl = now - _selfTapAt < JUMP_DBL_TAP_MS;
+    _selfTapAt = dbl ? 0 : now;
+    if (!dbl) return false;
+    if (chatIsOpen()) {
+        if (_chatUi.input && _chatUi.input.textContent.trim()) return false;
+        closeChatBox();
+    }
+    return triggerJump();
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 //  الدردشة القريبة — proximity chat (+ الإشارات, mentions)
 //  ---------------------------------------------------------------------------
@@ -30221,6 +30410,21 @@ const CHAT_PILL_H = 18, CHAT_PILL_AV = 14, CHAT_PILL_PAD_AV = 2, CHAT_PILL_GAP =
 const CHAT_OFF_K   = 0.21, CHAT_OFF_D  = 0.72;
 const CHAT_SCL_K   = 0.28, CHAT_SCL_D  = 0.68;
 
+// ── «يكتب الآن» — فقاعة الكتابة ──
+// ثلاث نقاط تقفز فوق رأس من يكتب، ثم تنصهر في رسالته حين تصل. تكلفتها صفر على
+// فايربيس مثل الرسالة نفسها: حدث واحد على المُرحِّل، لا يُكتب ولا يُقرأ ولا يُصغى إليه.
+// المُرسل يعيد تأكيدها كل CHAT_TYP_PING_MS، والمستقبل يُسقطها بعد CHAT_TYP_STALE_MS
+// من الصمت — فسقوط المقبس ينهيها وحده ولا تبقى معلّقة فوق رأس أحد.
+const CHAT_TYP_PING_MS  = 2400;
+const CHAT_TYP_STALE_MS = 6500;
+const CHAT_TYP_W        = 56;
+const CHAT_TYP_H        = 30;     // ارتفاع فقاعة سطر واحد بالضبط
+const CHAT_TYP_DOT_R    = 3.4;
+const CHAT_TYP_DOT_GAP  = 12;
+// الانصهار: العرض يسبق الارتفاع بقليل فتنتفخ الفقاعة عرضًا ثم تمتلئ — وهي حركة
+// «الزجاج السائل»: منحنى واحد لكل بُعد، لا قفزة ولا تلاشٍ.
+const CHAT_MORPH_MS     = 470;
+
 // ── mentions ──
 const CHAT_MEN_COOLDOWN_MS = 1000;   // the same member can't be pinged twice inside this…
 const CHAT_MEN_WORK_COOLDOWN_MS = 60000;  // …or inside a whole minute while they're WORKING
@@ -30273,6 +30477,7 @@ const _chatUi = {
     lastX: -1e9, lastY: -1e9, w: 240, h: 54, openedAt: 0, refocus: 0,
     cl: 0, ct: 0,   // cached canvas rect origin — see updateChatInputPos
     toastTimer: 0, refuseTimer: 0,
+    typPingAt: 0,   // last «يكتب الآن» re-assert — see updateChatSystem
 };
 
 // The @ picker, and MY OWN ping history (for the cooldown and the step).
@@ -30491,11 +30696,18 @@ function receiveChatMessage(player, raw, segs) {
     const text = _chatPlain(parts);
     const loud = onlyMen ? Math.max(...mens.map(p => p.l)) : 0;
     const list = player._chat || (player._chat = []);
+    // If their typing bubble is on screen, this message doesn't pop in beside it —
+    // it IS that bubble, melting into shape. So it starts at rest (the springs would
+    // fight the morph) and _chatMorphFx owns its box until the melt is over.
+    const ty = player._typing;
+    const morph = (ty && ty.a > 0.25) ? { w0: CHAT_TYP_W, h0: CHAT_TYP_H, t0: Date.now() } : null;
+    if (ty) player._typing = null;
     list.push({
         parts, text, lay: _chatLayout(parts), born: Date.now(),
         life: CHAT_LIFE_MS + text.length * CHAT_LIFE_PER_CH + (loud ? CHAT_LOUD[loud].dur : 0),
-        off: -9, offV: 0,     // enters just under its slot and springs up into it
-        sc: loud ? 0.35 : 0.5, scV: 0,
+        off: morph ? 0 : -9, offV: 0,     // enters just under its slot and springs up into it
+        sc: morph ? 1 : (loud ? 0.35 : 0.5), scV: 0,
+        morph,
         a: 1,
         loud,                 // 0, or the step (1-4) its shout is played at
         forMe: !!mine && !fromMe,
@@ -30859,6 +31071,94 @@ function sendChatWS(parts) {
     } catch (_) { return false; }
 }
 
+// ── «يكتب الآن» ──────────────────────────────────────────────────────────────
+// حدث واحد على المُرحِّل، بالضبط كالرسالة والقفزة: {t:'typ',uid,on}. صفر فايربيس.
+function sendTypingWS(on) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+        ws.send(JSON.stringify({ t: 'typ', uid: gameState.userId, on: on ? 1 : 0 }));
+        return true;
+    } catch (_) { return false; }
+}
+
+// حالة الكتابة لعضو آخر. لا تُضبط أبدًا على اللاعب المحلي: صندوق الكتابة نفسه فوق
+// رأسه، وفقاعة نقاط تحته ستزاحمه.
+function _chatSetTyping(player, on) {
+    if (!player || player.userId === gameState.userId) return;
+    const now = Date.now();
+    if (on) {
+        const t = player._typing;
+        if (t && t.on) { t.at = now; return; }   // مجرد تأكيد: لا تُعِد الدخول
+        player._typing = { on: true, at: now, sc: 0.4, scV: 0, a: 0 };
+    } else if (player._typing) {
+        player._typing.on = false;               // تتلاشى، ثم تُسقطها updateChatSystem
+        player._typing.at = now;
+    }
+}
+
+// الانصهار: فقاعة النقاط تصير الرسالة. دالة خالصة من عمر الفقاعة — فتمريرة الوضع
+// المصغّر ترسمها دون أن تقدّم شيئًا (قاعدة ليمو وسلسلة القبعات نفسها).
+function _chatMorphFx(b, now) {
+    const m = b.morph;
+    if (!m) return null;
+    const t = (now - m.t0) / CHAT_MORPH_MS;
+    if (t >= 1) return null;
+    const kw = easeOutBack(Math.min(1, t / 0.66));
+    const kh = easeOutBack(Math.max(0, Math.min(1, (t - 0.14) / 0.72)));
+    return {
+        w: m.w0 + (b.lay.w - m.w0) * kw,
+        h: m.h0 + (b.lay.h - m.h0) * kh,
+        // نفخة خفيفة في المنتصف: هي ما يجعلها تبدو سائلة لا مطّاطة
+        s: 1 + 0.07 * Math.sin(Math.min(1, t / 0.5) * Math.PI),
+        dots: Math.max(0, 1 - t / 0.34),
+        txt: t < 0.42 ? 0 : Math.min(1, (t - 0.42) / 0.38),
+    };
+}
+
+// النقاط الثلاث. تُرسم داخل صندوق موضوع ومُحجَّم من قِبل المُنادي (فقاعة الكتابة
+// نفسها، أو فقاعة تنصهر ونقاطها تتلاشى) فلا يوجد مسار رسم ثانٍ لها.
+function _chatDrawDots(ctx, cy, alpha, spread) {
+    const now = Date.now();
+    const gap = CHAT_TYP_DOT_GAP * (spread || 1);
+    ctx.fillStyle = '#fff';
+    for (let i = 0; i < 3; i++) {
+        const ph = (((now * 0.0013) - i * 0.15) % 1 + 1) % 1;
+        const up = ph < 0.45 ? Math.sin((ph / 0.45) * Math.PI) : 0;
+        const r = CHAT_TYP_DOT_R * (1 + up * 0.28);
+        ctx.globalAlpha = alpha * (0.42 + up * 0.58);
+        ctx.beginPath();
+        ctx.arc((i - 1) * gap, cy - up * 4.8, r, 0, Math.PI * 2);
+        ctx.fill();
+    }
+    ctx.globalAlpha = alpha;
+}
+
+// فقاعة الكتابة الكاملة — نفس زجاج فقاعة الرسالة وذيلها، فالانصهار بعدها يبدو
+// استمرارًا للشيء نفسه لا استبدالًا له.
+function _chatDrawTyping(ctx, ty, cx, baseY, alpha, low) {
+    const w = CHAT_TYP_W, h = CHAT_TYP_H;
+    ctx.save();
+    ctx.translate(cx, baseY);
+    ctx.scale(ty.sc, ty.sc);
+    ctx.globalAlpha = alpha;
+    if (!low) { ctx.shadowBlur = 12; ctx.shadowColor = 'rgba(0,0,0,0.45)'; }
+    ctx.fillStyle = 'rgba(20,20,22,0.88)';
+    _chatRoundRect(ctx, -w / 2, -h, w, h, h / 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.beginPath();
+    ctx.moveTo(-5.5, -1); ctx.lineTo(5.5, -1); ctx.lineTo(0, 6.5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+    ctx.lineWidth = 1;
+    _chatRoundRect(ctx, -w / 2, -h, w, h, h / 2);
+    ctx.stroke();
+    _chatDrawDots(ctx, -h / 2, alpha, 1);
+    ctx.restore();
+}
+
 // Is this member heads-down in a pomodoro or free-mode WORK phase? Not a break, not a
 // couch, not a reading session — and not a minigame, which raises `isWorking` too
 // (hence the isLockedIn / inFreeMode test beside it). Read off the synced users node.
@@ -30904,7 +31204,7 @@ function _chatSend() {
     }
     for (const p of parts) if (p.u) p.l = _chatMen.last[p.u] ? _chatMen.last[p.u].lv : 1;
     _chatUi.lastSentAt = now;
-    closeChatBox();
+    closeChatBox(true);   // the message ends the typing bubble — see closeChatBox
     const me = gameState.players[gameState.userId];
     if (me) receiveChatMessage(me, null, parts.map(p => ({ ...p })));   // show it locally at once — no round trip
     sendChatWS(parts);
@@ -31410,6 +31710,26 @@ function openChatBox() {
     // A key still held when the box opens would otherwise stay "down" forever —
     // handleMovement stops reading them the moment chatIsOpen() goes true.
     gameState.keys = {};
+    // …and handleMovement returns BEFORE the branch that clears isMoving, so pressing
+    // Enter mid-sprint used to leave the run cycle (bounce, lean, footsteps) playing
+    // on a stationary avatar for as long as the box stayed open. Stop everything here,
+    // exactly the way startSitAnimation does, and tell everyone else at once.
+    const _me = gameState.players[gameState.userId];
+    if (_me) {
+        _me._vx = 0; _me._vy = 0;
+        _me.bobTime = 0;
+        _me._wasMovingFast = false;
+        _me._wasSprinting = false;
+        _me._stopSquashT = null;
+        if (_me.isMoving) {
+            _me.isMoving = false;
+            _me.isSprinting = false;
+            sendPositionWS(_me.x, _me.y, true);
+            updatePlayerPosition(_me.x, _me.y);
+        }
+    }
+    sendTypingWS(true);
+    _chatUi.typPingAt = Date.now();
     _chatUi.input.textContent = '';
     _chatMen.dismissed = null;
     _chatMen.q = null;
@@ -31433,9 +31753,13 @@ function openChatBox() {
     try { _chatUi.input.focus({ preventScroll: true }); } catch (_) { _chatUi.input.focus(); }
 }
 
-function closeChatBox() {
+// `keepTyping` is for _chatSend only: the message itself is what ends the typing
+// state on the other end (receiveChatMessage melts the bubble into it), so sending a
+// `typ off` first would kill the bubble a beat early and there'd be nothing to melt.
+function closeChatBox(keepTyping) {
     if (!_chatUi.open) return;
     _chatUi.open = false;
+    if (!keepTyping) sendTypingWS(false);
     _chatMenClose();
     _chatToastHide();
     _chatUi.wrap?.classList.remove('active');
@@ -31529,7 +31853,15 @@ function updateChatInputPos(force) {
 function updateChatSystem() {
     if (_chatUi.open) {
         if (_chatMustClose()) closeChatBox();
-        else updateChatInputPos(false);
+        else {
+            updateChatInputPos(false);
+            // Re-assert «يكتب الآن» so a receiver that missed the opening packet still
+            // gets it, and so a dropped socket expires the bubble on its own.
+            if (Date.now() - _chatUi.typPingAt > CHAT_TYP_PING_MS) {
+                _chatUi.typPingAt = Date.now();
+                sendTypingWS(true);
+            }
+        }
     }
 
     const dt = gameState.dtFactor || 1;
@@ -31545,6 +31877,21 @@ function updateChatSystem() {
 
     const now = Date.now();
     for (const player of Object.values(gameState.players)) {
+        // «يكتب الآن»: a spring in, a fade out, and a stale guard so a member whose
+        // socket died never keeps three dots hanging over their head forever.
+        let tyLift = 0;
+        const ty = player._typing;
+        if (ty) {
+            if (ty.on && now - ty.at > CHAT_TYP_STALE_MS) { ty.on = false; ty.at = now; }
+            ty.a += ((ty.on ? 1 : 0) - ty.a) * 0.20 * dt;
+            ty.scV += (1 - ty.sc) * CHAT_SCL_K * dt;
+            ty.scV *= Math.pow(CHAT_SCL_D, dt);
+            ty.sc  += ty.scV * dt;
+            if (!ty.on && ty.a < 0.02) player._typing = null;
+            // Scaled by the fade so the stack above slides down with it instead of
+            // dropping the moment it disappears.
+            else tyLift = (CHAT_TYP_H + CHAT_BUB_GAP) * Math.min(1, ty.a);
+        }
         const list = player._chat;
         if (!list || !list.length) continue;
         for (let i = list.length - 1; i >= 0; i--) {
@@ -31552,16 +31899,21 @@ function updateChatSystem() {
             const age = now - b.born;
             if (age >= b.life) { list.splice(i, 1); continue; }
             b.a = age > b.life - CHAT_FADE_MS ? Math.max(0, (b.life - age) / CHAT_FADE_MS) : 1;
+            if (b.morph && age >= CHAT_MORPH_MS) b.morph = null;
         }
         if (!list.length) { player._chat = null; continue; }
         // Newest sits lowest. Each bubble's slot is the stacked height of everything
         // newer than it, so a two-line bubble pushes the older ones up by exactly its
         // own height — and when it expires they spring back down the same amount.
-        let slot = 0;
+        let slot = tyLift;   // the typing bubble owns the slot nearest the head
         for (let i = list.length - 1; i >= 0; i--) {
             const b = list[i];
             const target = slot;
-            slot += b.lay.h + CHAT_BUB_GAP;
+            // While a bubble is still melting out of the typing dots, the stack above
+            // it follows its GROWING height — otherwise the older bubbles jump to the
+            // final layout on frame one and the melt reads as a pop after all.
+            const _mf = b.morph ? _chatMorphFx(b, now) : null;
+            slot += (_mf ? _mf.h : b.lay.h) + CHAT_BUB_GAP;
             b.offV += (target - b.off) * CHAT_OFF_K * dt;
             b.offV *= Math.pow(CHAT_OFF_D, dt);
             b.off  += b.offV * dt;
@@ -31680,7 +32032,8 @@ function drawChatBubbles(floorFilter = null) {
 
     for (const player of Object.values(gameState.players)) {
         const list = player._chat;
-        if (!list || !list.length) continue;
+        const ty = player._typing;
+        if ((!list || !list.length) && !(ty && ty.a > 0.02)) continue;
         if (player._pendingSpawn != null) continue;
         const pFloor = player.floor || 1;
         if (floorFilter && pFloor !== floorFilter) continue;
@@ -31696,7 +32049,7 @@ function drawChatBubbles(floorFilter = null) {
             const d = Math.hypot((player.x || 0) - (me.x || 0), (player.y || 0) - (me.y || 0));
             if (d > CHAT_SEE_R) distA = Math.max(0, 1 - (d - CHAT_SEE_R) / CHAT_SEE_FADE);
         }
-        if (distA <= 0.02 && !list.some(b => b.forMe)) continue;
+        if (distA <= 0.02 && !(list && list.some(b => b.forMe))) continue;
 
         const rScale = player.renderScale || 1;
         const pos = getPlayerRenderPos(player);
@@ -31704,17 +32057,26 @@ function drawChatBubbles(floorFilter = null) {
         // Only my own stack lifts, and only on my own screen — see _chatSelfLift.
         if (me && player === me) baseY -= _chatSelfLift;
 
+        // «يكتب الآن» — nearest the head, under whatever they said before it.
+        if (ty && ty.a > 0.02) _chatDrawTyping(ctx, ty, pos.x, baseY, ty.a * distA * floorVis, low);
+        if (!list) continue;
+
         for (let i = 0; i < list.length; i++) {
             const b = list[i];
             const a = b.a * (b.forMe ? 1 : distA) * floorVis;
             if (a <= 0.02) continue;
-            const L = b.lay, w = L.w, h = L.h;
+            const L = b.lay;
+            // The melt out of the typing dots owns the box while it runs: the width
+            // and the height ease home on their own curves, so the bubble bulges wide
+            // and then fills out rather than simply scaling up.
+            const mf = b.morph ? _chatMorphFx(b, now) : null;
+            const w = mf ? mf.w : L.w, h = mf ? mf.h : L.h;
             const fx = b.loud ? _chatLoudFx(b, now) : null;
             ctx.save();
             ctx.translate(pos.x + (fx ? fx.x : 0), baseY - b.off + (fx ? fx.y : 0));
             // Scaled about the bubble's BOTTOM (so a shout grows up, away from the
             // head), tilted about its middle.
-            const s = b.sc * (fx ? fx.s : 1);
+            const s = b.sc * (fx ? fx.s : 1) * (mf ? mf.s : 1);
             ctx.scale(s, s);
             if (fx && fx.r) { ctx.translate(0, -h / 2); ctx.rotate(fx.r); ctx.translate(0, h / 2); }
             ctx.globalAlpha = a;
@@ -31728,8 +32090,9 @@ function drawChatBubbles(floorFilter = null) {
             ctx.fill();
             ctx.shadowBlur = 0;
 
-            // Only the newest (lowest) bubble carries the tail down to the head.
-            if (i === list.length - 1) {
+            // Only the newest (lowest) bubble carries the tail down to the head —
+            // and while the typing bubble is up, IT is the lowest and owns it.
+            if (i === list.length - 1 && !(ty && ty.a > 0.5)) {
                 ctx.beginPath();
                 ctx.moveTo(-5.5, -1); ctx.lineTo(5.5, -1); ctx.lineTo(0, 6.5);
                 ctx.closePath();
@@ -31753,7 +32116,22 @@ function drawChatBubbles(floorFilter = null) {
             ctx.stroke();
             ctx.shadowBlur = 0;
 
-            _chatDrawContent(ctx, L, h);
+            if (!mf) {
+                _chatDrawContent(ctx, L, h);
+            } else {
+                // Clipped to the box it is growing into — a two-line message would
+                // otherwise hang out of a bubble that isn't tall enough for it yet.
+                if (mf.txt > 0) {
+                    ctx.save();
+                    _chatRoundRect(ctx, -w / 2, -h, w, h, r);
+                    ctx.clip();
+                    ctx.globalAlpha = a * mf.txt;
+                    _chatDrawContent(ctx, L, h);
+                    ctx.restore();
+                }
+                // The dots fade out as the shape opens, spreading with it.
+                if (mf.dots > 0) _chatDrawDots(ctx, -h / 2, a * mf.dots, w / CHAT_TYP_W);
+            }
             ctx.restore();
         }
     }

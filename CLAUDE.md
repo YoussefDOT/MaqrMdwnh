@@ -95,6 +95,8 @@ Grep anchors for the major systems (all verified to exist):
 | جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
 | Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admRenderDutyBar`, `_admDutySection` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS`, `drawChatBeacons` |
+| «يكتب الآن» + الانصهار | `CHAT_TYP_`, `CHAT_MORPH_MS`, `sendTypingWS`, `_chatSetTyping`, `_chatMorphFx`, `_chatDrawTyping` |
+| القفز | `JUMP_MS`, `_jumpFx`, `triggerJump`, `canJump`, `sendJumpWS`, `receiveJump`, `selfDoubleTapJump` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
@@ -241,6 +243,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **حضور المقر** (was تحدي المثابرة) | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the user card (the azkar dock hangs under it) and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. Styled in the مدونة brand; pressing anywhere on the card opens the week panel. See **حضور المقر**. |
 | **رف الجوائز** | Three trophies (and four hidden, blacked-out ones) on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar whose cells he can press to **اعتماد** a day as done (even one taken off or never opened) or **رفع الإجازة** off a past one. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. See **لوحة القائد**. |
+| **القفز** | مسافة، أو نقرتان على شخصيتك. لا يحرّك أحدًا ولا فائدة منه — الشخصية تكبر نحوك وترتفع قليلًا وظلّها ينكمش معها، بانحناءة قبلها وانسحاقة عند الهبوط، وصوت النهوض عن الأريكة. حدث واحد على المُرحِّل، صفر فايربيس. See **القفز**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٥٠ حرفًا, wrapping onto two lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, a قوس on the screen edge pointing at whoever called you (it stays until you see them), a شريط at the bottom, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **غرفة الاجتماعات** | A room snapped onto the top-right of the scene, hidden behind a doorway that glows white until you walk up to it. Press its table → a seat (the sofa hop) and a full-screen look at the real table with everyone round it: six reactions, the proximity chat, and a **green ring on whoever is talking in the Discord call** — fed live by MdwnhBot over the relay, zero Firebase. See **غرفة الاجتماعات**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until someone walks up, then wanders it — and now and then walks the owner-drawn route to the meeting room, roams round the table and walks back. **One Lemo per lobby**: everyone sees the same robot, from a seeded timeline off one tiny Firebase doc that only changes when he's woken or put to bed. Arrive to an empty lobby → he's asleep. See **Lemo**. |
@@ -1456,6 +1459,48 @@ the picker for that `@` without closing the box.
   `notificationclick` that focuses the tab. **Limit:** a tab the OS has frozen or killed
   has no socket, so it hears nothing — reaching that would need Web Push and a server.
 
+### «يكتب الآن» — the typing bubble, and the melt
+
+Three dots hopping over the head of whoever has a type box open, which then **melt into
+their message** when it lands instead of being replaced by it.
+
+- **Zero Firebase, like the message itself.** `{t:'typ',uid,on}` on the relay — a FLAG,
+  not a stream. The sender re-asserts it every `CHAT_TYP_PING_MS` (2.4 s) and the
+  receiver drops it after `CHAT_TYP_STALE_MS` (6.5 s) of silence, so a dead socket ends
+  it on its own and nobody is left with three dots over their head forever. A `{t:'bye'}`
+  clears it at once.
+- **`closeChatBox(keepTyping)` — `_chatSend` is the ONE caller that passes true.** The
+  message itself is what ends the typing state on the other end (`receiveChatMessage`
+  nulls `_typing` and hands the bubble a `morph`), so sending a `typ off` first would
+  kill the dots a beat early and leave nothing to melt.
+- **Never set on the local player** (`_chatSetTyping` refuses own uid): the input box is
+  already over that head.
+- **The dots own the slot nearest the head.** `updateChatSystem` starts the stack at
+  `tyLift`, scaled by the bubble's fade so the messages above slide down with it rather
+  than dropping the frame it disappears. The tail belongs to whichever box is lowest, so
+  the newest message drops its tail while the dots are up.
+- **The melt (`_chatMorphFx`) is a PURE function of the bubble's age** — the PiP pass
+  draws it without advancing anything (the Lemo / hat-chain rule). Width and height ease
+  home on their own `easeOutBack` curves, the height a beat behind the width, so the box
+  bulges wide and then fills out; the dots fade over the first third, the text fades in
+  over the last, and the content is **clipped to the growing box** or a two-line message
+  hangs out of a bubble not yet tall enough for it. A morphing bubble enters at
+  `off: 0, sc: 1` — the entrance springs would fight the melt.
+- `updateChatSystem`'s stack accumulates the **morphing** height, not the final one, or
+  the bubbles above jump to the end layout on frame one and the melt reads as a pop.
+
+### Typing cancels the walk — and gets its own wiggle
+
+`handleMovement` returns **before** the branch that clears `isMoving`, so pressing Enter
+mid-sprint left the run cycle (bounce, lean, footsteps) playing on a stationary avatar
+for as long as the box stayed open. `openChatBox` now stops everything itself — velocity,
+`bobTime`, `_stopSquashT`, the sprint flags — and force-sends the stop, exactly the way
+`startSitAnimation` does.
+
+In its place the avatar plays a small busy wiggle (`_typing` in `drawPlayers`) that
+**replaces** the idle breathing and the work bounce. Everyone sees it: mine from my own
+open box, theirs from the relay flag.
+
 #### بوصلة الإشارة — where the mention came from (`_chatBeacons`, `drawChatBeacons`)
 Hearing the ping doesn't tell you **where to look**; the mentioner can be on the other
 floor or across the building. So a mention also lights a **Fortnite-style arc** on the
@@ -1507,6 +1552,45 @@ payload is client-claimed and spoofable, the same known limit the position relay
 carries — which also means a spoofed `l` could fake a step. Fine for the trusted group.
 
 ---
+
+## القفز — the jump
+
+**مسافة**, or **two presses on your own character**. It moves nobody and unlocks
+nothing — the avatar scales up toward the camera and lifts a little, with a crouch
+before it and a squash on landing. Code is the `القفز` block just above the chat
+section; there is no markup and no CSS. Grep anchors: `JUMP_MS`, `_jumpFx`,
+`triggerJump`, `canJump`, `sendJumpWS`, `receiveJump`, `selfDoubleTapJump`.
+
+- **Zero Firebase**: `{t:'jmp',uid}` on the relay, like the message and the sofa hop.
+  Nothing is written, nothing read, no listener. It plays **on arrival** rather than
+  being queued onto the replay timeline the way the sofa hop is — it is half a second
+  long and changes no position, so a delay of one interpolation window costs nothing.
+- **`_jumpFx(player, now)` is a PURE function of the jump's age**, so the PiP pass
+  draws it without advancing it (the Lemo / hat-chain rule). Nothing is ticked
+  anywhere; `player._jump` is a single timestamp.
+- **The scale is the jump; the shadow is what sells it.** The lift already reaches the
+  contact shadow through `workBob`, but the scale-up does not — so `_jumpScale` is fed
+  into `drawPlayers`'s `lift` term explicitly. Drop that and the avatar reads as
+  *growing on the spot* instead of leaving the floor.
+- **It never moves the player**, so it has nothing to do with `checkCollision` and
+  cannot put anyone inside a wall.
+- **Space belongs to whatever is focused first.** The handler bails on an input, a
+  textarea, a contenteditable, and on any focusable control (`BUTTON` / `A` / `SELECT` /
+  `[tabindex]` / `role="button"`) — the settings rows, the meeting seat and the trophy
+  slots are all activated by Space. Only a press that reaches the page itself jumps,
+  and that one `preventDefault()`s so the page can't scroll under the canvas. The boss
+  fight keeps its own Space handler and its own held-state flag, so it is untouched.
+- **The double tap has to undo the single tap**: one press on your own character has
+  always opened the chat box, so `selfDoubleTapJump` closes it again — unless something
+  is already typed in there, which is never thrown away for a jump. It is checked
+  **before** `chatSelfPress` in both the desktop and mobile hit-test chains.
+- The sound is the couch's own `sofaStand` — it is the same motion, so it is the same
+  cue — through `focusAudioEngine.playEffect` (Web Audio, background-tab safe).
+- The dust puff is spawned on the **jumper's** floor, so a mezzanine jump doesn't throw
+  dust onto the ground floor.
+- `canJump()` is the single guard and leans on `_chatMustClose()`, which already covers
+  azkar / prayer / the dashboard / the customizer / المدفأة / الجوائز / لوحة القائد /
+  المهام / حضور المقر / the minigames / the kidnap animation.
 
 ## غرفة الاجتماعات — the meeting room and its table
 
