@@ -4041,6 +4041,7 @@ function cleanupAbandonedPomoSessions(pomoData) {
                         mode: 'free', laptopId: parseInt(laptopId),
                         claimedBy: state.claimedBy,
                         totalWorkMs: state.totalWorkMs || 0,
+                        workMsAtLastBreak: state.workMsAtLastBreak || 0,
                         createdAt: state.createdAt || savedAt,
                         // Carry the doc's own stamp so the away-time credit runs from
                         // when THEY vanished, not from whenever another client
@@ -4183,6 +4184,7 @@ function _buildReclaimSnapshot() {
         return {
             mode: 'free', laptopId: lapId, claimedBy: gameState.userId,
             totalWorkMs: totalMs, createdAt: fm._createdAt || Date.now(),
+            workMsAtLastBreak: fm.workMsAtLastBreak || 0,   // keep the break countdown across a reclaim
         };
     }
     const p = gameState.pomodoro;
@@ -6086,7 +6088,16 @@ function startGame(userData) {
                     fm.workStartTime = 0;
                     fm.breakEndTime  = 0;
                     fm.breakPromptShown = false;
-                    fm.workMsAtLastBreak = resumedTotalMs;   // break prompt counts from the resume
+                    // Carry the break countdown across the reload instead of
+                    // restarting it: the mark is where it really was, SHIFTED by the
+                    // away time we just credited. That keeps work done before the
+                    // close (20 minutes stays 20 minutes) while still keeping the
+                    // away hours out of the threshold, so nobody is nagged the
+                    // instant they walk back in.
+                    fm.workMsAtLastBreak = Math.min(
+                        resumedTotalMs,
+                        (state.workMsAtLastBreak || 0) + awayMs
+                    );
                     fm.needsResume   = true;
                     // Restore laptop doc to active state. The unified disconnect
                     // handlers (free laptop + stash) are armed later via
@@ -6202,11 +6213,16 @@ function startGame(userData) {
                     // never stopped. (The «هل عملت هذه المدة فعلًا؟» confirm on انهاء
                     // الجلسة is where they correct it if the away time wasn't real work.)
                     const reclaimedTotalMs = _reclaimFreeTotalMs(ls);
+                    const reclaimedBreakMark = Math.min(
+                        reclaimedTotalMs,
+                        (ls.workMsAtLastBreak || 0) + _freeAwayMs(ls)
+                    );
                     const freeDoc = {
                         claimedBy: gameState.userId,
                         phase: 'free-work', mode: 'free',
                         createdAt: ls.createdAt || now,
                         endTime: 0, totalWorkMs: reclaimedTotalMs,
+                        workMsAtLastBreak: reclaimedBreakMark,
                         breakEndTime: 0, savedAt: 0,
                     };
                     update(ref(database), {
@@ -6226,11 +6242,13 @@ function startGame(userData) {
                     fm.workStartTime = 0;
                     fm.breakEndTime  = 0;
                     fm.breakPromptShown = false;
-                    // Measure the next "خذ استراحة؟" prompt from the RESUME, not from
-                    // zero — the away time we just credited is not work they sat
-                    // through, so counting it toward the 25-minute break threshold
-                    // would nag them the instant they walked back in.
-                    fm.workMsAtLastBreak = reclaimedTotalMs;
+                    // The «خذ استراحة؟» countdown resumes where it was, shifted by the
+                    // away time. Only the away time is excluded from the threshold —
+                    // it is not work they sat through, so counting it would nag them
+                    // the instant they walked back in; the work they DID sit through
+                    // before closing the tab still counts, and the prompt they had
+                    // almost earned comes back with them.
+                    fm.workMsAtLastBreak = reclaimedBreakMark;
                     fm.needsResume   = true;
                 } else if (target) {
                     const restoredPhase = ls.phase === 'break' ? 'break' : 'work';
@@ -16864,6 +16882,11 @@ function saveFreeModStateToFirebase(docThrottled = false) {
             createdAt:    fm._createdAt || Date.now(),
             endTime:      0,
             totalWorkMs:  currentTotalMs,
+            // Where the «هل تريد راحة؟» countdown was measured from. Without it a
+            // reload restarted the 25 minutes from scratch (the restore used to
+            // pin the mark to the resumed total), so the prompt the member had
+            // nearly earned vanished and had to be worked for all over again.
+            workMsAtLastBreak: fm.workMsAtLastBreak || 0,
             breakEndTime: fm.phase === 'break' ? fm.breakEndTime : 0,
             savedAt:      Date.now(),
         }});
