@@ -5814,7 +5814,7 @@ function updateFloorsAndScales() {
         if (local.x >= MEET_X0 && local.floor !== 1) local.floor = 1;
         // Off the table the moment anything else takes the player over — a seat, a
         // laptop, the kidnap — or the spot under them simply isn't a top any more.
-        if (local._elev && !local._jumpMove) {
+        if (local._elev && !local._air) {
             if (gameState.isLockedIn || gameState.anim.active || gameState.isSitting || gameState.sitAnim.active
                 || (worldCollision.built && !_jumpTopAt(local.x, local.y + PLAYER_SIZE * 0.22, local.floor || 1))) {
                 local._elev = false;
@@ -5831,7 +5831,7 @@ function updateFloorsAndScales() {
         if (!deferringFlip && (gameState.isLockedIn || gameState.anim.active)) {
             const lap = _activeLaptopForFloor();
             if (lap) local.floor = lap.floor || 1;
-        } else if (!gameState.anim.active && !local._jumpMove && isOnStairs(local.x, local.y)) {
+        } else if (!gameState.anim.active && !(local._jump && local._jump.k === 'fall' && local._air) && isOnStairs(local.x, local.y)) {
             // Reliable commit: once you've climbed up into the platform zone you're on
             // floor 2; otherwise decide by how far up the ramp you are (hysteresis).
             if (local.y < PLAT_Y1 - 10) {
@@ -5846,6 +5846,11 @@ function updateFloorsAndScales() {
     for (const player of Object.values(gameState.players)) {
         if (player.floor === undefined) player.floor = 1;
         if (player.renderScale === undefined) player.renderScale = desiredPlayerScale(player);
+        // A fall carries its own shrink (see _jumpFx) — the floor's scale snaps under it.
+        if (player._jump && player._jump.k === 'fall' && Date.now() - player._jump.t0 < JUMP_KINDS.fall.ms) {
+            player.renderScale = desiredPlayerScale(player);
+            continue;
+        }
         player.renderScale += (desiredPlayerScale(player) - player.renderScale) * k;
     }
 }
@@ -10239,15 +10244,22 @@ function _unstickLocalPlayer() {
 }
 
 // `opts` ({ floor, elev }) asks about a floor / a table-top state other than the
-// local player's current one — the jump planner uses it (see _jumpPlan).
+// local player's current one ({ air } = up in a jump) — see القفز.
 function checkCollision(x, y, opts) {
     // Outer clamp to the image (both rooms are one open world now — no door/seam).
     if (x < WORLD_BOUNDS.minX || x > WORLD_BOUNDS.maxX || y < WORLD_BOUNDS.minY || y > WORLD_BOUNDS.maxY) return true;
     const local = gameState.players[gameState.userId];
     const floor = (opts && opts.floor) || (local && local.floor) || 1;
     const elev = opts ? !!opts.elev : !!(local && local._elev);
+    const air = opts ? !!opts.air : !!(local && local._air);
     // Sample the avatar's base ("feet"), so its body — not its head — bumps furniture.
     const fy = y + PLAYER_SIZE * 0.22;
+    // Up in a jump: tables and objects are passed OVER — only walls block (see القفز).
+    // A fall off the mezzanine is judged against the ground floor below.
+    if (air) {
+        const falling = local && local._jump && local._jump.k === 'fall';
+        return falling ? _jumpWallAt(x, fy) : _jumpAirBlocked(x, y, fy, floor);
+    }
     // Standing on a table: only the walls block, and the top's edge (see القفز).
     if (elev) return _jumpElevBlocked(x, fy, floor);
     // Stairs bridge the floors — always walkable (their x drives the scale instead).
@@ -10294,8 +10306,8 @@ function updateCamera() {
 function handleMovement() {
     const player = gameState.players[gameState.userId];
     if (!player) return;
-    // A jump that travels (onto a table, off the mezzanine) owns the player until it lands.
-    if (_jumpDriveLocal(player)) return;
+    // القفز: the airborne flag checkCollision reads, and the landing.
+    jumpUpdateLocal(player);
     // Any of these lock out free movement. Zero the momentum velocity so a stale
     // glide can't lurch the player the instant the lock lifts (unlock / stand up /
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
@@ -10381,7 +10393,7 @@ function handleMovement() {
         else if (!_jumpStepOff(player, nextX, player.y)) player._vx = 0;
         if (!checkCollision(player.x, nextY)) player.y = nextY;
         else if (!_jumpStepOff(player, player.x, nextY)) player._vy = 0;
-        jumpNoteDir(player._vx, player._vy);
+        jumpAfterMove(player);
         player.smoothMove = false;
         syncEntityRenderToTarget(player);
         // Live movement goes over the WebSocket relay (throttled), NOT Firebase —
@@ -28104,6 +28116,7 @@ const _lemo = {
     // ── نداء ليمو (see lemoSummon) ────────────────────────────────────────────
     floor: 1,                     // 2 only while a call has him up on the mezzanine
     white: 0,                     // 0..1 — the teleport flash
+    glow: 0,                      // 0..1 — the light burst around it
     alpha: 1,
     talk: 0,                      // >0 while «عايز ايه؟» is up (its age, ms)
     callCue: 0,                   // the call whose arrival cue already played here
@@ -28231,7 +28244,7 @@ function _lemoCallPose(c, t) {
     const C = LEMO_CALL;
     const idle = LEMO_ANIMS.Idle;
     let el = t - c.at;
-    _lemo.white = 0; _lemo.alpha = 1; _lemo.talk = 0;
+    _lemo.white = 0; _lemo.alpha = 1; _lemo.talk = 0; _lemo.glow = 0;
     _lemo.state = 'called'; _lemo.anim = 'Idle';
     _lemo.frame = Math.floor(((t % LEMO_IDLE_CYCLE_MS) + LEMO_IDLE_CYCLE_MS) % LEMO_IDLE_CYCLE_MS * idle.fps / 1000) % idle.frames;
     _lemo.idleFrame = _lemo.frame;
@@ -28239,9 +28252,7 @@ function _lemoCallPose(c, t) {
     const at = (x, y, fl, face) => { _lemo.x = x; _lemo.y = y; _lemo.floor = fl; _lemo.face = face; };
     if (el < C.flashOut) {                          // stop, flash white, gone
         at(c.fx, c.fy, c.f0, c.ff);
-        const k = el / C.flashOut;
-        _lemo.white = Math.min(1, k * 1.6);
-        _lemo.alpha = k < 0.65 ? 1 : 1 - (k - 0.65) / 0.35;
+        _lemoFlashOut(el / C.flashOut);
         return;
     }
     el -= C.flashOut;
@@ -28250,9 +28261,7 @@ function _lemoCallPose(c, t) {
     const walkFace = c.sx < c.ax ? -1 : 1;
     if (el < C.flashIn) {                           // flash back in beside the caller
         at(c.ax, c.ay, c.fl, walkFace);
-        const k = el / C.flashIn;
-        _lemo.alpha = Math.min(1, k * 3);
-        _lemo.white = 1 - k;
+        _lemoFlashIn(el / C.flashIn);
         return;
     }
     el -= C.flashIn;
@@ -28272,9 +28281,20 @@ function _lemoCallPose(c, t) {
     el -= C.talk;
     if (el < C.linger) return;
     el -= C.linger;
-    const k = Math.min(1, el / C.leave);            // flash out
-    _lemo.white = Math.min(1, k * 1.6);
-    _lemo.alpha = k < 0.65 ? 1 : 1 - (k - 0.65) / 0.35;
+    _lemoFlashOut(Math.min(1, el / C.leave));       // flash out
+}
+/* The teleport flash. It must read as a FLASH, not a fade: he turns fully white at
+   full opacity first, a light bursts around him (`_lemo.glow`, see drawLemo), and
+   only then does he vanish / take his colour back. */
+function _lemoFlashOut(k) {
+    _lemo.white = Math.min(1, k * 3.5);
+    _lemo.alpha = k < 0.7 ? 1 : Math.max(0, 1 - (k - 0.7) / 0.3);
+    _lemo.glow = k < 0.55 ? k / 0.55 : Math.max(0, 1 - (k - 0.55) / 0.45);
+}
+function _lemoFlashIn(k) {
+    _lemo.alpha = Math.min(1, k * 10);
+    _lemo.white = k < 0.35 ? 1 : Math.max(0, 1 - (k - 0.35) / 0.65);
+    _lemo.glow = k < 0.2 ? k / 0.2 : Math.max(0, 1 - (k - 0.2) / 0.8);
 }
 
 // The speech bubble over his head — canvas, like the chat's. Pops in, fades out.
@@ -28305,6 +28325,30 @@ function _lemoDrawTalk(ctx, x, headY, sc, alpha) {
     ctx.textBaseline = 'middle';
     ctx.direction = 'rtl';
     ctx.fillText(LEMO_TALK_TEXT, 0, -h / 2 + 1);
+    ctx.restore();
+}
+
+// A soft burst of light + a ring, centred on his body. Only while he flashes.
+function _lemoDrawGlow(ctx, lsc, a) {
+    const cx = _lemo.x, cy = _lemo.y + (LEMO_H / 2) * (lsc - 1);
+    const r = 78 * lsc * (0.7 + 0.5 * a);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+    g.addColorStop(0, `rgba(255,255,255,${0.85 * a})`);
+    g.addColorStop(0.35, `rgba(220,245,255,${0.45 * a})`);
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 0.7 * a;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.ellipse(cx, _lemo.y + (LEMO_H / 2) * lsc - 2, r * 0.9 * (1.4 - a * 0.4), r * 0.3 * (1.4 - a * 0.4), 0, 0, Math.PI * 2);
+    ctx.stroke();
     ctx.restore();
 }
 
@@ -28513,7 +28557,7 @@ function _lemoMaybeWake() {
 
 // Where he is and what he's doing at server time t.
 function _lemoPose(t) {
-    _lemo.floor = 1; _lemo.white = 0; _lemo.alpha = 1; _lemo.talk = 0;
+    _lemo.floor = 1; _lemo.white = 0; _lemo.alpha = 1; _lemo.talk = 0; _lemo.glow = 0;
     const d = _lemo.doc;
     const c = d && d.call;
     if (c && t < d.at) {
@@ -28531,9 +28575,7 @@ function _lemoPose(t) {
     const s = _lemo.sim;
     // Back from a call: flash in at his spot.
     if (s && s.back && t >= s.t0 - 1 && d && t - d.at < LEMO_BACK_FLASH_MS) {
-        const k = Math.max(0, (t - d.at) / LEMO_BACK_FLASH_MS);
-        _lemo.alpha = Math.min(1, k * 3);
-        _lemo.white = 1 - k;
+        _lemoFlashIn(Math.max(0, (t - d.at) / LEMO_BACK_FLASH_MS));
     }
     if (!s || t < s.t0) {
         // Asleep — or woken, but finishing the loop he was in. `at` sits on the
@@ -28635,7 +28677,7 @@ function updateLemo() {
         _lemo.callCue = c.at;
         try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.35, 0.07); } catch (_) {}
     }
-    if (_lemo.white > 0 || _lemo.talk || lemoIsBusy()) perfWake(600);
+    if (_lemo.white > 0 || _lemo.glow > 0 || _lemo.talk || lemoIsBusy()) perfWake(600);
     if (_lemo.shown && _lemo.state === 'sleeping' && _lemo.doc.s !== 'awake') _lemoMaybeWake();
 }
 
@@ -28644,10 +28686,11 @@ function drawLemo(floorPass) {
     if ((floorPass || 1) !== (_lemo.floor || 1)) return;
     // In the meeting room he fades with the room — hidden until you reach its door.
     // Up on the mezzanine he fades with it, like a player standing there.
-    const fade = _meetFadeAt(_lemo.x) * (_lemo.alpha ?? 1)
-        * (_lemo.floor === 2 ? (gameState.secondFloorVis ?? 1) : 1);
-    if (fade < 0.01) return;
+    const place = _meetFadeAt(_lemo.x) * (_lemo.floor === 2 ? (gameState.secondFloorVis ?? 1) : 1);
     const lsc = _lemo.floor === 2 ? FLOOR2_SCALE : 1;
+    if (_lemo.glow > 0.01 && place > 0.01) _lemoDrawGlow(gameState.ctx, lsc, _lemo.glow * place);
+    const fade = place * (_lemo.alpha ?? 1);
+    if (fade < 0.01) return;
     let name = _lemo.anim, frame = _lemo.frame;
     let sheet = _lemoSheet(name);
     if (!sheet && name === 'Play') { name = 'Idle'; frame = _lemo.idleFrame; sheet = _lemoSheet('Idle'); }
@@ -31375,45 +31418,41 @@ const JUMP_DBL_TAP_PX   = 46;    // …landing this close together (anywhere, on
 let _selfTapAt = 0;
 let _anyTap = { t: 0, x: 0, y: 0 };
 
-/* ── القفز الوظيفي — tables, and the drop off the mezzanine ──────────────────────
-   A jump can now MOVE you: onto a table (you walk around up there, drawn a little
-   closer to the camera), across to the next table, off it again — and off the
-   second floor's open edge straight down to the ground.
+/* ── القفز الوظيفي — one continuous jump; the landing decides where you are ─────
+   A jump never plays a scripted move. You keep full control the whole way, and
+   while you are UP (`_jumpAirborne`) nothing but the walls blocks you — you pass
+   OVER tables, sofas, desks, the fireplace (and are drawn above them). Where your
+   feet come down decides the rest (`_jumpLand`):
+     • on a top (`worldCollision.tops`)  → you stand on it (`_elev`, 1.14× scale);
+     • on free floor                     → you're on the floor, normal size;
+     • inside something you can't stand on → nudged to the nearest spot you can.
+   Walking off a top in any direction steps you down (`_jumpStepOff`).
+   On the mezzanine, drifting past its open edge while up turns the jump into a
+   FALL ('fall'): Jump_Start, a drop, and the landing quake on the ground floor.
 
-   • `player._elev` — standing on a table top. Collision up there is the walls
-     alone (`worldCollision.walls`) plus "stay above a top" (`worldCollision.tops`);
-     walking past a top's edge steps you down (`_jumpStepOff`). Relayed as `el` in
-     the position packet, never written to Firebase — a reload just puts you back
-     on the ground (`_unstickLocalPlayer`).
-   • Kinds: '' (in place) · 'up' / 'hop' / 'down' (with travel) · 'off' (walked
-     off an edge) · 'drop' (off the mezzanine, long, with a landing quake).
-   • The travel itself is driven locally (`_jumpDriveLocal`) and reaches everyone
-     through the ordinary position packets; the event only carries the kind.
-   • THE DROP LANDS WITH A QUAKE (`_jumpQuakes`): a big dust burst, a shock ring,
-     a bounce that runs through every avatar it passes, and — for anyone near who
-     is NOT in a work session — a short screen shake and Jump_Land.mp3. A member
-     working at a laptop sees the ring and nothing else. */
+   • `player._elev` — relayed as `el` in the position packet, never written to
+     Firebase (a reload puts you back on the floor via _unstickLocalPlayer).
+   • Kinds on the relay: '' (a jump) · 'off' (stepped off a top) · 'fall'.
+   • THE FALL LANDS WITH A QUAKE (`_jumpQuakes`): a big dust burst, a shock ring,
+     a bounce through every avatar it passes, and — for anyone near who is NOT in a
+     work session — a short screen shake and Jump_Land.mp3. */
 const JUMP_KINDS = {
-    '':    { ms: JUMP_MS, arc: 38,  grow: 0.26, travel: [0.15, 0.72] },
-    up:    { ms: 640,     arc: 58,  grow: 0.30, travel: [0.14, 0.74] },
-    hop:   { ms: 600,     arc: 44,  grow: 0.26, travel: [0.14, 0.74] },
-    down:  { ms: 600,     arc: 34,  grow: 0.20, travel: [0.14, 0.74] },
-    off:   { ms: 300,     arc: 0,   grow: 0,    travel: null },
-    drop:  { ms: 1150,    arc: 70,  grow: 0.38, travel: [0.12, 0.80] },
+    '':   { ms: JUMP_MS },
+    off:  { ms: 300 },
+    fall: { ms: 640 },
 };
+const JUMP_AIR    = [0.10, 0.72];   // the airborne window of a jump, as fractions of JUMP_MS
+const JUMP_FALL_LAND = 0.70;        // where in a fall the feet touch the ground
 const JUMP_TOP_SCALE   = 1.14;   // standing on a table: a touch closer to the camera
-const JUMP_REACH       = 96;     // how far forward a jump looks for a table / the floor
-const JUMP_DROP_REACH  = 230;    // …and for the ground below the mezzanine's edge
 const JUMP_QUAKE_MS    = 1100;
 const JUMP_QUAKE_R     = 520;    // the shock ring's reach, and who hears / feels it
 const JUMP_QUAKE_SPEED = 0.62;   // world px per ms the ring travels
 const _jumpQuakes = [];          // { x, y, t0, fl }
 let _jumpShake = { t0: 0, amp: 0 };
-let _jumpLastDir = { x: 0, y: 1 };
 
 function _jumpKind(k) { return JUMP_KINDS[k] || JUMP_KINDS['']; }
 // When a jump of this kind touches down, ms after it starts (matches _jumpFx's phases).
-function _jumpLandMs(k) { return _jumpKind(k).ms * (k === 'drop' ? 0.80 : k === 'off' ? 0 : 0.72); }
+function _jumpLandMs(k) { return k === 'fall' ? JUMP_KINDS.fall.ms * JUMP_FALL_LAND : k === 'off' ? 0 : JUMP_MS * JUMP_AIR[1]; }
 const _JUMP_FEET = PLAYER_SIZE * 0.22;   // checkCollision samples the feet, so do we
 
 // Is (x, y) — the FEET point — over something a player can stand on?
@@ -31430,15 +31469,9 @@ function _jumpTopAt(x, fy, floor) {
     if (mx < 0 || my < 0 || mx >= MASK_W || my >= MASK_H || !worldCollision.tops) return false;
     return worldCollision.tops[my * MASK_W + mx] === 1;
 }
-// Collision for someone standing ON a top: leaving the top is not a plain move
-// (see _jumpStepOff), and only the walls still block.
-function _jumpElevBlocked(x, fy, floor) {
-    if (!worldCollision.built) return false;
-    if (!_jumpTopAt(x, fy, floor)) return true;
-    if (floor === 2) {
-        const inset = 4;
-        return x < PLAT_X0 + inset || x > PLAT_X1 - inset || fy < PLAT_Y0 + inset || fy > PLAT_Y1 - inset;
-    }
+// Only the walls (and the meeting room's walls / screen) — what still blocks
+// someone who is up in the air or standing on a top.
+function _jumpWallAt(x, fy) {
     for (const [dx, dy] of _BODY_PTS) {
         const px = x + dx * _BODY_R, py = fy + dy * _BODY_R;
         if (px >= MEET_X0) { if (_meetMaskAt(px, py) && !_jumpTopAt(px, py, 1)) return true; }
@@ -31446,99 +31479,92 @@ function _jumpElevBlocked(x, fy, floor) {
     }
     return false;
 }
-function _jumpOnPlatform(x, fy) {
-    return x >= PLAT_X0 && x <= PLAT_X1 && fy >= PLAT_Y0 && fy <= PLAT_Y1;
+function _jumpInPlatform(x, fy) {
+    const inset = 4;
+    return !(x < PLAT_X0 + inset || x > PLAT_X1 - inset || fy < PLAT_Y0 + inset || fy > PLAT_Y1 - inset);
+}
+// Collision for someone standing ON a top: leaving the top is not a plain move
+// (see _jumpStepOff), and only the walls still block.
+function _jumpElevBlocked(x, fy, floor) {
+    if (!worldCollision.built) return false;
+    if (!_jumpTopAt(x, fy, floor)) return true;
+    if (floor === 2) return !_jumpInPlatform(x, fy);
+    return _jumpWallAt(x, fy);
+}
+// Collision while UP in a jump: tables and objects are passed over. On the
+// mezzanine the platform is free, and past its edge only where the ground floor
+// below is free to land on (that is the fall — see _jumpMaybeFall).
+function _jumpAirBlocked(x, y, fy, floor) {
+    if (!worldCollision.built) return false;
+    if (floor === 2) {
+        if (_jumpInPlatform(x, fy) || isOnStairs(x, y)) return false;
+        return checkCollision(x, y, { floor: 1, elev: false, air: false });
+    }
+    return _jumpWallAt(x, fy);
 }
 
-// Where does a jump from here, facing (dx, dy), take me? → { kind, x, y, floor, elev }
-function _jumpPlan(p, dx, dy) {
-    const floor = p.floor || 1;
-    const elev = !!p._elev;
-    if (!worldCollision.built || (!dx && !dy)) return { kind: '', x: p.x, y: p.y, floor, elev };
-    for (let d = 24; d <= JUMP_REACH; d += 8) {
-        const x = p.x + dx * d, y = p.y + dy * d;
-        const fy = y + _JUMP_FEET;
-        // Onto a table (or across to the next one).
-        if (_jumpTopAt(x, fy, floor) && !checkCollision(x, y, { elev: true, floor })) {
-            // Standing on the same top already → nothing to jump onto, keep looking.
-            if (elev && d < 40) continue;
-            return { kind: elev ? 'hop' : 'up', x, y, floor, elev: true };
-        }
-        // Off a table, down to the floor.
-        if (elev && !_jumpTopAt(x, fy, floor) && !checkCollision(x, y, { elev: false, floor })) {
-            if (d < 40) continue;
-            return { kind: 'down', x, y, floor, elev: false };
-        }
-    }
-    // Off the mezzanine's open edge, down to the ground floor.
-    if (floor === 2) {
-        let crossed = false;
-        for (let d = 16; d <= JUMP_DROP_REACH; d += 8) {
-            const x = p.x + dx * d, y = p.y + dy * d;
-            const fy = y + _JUMP_FEET;
-            if (!crossed) {
-                crossed = !_jumpOnPlatform(x, fy);
-                // Walls/desks in the way on the platform itself end the search.
-                if (!crossed && !elev && checkCollision(x, y, { elev: false, floor: 2 })) break;
-                if (!crossed) continue;
-            }
-            if (isOnStairs(x, y)) continue;
-            if (!checkCollision(x, y, { elev: false, floor: 1 })) {
-                // A little past the railing, so the landing isn't hugging the platform.
-                return { kind: 'drop', x, y, floor: 1, elev: false };
-            }
-        }
-    }
-    return { kind: '', x: p.x, y: p.y, floor, elev };
+// Up in the air right now? Pure of the jump's age.
+function _jumpAirborne(p, now) {
+    const j = p && p._jump;
+    if (!j) return false;
+    const t = (now - j.t0) / _jumpKind(j.k).ms;
+    if (j.k === 'fall') return t >= 0 && t < JUMP_FALL_LAND;
+    if (j.k) return false;
+    return t >= JUMP_AIR[0] && t < JUMP_AIR[1];
 }
 
 // One frame of the jump, as a PURE function of its age — no state is advanced, so
 // the PiP pass draws it without running it twice (the Lemo / hat-chain rule).
 // `s` is the scale-up (the jump itself: the avatar comes toward the camera), `dy` the
-// lift, `sx`/`sy` the squash and stretch around it, `land` the landing phase (0..1).
+// lift, `sx`/`sy` the squash and stretch around it.
 function _jumpFx(player, now) {
     const j = player && player._jump;
     if (!j) return null;
-    const K = _jumpKind(j.k);
-    const t = (now - j.t0) / K.ms;
+    const ms = _jumpKind(j.k).ms;
+    const t = (now - j.t0) / ms;
     if (t < 0 || t >= 1) return null;
     if (j.k === 'off') {                  // walked off an edge: a short drop + squash
         const r = 1 - easeOutBack(Math.max(0.0001, t));
-        return { dy: -14 * (1 - t) * (1 - t), s: 1, sx: 1 + 0.16 * r, sy: 1 - 0.16 * r, air: 0 };
+        return { dy: -14 * (1 - t) * (1 - t), s: 1, sx: 1 + 0.16 * r, sy: 1 - 0.16 * r };
     }
-    const big = j.k === 'drop';
-    const t0 = big ? 0.12 : 0.15, t1 = big ? 0.80 : 0.72;
-    if (t < t0) {                         // crouch: wind up into it
+    if (j.k === 'fall') {
+        // Picks up from wherever the jump was (dy0 / s0) and falls AWAY from the
+        // camera: down past the platform's scale to the ground floor's. At touchdown
+        // the floor switches and the render scale snaps, so `s` is back to 1 there.
+        if (t < JUMP_FALL_LAND) {
+            const k = t / JUMP_FALL_LAND;
+            const g = k * k;
+            const s0 = j.s0 || 1, dy0 = j.dy0 || 0;
+            const lift = Math.sin(Math.min(1, k * 2.2) * Math.PI) * 16 * (1 - k);
+            return {
+                dy: dy0 * (1 - k) - lift,
+                s: s0 + (1 / FLOOR2_SCALE - s0) * g,
+                sx: 1 - 0.06 * g, sy: 1 + 0.10 * g,
+            };
+        }
+        const r = 1 - easeOutBack(Math.max(0.0001, (t - JUMP_FALL_LAND) / (1 - JUMP_FALL_LAND)));
+        return { dy: 0, s: 1 + 0.05 * r, sx: 1 + 0.34 * r, sy: 1 - 0.34 * r };
+    }
+    const [t0, t1] = JUMP_AIR;
+    if (t < t0) {                         // a short crouch — short, so the jump answers at once
         const e = t / t0;
         const k = 1 - (1 - e) * (1 - e);
-        const c = big ? 0.2 : 0.13;
-        return { dy: 0, s: 1 - 0.05 * k, sx: 1 + c * k, sy: 1 - c * k, air: 0 };
+        return { dy: 0, s: 1 - 0.04 * k, sx: 1 + 0.11 * k, sy: 1 - 0.11 * k };
     }
     if (t < t1) {                         // airborne
         const k = (t - t0) / (t1 - t0);
-        let arc = Math.sin(k * Math.PI);
-        // The drop rises a little, then falls much further than it rose: the
-        // ground floor is below the platform, so the fall ends well past neutral
-        // and the scale ends BELOW where it began (floor 2 is drawn larger).
-        let s = 1 + arc * K.grow;
-        if (big) {
-            arc = Math.sin(Math.min(1, k * 1.6) * Math.PI * 0.5) * (1 - k * k);
-            s = 1 + arc * K.grow - k * k * 0.18;
-        }
+        const arc = Math.sin(k * Math.PI);
         const st = Math.cos(k * Math.PI);
         return {
-            dy: -arc * K.arc,
-            s,
+            dy: -arc * 40,
+            s: 1 + arc * 0.28,
             sx: 1 - 0.077 * st - 0.04 * arc,
             sy: 1 + 0.091 * st + 0.05 * arc,
-            air: 1,
         };
     }
-    // Landing: squash flat on impact and spring back, with easeOutBack's overshoot
-    // giving the little reverse wobble instead of snapping still.
+    // Landing: squash flat on impact and spring back.
     const r = 1 - easeOutBack(Math.max(0.0001, (t - t1) / (1 - t1)));
-    const q = big ? 0.34 : 0.20;
-    return { dy: 0, s: 1 + 0.04 * r, sx: 1 + q * r, sy: 1 - q * r, air: 0 };
+    return { dy: 0, s: 1 + 0.04 * r, sx: 1 + 0.20 * r, sy: 1 - 0.20 * r };
 }
 
 // Same guard list every other world interaction uses. _chatMustClose() already covers
@@ -31549,7 +31575,7 @@ function canJump() {
     if (!p) return false;
     if (JUICE_ENTRANCE && _entrance.active) return false;
     if (chatIsOpen() || _chatMustClose()) return false;
-    if (gameState.isLockedIn) return false;
+    if (gameState.isLockedIn || gameState.anim.active) return false;
     if (gameState.isSitting || gameState.sitAnim.active) return false;
     if (gameState.reading && gameState.reading.active) return false;
     if (readingEndCardOpen()) return false;
@@ -31580,7 +31606,6 @@ function _jumpQuake(x, y, isMine) {
     _jumpQuakes.push({ x, y, t0: now, fl: 1 });
     if (_jumpQuakes.length > 4) _jumpQuakes.shift();
     perfWake(JUMP_QUAKE_MS + 200);
-    // A big burst, on the ground floor, arcing out in every direction.
     const lowGfx = gameState._lowGfx;
     const n = lowGfx ? 16 : 34;
     for (let i = 0; i < n; i++) {
@@ -31618,7 +31643,7 @@ function jumpShakeOffset(now) {
     return { x: Math.sin(e * 0.09) * a, y: Math.cos(e * 0.113) * a * 0.7 };
 }
 
-// The shock ring — world space, drawn right over the ground-floor players.
+// The shock ring — world space, drawn right under the ground-floor players.
 function drawJumpQuakes() {
     if (!_jumpQuakes.length) return;
     const ctx = gameState.ctx;
@@ -31675,73 +31700,113 @@ function receiveJump(player, msg) {
     if (!player) return;
     const now = Date.now();
     const k = (msg && typeof msg.k === 'string' && JUMP_KINDS[msg.k]) ? msg.k : '';
-    if (player._jump && now - player._jump.t0 < JUMP_COOLDOWN_MS && k !== 'off') return;
-    // A jump that TRAVELS is replayed with the avatar's own position stream, which
-    // runs one interpolation delay in the past — start the flourish in step with it.
-    const lag = (k && k !== 'off') ? ((player._netClock && player._netClock.delay) || 150) : 0;
-    player._jump = { t0: now + lag, k };
-    player._hatKick = { up: k === 'drop' ? 1.6 : 1, t: now + lag, land: _jumpLandMs(k) };
-    if (k === 'up' || k === 'hop') player._elev = true;
-    else if (k === 'down' || k === 'off' || k === 'drop') player._elev = false;
-    _jumpDust(player, k === 'drop' ? 3 : 5);
-    if (k === 'drop') {
+    if (k === 'fall') {
+        // Continues their jump; the floor flips when their fl=1 packet lands.
+        const fx = _jumpFx(player, now);
+        player._jump = { t0: now, k, s0: fx ? fx.s : 1, dy0: fx ? fx.dy : 0 };
+        player._hatKick = { up: 1.6, t: now, land: _jumpLandMs(k) };
         const x = Number(msg.x), y = Number(msg.y);
-        const lx = Number.isFinite(x) ? x : player.x, ly = Number.isFinite(y) ? y : player.y;
-        // The quake lands where the jumper lands — one interpolation delay later on
-        // this screen, since their avatar is replayed that far in the past.
-        const delay = _jumpKind('drop').ms * 0.80 + lag;
-        setTimeout(() => _jumpQuake(lx, ly, false), delay);
+        // The quake lands where their avatar lands — one interpolation delay late here.
+        const lag = (player._netClock && player._netClock.delay) || 150;
+        setTimeout(() => {
+            const lx = Number.isFinite(x) ? x : player.x, ly = Number.isFinite(y) ? y : player.y;
+            _jumpQuake(lx, ly, false);
+        }, _jumpLandMs('fall') + lag);
+        return;
     }
+    if (player._jump && now - player._jump.t0 < JUMP_COOLDOWN_MS && k !== 'off') return;
+    player._jump = { t0: now, k };
+    if (k === 'off') player._elev = false;
+    else player._hatKick = { up: 1, t: now, land: _jumpLandMs(k) };
+    _jumpDust(player, 5);
 }
 
-// The local jump's travel, one frame. Returns true while it owns the player.
-function _jumpDriveLocal(p) {
-    const m = p && p._jumpMove;
-    if (!m) return false;
-    // Anything that takes the player over (the kidnap, a seat) cancels the flight.
-    if (gameState.anim.active || gameState.isLockedIn || gameState.isSitting || gameState.sitAnim.active) {
-        p._jumpMove = null;
-        return false;
+// Where the feet came down → on a top, on the floor, or nudged out of something.
+function _jumpLand(p) {
+    const floor = p.floor || 1;
+    const ok = (x, y) => {
+        const fy = y + _JUMP_FEET;
+        if (_jumpTopAt(x, fy, floor) && !_jumpElevBlocked(x, fy, floor)) return 'top';
+        if (!checkCollision(x, y, { floor, elev: false, air: false })) return 'floor';
+        return '';
+    };
+    let where = ok(p.x, p.y);
+    if (!where) {
+        search:
+        for (let r = 8; r <= 180; r += 8) {
+            for (let a = 0; a < 16; a++) {
+                const ang = (a / 16) * Math.PI * 2;
+                const nx = p.x + Math.cos(ang) * r, ny = p.y + Math.sin(ang) * r;
+                const w = ok(nx, ny);
+                if (w) { p.x = nx; p.y = ny; where = w; break search; }
+            }
+        }
+        syncEntityRenderToTarget(p);
     }
-    const now = Date.now();
-    const K = _jumpKind(m.k);
-    const t = (now - m.t0) / K.ms;
-    const [a, b] = K.travel;
-    const k = Math.max(0, Math.min(1, (t - a) / (b - a)));
-    const e = k * k * (3 - 2 * k);
-    p.x = m.x0 + (m.x1 - m.x0) * e;
-    p.y = m.y0 + (m.y1 - m.y0) * e;
-    p._vx = 0; p._vy = 0;
-    p.isMoving = false; p.isSprinting = false;
-    p.smoothMove = false;
-    syncEntityRenderToTarget(p);
-    // Halfway through the flight is where the floor / the table changes hands.
-    if (k >= 0.5 && !m.swapped) {
-        m.swapped = true;
-        p._elev = m.elev;
-        if (m.floor !== (p.floor || 1)) forcePlayerFloor(p, m.floor);
-    }
-    sendPositionWS(p.x, p.y, false);
-    if (t < b) return true;
-    // Landed.
-    p._jumpMove = null;
-    p.x = m.x1; p.y = m.y1;
-    p._elev = m.elev;
-    if (m.floor !== (p.floor || 1)) forcePlayerFloor(p, m.floor);
-    syncEntityRenderToTarget(p);
+    const was = !!p._elev;
+    p._elev = where === 'top';
+    if (p._elev !== was || where) _jumpDust(p, p._elev ? 6 : 4);
     sendPositionWS(p.x, p.y, true);
     updatePlayerPosition(p.x, p.y);
-    if (m.k === 'drop') _jumpQuake(p.x, p.y, true);
-    else _jumpDust(p, 6);
-    return false;
+}
+
+// Up on the mezzanine and past its edge → the jump becomes a fall.
+function _jumpMaybeFall(p, now) {
+    if ((p.floor || 1) !== 2 || !p._air || (p._jump && p._jump.k === 'fall')) return;
+    const fy = p.y + _JUMP_FEET;
+    if (_jumpInPlatform(p.x, fy) || isOnStairs(p.x, p.y)) return;
+    const fx = _jumpFx(p, now);
+    p._jump = { t0: now, k: 'fall', s0: fx ? fx.s : 1, dy0: fx ? fx.dy : 0 };
+    p._elev = false;
+    p._hatKick = { up: 1.6, t: now, land: _jumpLandMs('fall') };
+    // Where the fall ends, roughly — the quake is placed off this for everyone else.
+    const lead = _jumpLandMs('fall') / 16.7;
+    sendJumpWS('fall', {
+        x: Math.round(p.x + (p._vx || 0) * lead * 0.6),
+        y: Math.round(p.y + (p._vy || 0) * lead * 0.6),
+    });
+    const fe = gameState.focusAudioEngine;
+    try { if (!(fe && fe.playHandled('jumpStart', 1, 0.9))) playSoundRobust(gameState.sounds.jumpStart); } catch (_) {}
+    perfWake(1200);
+}
+
+/* Per frame, from handleMovement, BEFORE the move: keeps `p._air` (which
+   checkCollision reads) true for exactly the airborne window, and lands the
+   player on the frame it ends. */
+function jumpUpdateLocal(p) {
+    const now = Date.now();
+    if (gameState.anim.active || gameState.isLockedIn || gameState.isSitting || gameState.sitAnim.active) {
+        p._air = false;
+        return;
+    }
+    const air = _jumpAirborne(p, now);
+    if (p._air && !air) {
+        p._air = false;
+        if (p._jump && p._jump.k === 'fall') {
+            // Touchdown on the ground floor.
+            p.floor = 1;
+            p.renderScale = desiredPlayerScale(p);
+            if (checkCollision(p.x, p.y, { floor: 1, elev: false, air: false })) _jumpLand(p);
+            else { sendPositionWS(p.x, p.y, true); updatePlayerPosition(p.x, p.y); }
+            _jumpQuake(p.x, p.y, true);
+        } else {
+            _jumpLand(p);
+        }
+        return;
+    }
+    p._air = air;
+}
+// Called right after the move — the mezzanine edge check needs the new position.
+function jumpAfterMove(p) {
+    if (p._air) _jumpMaybeFall(p, Date.now());
 }
 
 // Walking off the edge of a top: allowed wherever the floor below is free.
 function _jumpStepOff(p, nx, ny) {
-    if (!p._elev || p._jumpMove) return false;
+    if (!p._elev || p._air) return false;
     const floor = p.floor || 1;
     if (_jumpTopAt(nx, ny + _JUMP_FEET, floor)) return false;
-    if (checkCollision(nx, ny, { elev: false, floor })) return false;
+    if (checkCollision(nx, ny, { elev: false, floor, air: false })) return false;
     p._elev = false;
     p.x = nx; p.y = ny;
     p._jump = { t0: Date.now(), k: 'off' };
@@ -31753,38 +31818,19 @@ function _jumpStepOff(p, nx, ny) {
 
 function triggerJump() {
     const p = gameState.players[gameState.userId];
-    if (!p || !canJump() || p._jumpMove) return false;
+    if (!p || !canJump() || p._air) return false;
     const now = Date.now();
     if (p._jump && now - p._jump.t0 < JUMP_COOLDOWN_MS) return false;
-    // Facing: the way I'm moving, else the way I last moved.
-    let dx = p._vx || 0, dy = p._vy || 0;
-    const mag = Math.hypot(dx, dy);
-    if (mag > 0.4) { dx /= mag; dy /= mag; } else { dx = _jumpLastDir.x; dy = _jumpLastDir.y; }
-    // Standing still means "jump in place" — unless I'm on a table (then the jump
-    // is how I get down, so it still looks where I last faced).
-    const plan = (mag > 0.4 || p._elev) ? _jumpPlan(p, dx, dy) : { kind: '' };
-    const kind = plan.kind;
-    p._jump = { t0: now, k: kind };
-    if (kind) {
-        p._jumpMove = { k: kind, t0: now, x0: p.x, y0: p.y, x1: plan.x, y1: plan.y, floor: plan.floor, elev: plan.elev, swapped: false };
-    }
-    _jumpDust(p, kind === 'drop' ? 3 : 5);
-    sendJumpWS(kind, kind === 'drop' ? { x: Math.round(plan.x), y: Math.round(plan.y) } : null);
+    p._jump = { t0: now, k: '' };
+    _jumpDust(p, 5);
+    sendJumpWS('');
     const fe = gameState.focusAudioEngine;
-    if (kind === 'drop') {
-        if (!(fe && fe.playHandled('jumpStart', 1, 0.9))) playSoundRobust(gameState.sounds.jumpStart);
-    } else if (fe) fe.playEffect('sofaStand');   // the couch hop's own sound — the same motion
+    if (fe) fe.playEffect('sofaStand');   // the couch hop's own sound — the same motion
     else playSoundRobust(gameState.sounds.sofaStand);
     // Hats get a shove of their own (see _updateHatChain).
-    p._hatKick = { up: kind === 'drop' ? 1.6 : 1, t: now, land: _jumpLandMs(kind) };
-    perfWake(_jumpKind(kind).ms + 200);
+    p._hatKick = { up: 1, t: now, land: _jumpLandMs('') };
+    perfWake(JUMP_MS + 200);
     return true;
-}
-
-// Remembered for a standing jump off a table. Called from handleMovement.
-function jumpNoteDir(vx, vy) {
-    const m = Math.hypot(vx, vy);
-    if (m > 0.4) { _jumpLastDir.x = vx / m; _jumpLastDir.y = vy / m; }
 }
 
 // Two presses on your own character. The FIRST one opens the chat box (that is what a

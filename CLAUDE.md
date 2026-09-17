@@ -101,7 +101,7 @@ Grep anchors for the major systems (all verified to exist):
 | Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admTeam`, `_admRenderOverview`, `_admRenderList`, `_admRenderDetail`, `_admDutySection`, `_admCopyReport` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS`, `drawChatBeacons` |
 | «يكتب الآن» + الانصهار | `CHAT_TYP_`, `CHAT_MORPH_MS`, `sendTypingWS`, `_chatSetTyping`, `_chatMorphFx`, `_chatDrawTyping` |
-| القفز | `JUMP_KINDS`, `_jumpFx`, `_jumpPlan`, `_jumpDriveLocal`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump` |
+| القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump` |
 | نداء ليمو | `LEMO_UID`, `lemoSummon`, `_lemoCallPose`, `_lemoCallSpots`, `lemoIsAsleep`, `lemoIsBusy` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
@@ -1306,8 +1306,10 @@ linger → flash out → flash back in at a random break-room spot, where his se
   pill). Colour: fixed teal. `uid 'lemo'` is excluded from pings, cooldowns and the mention
   sound, and its pill never degrades to text for being "offline".
 - **Floor 2**: `call.fl` puts him on the mezzanine (`_lemo.floor`), see drawLemo above.
-- **The flash** draws the frame into one small scratch canvas and washes it white
-  (`_lemoWhiteFrame`, source-atop) — only while `_lemo.white > 0`.
+- **The flash** must read as a flash, not a fade (it looked like a plain fade-in on floor 2):
+  fully white at full opacity first (`_lemoFlashIn` / `_lemoFlashOut`), with a light burst and
+  ring around him (`_lemo.glow` → `_lemoDrawGlow`, drawn even while he is invisible). The
+  sprite is washed white in one small scratch canvas (`_lemoWhiteFrame`, source-atop).
 - The caller hears a soft blip when «عايز ايه؟» pops up (`_lemo.callCue`).
 
 ---
@@ -1608,46 +1610,45 @@ table) it can **travel**. Code is the `القفز` block just above the chat sec
 no CSS. Grep anchors: `JUMP_KINDS`, `_jumpFx`, `_jumpPlan`, `_jumpDriveLocal`,
 `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `receiveJump`, `anyDoubleTapJump`.
 
-### Kinds (`JUMP_KINDS`) and where they go (`_jumpPlan`)
-| kind | what | ms |
-|---|---|---|
-| `''` | in place | 560 |
-| `up` | floor → a table top in front (≤ `JUMP_REACH`) | 640 |
-| `hop` | table → the next table | 600 |
-| `down` | table → the floor in front | 600 |
-| `off` | walked off a top's edge (`_jumpStepOff`) — a short drop, no travel | 300 |
-| `drop` | floor 2 → over the railing → floor 1 (≤ `JUMP_DROP_REACH`) | 1150 |
+### One continuous jump — the LANDING decides (no scripted travel)
+An earlier version planned a destination and played a scripted move onto it: it felt like a
+separate, delayed animation and only found tables straight ahead. **Don't bring that back.**
 
-- **Facing** = current velocity, else the last movement direction (`jumpNoteDir`). A
-  standing jump on the floor never travels; a standing jump on a table uses the last facing
-  (it is how you get down).
-- **The travel is driven locally** (`_jumpDriveLocal`, first thing in `handleMovement`,
-  which it owns until landing) and reaches everyone through ordinary position packets. The
-  floor / table state swaps at mid-flight. A kidnap, a seat or a lock-in cancels it.
+- **You keep full control the whole jump.** `jumpUpdateLocal` (first in `handleMovement`)
+  keeps `player._air` true for exactly the airborne window (`JUMP_AIR`, pure of the jump's age
+  via `_jumpAirborne`); `checkCollision` reads it. **While up, only walls block**
+  (`_jumpWallAt` — `worldCollision.walls` + the meeting room's walls/screen): tables, sofas,
+  desks, the fireplace are passed over, and the avatar is drawn above them.
+- **The landing** (`_jumpLand`, on the frame the window ends): feet on a top → `_elev`; on free
+  floor → floor, normal size; inside something you can't stand on → nudged to the nearest spot
+  that is either. Works from every direction because nothing is aimed.
+- **Standing on a top** (`_elev`): `_jumpElevBlocked` — the feet must stay over a top, walls
+  block; walking off in any direction → `_jumpStepOff` (the `off` kind) → normal size again.
+- **The crouch is 56 ms** (`JUMP_AIR[0]`) so the jump answers the key at once.
+- **Relay kinds**: `''` · `off` · `fall` (`{t:'jmp', uid, k, x?, y?}`).
 
 ### Standing on a table — `player._elev`
 - **`worldCollision.tops`** = the eroded furniture body + the two manual desk rects;
-  **`worldCollision.walls`** = the dilated walls alone (2 × 1.7 MB, built with the other
-  masks). The meeting table is its `MEET_TABLE_SOLID` rect; on floor 2 the tops are the
-  desks (`floor2desks`).
-- **`checkCollision(x, y, opts)`** — `opts = { floor, elev }` asks about another state (the
-  planner uses it). Elevated → `_jumpElevBlocked`: blocked if the feet leave a top, or a wall
-  is hit. Leaving a top in `handleMovement` tries `_jumpStepOff`: allowed where the floor below
-  is free → `_elev` off + the `off` kind.
+  **`worldCollision.walls`** = the dilated walls alone (2 × 1.7 MB). The meeting table is its
+  `MEET_TABLE_SOLID` rect; on floor 2 the tops are the desks (`floor2desks`).
+- **`checkCollision(x, y, opts)`** — `opts = { floor, elev, air }` asks about another state.
 - **Scale**: `desiredPlayerScale` × `JUMP_TOP_SCALE` (1.14). Relayed as `el` in the position
-  packet (the 3 s idle ping carries it to late joiners). **Never written to Firebase** — a
-  reload puts you on the floor (`_unstickLocalPlayer`).
-- `updateFloorsAndScales` drops `_elev` the moment a seat / laptop / kidnap takes over, or the
-  spot under the feet stops being a top.
+  packet (the 3 s idle ping carries it to late joiners). **Never written to Firebase.**
+- `updateFloorsAndScales` drops `_elev` when a seat / laptop / kidnap takes over, or the spot
+  under the feet stops being a top.
 
-### The mezzanine drop — `_jumpQuake`
-- Launch: `Jump_Start.mp3` (jumper only). Landing (jumper at land, everyone else at land +
-  their interpolation delay, off `x/y` in the event): a big dust burst, a world-space shock
-  ring (`drawJumpQuakes`, under the ground players), a bounce that runs through every avatar
-  the ring passes (`_jumpQuakeBounce`, pure of age), and — within `JUMP_QUAKE_R` and **not in a
-  work phase / locked in / behind an overlay** — a short screen shake (`jumpShakeOffset` in
-  `render()`) and `Jump_Land.mp3`, quieter with distance. A worker sees the ring, nothing else.
-- Dust is capped at 260 particles; the burst is halved on reduced tiers.
+### The mezzanine fall — `_jumpMaybeFall` → `_jumpQuake`
+- On floor 2, while up, the platform (`_jumpInPlatform`) is free and past its edge you may go
+  only where the ground floor below is free. The moment the feet leave the platform (not onto
+  the stairs) the jump becomes a **`fall`**: Jump_Start (jumper), the fx continues from the
+  jump's current lift/scale (`s0`/`dy0`) and shrinks to the ground floor's size. The player
+  stays on floor 2 (drawn above the mezzanine) until touchdown, then `floor = 1` and the render
+  scale snaps (`updateFloorsAndScales` snaps any falling player — the fx carries the shrink).
+- Touchdown: `_jumpQuake` — a big dust burst, a world-space shock ring (`drawJumpQuakes`), a
+  bounce through every avatar it passes (`_jumpQuakeBounce`), and — within `JUMP_QUAKE_R` and
+  **not in a work phase / locked in / behind an overlay** — a short screen shake and
+  `Jump_Land.mp3`, quieter with distance. Others place it off the event's `x/y`, one
+  interpolation delay after their touchdown time. A worker sees the ring, nothing else.
 
 ### Rules that still hold
 - **Zero Firebase**: `{t:'jmp', uid, k, x?, y?}` on the relay. A travelling kind is started on
