@@ -3549,7 +3549,7 @@ A subtask is a whole task carrying `parent`. `_libBlock` nests each group's flat
 `_libNest` (mirror of `nest()`): a child whose parent is in the SAME group moves under it
 inside a `.subrow` wrapper that carries the elbow (`.sub-tee` — a wrapper because `.task` is
 `overflow:hidden`). The parent's foot gets `_libKidsChip` (count + triangle) that folds its
-rows (`.subrow.hid`, `_lib.shutKids`, session-only). Counts stay FLAT. `_libDropPill` removes
+rows (`.subrow.hid`, `_lib.shutKids`, session-only). Counts stay FLAT. **The الحريقة / بقية المهام split is by FAMILY** (`_libFireFamilies`): a family goes to الحريقة if any member burns — splitting task by task sent a subtask due sooner than its parent into another group, where it rendered as an orphan (the library's member view has one «مهامي» list, so it never splits them). `_libDropPill` removes
 the row with its pill. Orphans render as ordinary pills.
 
 ### RESYNC

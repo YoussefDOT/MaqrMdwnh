@@ -29502,8 +29502,25 @@ function _libOpenMine() {
     return _libSortByDue(_libMyTasks())
         .filter(t => me.admin ? !_libIsFullyDone(t) : !_libIsDoneFor(t, me.slug));
 }
-const _libFireOf = list => list.filter(t => ((Number(t.due) || 0) - Date.now()) <= LIB_FIRE_MS);
-const _libRestOf = list => list.filter(t => ((Number(t.due) || 0) - Date.now()) >  LIB_FIRE_MS);
+/* The split is by FAMILY, not by task. Nesting (`_libNest`) only happens inside
+   one group, so a subtask due tomorrow under a parent due next week used to land
+   in الحريقة on its own — an orphan pill, while the library (one «مهامي» list)
+   shows it under its parent. A family goes where its most urgent member goes:
+   the burning subtask still sits in الحريقة, now with its parent over it. */
+const _libIsFire = t => ((Number(t.due) || 0) - Date.now()) <= LIB_FIRE_MS;
+function _libFireFamilies(list) {
+    const byId = new Map(list.map(t => [t.id, t]));
+    const rootOf = t => {
+        const seen = new Set();
+        while (t.parent && byId.has(t.parent) && !seen.has(t.id)) { seen.add(t.id); t = byId.get(t.parent); }
+        return t.id;
+    };
+    const hot = new Set();
+    list.forEach(t => { if (_libIsFire(t)) hot.add(rootOf(t)); });
+    return { hot, rootOf };
+}
+const _libFireOf = list => { const f = _libFireFamilies(list); return list.filter(t =>  f.hot.has(f.rootOf(t))); };
+const _libRestOf = list => { const f = _libFireFamilies(list); return list.filter(t => !f.hot.has(f.rootOf(t))); };
 
 /* ── render ───────────────────────────────────────────────────────────────── */
 function _libRender(silent) {
