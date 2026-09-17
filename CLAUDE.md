@@ -101,7 +101,7 @@ Grep anchors for the major systems (all verified to exist):
 | Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admTeam`, `_admRenderOverview`, `_admRenderList`, `_admRenderDetail`, `_admDutySection`, `_admCopyReport` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS`, `drawChatBeacons` |
 | «يكتب الآن» + الانصهار | `CHAT_TYP_`, `CHAT_MORPH_MS`, `sendTypingWS`, `_chatSetTyping`, `_chatMorphFx`, `_chatDrawTyping` |
-| القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump` |
+| القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpTryFall`, `_jumpFallTarget`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump` |
 | نداء ليمو | `LEMO_UID`, `lemoSummon`, `_lemoCallPose`, `_lemoCallSpots`, `lemoIsAsleep`, `lemoIsBusy` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
@@ -1637,13 +1637,20 @@ separate, delayed animation and only found tables straight ahead. **Don't bring 
 - `updateFloorsAndScales` drops `_elev` when a seat / laptop / kidnap takes over, or the spot
   under the feet stops being a top.
 
-### The mezzanine fall — `_jumpMaybeFall` → `_jumpQuake`
-- On floor 2, while up, the platform (`_jumpInPlatform`) is free and past its edge you may go
-  only where the ground floor below is free. The moment the feet leave the platform (not onto
-  the stairs) the jump becomes a **`fall`**: Jump_Start (jumper), the fx continues from the
-  jump's current lift/scale (`s0`/`dy0`) and shrinks to the ground floor's size. The player
-  stays on floor 2 (drawn above the mezzanine) until touchdown, then `floor = 1` and the render
-  scale snaps (`updateFloorsAndScales` snaps any falling player — the fx carries the shrink).
+### The mezzanine fall — `_jumpTryFall` → `_jumpQuake`
+- On floor 2, while up, the platform (`_jumpInPlatform`) and the stairs are free; its edge is
+  never crossed by ordinary movement. When the next step would leave the platform,
+  `handleMovement` asks `_jumpTryFall` FIRST: `_jumpFallTarget` searches along the direction of
+  travel (`JUMP_FALL_MIN`–`JUMP_FALL_MAX`) for free ground whose whole avatar clears the
+  platform art by `JUMP_FALL_CLEAR` (the head, not just the feet, on the south edge), off the
+  stairs. Found → a **thrown fall**: `player._fallMove` eases the position there over the fall
+  (`jumpUpdateLocal` owns the position; input is ignored), Jump_Start plays, the event carries
+  the exact landing `x/y`. Not found → the edge simply blocks.
+  (It used to need the ground right at the edge to be clear AND the edge reached inside the
+  short airborne window — so it often didn't trigger, and it landed overlapping the platform.)
+- The fx continues from the jump's current lift/scale (`s0`/`dy0`) and shrinks to the ground
+  floor's size; the player stays on floor 2 (drawn above the mezzanine) until touchdown, then
+  `floor = 1` and the render scale snaps (`updateFloorsAndScales` snaps any falling player).
 - Touchdown: `_jumpQuake` — a big dust burst, a world-space shock ring (`drawJumpQuakes`), a
   bounce through every avatar it passes (`_jumpQuakeBounce`), and — within `JUMP_QUAKE_R` and
   **not in a work phase / locked in / behind an overlay** — a short screen shake and

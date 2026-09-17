@@ -10306,8 +10306,9 @@ function updateCamera() {
 function handleMovement() {
     const player = gameState.players[gameState.userId];
     if (!player) return;
-    // القفز: the airborne flag checkCollision reads, and the landing.
-    jumpUpdateLocal(player);
+    // القفز: the airborne flag checkCollision reads, the landing, and a thrown fall
+    // off the mezzanine (which owns the position while it flies).
+    if (jumpUpdateLocal(player)) { player._vx = 0; player._vy = 0; return; }
     // Any of these lock out free movement. Zero the momentum velocity so a stale
     // glide can't lurch the player the instant the lock lifts (unlock / stand up /
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
@@ -10389,11 +10390,12 @@ function handleMovement() {
         player.isSprinting = isSprinting && hasInput;
         const nextX = player.x + player._vx * gameState.dtFactor;
         const nextY = player.y + player._vy * gameState.dtFactor;
+        // Up on the mezzanine and heading over its edge → thrown fall (see القفز).
+        if (_jumpTryFall(player, nextX, nextY)) return;
         if (!checkCollision(nextX, player.y)) player.x = nextX;
         else if (!_jumpStepOff(player, nextX, player.y)) player._vx = 0;
         if (!checkCollision(player.x, nextY)) player.y = nextY;
         else if (!_jumpStepOff(player, player.x, nextY)) player._vy = 0;
-        jumpAfterMove(player);
         player.smoothMove = false;
         syncEntityRenderToTarget(player);
         // Live movement goes over the WebSocket relay (throttled), NOT Firebase —
@@ -31439,7 +31441,7 @@ let _anyTap = { t: 0, x: 0, y: 0 };
 const JUMP_KINDS = {
     '':   { ms: JUMP_MS },
     off:  { ms: 300 },
-    fall: { ms: 640 },
+    fall: { ms: 820 },
 };
 const JUMP_AIR    = [0.10, 0.72];   // the airborne window of a jump, as fractions of JUMP_MS
 const JUMP_FALL_LAND = 0.70;        // where in a fall the feet touch the ground
@@ -31492,15 +31494,38 @@ function _jumpElevBlocked(x, fy, floor) {
     return _jumpWallAt(x, fy);
 }
 // Collision while UP in a jump: tables and objects are passed over. On the
-// mezzanine the platform is free, and past its edge only where the ground floor
-// below is free to land on (that is the fall — see _jumpMaybeFall).
+// mezzanine the platform (and the stairs) are free; its edge is left only by a
+// FALL, which handleMovement starts before this is ever asked (_jumpTryFall).
 function _jumpAirBlocked(x, y, fy, floor) {
     if (!worldCollision.built) return false;
-    if (floor === 2) {
-        if (_jumpInPlatform(x, fy) || isOnStairs(x, y)) return false;
-        return checkCollision(x, y, { floor: 1, elev: false, air: false });
-    }
+    if (floor === 2) return !(_jumpInPlatform(x, fy) || isOnStairs(x, y));
     return _jumpWallAt(x, fy);
+}
+
+/* Where a fall off the mezzanine lands: along the direction of travel, far enough
+   out that the whole avatar clears the platform's art (the feet point is at the
+   bottom of the sprite, the head ~a body above it), on free ground, not on the
+   stairs. Searched from the edge outward; null = no way down this way. */
+const JUMP_FALL_MIN = 70;     // world px past the edge, at least
+const JUMP_FALL_MAX = 340;
+const JUMP_FALL_CLEAR = 46;   // extra margin round the platform the avatar must clear
+function _jumpFallTarget(p, dx, dy) {
+    const L = Math.hypot(dx, dy);
+    if (L < 0.01) return null;
+    dx /= L; dy /= L;
+    const clear = (x, y) => {
+        const r = PLAYER_SIZE * 0.5 + JUMP_FALL_CLEAR;
+        return x + r < PLAT_X0 || x - r > PLAT_X1
+            || y - PLAYER_SIZE * 0.5 - JUMP_FALL_CLEAR > PLAT_Y1   // the head clears the south edge
+            || y + r < PLAT_Y0;
+    };
+    for (let d = JUMP_FALL_MIN; d <= JUMP_FALL_MAX; d += 8) {
+        const x = p.x + dx * d, y = p.y + dy * d;
+        if (!clear(x, y) || isOnStairs(x, y)) continue;
+        if (checkCollision(x, y, { floor: 1, elev: false, air: false })) continue;
+        return { x, y };
+    }
+    return null;
 }
 
 // Up in the air right now? Pure of the jump's age.
@@ -31750,40 +31775,58 @@ function _jumpLand(p) {
     updatePlayerPosition(p.x, p.y);
 }
 
-// Up on the mezzanine and past its edge → the jump becomes a fall.
-function _jumpMaybeFall(p, now) {
-    if ((p.floor || 1) !== 2 || !p._air || (p._jump && p._jump.k === 'fall')) return;
-    const fy = p.y + _JUMP_FEET;
-    if (_jumpInPlatform(p.x, fy) || isOnStairs(p.x, p.y)) return;
+// Up on the mezzanine and about to cross its edge → the jump becomes a THROWN fall:
+// a clear landing spot out past the platform, reached in one eased arc. Returns
+// true when it started one (the caller then leaves the position alone).
+function _jumpTryFall(p, nx, ny) {
+    if ((p.floor || 1) !== 2 || !p._air || (p._jump && p._jump.k === 'fall')) return false;
+    if (_jumpInPlatform(nx, ny + _JUMP_FEET) || isOnStairs(nx, ny)) return false;
+    const to = _jumpFallTarget(p, p._vx || (nx - p.x), p._vy || (ny - p.y));
+    if (!to) return false;
+    const now = Date.now();
     const fx = _jumpFx(p, now);
     p._jump = { t0: now, k: 'fall', s0: fx ? fx.s : 1, dy0: fx ? fx.dy : 0 };
+    p._fallMove = { x0: p.x, y0: p.y, x1: to.x, y1: to.y, t0: now };
     p._elev = false;
+    p._vx = 0; p._vy = 0;
     p._hatKick = { up: 1.6, t: now, land: _jumpLandMs('fall') };
-    // Where the fall ends, roughly — the quake is placed off this for everyone else.
-    const lead = _jumpLandMs('fall') / 16.7;
-    sendJumpWS('fall', {
-        x: Math.round(p.x + (p._vx || 0) * lead * 0.6),
-        y: Math.round(p.y + (p._vy || 0) * lead * 0.6),
-    });
+    sendJumpWS('fall', { x: Math.round(to.x), y: Math.round(to.y) });
     const fe = gameState.focusAudioEngine;
     try { if (!(fe && fe.playHandled('jumpStart', 1, 0.9))) playSoundRobust(gameState.sounds.jumpStart); } catch (_) {}
-    perfWake(1200);
+    perfWake(1400);
+    return true;
 }
 
 /* Per frame, from handleMovement, BEFORE the move: keeps `p._air` (which
-   checkCollision reads) true for exactly the airborne window, and lands the
-   player on the frame it ends. */
+   checkCollision reads) true for exactly the airborne window, drives a thrown
+   fall, and lands the player on the frame it ends. Returns true while a fall owns
+   the position (no input movement then). */
 function jumpUpdateLocal(p) {
     const now = Date.now();
     if (gameState.anim.active || gameState.isLockedIn || gameState.isSitting || gameState.sitAnim.active) {
         p._air = false;
-        return;
+        p._fallMove = null;
+        return false;
     }
     const air = _jumpAirborne(p, now);
+    const m = p._fallMove;
+    if (m) {
+        // The throw: ease-out across the fall, so it leaves the edge fast and settles.
+        const k = Math.min(1, (now - m.t0) / _jumpLandMs('fall'));
+        const e = 1 - Math.pow(1 - k, 2.2);
+        p.x = m.x0 + (m.x1 - m.x0) * e;
+        p.y = m.y0 + (m.y1 - m.y0) * e;
+        p.isMoving = false; p.isSprinting = false;
+        p.smoothMove = false;
+        syncEntityRenderToTarget(p);
+        sendPositionWS(p.x, p.y, false);
+    }
     if (p._air && !air) {
         p._air = false;
         if (p._jump && p._jump.k === 'fall') {
             // Touchdown on the ground floor.
+            if (m) { p.x = m.x1; p.y = m.y1; syncEntityRenderToTarget(p); }
+            p._fallMove = null;
             p.floor = 1;
             p.renderScale = desiredPlayerScale(p);
             if (checkCollision(p.x, p.y, { floor: 1, elev: false, air: false })) _jumpLand(p);
@@ -31792,13 +31835,10 @@ function jumpUpdateLocal(p) {
         } else {
             _jumpLand(p);
         }
-        return;
+        return false;
     }
     p._air = air;
-}
-// Called right after the move — the mezzanine edge check needs the new position.
-function jumpAfterMove(p) {
-    if (p._air) _jumpMaybeFall(p, Date.now());
+    return !!p._fallMove;
 }
 
 // Walking off the edge of a top: allowed wherever the floor below is free.
