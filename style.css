@@ -9460,10 +9460,10 @@ body.chal-modal-open.is-mobile #game-canvas { opacity: 0; pointer-events: none; 
    في عنصر يرث user-select: none. */
 #chat-input {
     position: relative;
-    width: 190px;
+    width: 240px;
     min-width: 0;
     min-height: 22px;
-    max-height: 66px;
+    max-height: 88px;
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-width: none;
@@ -9540,7 +9540,7 @@ body.chal-modal-open.is-mobile #game-canvas { opacity: 0; pointer-events: none; 
     font-weight: 600;
     color: rgba(255, 255, 255, 0.30);
     font-variant-numeric: tabular-nums;
-    min-width: 16px;
+    min-width: 22px;
     text-align: center;
     margin-bottom: 8px;
     transition: color .2s;
@@ -9583,7 +9583,7 @@ body.is-mobile .chat-input-box {
     background: rgba(18, 18, 18, 0.93);
 }
 body.is-mobile .chat-input-tail { background: rgba(18, 18, 18, 0.93); }
-body.is-mobile #chat-input { width: 44vw; max-width: 220px; font-size: 16px; line-height: 24px; max-height: 72px; }
+body.is-mobile #chat-input { width: 56vw; max-width: 260px; font-size: 16px; line-height: 24px; max-height: 96px; }
 body.is-mobile #chat-input.is-empty::before { top: 3px; }
 
 /* ── الرفض: هزّة يمين-يسار ووميض أحمر (مهلة الإشارة، أو لا مساحة لها) ──
@@ -11935,8 +11935,9 @@ body.is-mobile .adm-sort { flex: 1 1 auto; }
     left: 50%;
     z-index: 2;
     width: max-content;
-    max-width: 220px;
+    max-width: 260px;
     padding: 7px 12px;
+    text-wrap: balance;
     border-radius: 15px;
     background: rgba(20, 20, 22, 0.92);
     border: 1px solid rgba(255, 255, 255, 0.1);

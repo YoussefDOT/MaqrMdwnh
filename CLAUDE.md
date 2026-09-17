@@ -261,7 +261,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **القفز** | مسافة، أو نقرتان على شخصيتك (وعلى الجوال نقرتان في أي مكان). قفزة في المكان — أو، أثناء الحركة، **على طاولة** تمشي فوقها (أكبر قليلًا)، ومنها إلى الأرض، و**من حافة الطابق الثاني** إلى الأرض بهبوط قوي: غبار وموجة وهزّة وصوت لمن حولك إلا من في جلسة عمل. صفر فايربيس. See **القفز**. |
 | **نداء ليمو** | `@ليمو` في الدردشة: يترك ما يفعله، يومض ويختفي، يظهر بجانبك ويمشي إليك ويقول «عايز ايه؟» ثم يعود إلى جولته. واحد في كل مرة، ولا يُنادى نائمًا ولا من جلسة عمل. See **Lemo → نداء ليمو**. |
 | **نشرة الأخبار** | A button under the login pill opens the member-facing changelog, grouped by day (`patch-notes.json`). See **نشرة الأخبار**. |
-| **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٥٠ حرفًا, wrapping onto two lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, a قوس on the screen edge pointing at whoever called you (it stays until you see them), a شريط at the bottom, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
+| **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ١٠٠ حرف, wrapping onto up to three balanced lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, a قوس on the screen edge pointing at whoever called you (it stays until you see them), a شريط at the bottom, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **غرفة الاجتماعات** | A room snapped onto the top-right of the scene, hidden behind a doorway that glows white until you walk up to it. Press its table → a seat (the sofa hop) and a full-screen look at the real table with everyone round it: six reactions, the proximity chat, and a **green ring on whoever is talking in the Discord call** — fed live by MdwnhBot over the relay, zero Firebase. See **غرفة الاجتماعات**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until someone walks up, then wanders it — and now and then walks the owner-drawn route to the meeting room, roams round the table and walks back. **One Lemo per lobby**: everyone sees the same robot, from a seeded timeline off one tiny Firebase doc that only changes when he's woken or put to bed. Arrive to an empty lobby → he's asleep. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
@@ -1316,8 +1316,10 @@ linger → flash out → flash back in at a random break-room spot, where his se
 
 ## الدردشة القريبة — proximity chat
 
-A **50-character** message that floats over your head, wrapping onto a second line when
-it needs one. Code is the `الدردشة القريبة` block near the end of `game.js`; markup is
+A **100-character** message that floats over your head, wrapping onto up to **three
+balanced lines** when it needs them (`_chatLayout`: widens the wrap from `CHAT_WRAP_W` up
+to `CHAT_WRAP_W_MAX` until it fits `CHAT_MAX_LINES`, then narrows it back to the
+narrowest width with the same line count so the rows come out even). Code is the `الدردشة القريبة` block near the end of `game.js`; markup is
 `#chat-input-wrap` in `index.html`; styles are the matching block in `style.css`. Grep
 anchors: `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`,
 `sendChatWS`, `_chatMen`, `_chatMentionPing`.

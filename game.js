@@ -31889,8 +31889,8 @@ function anyDoubleTapJump(sx, sy) {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  الدردشة القريبة — proximity chat (+ الإشارات, mentions)
 //  ---------------------------------------------------------------------------
-//  A 50-character message that floats over your head — wrapping onto a second line
-//  when it needs one — and stacks upward when you send another. Someone standing
+//  A 100-character message that floats over your head — wrapping onto up to three
+//  balanced lines when it needs them — and stacks upward when you send another. Someone standing
 //  near you gets a soft cue with it; someone across the building, or in a work
 //  session, gets nothing.
 //
@@ -31917,7 +31917,7 @@ function anyDoubleTapJump(sx, sy) {
 //  sendChatWS, _chatMen, _chatMentionPing.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const CHAT_MAX_LEN      = 50;     // hard cap, enforced on send AND on receive; a mention
+const CHAT_MAX_LEN      = 100;     // hard cap, enforced on send AND on receive; a mention
                                   // costs its name plus the @ (what an old client reads)
 const CHAT_STACK_MAX    = 3;      // bubbles kept above one head
 const CHAT_LIFE_MS      = 6200;   // base lifetime…
@@ -31935,7 +31935,9 @@ const CHAT_HEAD_GAP     = 30;     // clearance above the head — the tail tucks
 // The bubble box. Its height follows its line count, so the stack is built from
 // each bubble's OWN height (see updateChatSystem) — never a fixed step, which is
 // what would make a two-line bubble overlap the one above it.
-const CHAT_WRAP_W       = 188;    // widest a line may run before it wraps
+const CHAT_WRAP_W       = 188;    // widest a line may run before it wraps…
+const CHAT_WRAP_W_MAX   = 300;    // …unless that would take more than CHAT_MAX_LINES:
+const CHAT_MAX_LINES    = 3;      // then the wrap widens until it fits in three
 const CHAT_LINE_H       = 20;
 const CHAT_PAD_X        = 13;
 const CHAT_PAD_Y        = 5;      // one line → 30 tall, the height the bubble always had
@@ -32047,7 +32049,7 @@ function _chatCleanRun(t) {
     return String(t == null ? '' : t).replace(_CHAT_STRIP_RE, ' ').replace(/\s+/g, ' ');
 }
 
-// What a part spends of the 50. A mention costs its name plus the @.
+// What a part spends of the 100. A mention costs its name plus the @.
 function _chatPartLen(p) { return p.u ? p.n.length + 1 : p.t.length; }
 function _chatPlain(parts) { return parts.map(p => (p.u ? '@' + p.n : p.t)).join(''); }
 
@@ -32151,7 +32153,36 @@ function _chatIsRtl(str) {
     }
     return true;
 }
+// Wraps at CHAT_WRAP_W; a long message widens the wrap (up to CHAT_WRAP_W_MAX) until
+// it fits in CHAT_MAX_LINES, then the width is shrunk back to the narrowest one that
+// keeps that line count — so the lines come out even (CSS text-wrap: balance) instead
+// of two full lines and a one-word tail. Greedy wrapping only ever needs fewer lines
+// as the width grows, so both searches are plain bisections. Measured once per
+// message, never per frame.
 function _chatLayout(parts) {
+    let lay = _chatLayoutAt(parts, CHAT_WRAP_W);
+    if (lay.lines.length <= 1) return lay;
+    let hi = CHAT_WRAP_W;
+    if (lay.lines.length > CHAT_MAX_LINES) {
+        const wide = _chatLayoutAt(parts, CHAT_WRAP_W_MAX);
+        if (wide.lines.length > CHAT_MAX_LINES) return wide;
+        let lo = CHAT_WRAP_W; hi = CHAT_WRAP_W_MAX; lay = wide;
+        while (hi - lo > 4) {
+            const mid = (lo + hi) >> 1;
+            const t = _chatLayoutAt(parts, mid);
+            if (t.lines.length <= CHAT_MAX_LINES) { hi = mid; lay = t; } else lo = mid;
+        }
+    }
+    const n = lay.lines.length;
+    let lo = Math.max(40, Math.floor((lay.w - CHAT_PAD_X * 2) * 0.5));
+    while (hi - lo > 3) {
+        const mid = (lo + hi) >> 1;
+        const t = _chatLayoutAt(parts, mid);
+        if (t.lines.length <= n) { hi = mid; lay = t; } else lo = mid;
+    }
+    return lay;
+}
+function _chatLayoutAt(parts, WRAP) {
     const m = _chatMCtx();
     const tw = (s) => { if (!m) return s.length * 7;   m.font = CHAT_FONT;      return m.measureText(s).width; };
     const pw = (s) => { if (!m) return s.length * 6.5; m.font = CHAT_PILL_FONT; return m.measureText(s).width; };
@@ -32164,7 +32195,7 @@ function _chatLayout(parts) {
         if (p.u) {
             const nw = pw(p.n);
             const w = CHAT_PILL_PAD_AV + CHAT_PILL_AV + CHAT_PILL_GAP + nw + CHAT_PILL_PAD_END;
-            if (line.w > 0 && line.w + w > CHAT_WRAP_W) newLine();
+            if (line.w > 0 && line.w + w > WRAP) newLine();
             line.items.push({ pill: true, u: p.u, n: p.n, nw, w, col: _chatMenColor(p.u) });
             line.w += w;
             continue;
@@ -32174,10 +32205,10 @@ function _chatLayout(parts) {
         // browser does the bidi inside it (splitting word by word would reverse an
         // English phrase inside an Arabic line).
         let rest = p.t;
-        for (let guard = 0; rest && guard < 60; guard++) {
+        for (let guard = 0; rest && guard < 120; guard++) {
             if (line.w === 0) rest = rest.replace(/^\s+/, '');   // a line never opens on a space
             if (!rest) break;
-            const avail = CHAT_WRAP_W - line.w;
+            const avail = WRAP - line.w;
             const w = tw(rest);
             if (w <= avail) { line.items.push({ t: rest, w }); line.w += w; break; }
             const words = rest.split(/(\s+)/);
