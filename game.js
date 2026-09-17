@@ -31765,8 +31765,9 @@ function _jumpMaybeFall(p, now) {
         x: Math.round(p.x + (p._vx || 0) * lead * 0.6),
         y: Math.round(p.y + (p._vy || 0) * lead * 0.6),
     });
-    const fe = gameState.focusAudioEngine;
-    try { if (!(fe && fe.playHandled('jumpStart', 1, 0.9))) playSoundRobust(gameState.sounds.jumpStart); } catch (_) {}
+    // Jump_Start already played at take-off if the jump began near the edge.
+    if (!p._jumpStartPlayed) _jumpPlayStart();
+    p._jumpStartPlayed = false;
     perfWake(1200);
 }
 
@@ -31816,6 +31817,21 @@ function _jumpStepOff(p, nx, ny) {
     return true;
 }
 
+function _jumpPlayStart() {
+    const fe = gameState.focusAudioEngine;
+    try { if (!(fe && fe.playHandled('jumpStart', 1, 0.9))) playSoundRobust(gameState.sounds.jumpStart); } catch (_) {}
+}
+// On the mezzanine, close enough to its edge that this jump may go over it — the
+// take-off then plays Jump_Start instead of the ordinary hop, so the fall doesn't
+// add a second jump sound.
+const JUMP_EDGE_NEAR = 70;
+function _jumpNearEdge(p) {
+    if ((p.floor || 1) !== 2) return false;
+    const fy = p.y + _JUMP_FEET;
+    const d = Math.min(p.x - PLAT_X0, PLAT_X1 - p.x, fy - PLAT_Y0, PLAT_Y1 - fy);
+    return d < JUMP_EDGE_NEAR;
+}
+
 function triggerJump() {
     const p = gameState.players[gameState.userId];
     if (!p || !canJump() || p._air) return false;
@@ -31824,9 +31840,13 @@ function triggerJump() {
     p._jump = { t0: now, k: '' };
     _jumpDust(p, 5);
     sendJumpWS('');
-    const fe = gameState.focusAudioEngine;
-    if (fe) fe.playEffect('sofaStand');   // the couch hop's own sound — the same motion
-    else playSoundRobust(gameState.sounds.sofaStand);
+    p._jumpStartPlayed = _jumpNearEdge(p);
+    if (p._jumpStartPlayed) _jumpPlayStart();
+    else {
+        const fe = gameState.focusAudioEngine;
+        if (fe) fe.playEffect('sofaStand');   // the couch hop's own sound — the same motion
+        else playSoundRobust(gameState.sounds.sofaStand);
+    }
     // Hats get a shove of their own (see _updateHatChain).
     p._hatKick = { up: 1, t: now, land: _jumpLandMs('') };
     perfWake(JUMP_MS + 200);

@@ -1663,7 +1663,7 @@ separate, delayed animation and only found tables straight ahead. **Don't bring 
 - **The anywhere double-tap (phone) only counts a FIRST tap that nothing else took**
   (`jumpNoteFreeTap` at the end of the tap chain) — a tap that sat you down or opened
   something must not make the second one a jump. Checked right after the minigame buttons.
-- Normal jumps use `sofaStand` (Web Audio); the drop uses its own two sounds, warmed at spawn.
+- Normal jumps use `sofaStand` (Web Audio). A jump that starts on floor 2 within `JUMP_EDGE_NEAR` of the platform edge (`_jumpNearEdge`) plays **Jump_Start instead** at take-off, and the fall then skips it (`_jumpStartPlayed`) — otherwise two jump sounds played. Both fall sounds are warmed at spawn.
 - `canJump()` is the single guard (leans on `_chatMustClose()`).
 
 ## غرفة الاجتماعات — the meeting room and its table
