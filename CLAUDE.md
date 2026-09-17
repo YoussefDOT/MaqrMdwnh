@@ -52,6 +52,11 @@ python3 -m http.server 8080
 
 **Never push to git unless the user explicitly asks.** Always test on localhost first. **Always push directly to `main`** — never push to a separate branch (`git push origin HEAD:main`).
 
+**Every push updates نشرة الأخبار.** `patch-notes.json` is the member-facing changelog shown by the
+menu's «نشرة الأخبار» button. Before pushing, add (or extend) TODAY's entry at the TOP of `days`
+— plain, spell-checked Arabic written for members, tagged `new` / `fix` / `better`. Never edit or
+delete an older day. See **نشرة الأخبار**.
+
 **Pre-commit hook**: besides the build number below, it regenerates `Hats/hats.json` from the PNGs in `Hats/` (see Character Customization).
 
 **Build number**: A `#build-number` div sits below the `#siraj-test-link` button on the login screen showing **`Build N · Updated M/D H:MM AM/PM`** (e.g. `Build 244 · Updated 7/28 1:47 PM`) — the **date is part of the stamp**, so "when did this last ship" is answerable at a glance. The `.git/hooks/pre-commit` hook auto-increments the number and rewrites the date+time on every commit — **never hand-edit it**. Its `sed` pattern treats the `M/D ` part as optional so an older date-less stamp is upgraded in place rather than skipped. If the hook can't find the pattern at all, it logs a warning and exits cleanly. **If the stamp format ever changes, update the hook's `sed` pattern and this line together.**
@@ -90,13 +95,15 @@ Grep anchors for the major systems (all verified to exist):
 | Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession` |
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
-| Daily duty (حضور المقر — was تحدي المثابرة) | `DUTY`, `updateWorkChallenge`, `_dutyTick`, `_dutySetVacation`, `_dutyFixApply`, `_chalPayDue`, `_chalClaim` |
+| Daily duty (حضور المقر — was تحدي المثابرة) | `DUTY`, `updateWorkChallenge`, `_dutyTick`, `_dutySessTrack`, `_dutyFinishSession`, `_dutyBank`, `_dutyReplayPending`, `_dutySetVacation`, `_dutyFixApply`, `_chalPayDue`, `_chalClaim` |
 | Trophy shelf | `TROPHIES`, `updateTrophies`, `_troBank`, `_troClaim`, `_troCeremony` |
 | جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
-| Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admRenderDetail`, `_admRenderDutyBar`, `_admDutySection` |
+| Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admTeam`, `_admRenderOverview`, `_admRenderList`, `_admRenderDetail`, `_admDutySection`, `_admCopyReport` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS`, `drawChatBeacons` |
 | «يكتب الآن» + الانصهار | `CHAT_TYP_`, `CHAT_MORPH_MS`, `sendTypingWS`, `_chatSetTyping`, `_chatMorphFx`, `_chatDrawTyping` |
-| القفز | `JUMP_MS`, `_jumpFx`, `triggerJump`, `canJump`, `sendJumpWS`, `receiveJump`, `selfDoubleTapJump` |
+| القفز | `JUMP_KINDS`, `_jumpFx`, `_jumpPlan`, `_jumpDriveLocal`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump` |
+| نداء ليمو | `LEMO_UID`, `lemoSummon`, `_lemoCallPose`, `_lemoCallSpots`, `lemoIsAsleep`, `lemoIsBusy` |
+| نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
 | Settings | `setupSettingsUI` |
@@ -108,7 +115,7 @@ Grep anchors for the major systems (all verified to exist):
 | Off-screen culling | `_viewRect`, `_offView` |
 | Cached text/badge/avatar sprites | `_spritesOk`, `_pillSprite`, `_fillTextCached`, `_avatarComposite`, `_fxSprite` |
 | Staggered logic tick | `SLOW_TASKS`, `runSlowTasks` |
-| Session attendance credit / keep-alive | `_dutyCreditSession`, `_dutyResetSessionLedger`, `_keepAliveSet` |
+| Session attendance credit / keep-alive | `_dutySessTrack`, `_dutyFinishSession`, `_keepAliveSet` |
 
 ### 2. Before touching a feature
 
@@ -251,7 +258,9 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **حضور المقر** (was تحدي المثابرة) | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the user card (the azkar dock hangs under it) and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. Styled in the مدونة brand; pressing anywhere on the card opens the week panel. See **حضور المقر**. |
 | **رف الجوائز** | Three trophies (and four hidden, blacked-out ones) on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar whose cells he can press to **اعتماد** a day as done (even one taken off or never opened) or **رفع الإجازة** off a past one. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. See **لوحة القائد**. |
-| **القفز** | مسافة، أو نقرتان على شخصيتك. لا يحرّك أحدًا ولا فائدة منه — الشخصية تكبر نحوك وترتفع قليلًا وظلّها ينكمش معها، بانحناءة قبلها وانسحاقة عند الهبوط، وصوت النهوض عن الأريكة. حدث واحد على المُرحِّل، صفر فايربيس. See **القفز**. |
+| **القفز** | مسافة، أو نقرتان على شخصيتك (وعلى الجوال نقرتان في أي مكان). قفزة في المكان — أو، أثناء الحركة، **على طاولة** تمشي فوقها (أكبر قليلًا)، ومنها إلى الأرض، و**من حافة الطابق الثاني** إلى الأرض بهبوط قوي: غبار وموجة وهزّة وصوت لمن حولك إلا من في جلسة عمل. صفر فايربيس. See **القفز**. |
+| **نداء ليمو** | `@ليمو` في الدردشة: يترك ما يفعله، يومض ويختفي، يظهر بجانبك ويمشي إليك ويقول «عايز ايه؟» ثم يعود إلى جولته. واحد في كل مرة، ولا يُنادى نائمًا ولا من جلسة عمل. See **Lemo → نداء ليمو**. |
+| **نشرة الأخبار** | A button under the login pill opens the member-facing changelog, grouped by day (`patch-notes.json`). See **نشرة الأخبار**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ٥٠ حرفًا, wrapping onto two lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, a قوس on the screen edge pointing at whoever called you (it stays until you see them), a شريط at the bottom, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **غرفة الاجتماعات** | A room snapped onto the top-right of the scene, hidden behind a doorway that glows white until you walk up to it. Press its table → a seat (the sofa hop) and a full-screen look at the real table with everyone round it: six reactions, the proximity chat, and a **green ring on whoever is talking in the Discord call** — fed live by MdwnhBot over the relay, zero Firebase. See **غرفة الاجتماعات**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until someone walks up, then wanders it — and now and then walks the owner-drawn route to the meeting room, roams round the table and walks back. **One Lemo per lobby**: everyone sees the same robot, from a seeded timeline off one tiny Firebase doc that only changes when he's woken or put to bed. Arrive to an empty lobby → he's asleep. See **Lemo**. |
@@ -283,6 +292,8 @@ Maqr logo.png                — the brand logo: menu + boot screen
 game.js        ~24000 lines — all game logic, classes, Firebase, rendering
 index.html      ~1600 lines — single page; all panels/overlays live here
 style.css       ~7700 lines — all styling; mobile rules under body.is-mobile
+patch-notes.json             — نشرة الأخبار: the member-facing changelog, newest day first (update every push)
+LemoPFP.jpg                  — ليمو's face in the @ picker / mention pills
 firebase-config.js           — exports { database, ref, onValue, update, get, onDisconnect, set }
 sw.js                        — service worker: cache-first for Sound/Art/Fonts (see Loading strategy)
 Sound/                       — UI/minigame sound effects (.mp3)
@@ -1270,6 +1281,34 @@ detour, so it warms on idle, not at spawn (desktop only).
   occlude a player.
 - The drop shadow uses the avatars' exact values; `installLowGfxShadowGuard` zeroes
   `shadowBlur` on reduced tiers, so it's free on mobile like every other world shadow.
+- `drawLemo(floorPass)` is called once per floor (before each floor's players); he is drawn
+  only in the pass matching `_lemo.floor`, scaled by `FLOOR2_SCALE` and faded with the
+  mezzanine up there.
+
+### نداء ليمو — `@ليمو` calls him over
+A mention of **ليمو** (picker row, found by «ليمو» / «lemo») interrupts him **for everyone**:
+flash white → gone → flash in beside the caller → walk up → «عايز ايه؟» (canvas bubble) →
+linger → flash out → flash back in at a random break-room spot, where his seeded life resumes.
+
+- **Still one tiny doc.** `lemoSummon()` is a transaction writing
+  `{ s:'awake', at:<call end>, seed, from:<LEMO_SPOTS index>, call:{u, at, fx,fy,f0,ff, ax,ay, sx,sy, fl, face} }`.
+  `_lemoCallPose(call, t)` is PURE (`LEMO_CALL` phases); after `at` the timeline starts from
+  `from` in an idle, not a wake (`sim.back` → the flash-in). The caller measures the geometry
+  once (`_lemoCallSpots`: a free spot beside them on THEIR floor, and a clear appear point
+  further out) — nobody else searches.
+- **The call is the lock**: the transaction aborts while `serverNow() < at` (busy) or when he
+  is asleep. The sender's message is refused (shake + «uh-uh» + toast) when he is asleep
+  («أيقظه أولًا» — also a `_libToast`), busy, or the sender is in a work phase / locked in.
+  In a work phase he isn't even offered in the picker.
+- **Picker**: always the LAST row, whatever the distance (`d: Infinity`, no «الأقرب» tag), with
+  a state line (نائم / مشغول / سيأتي إليك). Avatar `LemoPFP.jpg` (`LEMO_PFP`, allowed by
+  `_chatSetAvatar`; loaded in `startLemo` into `gameState.avatarCache.lemo` for the canvas
+  pill). Colour: fixed teal. `uid 'lemo'` is excluded from pings, cooldowns and the mention
+  sound, and its pill never degrades to text for being "offline".
+- **Floor 2**: `call.fl` puts him on the mezzanine (`_lemo.floor`), see drawLemo above.
+- **The flash** draws the frame into one small scratch canvas and washes it white
+  (`_lemoWhiteFrame`, source-atop) — only while `_lemo.white > 0`.
+- The caller hears a soft blip when «عايز ايه؟» pops up (`_lemo.callCue`).
 
 ---
 
@@ -1563,42 +1602,68 @@ carries — which also means a spoofed `l` could fake a step. Fine for the trust
 
 ## القفز — the jump
 
-**مسافة**, or **two presses on your own character**. It moves nobody and unlocks
-nothing — the avatar scales up toward the camera and lifts a little, with a crouch
-before it and a squash on landing. Code is the `القفز` block just above the chat
-section; there is no markup and no CSS. Grep anchors: `JUMP_MS`, `_jumpFx`,
-`triggerJump`, `canJump`, `sendJumpWS`, `receiveJump`, `selfDoubleTapJump`.
+**مسافة**, **two presses on your own character**, or — on a phone — **two quick taps
+anywhere on the world**. Standing still it is a jump in place; moving (or standing on a
+table) it can **travel**. Code is the `القفز` block just above the chat section; no markup,
+no CSS. Grep anchors: `JUMP_KINDS`, `_jumpFx`, `_jumpPlan`, `_jumpDriveLocal`,
+`_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `receiveJump`, `anyDoubleTapJump`.
 
-- **Zero Firebase**: `{t:'jmp',uid}` on the relay, like the message and the sofa hop.
-  Nothing is written, nothing read, no listener. It plays **on arrival** rather than
-  being queued onto the replay timeline the way the sofa hop is — it is half a second
-  long and changes no position, so a delay of one interpolation window costs nothing.
-- **`_jumpFx(player, now)` is a PURE function of the jump's age**, so the PiP pass
-  draws it without advancing it (the Lemo / hat-chain rule). Nothing is ticked
-  anywhere; `player._jump` is a single timestamp.
-- **The scale is the jump; the shadow is what sells it.** The lift already reaches the
-  contact shadow through `workBob`, but the scale-up does not — so `_jumpScale` is fed
-  into `drawPlayers`'s `lift` term explicitly. Drop that and the avatar reads as
-  *growing on the spot* instead of leaving the floor.
-- **It never moves the player**, so it has nothing to do with `checkCollision` and
-  cannot put anyone inside a wall.
-- **Space belongs to whatever is focused first.** The handler bails on an input, a
-  textarea, a contenteditable, and on any focusable control (`BUTTON` / `A` / `SELECT` /
-  `[tabindex]` / `role="button"`) — the settings rows, the meeting seat and the trophy
-  slots are all activated by Space. Only a press that reaches the page itself jumps,
-  and that one `preventDefault()`s so the page can't scroll under the canvas. The boss
-  fight keeps its own Space handler and its own held-state flag, so it is untouched.
-- **The double tap has to undo the single tap**: one press on your own character has
-  always opened the chat box, so `selfDoubleTapJump` closes it again — unless something
-  is already typed in there, which is never thrown away for a jump. It is checked
-  **before** `chatSelfPress` in both the desktop and mobile hit-test chains.
-- The sound is the couch's own `sofaStand` — it is the same motion, so it is the same
-  cue — through `focusAudioEngine.playEffect` (Web Audio, background-tab safe).
-- The dust puff is spawned on the **jumper's** floor, so a mezzanine jump doesn't throw
-  dust onto the ground floor.
-- `canJump()` is the single guard and leans on `_chatMustClose()`, which already covers
-  azkar / prayer / the dashboard / the customizer / المدفأة / الجوائز / لوحة القائد /
-  المهام / حضور المقر / the minigames / the kidnap animation.
+### Kinds (`JUMP_KINDS`) and where they go (`_jumpPlan`)
+| kind | what | ms |
+|---|---|---|
+| `''` | in place | 560 |
+| `up` | floor → a table top in front (≤ `JUMP_REACH`) | 640 |
+| `hop` | table → the next table | 600 |
+| `down` | table → the floor in front | 600 |
+| `off` | walked off a top's edge (`_jumpStepOff`) — a short drop, no travel | 300 |
+| `drop` | floor 2 → over the railing → floor 1 (≤ `JUMP_DROP_REACH`) | 1150 |
+
+- **Facing** = current velocity, else the last movement direction (`jumpNoteDir`). A
+  standing jump on the floor never travels; a standing jump on a table uses the last facing
+  (it is how you get down).
+- **The travel is driven locally** (`_jumpDriveLocal`, first thing in `handleMovement`,
+  which it owns until landing) and reaches everyone through ordinary position packets. The
+  floor / table state swaps at mid-flight. A kidnap, a seat or a lock-in cancels it.
+
+### Standing on a table — `player._elev`
+- **`worldCollision.tops`** = the eroded furniture body + the two manual desk rects;
+  **`worldCollision.walls`** = the dilated walls alone (2 × 1.7 MB, built with the other
+  masks). The meeting table is its `MEET_TABLE_SOLID` rect; on floor 2 the tops are the
+  desks (`floor2desks`).
+- **`checkCollision(x, y, opts)`** — `opts = { floor, elev }` asks about another state (the
+  planner uses it). Elevated → `_jumpElevBlocked`: blocked if the feet leave a top, or a wall
+  is hit. Leaving a top in `handleMovement` tries `_jumpStepOff`: allowed where the floor below
+  is free → `_elev` off + the `off` kind.
+- **Scale**: `desiredPlayerScale` × `JUMP_TOP_SCALE` (1.14). Relayed as `el` in the position
+  packet (the 3 s idle ping carries it to late joiners). **Never written to Firebase** — a
+  reload puts you on the floor (`_unstickLocalPlayer`).
+- `updateFloorsAndScales` drops `_elev` the moment a seat / laptop / kidnap takes over, or the
+  spot under the feet stops being a top.
+
+### The mezzanine drop — `_jumpQuake`
+- Launch: `Jump_Start.mp3` (jumper only). Landing (jumper at land, everyone else at land +
+  their interpolation delay, off `x/y` in the event): a big dust burst, a world-space shock
+  ring (`drawJumpQuakes`, under the ground players), a bounce that runs through every avatar
+  the ring passes (`_jumpQuakeBounce`, pure of age), and — within `JUMP_QUAKE_R` and **not in a
+  work phase / locked in / behind an overlay** — a short screen shake (`jumpShakeOffset` in
+  `render()`) and `Jump_Land.mp3`, quieter with distance. A worker sees the ring, nothing else.
+- Dust is capped at 260 particles; the burst is halved on reduced tiers.
+
+### Rules that still hold
+- **Zero Firebase**: `{t:'jmp', uid, k, x?, y?}` on the relay. A travelling kind is started on
+  the receiver one interpolation delay late, in step with the replayed avatar.
+- **`_jumpFx(player, now)` is PURE of the jump's age** (`player._jump = {t0, k}`), so the PiP
+  pass draws it without advancing it.
+- **The scale is the jump; the shadow sells it** — `_jumpScale` is fed to the shadow `lift`.
+- **Hats ride it**: `drawPlayerHats` gets `rScale × _jumpScale` and the avatar's squash, and a
+  jump sets `player._hatKick` (launch + landing shove, see Hat physics).
+- **Space belongs to whatever is focused first** (inputs, buttons, `[tabindex]`, `role=button`).
+- **The self double-tap undoes the single tap** (it opened the chat box) unless text is typed.
+- **The anywhere double-tap (phone) only counts a FIRST tap that nothing else took**
+  (`jumpNoteFreeTap` at the end of the tap chain) — a tap that sat you down or opened
+  something must not make the second one a jump. Checked right after the minigame buttons.
+- Normal jumps use `sofaStand` (Web Audio); the drop uses its own two sounds, warmed at spawn.
+- `canJump()` is the single guard (leans on `_chatMustClose()`).
 
 ## غرفة الاجتماعات — the meeting room and its table
 
@@ -1939,8 +2004,8 @@ counter resets at midnight with the duty's day key.
   `_dutyBank()`, so there is **no new read, no new listener** and one extra transaction
   a minute *only while actually working*. `ms` is the site's **open** time and `work` is
   the **work** time; they are separate on purpose and `work` must never be derived from
-  `ms`. It ticks in `_dutyTick` under `localInWorkPhase()`, and `_dutyCreditSession`'s
-  recovered (suspended-phone) time credits it too.
+  `ms`. It ticks in `_dutyTick` under `localInWorkPhase()` only (a suspended phone's
+  stretch is not recovered into it — it only unlocks the games).
 - **It counts on a vacation day** — the vacation rule is about attendance, not about
   whether an hour of work happened. Taking a day off wipes `ms` and `fix`, never `work`.
 - **The manual top-up (`_dutyFixApply`) never touches `work`.** That is self-reported
@@ -2579,7 +2644,7 @@ squashes the gradient). Tokens are scoped `--cd-*` on `.chal-dock` / `.chal-moda
 
 ### The duty's state — `dashboards/{uid}/duty/days`
 ```
-dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, vac, ok, fix, work }  // ms open; vac = ts taken; ok = ts the leader approved it; fix = ms the member added by hand; work = ms actually WORKED — an hour of it unlocks the games (see Minigame Architecture)
+dashboards/{uid}/duty/days/{YYYY-MM-DD} = { ms, o, s, vac, ok, fix, work }  // o/s: per-load / per-session TOTALS (see below)  // ms open; vac = ts taken; ok = ts the leader approved it; fix = ms the member added by hand; work = ms actually WORKED — an hour of it unlocks the games (see Minigame Architecture)
 dashboards/{uid}/challenge/s1/{days, claimed}          // round one — read-only now
 ```
 Decision tree §5 case 4 — private, persistent, written more than once a day: one bounded
@@ -2591,8 +2656,9 @@ Under `users/{uid}` this would re-stream every member's every minute to both lob
 - **`ms` is NOT capped at the goal** (only at 24 h). Round one capped at its goal to bound
   writes; here the leader ranks members by how long they were really here, which a capped
   value can't say. The cost is one tiny transaction a minute on a node nobody listens to.
-- **Open time, not session time.** `_dutyTick` credits the wall-clock gap between ticks while
-  `#game-screen` is `.active`. It runs per frame (throttled to 1/s) AND on a 15 s
+- **Open time outside work, session time inside it** — see **Where a day's time comes from**
+  below. `_dutyTick` credits the wall-clock gap between ticks while
+  `#game-screen` is `.active` and the member is NOT in a work phase. It runs per frame (throttled to 1/s) AND on a 15 s
   `setInterval` — rAF stops in a hidden tab, the interval keeps going (~1/min at worst), so a
   background tab still counts. **A gap over `DUTY_GAP_MAX_MS` (150 s) earns nothing** — that
   is a sleeping laptop or an iOS-suspended tab, not an open site. Counting pauses under
@@ -2609,8 +2675,48 @@ Under `users/{uid}` this would re-stream every member's every minute to both lob
   as `done`. It also stops consuming an automatic vacation (`_dutyAutoVac`), so the week's
   allowance comes back with it.
 - **Nothing writes the whole day record.** `_dutySetVacation` and `_dutyBank` both write
-  leaf fields (`…/{key}/ms`, `…/{key}/vac`) — a member toggling their day off must not wipe
-  the leader's `ok` sitting in the same node.
+  leaf fields (`…/{key}/o/{id}`, `…/{key}/vac`) — a member toggling their day off must not wipe
+  the leader's `ok` sitting in the same node. The local mirror goes through `_dutyPatchDay` /
+  `_dutyPatchSub` for the same reason — never assign a fresh object to `_duty.days[key]`.
+
+### Where a day's time comes from — `ms` + `o` + `s`
+
+```
+dashboards/{uid}/duty/days/{key} = {
+  ms,                 // legacy leaf: old clients' deltas + the manual top-up (fix)
+  o: { <loadId>: ms } // each PAGE LOAD's open time that day — a TOTAL
+  s: { <sessId>: ms } // each WORK SESSION's credit for that day — a TOTAL
+  vac, ok, fix, work
+}
+```
+`_dutyRec` sums the three (capped at 24 h) — everything that reads a day (the card, the
+ladder, auto-vacations, the leader's panel) gets the sum for free.
+
+- **Two measures, never both.** Outside a work phase the ticker adds open time to this
+  load's `o` total. Inside a work phase it adds NOTHING — `_dutySessTrack` instead mirrors
+  the session's own worked clock (`pomoWorkedMsNow` / `freeWorkedMsNow`, stamped at phase
+  transitions, so it survives a suspended phone) LIVE into `s/{sessId}`. A break is open time.
+- **The session is locked in at its end** by `_dutyFinishSession(workedMs)`, called from
+  `dashSaveSession` (every saved end, above its 10-minute floor) with the value the member
+  ended with — the full time, the time corrected in «هل عملت …فعلًا؟», or **0 from the
+  discard** path. `_duty.sessDone[id]` stops the live tracker writing it again.
+- **Session id** = `f<_createdAt>` / `p<createdAt>` — both survive a reload and a reclaim,
+  so a reloaded session keeps overwriting the SAME total instead of adding a second one.
+- **`base`** = the part of a session's worked time that belongs to earlier days (or to a
+  vacation stretch). Rolled forward at midnight (`_dutyRollDay`, which credits the old day
+  without the since-midnight cap) and kept in localStorage (`DUTY_SB_KEY`). Every credit is
+  capped at the time since local midnight, which is what keeps a reclaimed session (whose
+  clock includes hours the tab was closed) from buying more than a day can hold.
+- **Totals, not deltas, so a write can be RETRIED.** Every queued value lives in
+  `_duty.dirty` → `_duty.inflight` until the server acks it, mirrored to localStorage
+  (`DUTY_PEND_KEY`); `_dutyReplayPending()` sends a previous visit's leftovers right after the
+  week's read (skipping a day since taken off). Re-sending a total changes nothing.
+- **«أحسنت!» waits for the server.** `updateWorkChallenge` celebrates only when today has no
+  pending write (`_dutyHasPending`); crossing three hours forces a bank and the card appears
+  on its ack.
+- **A vacation wipes `o` and `s` too**, drops any queued totals for that day, zeroes this
+  load's `openMs` and moves the running session's `base` up to now.
+- `work` (the games counter) is still a delta transaction — it only unlocks the games.
 
 ### Vacations — two a WEEK, today only
 
@@ -2639,8 +2745,8 @@ bounded setup read — both assume a week.
 
 The ticker is honest but not complete: a suspended phone tab, a slept laptop, a reload
 the site never saw the end of — each is a stretch the member really was here for and
-`DUTY_GAP_MAX_MS` refuses to credit. `_dutyCreditSession` recovers the **work** inside
-such a stretch; nothing recovers plain presence. So plain clickable text under the
+`DUTY_GAP_MAX_MS` refuses to credit. The session clock (`_dutySessTrack`) covers the **work**
+inside such a stretch; nothing recovers plain presence. So plain clickable text under the
 panel's buttons (`#chal-fix-link`, the shape of «تجاهل الجلسة» — never a button-looking
 thing, it must not compete with الإجازة for the eye) opens a **fourth face** of the same
 modal: hour and minute steppers like the long-free confirm, with a live «بعد الإضافة»
@@ -2679,41 +2785,22 @@ mid-session, `_chalPayScreenOk` is deliberately looser than `_chalScreenIsClear`
 the id is fixed per round and the Points site deletes a settled claim, so a second record
 would pay twice — then mints it and hands over to `_libShowClaim` (استلم الآن / لاحقًا).
 
-### A finished session credits the attendance the ticker missed
+### Why the session clock is the measure — the "full hour credited as eight minutes" bug
 
-**The bug, twice reported:** a member worked a **full hour** on his phone, switched to
-another app, came back, finished the session — and was credited **eight minutes**.
+A member worked a **full hour** on his phone, switched apps, came back and finished the
+session — and was credited **eight minutes**: the ticker refuses any gap over
+`DUTY_GAP_MAX_MS`, and a suspended PWA produces exactly that gap. Raising the cap would hand a
+sleeping laptop the same hours. The session's own worked clock is the measure that is not a
+tick, so inside a work phase it is now the ONLY measure (see above) — live, not just at the end.
 
-`_dutyTick` credits the wall-clock gap between its own ticks and refuses any gap over
-`DUTY_GAP_MAX_MS` (150 s), because a 40-minute gap is a sleeping laptop, not an open
-site. A phone that **suspends** a backgrounded PWA produces exactly that shape. Raising
-the cap is not the fix — it would hand a sleeping laptop the same hours.
+### «أتممت يومك» then a vacation the next day — the lost write
 
-The measure that is **not a tick** is the session itself. Its worked time is stamped at
-the phase transitions (`pomoWorkedMsNow` / `freeWorkedMsNow`), never accumulated per
-frame, so it survives suspension intact. So `_dutyCreditSession(workedMs)` adds
-`workedMs` **minus whatever the ticker already counted during that session** — the same
-ledger shape `bankReadingProgress` uses, so nothing is counted twice.
-
-The ledger lives on `_duty`: a **rising edge** in `_dutyTick` (no session → session)
-stamps `workAt` and zeroes `workTicked`; every credited gap where `localInWorkPhase()`
-is true also adds to `workTicked`. Rules:
-
-- **Called from `dashSaveSession`, ABOVE its 10-minute floor.** That floor is a dashboard
-  rule, not an attendance one. `dashSaveSession` is the single funnel every finished
-  session goes through; a **discarded** free session never reaches it and is never
-  credited (correct — the member said they didn't work it).
-- **Capped by the WALL TIME since this device first saw the session running.** This is
-  what stops a **reclaimed** session — whose `totalWorkMs` legitimately includes hours
-  the tab was CLOSED (`_reclaimFreeTotalMs`) — from buying attendance for time the site
-  was not open at all. Without it, closing the tab for six hours would pay six hours.
-- **No ledger (`workAt` 0) credits nothing.** No evidence of presence, no pay.
-- It credits **worked** ms, not session wall time, so a break spent away from the phone
-  is never paid for. Under-credits by the break minutes when suspended; deliberate.
-- `_dutyResetSessionLedger()` on every exit path, so one session can't spend another's.
-
-**Only the WORK is recovered, not idle presence.** A phone suspended with the site merely
-open still earns nothing for that stretch — that is the rule, not a bug.
+A member saw the «أحسنت!» card and the next morning found the day marked as a vacation. The
+card was judged on the LOCAL count; the delta transactions that carried the time were
+fire-and-forget, and an app closed right after the card (a phone whose socket was still
+reconnecting after suspension) lost them — the server never reached three hours, and a short
+day spends a vacation by itself. Fixed by the retryable totals + the localStorage replay +
+celebrating only acknowledged numbers (see above).
 
 ### Keeping the tab alive — `_keepAliveSet`
 
@@ -2728,8 +2815,8 @@ not enough, browsers may optimise pure silence away.
 - Its **own 5 s interval**, not folded into `_dutyTick`: it must survive a failed duty
   read and must not inherit the ticker's throttle.
 - **Best-effort, not a guarantee.** It makes freezing much less likely; an OS under real
-  memory pressure can still kill the tab. That is exactly why `_dutyCreditSession`
-  exists — the hours survive even when this doesn't.
+  memory pressure can still kill the tab. That is exactly why the session clock is the
+  attendance measure (`_dutySessTrack`) — the hours survive even when this doesn't.
 
 Paired with `freeze` / `resume` (Page Lifecycle) on the duty block: `freeze` is the last
 callback a tab gets before the browser freezes it, so it banks; `resume` re-anchors
@@ -3124,6 +3211,28 @@ them once.
 
 ## لوحة القائد — the leader's panel
 
+**The look (Sept 17 redesign):** a modern admin dashboard in the **مدونة brand** — snow paper,
+one ink and its opacities, the four brand colours, Baloo Bhaijaan 2, brush marks through
+`mask` (see `../MdwnhExplained/css/base.css`). NOT the HUD's dark glass. A side rail
+(brand + «نظرة عامة» / «الأعضاء» + refresh + «نسخ تقرير اليوم»), a header with today's date,
+and a scrolling main column. On `body.is-mobile` the rail becomes a top bar with tabs, and
+the member table folds into cards (also below 1000px wide) with `data-l` labels.
+
+- **نظرة عامة** (`_admRenderOverview`, numbers from ONE pass `_admTeam()`): four KPI cards
+  (today's three hours with a ring, in the lobby now / working now, team work this week with a
+  trend against last week, team presence this week), a 7-day bar chart of who met their hours,
+  today's donut (conic-gradient, no library), «الأعلى عملًا» and «يحتاجون متابعة» (missed days
+  this week, or no session in 7+ days — only judged on a history that loaded).
+- **الأعضاء**: search, a sort `<select>` (الاسم / الحضور / العمل / الأقرب لإتمام اليوم / التحسن),
+  filter chips with counts (الكل / أتمّوا / لم يُتمّوا / إجازة / في المقر الآن), and a table:
+  member + presence dot/pill, today's progress bar, week dots, presence, work, trend, last session.
+- **Member page**: hero card, duty KPIs + the six-week calendar + the day editor (which now
+  also splits the day into داخل المقر / جلسات عمل / مضافة يدويًا / عمل فعلي), work KPIs, a
+  12-week bar chart and top tasks.
+- **Online** = `gameState.players` (the leader's own lobby only). **«نسخ تقرير اليوم»** copies a
+  plain-text roll-call (clipboard, `execCommand` fallback).
+- `_admSetDuty` PATCHES the stored day (never replaces it — its `o`/`s` maps must survive).
+
 نواف's view of the whole team: who worked and how long. Read-only except for his verdict on
 a single duty day — see **الاعتماد** below.
 Code is the `لوحة القائد` block at the very end of `game.js`; markup is `#admin-btn` +
@@ -3432,6 +3541,14 @@ own `overflow:hidden`** — the button is the only thing on that row that is not
 - `.who` is `flex:0 1 auto;min-width:0` and `.who-rest` clips: the net under the cap is that
   the stack gives before the button does.
 
+### المهام الفرعية — mirrored from the library
+A subtask is a whole task carrying `parent`. `_libBlock` nests each group's flat list with
+`_libNest` (mirror of `nest()`): a child whose parent is in the SAME group moves under it
+inside a `.subrow` wrapper that carries the elbow (`.sub-tee` — a wrapper because `.task` is
+`overflow:hidden`). The parent's foot gets `_libKidsChip` (count + triangle) that folds its
+rows (`.subrow.hid`, `_lib.shutKids`, session-only). Counts stay FLAT. `_libDropPill` removes
+the row with its pill. Orphans render as ordinary pills.
+
 ### RESYNC
 `library-tasks.css` and `_libTaskPill()` are hand-copies of `MdwnhLibrary/css/tasks.css` and
 `taskPill()`. **Nothing automates the sync.** If the pill changes there, change it in both
@@ -3533,6 +3650,16 @@ Two guards that matter (unchanged in spirit from the old spring):
   integrate the chain a second time each frame (double speed). `renderPiPInto` sets the
   flag; the chain **draws but never advances** during that pass.
 
+- **Radial give** (`HAT_RDRIVE`/`HAT_RFREQ`/`HAT_R_MAX`): a per-link spring on a FRACTION of
+  the hat's own offset, driven by the anchor's vertical acceleration — accelerating up pulls the
+  hats toward the pivot, down throws them out. Being a fraction, a far hat moves further.
+- **The jump shove** (`player._hatKick = {up, t, land}`, set by `triggerJump` / `receiveJump`):
+  consumed once at launch (tip along each link's lean, press in) and once at `t + land` (throw
+  out), harder up the stack. The jump's lift is mostly SCALE, which barely moves the anchor —
+  without the shove the stack ignored jumps.
+- `drawPlayerHats(…, sx, sy)` also takes the avatar's squash, and `drawPlayers` passes
+  `rScale × _jumpScale` — hats used to stay standing-size while the avatar grew in a jump.
+
 The chain is rebuilt when the hat list changes (`st.key` = ids + offsets), so a saved
 placement re-derives the segment lengths. The customizer's preview is **static DOM** and
 deliberately runs none of this.
@@ -3587,6 +3714,22 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 - **Gestures** form a horizontal strip `[invoices] ← [main] ← [to-do]`: swipe-right moves "back" toward invoices, swipe-left "forward" toward the to-do paper.
 - **Data**: one-shot `get()` of `invoices` metadata, most-recent `INVOICE_LIMIT=60`, photos **lazy-loaded via `IntersectionObserver`** (`_lazyLoadInvoicePhotos`).
 - **Mock data**: `dashSeedMockInvoices()` injects `DASH_MOCK_INVOICE_COUNT=80` fake invoices **only for Siraj test ghosts** (their dashboard node is ephemeral, removed on disconnect) — never the owner's real archive. To test the grid/virtualization, enter as a Siraj ghost.
+
+---
+
+## نشرة الأخبار — the patch notes
+
+`#news-btn` sits under the login pill on the menu, always (signed in or out). It opens
+`#news-modal` (z-index 100001, dark glass, a bottom sheet on mobile): every day's notes,
+newest first, each with its date, «اليوم»/«أمس», a title, and items tagged جديد / إصلاح / تحسين.
+A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen`).
+
+- **Data lives in `patch-notes.json`** — `{ days: [{ date:'YYYY-MM-DD', title, items:[{tag, text}] }] }`,
+  newest first (the client sorts anyway). Fetched `no-store` on idle after the menu shows and on
+  open; `.json` is never cached by sw.js. Rendered with `textContent` only.
+- **UPDATE IT ON EVERY PUSH** (see Quick Start): add today's day at the top (or extend today's),
+  member-facing Arabic, spell-checked, no jargon. **Never edit or remove an older day** — the
+  file only grows; the modal scrolls.
 
 ---
 
@@ -3650,6 +3793,9 @@ The photo is downscaled to a **320×240 @0.55 JPEG thumbnail** (`_makeThumb`, ~1
 | World renders soft/blurry-wrong (nearest-neighbour) after playing a minigame | The race/fig/boss renderers set `ctx.imageSmoothingEnabled = false` for their pixel art and never restore it — it's one shared context, so the next world frame inherited it (violating hard invariant #16) | `render()` re-asserts `imageSmoothingEnabled = true` each frame rather than chasing every minigame exit path |
 | A player sits at a laptop with «أعمل على» and the 🌿 free-mode emoji but **no clock**, and doesn't answer a mention | `updateFreeMode` freezes the count-up under the prayer/azkar overlay by folding the elapsed ms into `totalWorkMs` and zeroing `workStartTime`, but leaves the phase at `work` — so the 4 s heartbeat kept writing `freeWorkStartTime: 0` and observers, whose only test was `freeWorkStartTime > 0`, drew the bare-🌿 fallback. An unanswered adhan leaves that overlay up for hours, so a member who was merely praying or away looked like a half-broken ghost | Publish the freeze (`users/{uid}/freePaused`) and draw the clock **stopped** at its real value (`⏸ <time>`); publish «بعيد» (`awaySince`) for a hidden tab or an open صلاة/أذكار overlay so presence answers "can they reply", not just "is the tab open". See **Player Position Sync → «بعيد» + the paused free clock** |
 | Disconnected user never leaves — others still see their avatar forever | Ending a reading session ran `onDisconnect(ref('users/{uid}')).cancel()` to disarm its own ghost-cleanup. **`cancel()` cancels the queued ops of that location AND all its children**, so it also wiped the presence handlers armed at login (`activeInGame` → false, `activeSession` → null). That user's tab close then cleared nothing, and `listenToPlayers` (which gates purely on `activeInGame === true`) kept rendering them. Only `.info/connected` re-armed it, so it self-healed only if they later had a network blip — hence "sometimes" | Arm/cancel the reading fields **individually on their own child refs** (`armReadingDisconnect` / `cancelReadingDisconnect` + `READING_DISCONNECT_FIELDS`). **Never `onDisconnect(...).cancel()` on `users/{uid}` or any other node that has child ops armed under it** |
+| Member saw «أتممت يومك», next morning the day read as a vacation | The card was judged on the local count; attendance was sent as fire-and-forget delta transactions, lost when the app closed right after (socket still reconnecting). The server never reached 3 h and a short day auto-spends a vacation | Attendance written as retryable TOTALS (`o/{loadId}`, `s/{sessId}`), kept until acked + replayed from localStorage next visit (`_dutyReplayPending`); «أحسنت!» only on acknowledged numbers. See **حضور المقر → Where a day's time comes from** |
+| Hard workers never complete their day on mobile | Attendance came from the per-tick open-time counter, which refuses suspended stretches; the session credit only landed at the very end | Inside a work phase the session's own clock is credited LIVE (`_dutySessTrack`) and locked in at the end with the confirmed value (`_dutyFinishSession`) |
+| Hats didn't jump with the avatar | `drawPlayerHats` got `rScale × _juiceScale` but not `_jumpScale`, and the jump barely moves the anchor | Pass `_jumpScale` + the squash; `player._hatKick` shoves the chain at launch and landing |
 | Budget phone (Galaxy A32) gets hot enough to take the case off — Chrome and Firefox, with or without PiP | The page never let the GPU idle: the world redrew 30–60×/s even when nothing on screen changed (hours in a work session), the YouTube waveform ran its own 60 fps rAF with a forced layout + canvas realloc per frame, the world kept drawing under the PiP blackout (with a live backdrop blur over it), a primed hidden `<video>` kept playing a canvas stream forever, prayer rain stroked 110 paths/frame, and an infinite CSS pulse on the always-visible azkar button kept the compositor at 60 Hz. The governor only watched frame times, so a phone that *could* hold 60 was left at 60 | توفير الطاقة: 30 fps cap on touch devices from frame one, calm 15 / drowsy 6 fps when nothing moves (loop sleeps in a timer), DPR cap, `body.power-save` CSS off-switches, PiP/waveform/rain/worker fixes, weak GPUs default to بطاطس. See **مُنظّم الأداء → توفير الطاقة** |
 
 ---

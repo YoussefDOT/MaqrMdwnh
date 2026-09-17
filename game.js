@@ -825,10 +825,149 @@ function buildMenuDecor() {
     wrap.appendChild(frag);
 }
 
+/* ── نشرة الأخبار — patch notes on the menu ────────────────────────────────────
+   `patch-notes.json` holds every day's notes, NEWEST FIRST, and only ever grows:
+   a new day goes on top with each push, and old days are never edited away. It is
+   fetched `no-store` (and sw.js never caches .json), on idle after the menu shows —
+   a few KB, never on the boot path. The dot on the button is "a day newer than the
+   last one you opened" (localStorage). */
+const NEWS_URL = 'patch-notes.json';
+const NEWS_SEEN_KEY = 'mdwnh_news_seen';
+const NEWS_TAGS = {
+    new:    { label: 'جديد',  cls: 'is-new' },
+    fix:    { label: 'إصلاح', cls: 'is-fix' },
+    better: { label: 'تحسين', cls: 'is-better' },
+};
+const _news = { data: null, loading: null, open: false, wired: false };
+
+function _newsLoad() {
+    if (_news.data) return Promise.resolve(_news.data);
+    if (_news.loading) return _news.loading;
+    _news.loading = fetch(NEWS_URL + '?t=' + Date.now(), { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : null))
+        .then(j => {
+            const days = (j && Array.isArray(j.days)) ? j.days.filter(d => d && typeof d.date === 'string') : [];
+            days.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+            _news.data = days;
+            return days;
+        })
+        .catch(() => null)
+        .finally(() => { _news.loading = null; });
+    return _news.loading;
+}
+function _newsSeen() { try { return localStorage.getItem(NEWS_SEEN_KEY) || ''; } catch (_) { return ''; } }
+function _newsPaintDot() {
+    const dot = document.getElementById('news-dot');
+    const top = _news.data && _news.data[0];
+    if (dot) dot.hidden = !(top && top.date > _newsSeen());
+}
+function _newsDateLabel(key) {
+    const [y, m, d] = String(key).split('-').map(Number);
+    const dt = new Date(y, (m || 1) - 1, d || 1);
+    let txt = key;
+    try { txt = dt.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }); } catch (_) {}
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const diff = Math.round((today - dt) / 864e5);
+    const rel = diff === 0 ? 'اليوم' : diff === 1 ? 'أمس' : '';
+    return { txt, rel };
+}
+function _newsRender(days) {
+    const host = document.getElementById('news-list');
+    if (!host) return;
+    host.textContent = '';
+    if (!days || !days.length) {
+        const p = document.createElement('p');
+        p.className = 'news-empty';
+        p.textContent = days ? 'لا أخبار بعد.' : 'تعذّر تحميل النشرة، حاول مرة أخرى.';
+        host.appendChild(p);
+        return;
+    }
+    const seen = _newsSeen();
+    days.forEach((day, i) => {
+        const sec = document.createElement('section');
+        sec.className = 'news-day' + (day.date > seen ? ' is-unread' : '');
+        sec.style.animationDelay = (Math.min(i, 6) * 60) + 'ms';
+        const head = document.createElement('div');
+        head.className = 'news-day-head';
+        const lbl = _newsDateLabel(day.date);
+        const date = document.createElement('span');
+        date.className = 'news-date';
+        date.textContent = lbl.txt;
+        head.appendChild(date);
+        if (lbl.rel) {
+            const rel = document.createElement('span');
+            rel.className = 'news-rel';
+            rel.textContent = lbl.rel;
+            head.appendChild(rel);
+        }
+        sec.appendChild(head);
+        if (day.title) {
+            const h = document.createElement('h3');
+            h.className = 'news-title';
+            h.textContent = String(day.title);
+            sec.appendChild(h);
+        }
+        const ul = document.createElement('ul');
+        ul.className = 'news-items';
+        for (const it of (Array.isArray(day.items) ? day.items : [])) {
+            if (!it || !it.text) continue;
+            const tag = NEWS_TAGS[it.tag] || NEWS_TAGS.new;
+            const li = document.createElement('li');
+            const chip = document.createElement('span');
+            chip.className = 'news-tag ' + tag.cls;
+            chip.textContent = tag.label;
+            const tx = document.createElement('span');
+            tx.className = 'news-text';
+            tx.textContent = String(it.text);
+            li.append(chip, tx);
+            ul.appendChild(li);
+        }
+        sec.appendChild(ul);
+        host.appendChild(sec);
+    });
+    host.scrollTop = 0;
+}
+function openNews() {
+    const modal = document.getElementById('news-modal');
+    if (!modal || _news.open) return;
+    _news.open = true;
+    modal.setAttribute('aria-hidden', 'false');
+    const host = document.getElementById('news-list');
+    if (host && !_news.data) host.innerHTML = '<p class="news-empty">جارٍ التحميل…</p>';
+    requestAnimationFrame(() => requestAnimationFrame(() => { if (_news.open) modal.classList.add('active'); }));
+    _newsLoad().then(days => {
+        if (!_news.open) return;
+        _newsRender(days);
+        if (days && days[0]) { try { localStorage.setItem(NEWS_SEEN_KEY, days[0].date); } catch (_) {} }
+        _newsPaintDot();
+    });
+}
+function closeNews() {
+    const modal = document.getElementById('news-modal');
+    if (!modal || !_news.open) return;
+    _news.open = false;
+    modal.classList.remove('active');
+    modal.setAttribute('aria-hidden', 'true');
+}
+function setupNewsUI() {
+    if (_news.wired) return;
+    _news.wired = true;
+    document.getElementById('news-btn')?.addEventListener('click', (e) => { e.stopPropagation(); openNews(); });
+    document.getElementById('news-close')?.addEventListener('click', closeNews);
+    const modal = document.getElementById('news-modal');
+    modal?.addEventListener('click', (e) => { if (e.target === modal) closeNews(); });
+    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && _news.open) closeNews(); });
+    // The unread dot — a small fetch once the menu is up, never before.
+    const warm = () => _newsLoad().then(_newsPaintDot);
+    if (window.requestIdleCallback) requestIdleCallback(warm, { timeout: 6000 });
+    else setTimeout(warm, 2500);
+}
+
 // Main OAuth entry — called once on init.
 async function initDiscordOAuth() {
     setupDiscordLoginButton();
     buildMenuDecor();
+    setupNewsUI();
     showBootScreen('instant');   // the boot screen is `active` in the markup; wire it up
     parseDiscordOauthHash();
 
@@ -950,6 +1089,8 @@ class FocusAudioEngine {
             // Sofa relax seating
             sofaSit: null,
             sofaStand: null,
+            jumpStart: null,
+            jumpLand: null,
             // الدردشة القريبة — mentions. Web Audio so a ping sounds in a background tab.
             chatMention: null,
             mentionPing: null,
@@ -1083,6 +1224,8 @@ class FocusAudioEngine {
             this.buffers.invoiceCardSave   = await loadBuffer('Sound/Invoice_Card_Sounds.mp3');
             this.buffers.sofaSit           = await loadBuffer('Sound/Sofa_Sit.mp3');
             this.buffers.sofaStand         = await loadBuffer('Sound/Sofa_Stand.mp3');
+            this.buffers.jumpStart         = await loadBuffer('Sound/Jump_Start.mp3');
+            this.buffers.jumpLand          = await loadBuffer('Sound/Jump_Land.mp3');
             this.buffers.chatMention       = await loadBuffer('Sound/chat_mention.mp3');
             this.buffers.mentionPing       = await loadBuffer('Sound/mention_ping.mp3');
             this.buffers.mentionAlarm      = await loadBuffer('Sound/mention_alarm.mp3');
@@ -2436,6 +2579,8 @@ const gameState = {
         crowdShock:         _lazyAudio('Sound/LaptopMinigame/Crowd_Shock.mp3'),
         sofaSit:                 _lazyAudio('Sound/Sofa_Sit.mp3'),
         sofaStand:               _lazyAudio('Sound/Sofa_Stand.mp3'),
+        jumpStart:               _lazyAudio('Sound/Jump_Start.mp3'),
+        jumpLand:                _lazyAudio('Sound/Jump_Land.mp3'),
         // الدردشة القريبة — mention cues (HTMLAudio fallback until the buffers decode)
         chatMention:             _lazyAudio('Sound/chat_mention.mp3'),
         mentionPing:             _lazyAudio('Sound/mention_ping.mp3'),
@@ -2746,7 +2891,7 @@ function warmGameSounds() {
     // Priority 1 — needed moments after spawn.
     ['kidnap', 'timeBreak', 'timeReturn', 'yipee', 'breakAdded', 'prayerCall',
      'minigameReady', 'inviteSent', 'inviteAccepted', 'sofaSit', 'sofaStand',
-     'mentionPing', 'mentionAlarm'].forEach(warm);
+     'mentionPing', 'mentionAlarm', 'jumpStart', 'jumpLand'].forEach(warm);
     // Priority 2 — everything else, on idle (minigames + dashboard papers live
     // behind explicit user actions, so a few seconds of delay is invisible).
     // The trophy pair is half a megabyte and only ever plays inside the award
@@ -4865,7 +5010,7 @@ function initLaptops() {
 // ═══════════════════════════════════════════════════════════════════════════════
 //  WORLD ENGINE — alpha collision masks, floors, dynamic scale, second-floor fade
 // ═══════════════════════════════════════════════════════════════════════════════
-const worldCollision = { floor1: null, floor2desks: null, stairs: null, meet: null, built: false };
+const worldCollision = { floor1: null, floor2desks: null, stairs: null, meet: null, tops: null, walls: null, built: false };
 
 // Rasterise an image into a MASK_W×MASK_H alpha bitmap (1 = solid). `threshold`
 // ignores near-transparent pixels (empty art never collides).
@@ -5101,10 +5246,22 @@ async function loadWorldArt() {
     // each frame only pays for one or two passes. Results are identical.
     const _yield = () => new Promise(r => setTimeout(r, 0));
     const f1 = new Uint8Array(MASK_W * MASK_H);
-    _orMask(f1, _dilate(M.walls, 3));
+    const wallsD = _dilate(M.walls, 3);
+    _orMask(f1, wallsD);
     await _yield();
-    _orMask(f1, _erode(M.furn, 3));
+    const furnE = _erode(M.furn, 3);
+    _orMask(f1, furnE);
     await _yield();
+    /* القفز على الطاولات — the furniture a player can jump up onto and walk across
+       (the eroded furniture body + the two desks whose collider is a manual rect), and
+       the walls alone, which are all that still blocks someone standing up there.
+       Kept as their own masks: 2 × 1.7 MB, see _jumpTopAt / checkCollision. */
+    const tops = new Uint8Array(MASK_W * MASK_H);
+    _orMask(tops, furnE);
+    _fillMaskRectSrc(tops, GROUND_TABLE_GHOST_PX0, GROUND_TABLE_GHOST_PY0, GROUND_TABLE_GHOST_PX1, GROUND_TABLE_GHOST_PY1);
+    _fillMaskRectSrc(tops, EXT_TABLE_GHOST[0], EXT_TABLE_GHOST[1], EXT_TABLE_GHOST[2], EXT_TABLE_GHOST[3]);
+    worldCollision.tops = tops;
+    worldCollision.walls = wallsD;
     _orMask(f1, M.fire);
     _fillMaskRectSrc(f1, STAIR_GHOST_PX0, STAIR_GHOST_PY0, STAIR_GHOST_PX1, STAIR_GHOST_PY1); // stair dead-zone ghost collider
     _fillMaskRectSrc(f1, GROUND_TABLE_GHOST_PX0, GROUND_TABLE_GHOST_PY0, GROUND_TABLE_GHOST_PX1, GROUND_TABLE_GHOST_PY1); // ground laptop desk collider
@@ -5215,8 +5372,9 @@ function _activeLaptopForFloor() {
     return id != null ? gameState.laptops.find(l => l.id === id) : null;
 }
 function desiredPlayerScale(player) {
-    if (isOnStairs(player.x, player.y)) return stairScaleAt(player.x);
-    return (player.floor === 2) ? FLOOR2_SCALE : 1.0;
+    const top = player._elev ? JUMP_TOP_SCALE : 1;   // on a table: a touch closer to the camera
+    if (isOnStairs(player.x, player.y)) return stairScaleAt(player.x) * top;
+    return ((player.floor === 2) ? FLOOR2_SCALE : 1.0) * top;
 }
 
 // ── Seating (sofas) ──────────────────────────────────────────────────────────
@@ -5654,6 +5812,14 @@ function updateFloorsAndScales() {
         // was saved in there before isOnStairs learned about the room (a stored
         // floor 2 is otherwise never flipped back — it only flips on the stairs).
         if (local.x >= MEET_X0 && local.floor !== 1) local.floor = 1;
+        // Off the table the moment anything else takes the player over — a seat, a
+        // laptop, the kidnap — or the spot under them simply isn't a top any more.
+        if (local._elev && !local._jumpMove) {
+            if (gameState.isLockedIn || gameState.anim.active || gameState.isSitting || gameState.sitAnim.active
+                || (worldCollision.built && !_jumpTopAt(local.x, local.y + PLAYER_SIZE * 0.22, local.floor || 1))) {
+                local._elev = false;
+            }
+        }
         // Pin to the seated laptop's floor while locked in / being kidnapped — this
         // is what keeps a second-floor work session from wrongly reading floor 1
         // (which faded the whole mezzanine and hid the player from others). During
@@ -5665,7 +5831,7 @@ function updateFloorsAndScales() {
         if (!deferringFlip && (gameState.isLockedIn || gameState.anim.active)) {
             const lap = _activeLaptopForFloor();
             if (lap) local.floor = lap.floor || 1;
-        } else if (!gameState.anim.active && isOnStairs(local.x, local.y)) {
+        } else if (!gameState.anim.active && !local._jumpMove && isOnStairs(local.x, local.y)) {
             // Reliable commit: once you've climbed up into the platform zone you're on
             // floor 2; otherwise decide by how far up the ramp you are (hysteresis).
             if (local.y < PLAT_Y1 - 10) {
@@ -8179,6 +8345,9 @@ function initMobileControls() {
                 Math.hypot(clickWorld.x - LAPTOP_BOSS_BTN_CX, clickWorld.y - LAPTOP_BOSS_BTN_CY) < LAPTOP_BOSS_BTN_R + 24;
             if (clickedBossBtn) { triggerLaptopBossTeleport(); return; }
 
+            // القفز: two quick taps anywhere on the world (see anyDoubleTapJump).
+            if (!isMinigameActive() && anyDoubleTapJump(t.clientX, t.clientY)) { e.preventDefault(); return; }
+
             // وقوف (stand up) button — floats above the local player while seated.
             if (gameState.isSitting && !gameState.sitAnim.active && player) {
                 const btnY = player.y - 90;
@@ -8287,11 +8456,14 @@ function initMobileControls() {
             }
             // Laptops only: blocked while a pomodoro/free-mode session is active (including
             // break) so you can't hop to a different laptop mid-session.
-            if (gameState.pomodoro.active || gameState.freeMode.active) return;
+            if (gameState.pomodoro.active || gameState.freeMode.active) { jumpNoteFreeTap(t.clientX, t.clientY); return; }
             if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
                 if (gameState.activeLaptop.claimedBy) return;
                 showLaptopModeSelect();
+                return;
             }
+            // Nothing took this tap — it may be the first half of a double-tap jump.
+            jumpNoteFreeTap(t.clientX, t.clientY);
         }, { passive: false });   // non-passive so the chat branch above can preventDefault
     }
 
@@ -9861,6 +10033,7 @@ function sendPositionWS(x, y, force) {
         m: (p && p.isMoving) ? 1 : 0,
         s: (p && p.isSprinting) ? 1 : 0,
         fl: (p && p.floor) || 1,    // which floor I'm on → others scale me correctly
+        el: (p && p._elev) ? 1 : 0, // standing on a table (القفز)
         // Our own monotonic clock when this packet was built. The receiver maps it
         // onto its own clock with a minimum-filtered offset, so its jitter buffer
         // replays the samples at the spacing they were SENT at, not the spacing
@@ -9925,7 +10098,7 @@ function onPresenceMessage(data) {
     if (msg.t === 'typ') { _chatSetTyping(player, msg.on === 1); return; }
     // القفزة — one-off and half a second long, so it plays on arrival rather than
     // being queued onto the replay timeline the way the sofa hop is.
-    if (msg.t === 'jmp') { receiveJump(player); return; }
+    if (msg.t === 'jmp') { receiveJump(player, msg); return; }
     // isMoving must update before pushing the sample — interpolateRemoteFromBuffer
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
@@ -9936,6 +10109,7 @@ function onPresenceMessage(data) {
     player._netM = msg.m === 1 ? 1 : 0;
     player._netS = msg.s === 1 ? 1 : 0;
     if (msg.fl === 1 || msg.fl === 2) player.floor = msg.fl;
+    player._elev = msg.el === 1;
     if (typeof msg.x === 'number' && typeof msg.y === 'number') {
         setEntityTarget(player, msg.x, msg.y);  // keep .x/.y authoritative
         if (player._pendingSpawn != null) {
@@ -10064,15 +10238,20 @@ function _unstickLocalPlayer() {
     updatePlayerPosition(spawn.x, spawn.y);
 }
 
-function checkCollision(x, y) {
+// `opts` ({ floor, elev }) asks about a floor / a table-top state other than the
+// local player's current one — the jump planner uses it (see _jumpPlan).
+function checkCollision(x, y, opts) {
     // Outer clamp to the image (both rooms are one open world now — no door/seam).
     if (x < WORLD_BOUNDS.minX || x > WORLD_BOUNDS.maxX || y < WORLD_BOUNDS.minY || y > WORLD_BOUNDS.maxY) return true;
-    // Stairs bridge the floors — always walkable (their x drives the scale instead).
-    if (isOnStairs(x, y)) return false;
     const local = gameState.players[gameState.userId];
-    const floor = (local && local.floor) || 1;
+    const floor = (opts && opts.floor) || (local && local.floor) || 1;
+    const elev = opts ? !!opts.elev : !!(local && local._elev);
     // Sample the avatar's base ("feet"), so its body — not its head — bumps furniture.
     const fy = y + PLAYER_SIZE * 0.22;
+    // Standing on a table: only the walls block, and the top's edge (see القفز).
+    if (elev) return _jumpElevBlocked(x, fy, floor);
+    // Stairs bridge the floors — always walkable (their x drives the scale instead).
+    if (isOnStairs(x, y)) return false;
     if (floor === 2) {
         // Second floor: geometric platform bounds (railing) + desk alpha. The wood
         // floor itself is walkable; you leave only through the stair opening. Small
@@ -10115,6 +10294,8 @@ function updateCamera() {
 function handleMovement() {
     const player = gameState.players[gameState.userId];
     if (!player) return;
+    // A jump that travels (onto a table, off the mezzanine) owns the player until it lands.
+    if (_jumpDriveLocal(player)) return;
     // Any of these lock out free movement. Zero the momentum velocity so a stale
     // glide can't lurch the player the instant the lock lifts (unlock / stand up /
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
@@ -10196,8 +10377,11 @@ function handleMovement() {
         player.isSprinting = isSprinting && hasInput;
         const nextX = player.x + player._vx * gameState.dtFactor;
         const nextY = player.y + player._vy * gameState.dtFactor;
-        if (!checkCollision(nextX, player.y)) player.x = nextX; else player._vx = 0;
-        if (!checkCollision(player.x, nextY)) player.y = nextY; else player._vy = 0;
+        if (!checkCollision(nextX, player.y)) player.x = nextX;
+        else if (!_jumpStepOff(player, nextX, player.y)) player._vx = 0;
+        if (!checkCollision(player.x, nextY)) player.y = nextY;
+        else if (!_jumpStepOff(player, player.x, nextY)) player._vy = 0;
+        jumpNoteDir(player._vx, player._vy);
         player.smoothMove = false;
         syncEntityRenderToTarget(player);
         // Live movement goes over the WebSocket relay (throttled), NOT Firebase —
@@ -11059,6 +11243,7 @@ function render() {
     ctx.save();
     ctx.translate(W / 2, H / 2);
     if (_entrance.shakeX || _entrance.shakeY) ctx.translate(_entrance.shakeX, _entrance.shakeY); // JUICE: entrance impact shake
+    { const js = jumpShakeOffset(Date.now()); if (js) ctx.translate(js.x, js.y); }               // القفز: the mezzanine landing
     ctx.scale(gameState.zoom, gameState.zoom);
     ctx.translate(gameState.camera.x, gameState.camera.y);
 
@@ -11070,7 +11255,7 @@ function render() {
 
     // Lemo lives on the ground floor. Drawn before the avatars so players always
     // pass in FRONT of him — he's set dressing, he shouldn't ever occlude someone.
-    drawLemo();
+    drawLemo(1);
 
     drawAmbientMotes();
     drawDustParticles(1);   // ground-floor dust — under the mezzanine art
@@ -11082,6 +11267,7 @@ function render() {
     const _kidnapLineActive = gameState.anim.active
         && (gameState.anim.phase === 'reach' || gameState.anim.phase === 'align' || gameState.anim.phase === 'pull');
     if (_kidnapLineActive && (gameState.anim.laptop.floor || 1) === 1) drawKidnapLine();
+    drawJumpQuakes();           // القفز: the shock ring under the ground-floor players' heads
     drawPlayers(false, 1);      // ground-floor players (under the mezzanine)
     drawTimers(1);
 
@@ -11094,6 +11280,7 @@ function render() {
     drawLaptopLights(2, gameState.secondFloorVis ?? 1);
     if (_kidnapLineActive && (gameState.anim.laptop.floor || 1) === 2) drawKidnapLine();
     drawDustParticles(2);       // mezzanine dust — above the floor art, UNDER the players
+    drawLemo(2);                // ليمو, when a mention called him up here
     drawPlayers(false, 2);      // players standing on the platform
     drawTimers(2);
 
@@ -14874,6 +15061,9 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
                 workScaleY *= jf.sy;
                 _jumpScale = jf.s;
             }
+            // The mezzanine landing's shockwave bouncing through everyone it passes.
+            const qb = !tpData ? _jumpQuakeBounce(player, Date.now()) : null;
+            if (qb) { workBob += qb.dy; workScaleX *= qb.sx; workScaleY *= qb.sy; }
         }
 
         // Coop animation: read lerped blend values computed in updateCoopAnimation
@@ -15098,11 +15288,14 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         // at this anchor (the avatar's centre), driven by the anchor's acceleration,
         // so they lean into a move and overshoot on a stop — and the higher a hat
         // sits in the stack, the wider and faster it swings. See drawPlayerHats.
+        // The jump's scale-up and squash reach the hats too — without them the stack
+        // stayed its standing size while the avatar under it grew toward the camera.
         drawPlayerHats(player,
             screenX + coopDX,
             screenY + workBob + coopDY + tpFlyOffsetY + _juiceDropY,
-            rScale * _juiceScale,
-            floorVis * (tpFadeOut > 0.01 ? (1 - tpFadeOut) : 1));
+            rScale * _juiceScale * _jumpScale,
+            floorVis * (tpFadeOut > 0.01 ? (1 - tpFadeOut) : 1),
+            workScaleX, workScaleY);
 
         // A reaction's emoji rises off the head (the avatar's own motion is above).
         if (_rx && _rx.ea > 0.01 && !tpData) {
@@ -15530,7 +15723,7 @@ function renderPiPInto(ctx, canvas, dpr) {
         drawMeetingRoom();
         drawLaptopLights(1);
         drawMeetDoorGlow();       // draw-only — updateMeeting never runs on the PiP pass
-        drawLemo();               // draw-only — updateLemo never runs on the PiP pass
+        drawLemo(1);              // draw-only — updateLemo never runs on the PiP pass
         drawAmbientMotes();
         drawDustParticles(1);
         drawPlayers(false, 1);
@@ -15539,6 +15732,7 @@ function renderPiPInto(ctx, canvas, dpr) {
         drawSecondFloor();
         drawLaptopLights(2, gameState.secondFloorVis ?? 1);
         drawDustParticles(2);
+        drawLemo(2);
         drawPlayers(false, 2);
         drawTimers(2);
         drawCoopEmojiFloats();
@@ -22963,7 +23157,7 @@ function dashSaveSession(mode, task, workedMs) {
     // حضور المقر: credit the attendance the per-second ticker missed while the
     // phone had this tab suspended. Deliberately ABOVE the 10-minute floor —
     // that floor is a dashboard rule, not an attendance one.
-    _dutyCreditSession(workedMs);
+    _dutyFinishSession(workedMs);
     if (!(workedMs >= DASH_MIN_SESSION_MS)) return;        // 10-minute floor
     const uid = gameState.userId;
     const finishMs = Date.now();
@@ -23060,6 +23254,7 @@ function openFreeLongConfirmModal(elapsedMs) {
         if (answered) return;
         answered = true;
         _dashFreeHandled = true;   // discard: end the session WITHOUT saving to the dashboard
+        _dutyFinishSession(0);     // …and it earns no attendance either
         _dashFreeDiscarded = true; // …and without the end card / sound
         modal.classList.remove('active');
         endFreeMode();
@@ -26623,6 +26818,16 @@ const HAT_TOT_MAX = 0.62;   // rad — clamp on the accumulated angle at the top
 const HAT_Y_MAX   = 0.10;   // player units — clamp on one link's vertical give
 const HAT_ACC_MAX = 0.40;   // player-units/frame² — drive clamp, kills one-frame spikes
 const HAT_JUMP    = 3;      // player-units/frame ⇒ a teleport: re-anchor, don't torque
+// Radial give: a stack pressed toward the pivot when the anchor accelerates UP, thrown
+// out from it when it accelerates DOWN. It is a fraction of each hat's own offset, so a
+// hat far from the centre travels further — the same "farther ⇒ more" as the swing.
+const HAT_RDRIVE  = 0.55;
+const HAT_RFREQ   = 1.2;
+const HAT_R_MAX   = 0.14;   // ±14% of the hat's distance from the pivot
+// A jump shoves the stack on top of what the anchor's motion already does — the
+// jump's lift is mostly SCALE, which moves the anchor very little.
+const HAT_KICK_V  = 0.030;  // rad/frame, signed by each link's built-in lean
+const HAT_KICK_R  = 0.035;
 
 // Deterministic tiny hash — the per-hat lean below must be the SAME on every
 // client, or two people would see the same stack fall different ways.
@@ -26646,6 +26851,8 @@ function _hatChainState(player, hats, tx, ty) {
         links: [],
         angle: new Array(hats.length).fill(0),   // accumulated angle, by ORIGINAL index
         yOff:  new Array(hats.length).fill(0),   // accumulated vertical give, ditto
+        rad:   new Array(hats.length).fill(0),   // radial give (fraction of the offset), ditto
+        kickT: 0,                                // the last jump shove consumed
     };
     const order = hats.map((h, i) => i)
         .sort((a, b) => Math.hypot(hats[a].x, hats[a].y) - Math.hypot(hats[b].x, hats[b].y));
@@ -26658,7 +26865,7 @@ function _hatChainState(player, hats, tx, ty) {
             // A real stack is never perfectly balanced, and that imperfection is
             // the only reason a purely VERTICAL jolt can topple one at all.
             bias: ((_hatHash(hats[idx].id + '#' + idx) % 1000) / 1000 - 0.5) * 0.20,
-            a: 0, v: 0, y: 0, yv: 0,
+            a: 0, v: 0, y: 0, yv: 0, r: 0, rv: 0,
         });
         rPrev = r;
     }
@@ -26686,9 +26893,31 @@ function _updateHatChain(player, hats, tx, ty) {
     const ay = jumped ? 0 : clampA((rawVy - st.vy) * inv * HAT_DRIVE);
     st.vx = rawVx; st.vy = rawVy;
 
+    /* A jump (see triggerJump / receiveJump) hands every link a shove: launch presses
+       the stack in and tips it along its built-in lean; the landing (scheduled from
+       the same stamp) throws it out again. Timed off the kick's own stamp, so both
+       halves happen once however many frames the jump takes. */
+    let kickV = 0, kickR = 0;
+    const kick = player._hatKick;
+    if (kick) {
+        const now = Date.now();
+        if (kick.t <= now && st.kickT < kick.t) {
+            st.kickT = kick.t; kickV = kick.up; kickR = -kick.up;
+        } else if (kick.t + (kick.land || 400) <= now && st.kickT < kick.t + 1) {
+            st.kickT = kick.t + 1; kickV = -0.7 * kick.up; kickR = 1.3 * kick.up;
+            player._hatKick = null;
+        }
+    }
+
     let pivotAx = ax, sumA = 0, sumY = 0;
     for (let i = 0; i < st.links.length; i++) {
         const link = st.links[i];
+        if (kickV || kickR) {
+            const sgn = link.bias >= 0 ? 1 : -1;
+            const up = 1 + i * 0.5;              // the higher, the harder
+            link.v  += kickV * HAT_KICK_V * sgn * up;
+            link.rv += kickR * HAT_KICK_R * up;
+        }
         // Inertia = the segment's length × the number of hats it still has to carry.
         // The bottom link is dragging the whole tower, the top link only itself, so
         // ω₀ = sqrt(HAT_K / I) RISES up the stack and the same shove moves the top
@@ -26717,10 +26946,18 @@ function _updateHatChain(player, hats, tx, ty) {
         if (link.y >  HAT_Y_MAX) { link.y =  HAT_Y_MAX; if (link.yv > 0) link.yv = 0; }
         if (link.y < -HAT_Y_MAX) { link.y = -HAT_Y_MAX; if (link.yv < 0) link.yv = 0; }
 
+        // Radial give — see HAT_RDRIVE. ay < 0 (accelerating up) pulls the hat in.
+        const wr = w0 * HAT_RFREQ;
+        link.rv += (ay * HAT_RDRIVE - wr * wr * link.r - 2 * HAT_ZETA * wr * link.rv) * dt;
+        link.r  += link.rv * dt;
+        if (link.r >  HAT_R_MAX) { link.r =  HAT_R_MAX; if (link.rv > 0) link.rv = 0; }
+        if (link.r < -HAT_R_MAX) { link.r = -HAT_R_MAX; if (link.rv < 0) link.rv = 0; }
+
         sumA += link.a;
         sumY += link.y;
         st.angle[link.idx] = Math.max(-HAT_TOT_MAX, Math.min(HAT_TOT_MAX, sumA));
         st.yOff[link.idx]  = sumY;
+        st.rad[link.idx]   = link.r;
 
         // This link's tip accelerates the pivot of the one above it — the whip.
         pivotAx = clampA(pivotAx + aa * link.L * HAT_COUPLE);
@@ -26732,7 +26969,9 @@ function _updateHatChain(player, hats, tx, ty) {
 // drawPlayers AFTER the avatar's transform is restored, with the anchor the
 // avatar was drawn at. Draw order stays the array order (z-order); the physics
 // order is the chain's, which is why the angles are looked up by index.
-function drawPlayerHats(player, anchorX, anchorY, rScale, alpha) {
+// `sx`/`sy` are the avatar's own squash and stretch, so a hat sitting on the head
+// rides it down on a landing instead of floating where the head used to be.
+function drawPlayerHats(player, anchorX, anchorY, rScale, alpha, sx = 1, sy = 1) {
     const hats = player.hats;
     if (!hats || !hats.length || alpha < 0.02) { player._hatPhys = null; return; }
 
@@ -26751,7 +26990,8 @@ function drawPlayerHats(player, anchorX, anchorY, rScale, alpha) {
         ctx.globalAlpha = alpha;
         ctx.translate(anchorX, anchorY);
         ctx.rotate(st.angle[i] || 0);                    // the whole stack pivots here
-        ctx.translate(hat.x * U, hat.y * U + (st.yOff[i] || 0) * U);
+        const rk = 1 + (st.rad[i] || 0);
+        ctx.translate(hat.x * U * rk * sx, hat.y * U * rk * sy + (st.yOff[i] || 0) * U);
         ctx.rotate(hat.rot);
         if (hat.flip) ctx.scale(-1, 1);
         ctx.drawImage(src, -w / 2, -h / 2, w, h);
@@ -27861,7 +28101,232 @@ const _lemo = {
     wakeReqAt: 0,
     sleepFreed: false,
     unsub: null,
+    // ── نداء ليمو (see lemoSummon) ────────────────────────────────────────────
+    floor: 1,                     // 2 only while a call has him up on the mezzanine
+    white: 0,                     // 0..1 — the teleport flash
+    alpha: 1,
+    talk: 0,                      // >0 while «عايز ايه؟» is up (its age, ms)
+    callCue: 0,                   // the call whose arrival cue already played here
+    summoning: false,             // a summon transaction is in flight from this client
 };
+
+/* ── نداء ليمو — a mention calls him over ─────────────────────────────────────
+   @ليمو (or @lemo) in the chat interrupts whatever he is doing, for EVERYONE: he
+   flashes white and vanishes, flashes back in beside the caller, walks up, says
+   «عايز ايه؟», waits a moment, flashes out — and reappears at one of his break-room
+   spots, where his ordinary seeded life carries on.
+
+   Still ONE tiny lobby doc and no stream. The summon is a transaction that writes
+   `{ s:'awake', at: <when the call ends>, seed, from: <spot>, call: {...} }`: the
+   whole call is a pure function of `call` and serverNow() (`_lemoCallPose`), and the
+   timeline after it starts fresh at `at` from `from`. The caller's client measures
+   the geometry (where he is, where to appear, where to stand) once and writes it —
+   nobody else ever has to search the world.
+
+   The call IS the lock: until `at`, the transaction refuses another one. Asleep, he
+   refuses too — the message is held and the sender is told to wake him first. And
+   nobody in a work session can call him (he isn't even in their picker). */
+const LEMO_UID  = 'lemo';
+const LEMO_NAME = 'ليمو';
+const LEMO_PFP  = 'LemoPFP.jpg';
+const LEMO_TALK_TEXT = 'عايز ايه؟';
+const LEMO_CALL_LEAD = 250;                       // ms — lets the doc reach everyone first
+const LEMO_CALL = {
+    flashOut: 520, gone: 280, flashIn: 460,
+    walk: 2600, talk: 3800, linger: 1400, leave: 520,
+};
+const LEMO_CALL_MS = Object.values(LEMO_CALL).reduce((a, b) => a + b, 0);
+const LEMO_BACK_FLASH_MS = 520;                   // the flash-in back at his spot
+const LEMO_CALL_STAND = 74;                       // world px from the caller he stops at
+const LEMO_CALL_APPEAR = 170;                     // …and how far past that he appears
+
+function lemoIsAsleep() { return !_lemo.doc || _lemo.doc.s !== 'awake'; }
+function lemoIsBusy() {
+    const d = _lemo.doc;
+    return !!(d && d.call && serverNow() < d.at);
+}
+
+function _lemoFinite(v, lo, hi) { v = Number(v); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : null; }
+function _lemoCleanCall(c) {
+    if (!c || typeof c !== 'object') return null;
+    const X = (v) => _lemoFinite(v, WORLD_BOUNDS.minX, WORLD_BOUNDS.maxX);
+    const Y = (v) => _lemoFinite(v, WORLD_BOUNDS.minY, WORLD_BOUNDS.maxY);
+    const out = {
+        u: typeof c.u === 'string' ? c.u.slice(0, 64) : '',
+        at: _lemoFinite(c.at, 0, 9e15),
+        fx: X(c.fx), fy: Y(c.fy), f0: c.f0 === 2 ? 2 : 1, ff: c.ff === -1 ? -1 : 1,
+        ax: X(c.ax), ay: Y(c.ay), sx: X(c.sx), sy: Y(c.sy),
+        fl: c.fl === 2 ? 2 : 1, face: c.face === -1 ? -1 : 1,
+    };
+    for (const k of ['at', 'fx', 'fy', 'ax', 'ay', 'sx', 'sy']) if (out[k] === null) return null;
+    return out;
+}
+
+// Where to stand beside the caller, and where to appear before walking up.
+// Checked against the CALLER's floor, with the ordinary collision.
+function _lemoCallSpots(me) {
+    const floor = me.floor || 1;
+    const free = (x, y) => !checkCollision(x, y, { floor, elev: false });
+    const clear = (a, b) => {
+        for (let i = 1; i <= 12; i++) {
+            const t = i / 12;
+            if (!free(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)) return false;
+        }
+        return true;
+    };
+    const angs = [0, Math.PI, Math.PI * 0.25, Math.PI * 0.75, -Math.PI * 0.25, -Math.PI * 0.75, Math.PI / 2, -Math.PI / 2];
+    for (const r of [LEMO_CALL_STAND, LEMO_CALL_STAND * 1.4, LEMO_CALL_STAND * 1.9]) {
+        for (const a of angs) {
+            const st = { x: me.x + Math.cos(a) * r, y: me.y + Math.sin(a) * r * 0.8 };
+            if (!free(st.x, st.y)) continue;
+            // Appear further out along the same line, so the walk ends facing the caller.
+            for (const k of [1, 0.7, 0.45]) {
+                const ap = { x: st.x + Math.cos(a) * LEMO_CALL_APPEAR * k, y: st.y + Math.sin(a) * LEMO_CALL_APPEAR * k * 0.8 };
+                if (free(ap.x, ap.y) && clear(ap, st)) return { st, ap, floor };
+            }
+            return { st, ap: st, floor };
+        }
+    }
+    return { st: { x: me.x, y: me.y }, ap: { x: me.x, y: me.y }, floor };
+}
+
+// → Promise<'ok' | 'sleep' | 'busy' | 'fail'>
+function lemoSummon() {
+    const me = gameState.players[gameState.userId];
+    if (!me || !gameState.selectedLobby) return Promise.resolve('fail');
+    if (lemoIsAsleep()) return Promise.resolve('sleep');
+    if (lemoIsBusy() || _lemo.summoning) return Promise.resolve('busy');
+    _lemo.summoning = true;
+    const spots = _lemoCallSpots(me);
+    const from = { x: _lemo.x, y: _lemo.y, f: _lemo.floor, face: _lemo.face };
+    const home = Math.floor(Math.random() * LEMO_SPOTS.length);
+    let outcome = 'fail';
+    return runTransaction(ref(database, lobbyPath('lemo')), (cur) => {
+        if (!cur || cur.s !== 'awake') { outcome = 'sleep'; return; }
+        const now = serverNow();
+        if (cur.call && now < (Number(cur.at) || 0)) { outcome = 'busy'; return; }
+        const at = now + LEMO_CALL_LEAD;
+        outcome = 'ok';
+        return {
+            s: 'awake',
+            at: at + LEMO_CALL_MS,
+            seed: Math.floor(Math.random() * 2147483647),
+            from: home,
+            call: {
+                u: gameState.userId, at,
+                fx: Math.round(from.x), fy: Math.round(from.y), f0: from.f, ff: from.face,
+                ax: Math.round(spots.ap.x), ay: Math.round(spots.ap.y),
+                sx: Math.round(spots.st.x), sy: Math.round(spots.st.y),
+                fl: spots.floor, face: me.x < spots.st.x ? -1 : 1,
+            },
+        };
+    }).then(r => {
+        if (r && r.snapshot) _lemoApplyDoc(r.snapshot.val());
+        return r && r.committed ? 'ok' : (outcome === 'ok' ? 'busy' : outcome);
+    }).catch(() => 'fail').finally(() => { _lemo.summoning = false; });
+}
+
+// One frame of the call. PURE in (call, t) — the PiP pass reads the result.
+function _lemoCallPose(c, t) {
+    const C = LEMO_CALL;
+    const idle = LEMO_ANIMS.Idle;
+    let el = t - c.at;
+    _lemo.white = 0; _lemo.alpha = 1; _lemo.talk = 0;
+    _lemo.state = 'called'; _lemo.anim = 'Idle';
+    _lemo.frame = Math.floor(((t % LEMO_IDLE_CYCLE_MS) + LEMO_IDLE_CYCLE_MS) % LEMO_IDLE_CYCLE_MS * idle.fps / 1000) % idle.frames;
+    _lemo.idleFrame = _lemo.frame;
+    _lemo.caughtUp = true;
+    const at = (x, y, fl, face) => { _lemo.x = x; _lemo.y = y; _lemo.floor = fl; _lemo.face = face; };
+    if (el < C.flashOut) {                          // stop, flash white, gone
+        at(c.fx, c.fy, c.f0, c.ff);
+        const k = el / C.flashOut;
+        _lemo.white = Math.min(1, k * 1.6);
+        _lemo.alpha = k < 0.65 ? 1 : 1 - (k - 0.65) / 0.35;
+        return;
+    }
+    el -= C.flashOut;
+    if (el < C.gone) { at(c.fx, c.fy, c.f0, c.ff); _lemo.alpha = 0; return; }
+    el -= C.gone;
+    const walkFace = c.sx < c.ax ? -1 : 1;
+    if (el < C.flashIn) {                           // flash back in beside the caller
+        at(c.ax, c.ay, c.fl, walkFace);
+        const k = el / C.flashIn;
+        _lemo.alpha = Math.min(1, k * 3);
+        _lemo.white = 1 - k;
+        return;
+    }
+    el -= C.flashIn;
+    if (el < C.walk) {                              // walk up
+        const k = el / C.walk;
+        const e = _lemoEase(Math.min(1, k / 0.8));
+        at(c.ax + (c.sx - c.ax) * e, c.ay + (c.sy - c.ay) * e, c.fl, walkFace);
+        if (c.ax !== c.sx || c.ay !== c.sy) {
+            _lemo.state = 'walking'; _lemo.anim = 'Walk';
+            _lemo.frame = Math.min(LEMO_ANIMS.Walk.frames - 1, Math.floor(k * LEMO_WALK_MOVE_FRAMES * 1.25));
+        }
+        return;
+    }
+    el -= C.walk;
+    at(c.sx, c.sy, c.fl, c.face);
+    if (el < C.talk) { _lemo.talk = el + 1; return; }  // «عايز ايه؟»
+    el -= C.talk;
+    if (el < C.linger) return;
+    el -= C.linger;
+    const k = Math.min(1, el / C.leave);            // flash out
+    _lemo.white = Math.min(1, k * 1.6);
+    _lemo.alpha = k < 0.65 ? 1 : 1 - (k - 0.65) / 0.35;
+}
+
+// The speech bubble over his head — canvas, like the chat's. Pops in, fades out.
+function _lemoDrawTalk(ctx, x, headY, sc, alpha) {
+    const age = _lemo.talk;
+    if (!age) return;
+    const pop = age < 320 ? easeOutBack(Math.max(0.0001, age / 320)) : 1;
+    const fade = Math.min(1, (LEMO_CALL.talk - age) / 260);
+    const a = alpha * Math.max(0, fade);
+    if (a < 0.01) return;
+    ctx.save();
+    ctx.font = '700 15px Rubik, system-ui, sans-serif';
+    const tw = ctx.measureText(LEMO_TALK_TEXT).width;
+    const w = tw + 26, h = 34;
+    const by = headY - 12;
+    ctx.translate(x, by);
+    ctx.scale(pop * sc, pop * sc);
+    ctx.globalAlpha = a;
+    ctx.fillStyle = 'rgba(255,255,255,0.96)';
+    _chatRoundRect(ctx, -w / 2, -h, w, h, h / 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(-6, -1); ctx.lineTo(6, -1); ctx.lineTo(0, 8);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = '#262626';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.direction = 'rtl';
+    ctx.fillText(LEMO_TALK_TEXT, 0, -h / 2 + 1);
+    ctx.restore();
+}
+
+// The white flash: one frame drawn into a small scratch canvas and washed white.
+let _lemoFlashCv = null;
+function _lemoWhiteFrame(sheet, sx, sy, fw, fh, white) {
+    if (!_lemoFlashCv) _lemoFlashCv = document.createElement('canvas');
+    const cv = _lemoFlashCv;
+    if (cv.width !== fw || cv.height !== fh) { cv.width = fw; cv.height = fh; }
+    const c = cv.getContext('2d');
+    c.globalCompositeOperation = 'source-over';
+    c.clearRect(0, 0, fw, fh);
+    c.drawImage(sheet, sx, sy, fw, fh, 0, 0, fw, fh);
+    c.globalCompositeOperation = 'source-atop';
+    c.globalAlpha = Math.min(1, white);
+    c.fillStyle = '#ffffff';
+    c.fillRect(0, 0, fw, fh);
+    c.globalAlpha = 1;
+    c.globalCompositeOperation = 'source-over';
+    return cv;
+}
+
 
 function ensureLemoSheet(name) {
     if (_lemo.sheets[name]) return;                 // loaded or loading
@@ -27990,17 +28455,28 @@ function _lemoApplyDoc(v) {
     const at = (v && Number.isFinite(v.at)) ? v.at : 0;
     const seed = (v && Number.isFinite(v.seed)) ? (v.seed | 0) : 0;
     _lemo.docReady = true;
-    const key = s + ':' + at + ':' + seed;
+    const call = (s === 'awake') ? _lemoCleanCall(v && v.call) : null;
+    const from = (v && Number.isInteger(v.from) && v.from >= 0 && v.from < LEMO_SPOTS.length) ? v.from : -1;
+    const key = s + ':' + at + ':' + seed + ':' + (call ? call.at : '') + ':' + from;
     if (key === _lemo.docKey) return;
     _lemo.docKey = key;
-    _lemo.doc = { s, at, seed };
+    _lemo.doc = { s, at, seed, call, from };
     _lemo.wakeReqAt = 0;
-    _lemo.sim = (s !== 'awake') ? null : {
+    if (s !== 'awake') { _lemo.sim = null; return; }
+    const sim = {
         rand: _lemoRng(seed),
         kind: 'wake', t0: at, end: at + LEMO_WAKE_MS,
         x: LEMO_SPAWN.x, y: LEMO_SPAWN.y, sx: 0, sy: 0, tx: 0, ty: 0, face: 1,
         mode: 'rest', spot: null, prevSpot: null, queue: [], restWalks: 0, meetLeft: 0,
     };
+    // After a call he doesn't wake up — he reappears at a break-room spot and idles.
+    if (from >= 0) {
+        sim.spot = LEMO_SPOTS[from];
+        sim.x = sim.spot.x; sim.y = sim.spot.y;
+        _lemoIdle(sim, at);
+        sim.back = true;
+    }
+    _lemo.sim = sim;
 }
 
 // Nobody else is here → he goes back to bed. Runs once, on arrival, after the first
@@ -28037,7 +28513,28 @@ function _lemoMaybeWake() {
 
 // Where he is and what he's doing at server time t.
 function _lemoPose(t) {
+    _lemo.floor = 1; _lemo.white = 0; _lemo.alpha = 1; _lemo.talk = 0;
+    const d = _lemo.doc;
+    const c = d && d.call;
+    if (c && t < d.at) {
+        if (t >= c.at) { _lemoCallPose(c, t); }
+        else {
+            // The doc arrived a hair before the call's own start: stand where he was.
+            _lemo.x = c.fx; _lemo.y = c.fy; _lemo.floor = c.f0; _lemo.face = c.ff;
+            _lemo.state = 'idle'; _lemo.anim = 'Idle'; _lemo.caughtUp = true;
+            const a = LEMO_ANIMS.Idle;
+            _lemo.frame = _lemo.idleFrame = Math.floor(((t % LEMO_IDLE_CYCLE_MS) + LEMO_IDLE_CYCLE_MS) % LEMO_IDLE_CYCLE_MS * a.fps / 1000) % a.frames;
+        }
+        if (!_lemo.sleepFreed) { _lemo.sleepFreed = true; _lemoReleaseSleepSheets(); }
+        return;
+    }
     const s = _lemo.sim;
+    // Back from a call: flash in at his spot.
+    if (s && s.back && t >= s.t0 - 1 && d && t - d.at < LEMO_BACK_FLASH_MS) {
+        const k = Math.max(0, (t - d.at) / LEMO_BACK_FLASH_MS);
+        _lemo.alpha = Math.min(1, k * 3);
+        _lemo.white = 1 - k;
+    }
     if (!s || t < s.t0) {
         // Asleep — or woken, but finishing the loop he was in. `at` sits on the
         // loop grid either way, so every client shows the same frame.
@@ -28087,6 +28584,13 @@ function startLemo() {
     _lemo.started = true;
     ensureLemoSheet('Idle');
     ensureLemoSheet('Walk');
+    // His face in the @ picker and on a mention pill (canvas + DOM). Tiny, after spawn.
+    try {
+        const pfp = new Image();
+        pfp.decoding = 'async';
+        pfp.onload = () => { gameState.avatarCache[LEMO_UID] = pfp; };
+        pfp.src = LEMO_PFP;
+    } catch (_) {}
     if (!_lemo.unsub && gameState.selectedLobby) {
         // Unreadable → he just sleeps, locally. Never worth an error on screen.
         _lemo.unsub = onValue(ref(database, lobbyPath('lemo')),
@@ -28125,14 +28629,25 @@ function updateLemo() {
     if (gameState._hideLemo) { _lemo.shown = false; return; }
     _lemoPose(t);
     _lemo.shown = _lemo.resetChecked && _lemo.caughtUp;
+    // The caller hears him arrive (a soft blip as «عايز ايه؟» pops up).
+    const c = _lemo.doc && _lemo.doc.call;
+    if (c && _lemo.talk && c.u === gameState.userId && _lemo.callCue !== c.at) {
+        _lemo.callCue = c.at;
+        try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.35, 0.07); } catch (_) {}
+    }
+    if (_lemo.white > 0 || _lemo.talk || lemoIsBusy()) perfWake(600);
     if (_lemo.shown && _lemo.state === 'sleeping' && _lemo.doc.s !== 'awake') _lemoMaybeWake();
 }
 
-function drawLemo() {
+function drawLemo(floorPass) {
     if (!_lemo.shown || gameState._hideLemo) return;
+    if ((floorPass || 1) !== (_lemo.floor || 1)) return;
     // In the meeting room he fades with the room — hidden until you reach its door.
-    const fade = _meetFadeAt(_lemo.x);
+    // Up on the mezzanine he fades with it, like a player standing there.
+    const fade = _meetFadeAt(_lemo.x) * (_lemo.alpha ?? 1)
+        * (_lemo.floor === 2 ? (gameState.secondFloorVis ?? 1) : 1);
     if (fade < 0.01) return;
+    const lsc = _lemo.floor === 2 ? FLOOR2_SCALE : 1;
     let name = _lemo.anim, frame = _lemo.frame;
     let sheet = _lemoSheet(name);
     if (!sheet && name === 'Play') { name = 'Idle'; frame = _lemo.idleFrame; sheet = _lemoSheet('Idle'); }
@@ -28142,12 +28657,12 @@ function drawLemo() {
 
     // Soft contact shadow on the floor — the same ellipse the avatars get, but
     // tighter than theirs: he stands on small feet, not a full body footprint.
-    const shW = LEMO_W * 0.30;
+    const shW = LEMO_W * 0.30 * lsc;
     ctx.save();
     ctx.globalAlpha = 0.28 * fade;
     ctx.fillStyle = '#000';
     ctx.beginPath();
-    ctx.ellipse(_lemo.x, _lemo.y + LEMO_H / 2 - 2, shW, shW * 0.32, 0, 0, Math.PI * 2);
+    ctx.ellipse(_lemo.x, _lemo.y + (LEMO_H / 2) * lsc - 2, shW, shW * 0.32, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
@@ -28156,23 +28671,31 @@ function drawLemo() {
     const row = (frame / a.cols) | 0;
     ctx.save();
     if (fade < 1) ctx.globalAlpha = fade;
-    ctx.translate(_lemo.x, _lemo.y);
-    ctx.scale(_lemo.face, 1);           // mirrors around his own anchor
+    ctx.translate(_lemo.x, _lemo.y + (LEMO_H / 2) * (lsc - 1));
+    ctx.scale(_lemo.face * lsc, lsc);   // mirrors around his own anchor
     // Drop shadow, matching the avatars' (drawPlayers uses the same values on the
     // ring). installLowGfxShadowGuard zeroes shadowBlur on the reduced tiers, so
     // this costs nothing on mobile — same as every other shadow in the world pass.
     ctx.shadowBlur = 10;
     ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
     ctx.shadowOffsetY = 4;
+    // The teleport flash washes the frame white (see _lemoWhiteFrame).
+    const white = _lemo.white || 0;
+    const src = white > 0.01 ? _lemoWhiteFrame(sheet, col * a.fw, row * a.fh, a.fw, a.fh, white) : sheet;
+    const sx0 = white > 0.01 ? 0 : col * a.fw, sy0 = white > 0.01 ? 0 : row * a.fh;
     ctx.drawImage(
-        sheet,
-        col * a.fw, row * a.fh, a.fw, a.fh,
+        src,
+        sx0, sy0, a.fw, a.fh,
         (bx0 - LEMO_ANCHOR_SX) * LEMO_SCALE,
         (by0 - LEMO_ANCHOR_SY) * LEMO_SCALE + LEMO_H / 2,
         (bx1 - bx0) * LEMO_SCALE,
         (by1 - by0) * LEMO_SCALE
     );
     ctx.restore();
+    if (_lemo.talk) {
+        const headY = _lemo.y + (LEMO_H / 2) * lsc - LEMO_H * lsc;
+        _lemoDrawTalk(ctx, _lemo.x, headY, Math.min(1.4, 1 / Math.max(0.6, gameState.zoom || 1)) * lsc, fade);
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -28333,6 +28856,7 @@ const _lib = {
     pickOpen: false,
     quotes: new Map(),
     shut: {},           // which groups the reader collapsed — session only, like the library's
+    shutKids: new Set(),// which PARENT tasks have their subtasks folded — session only, like the library's
     toastTimer: 0,
     wired: false,
 };
@@ -28573,6 +29097,7 @@ function _libTaskPill(t, i, opts) {
     const el = document.createElement('article');
     el.className = 'task' +
         (done || (watching && full) ? ' done' : '') +
+        (opts.subs && opts.subs.has(t.id) ? ' subpill' : '') +
         (c.late ? ' overdue' : '') +
         (!c.late && c.ms <= LIB_DAY_MS ? ' urgent' : '');
     el.style.setProperty('--c', color);
@@ -28621,6 +29146,7 @@ function _libTaskPill(t, i, opts) {
             '<span class="task-title">' + _libEsc(t.title) + '</span>' +
             (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
             '<span class="pill-foot">' +
+                _libKidsChip(t, opts) +
                 '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>' +
                 _libTagsHtml(t) +
             '</span>' +
@@ -28662,10 +29188,46 @@ function _libTaskPill(t, i, opts) {
     return el;
 }
 
+/* ── المهام الفرعية — mirror of `nest()` / `kidsChip()` in MdwnhLibrary/js/tasks.js
+   A subtask is a WHOLE task carrying `parent`, so it renders as an ordinary pill
+   wherever its parent is not in the same list. When both are, the child moves
+   under its parent and wears the elbow. Orphans are normal — nothing repairs. */
+function _libNest(list) {
+    const byId = new Map(list.map(t => [t.id, t]));
+    const kids = new Map();
+    list.forEach(t => {
+        if (!t.parent || !byId.has(t.parent) || t.parent === t.id) return;
+        if (!kids.has(t.parent)) kids.set(t.parent, []);
+        kids.get(t.parent).push(t);
+    });
+    const out = [], subs = new Set();
+    list.forEach(t => {
+        if (t.parent && byId.has(t.parent) && t.parent !== t.id) return;   // drawn under its parent
+        out.push(t);
+        (kids.get(t.id) || []).forEach(k => { out.push(k); subs.add(k.id); });
+    });
+    return { items: out, subs, kids };
+}
+// The count comes from the list this group is ABOUT to render: a parent whose
+// children are not on screen must not offer a control that does nothing.
+function _libKidsChip(t, opts) {
+    const n = opts.kids ? (opts.kids.get(t.id) || []).length : 0;
+    if (!n) return '';
+    const shut = _lib.shutKids.has(t.id);
+    return '<button class="pill-kids' + (shut ? ' on' : '') + '" type="button"' +
+        ' aria-expanded="' + String(!shut) + '"' +
+        ' aria-label="' + (shut ? 'إظهار المهام الفرعية' : 'طي المهام الفرعية') + '">' +
+        LIB_ICON.tri + '<span>' + _libAr(n) + '</span></button>';
+}
+
 /* ── a collapsible group ──────────────────────────────────────────────────── */
 function _libBlock(id, cls, title, items, opts, seq) {
     if (!items.length) return null;
     seq = seq || { n: 0 };
+    // The count stays FLAT — a subtask is a task, and the number must agree with
+    // what there is to finish. Only the layout nests.
+    const nested = _libNest(items);
+    opts = Object.assign({}, opts || {}, { subs: nested.subs, kids: nested.kids });
     const sec = document.createElement('section');
     sec.className = 'subgroup ' + cls + (_lib.shut[id] ? ' collapsed' : '');
     sec.dataset.group = id;
@@ -28680,7 +29242,39 @@ function _libBlock(id, cls, title, items, opts, seq) {
     // A collapsed group's pills are clipped to zero height, so they must not
     // spend cascade slots — the next group would start its delays halfway
     // through a run nobody can see.
-    items.forEach(t => lst.appendChild(_libTaskPill(t, _lib.shut[id] ? LIB_SEQ_MAX + 1 : seq.n++, opts)));
+    const rowsOf = new Map(), pillOf = new Map();
+    nested.items.forEach(t => {
+        const pill = _libTaskPill(t, _lib.shut[id] ? LIB_SEQ_MAX + 1 : seq.n++, opts);
+        /* The elbow cannot live on the pill — `.task` is overflow:hidden and would
+           clip it — so every subtask gets a wrapper row that carries the line. */
+        if (nested.subs.has(t.id)) {
+            const row = document.createElement('div');
+            row.className = 'subrow' + (_lib.shutKids.has(t.parent) ? ' hid' : '');
+            row.innerHTML = '<i class="sub-tee" aria-hidden="true"></i>';
+            row.appendChild(pill);
+            if (!rowsOf.has(t.parent)) rowsOf.set(t.parent, []);
+            rowsOf.get(t.parent).push(row);
+            lst.appendChild(row);
+            return;
+        }
+        pillOf.set(t.id, pill);
+        lst.appendChild(pill);
+    });
+    // The fold is wired here: only the group that laid the rows out knows them.
+    rowsOf.forEach((rows, pid) => {
+        const pill = pillOf.get(pid);
+        const btn = pill && pill.querySelector('.pill-kids');
+        if (!btn) return;
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();                   // the pill itself opens the library
+            const shut = !_lib.shutKids.has(pid);
+            if (shut) _lib.shutKids.add(pid); else _lib.shutKids.delete(pid);
+            rows.forEach(r => r.classList.toggle('hid', shut));
+            btn.classList.toggle('on', shut);
+            btn.setAttribute('aria-expanded', String(!shut));
+            btn.setAttribute('aria-label', shut ? 'إظهار المهام الفرعية' : 'طي المهام الفرعية');
+        });
+    });
     sec.querySelector('.sub-head').addEventListener('click', () => {
         const now = sec.classList.toggle('collapsed');
         _lib.shut[id] = now;                       // session only, like the library's
@@ -28798,6 +29392,8 @@ const LIB_LIST_GAP = 10;
 function _libDropPill(el, after) {
     const done = () => { if (after) after(); };
     if (!el || !el.parentNode) { done(); return; }
+    // A subtask lives inside its own `.subrow`, which carries the elbow — drop both.
+    if (el.parentNode.classList && el.parentNode.classList.contains('subrow')) el = el.parentNode;
     if (window.matchMedia('(prefers-reduced-motion:reduce)').matches) {
         el.parentNode.removeChild(el); done(); return;
     }
@@ -29564,8 +30160,9 @@ const _duty = {
     ready: false,       // the week's read has landed (or failed)
     readOk: false,      // …and succeeded — vacations are only offered on an honest count
     days: {},           // { 'YYYY-MM-DD': { ms, vac } } — this week onward, the banked mirror
-    dayKey: '',         // the day `liveMs` belongs to
-    liveMs: 0,          // unbanked open-time for `dayKey`
+    dayKey: '',         // the day the live counters below belong to
+    loadId: 'l' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    openMs: 0,          // this page load's open time for `dayKey` (a TOTAL, see _dutyBank)
     liveWorkMs: 0,      // unbanked WORK time for `dayKey` (see gamesUnlocked)
     gamesToldAt: '',    // the day whose games-unlock toast has already been said
     tickAt: 0,          // last counted tick (0 = re-anchor on the next one)
@@ -29576,10 +30173,13 @@ const _duty = {
     confirmAt: 0,
     busy: false,        // a vacation write is in flight — counting pauses
     screenEl: null,
-    // ── the session ledger (see _dutyCreditSession) ──────────────────────────
-    sessOn: false,      // a work session was running at the previous tick
-    workAt: 0,          // when THIS device first saw the running session (0 = no ledger)
-    workTicked: 0,      // ms the ticker already credited during it
+    // ── the live session credit (see _dutySessTrack) ─────────────────────────
+    sess: null,         // { id, key, base, last } — the running work session
+    sessDone: {},       // { sessionId: true } — finished; never written live again
+    // ── writes not yet acknowledged by the server (see _dutyBank) ────────────
+    dirty: {},          // { path: value } — waiting for the next bank
+    inflight: {},       // { path: value } — sent, not acked yet
+    winBankAt: 0,
     // ── «لم تُسجل ساعاتك بشكل صحيح؟» — the manual top-up steppers ─────────────
     fixH: 0,
     fixM: 0,
@@ -29635,10 +30235,19 @@ function _dutyWeekKeys(start) {
     return out;
 }
 function _dutyStarted(key) { return (key || _todayDateStr()) >= DUTY_START_KEY; }
+// Sum of a { id: ms } map — the per-load open totals (`o`) and the per-session
+// credits (`s`) that sit beside the legacy `ms` leaf. See _dutyBank.
+function _dutySumMap(m) {
+    let t = 0;
+    if (m && typeof m === 'object') for (const k in m) { const v = Number(m[k]); if (v > 0) t += v; }
+    return t;
+}
 function _dutyRec(days, key) {
     const r = days && days[key];
     return {
-        ms: Math.max(0, Number(r && r.ms) || 0),
+        // The day's attendance = the legacy `ms` leaf (old clients' deltas + the manual
+        // top-up) + every page load's open total (`o`) + every work session's credit (`s`).
+        ms: Math.min(DUTY_DAY_MAX_MS, Math.max(0, Number(r && r.ms) || 0) + _dutySumMap(r && r.o) + _dutySumMap(r && r.s)),
         vac: Number(r && r.vac) || 0,
         // اعتماد القائد — the leader passed this day by hand (see _admSetDuty). It is a
         // field of its own so `ms` stays the honest open time he ranks members by.
@@ -29732,12 +30341,10 @@ function _dutyDaysAr(n) {
 }
 
 /* ── my own day ───────────────────────────────────────────────────────────── */
-// The banked value plus whatever this tab has counted since the last bank.
+// The live counters are mirrored straight into `_duty.days` (see _dutyPatchSub),
+// so the record already holds everything this tab has counted.
 function _dutyTodayRec() {
-    const key = _todayDateStr();
-    const r = _dutyRec(_duty.days, key);
-    if (!r.vac && _duty.dayKey === key) r.ms += _duty.liveMs;
-    return r;
+    return _dutyRec(_duty.days, _todayDateStr());
 }
 /* ساعات العمل اليوم — البنك زائد ما لم يُبنَّك بعد. هذا ما تُقاس عليه الألعاب:
    عملٌ فعليّ (طور العمل في البومودورو أو الجلسة الحرة)، لا مجرّد فتح الموقع. */
@@ -29761,18 +30368,128 @@ function _dutyCanVacation() {
     return _duty.readOk && _dutyStarted() && !r.vac && !r.ok && r.ms < DUTY.goalMs && _dutyVacLeft() > 0;
 }
 
-/* ── counting the open time ───────────────────────────────────────────────────
-   Wall-clock gaps between ticks, ticked by the game loop AND a 15 s interval —
-   rAF stops entirely in a hidden tab, the interval keeps going (throttled to
-   ~1/min at worst), so a tab left open in the background is still counted.
-   A gap over DUTY_GAP_MAX_MS is not credited at all: that is a sleeping laptop
-   or a phone that suspended the tab, and the site was not really open.
-   Paused while another device holds the session (`_dupSessionDetected`), so two
-   open tabs can never double-count the same minute. */
+/* ── the local mirror ─────────────────────────────────────────────────────────
+   Every change to the day goes through these two, so the record can never lose
+   a field another writer put there (the leader's `ok`, a top-up's `fix`). */
+function _dutyDay(key) {
+    const d = _duty.days[key];
+    if (d && typeof d === 'object') return d;
+    return (_duty.days[key] = {});
+}
+function _dutyPatchDay(key, fields) {
+    const d = _dutyDay(key);
+    for (const f in fields) {
+        if (fields[f] === null || fields[f] === undefined) delete d[f];
+        else d[f] = fields[f];
+    }
+}
+// One entry of the `o` (open) or `s` (session) map: mirrored now, queued for the
+// next bank. `v` 0/null deletes it.
+function _dutyPatchSub(key, sub, id, v) {
+    const d = _dutyDay(key);
+    const val = v > 0 ? Math.round(Math.min(DUTY_DAY_MAX_MS, v)) : null;
+    if (val === null) { if (d[sub]) delete d[sub][id]; }
+    else { (d[sub] && typeof d[sub] === 'object' ? d[sub] : (d[sub] = {}))[id] = val; }
+    _duty.dirty[`${_dutyPath()}/${key}/${sub}/${id}`] = val;
+}
+function _dutySinceMidnight() {
+    const mid = new Date(); mid.setHours(0, 0, 0, 0);
+    return Math.min(DUTY_DAY_MAX_MS, Math.max(0, Date.now() - mid.getTime()));
+}
+
+/* ── counting ────────────────────────────────────────────────────────────────
+   TWO measures, never both at once:
+
+   • OPEN TIME — wall-clock gaps between ticks while the game screen is up and the
+     member is NOT in a work phase. Ticked by the game loop AND a 15 s interval
+     (rAF stops in a hidden tab, the interval keeps going). A gap over
+     DUTY_GAP_MAX_MS is not credited: a sleeping laptop, a suspended phone tab.
+
+   • SESSION TIME — while a work session runs, the open-time counter stops and the
+     session's own worked time is credited LIVE instead (`_dutySessTrack`). That
+     clock is stamped at phase transitions, never ticked, so it survives a phone
+     suspending the tab — which is exactly the case that used to credit a member
+     eight minutes for an hour of work. It is locked in when the session ends
+     (`_dutyFinishSession`) with whatever the member confirmed: the full time, the
+     time they corrected in «هل عملت …فعلًا؟», or nothing if they discarded it.
+
+   Paused while another device holds the session (`_dupSessionDetected`). */
 function _dutyCounting() {
     if (!gameState.userId || gameState._dupSessionDetected || _duty.busy) return false;
     const s = _duty.screenEl || (_duty.screenEl = document.getElementById('game-screen'));
     return !!(s && s.classList.contains('active'));
+}
+function _dutySessId() {
+    const fm = gameState.freeMode, p = gameState.pomodoro;
+    if (fm.active && fm._createdAt) return 'f' + Math.round(fm._createdAt);
+    if (p.active && p.createdAt) return 'p' + Math.round(p.createdAt);
+    return '';
+}
+function _dutySessWorkedNow() {
+    if (gameState.freeMode.active) return freeWorkedMsNow();
+    if (gameState.pomodoro.active) return pomoWorkedMsNow();
+    return 0;
+}
+/* `base` = how much of this session's worked time belongs to EARLIER days (or to a
+   vacation stretch). Kept in localStorage so a reload keeps it. */
+const DUTY_SB_KEY = 'mdwnh_duty_sessbase';
+function _dutySaveSessBase() {
+    try {
+        const s = _duty.sess;
+        if (s) localStorage.setItem(DUTY_SB_KEY, JSON.stringify({ u: gameState.userId, id: s.id, key: s.key, base: s.base }));
+    } catch (_) {}
+}
+function _dutyLoadSessBase(id, key) {
+    try {
+        const v = JSON.parse(localStorage.getItem(DUTY_SB_KEY) || 'null');
+        if (v && v.u === gameState.userId && v.id === id) return { base: Number(v.base) || 0, key: v.key };
+    } catch (_) {}
+    return null;
+}
+// `cap` bounds the day's credit — the time since midnight for today; the midnight
+// roll-over passes the whole day, since by then "since midnight" means the NEW day.
+function _dutySessTrack(key, cap) {
+    const id = _dutySessId();
+    if (!id || _duty.sessDone[id]) return;
+    const worked = _dutySessWorkedNow();
+    let s = _duty.sess;
+    if (!s || s.id !== id) {
+        const saved = _dutyLoadSessBase(id);
+        s = _duty.sess = { id, key, base: 0, last: 0 };
+        // Same day as the saved base → reuse it. An older day's base is stale, and the
+        // midnight cap below keeps a reloaded overnight session honest anyway.
+        if (saved && saved.key === key) s.base = saved.base;
+        _dutySaveSessBase();
+    }
+    if (s.key !== key) return;   // _dutyRollDay moves it
+    if (_dutyRec(_duty.days, key).vac) {
+        // A day off counts nothing — and cancelling it restarts the credit from here.
+        const moved = worked - s.base;
+        s.base = worked; s.last = 0;
+        if (Math.abs(moved) > 15000) _dutySaveSessBase();   // not a storage write every tick
+        return;
+    }
+    const credit = Math.max(0, Math.min(worked - s.base, cap || _dutySinceMidnight()));
+    if (credit === s.last || (s.last && Math.abs(credit - s.last) < 1000)) return;
+    s.last = credit;
+    _dutyPatchSub(key, 's', id, credit);
+}
+// Midnight: the old day keeps what it earned, the new one starts from zero.
+function _dutyRollDay(key) {
+    const old = _duty.dayKey;
+    if (old) {
+        if (_duty.sess && _duty.sess.key === old) {
+            _dutySessTrack(old, DUTY_DAY_MAX_MS);
+            _duty.sess.base += _duty.sess.last;
+            _duty.sess.last = 0;
+            _duty.sess.key = key;
+            _dutySaveSessBase();
+        }
+        _dutyBank(true);
+    }
+    _duty.dayKey = key;
+    _duty.openMs = 0;
+    _duty.liveWorkMs = 0;
 }
 function _dutyTick() {
     if (!_duty.ready) return;
@@ -29780,108 +30497,140 @@ function _dutyTick() {
     if (now - _duty.checkAt < 1000) return;
     _duty.checkAt = now;
     const key = _todayDateStr();
-    if (_duty.dayKey !== key) { _dutyBank(true); _duty.dayKey = key; _duty.liveMs = 0; _duty.liveWorkMs = 0; }
+    if (_duty.dayKey !== key) _dutyRollDay(key);
     const last = _duty.tickAt;
     if (!_dutyCounting()) { _duty.tickAt = 0; return; }
     _duty.tickAt = now;
-    /* The session ledger. A rising edge — no session, then one — opens a fresh
-       one; `workAt` is the first moment THIS device saw it running, which is
-       what caps the credit at the end. See _dutyCreditSession. */
-    const inSess = !!(gameState.pomodoro.active || gameState.freeMode.active);
-    if (inSess && !_duty.sessOn) { _duty.workAt = now; _duty.workTicked = 0; }
-    _duty.sessOn = inSess;
+    _dutySessTrack(key);
     const gap = last ? now - last : 0;
-    if (gap <= 0 || gap > DUTY_GAP_MAX_MS) return;
-    if (!_dutyRec(_duty.days, key).vac) _duty.liveMs += gap;   // a day off counts nothing
-    if (localInWorkPhase()) {
-        /* ساعات العمل اليوم — عدّاد مستقل عن الحضور: `ms` زمن فتح الموقع، وهذا زمن
-           العمل وحده. يُحتسب حتى في يوم الإجازة، لأن فتح الألعاب لا علاقة له بقاعدة
-           الإجازات — عملُ ساعةٍ عملٌ مهما كان اليوم. */
-        _duty.liveWorkMs += gap;
-        // Remember how much of this session the ticker managed to count, so the
-        // end-of-session credit adds only what it MISSED — never a total.
-        if (_duty.workAt) _duty.workTicked += gap;
-        // The moment the hour is crossed, say so — the member is mid-session and will
-        // not be standing at the games table to read the prompt.
-        if (_duty.gamesToldAt !== key && _dutyTodayWorkMs() >= GAMES_WORK_UNLOCK_MS) {
-            _duty.gamesToldAt = key;
-            _libToast('أتممت ساعة عمل اليوم — ألعاب المقر مفتوحة لك حتى منتصف الليل 🎮');
+    if (gap > 0 && gap <= DUTY_GAP_MAX_MS) {
+        const working = localInWorkPhase();
+        // Open time only OUTSIDE work — inside it the session clock is the measure.
+        if (!working && !_dutyRec(_duty.days, key).vac) {
+            _duty.openMs += gap;
+            _dutyPatchSub(key, 'o', _duty.loadId, Math.min(_duty.openMs, _dutySinceMidnight()));
+        }
+        if (working) {
+            /* ساعات العمل اليوم — عدّاد مستقل عن الحضور: يُحتسب حتى في يوم الإجازة،
+               لأن فتح الألعاب لا علاقة له بقاعدة الإجازات. */
+            _duty.liveWorkMs += gap;
+            if (_duty.gamesToldAt !== key && _dutyTodayWorkMs() >= GAMES_WORK_UNLOCK_MS) {
+                _duty.gamesToldAt = key;
+                _libToast('أتممت ساعة عمل اليوم — ألعاب المقر مفتوحة لك حتى منتصف الليل 🎮');
+            }
         }
     }
     _dutyBank(false);
 }
 
-function _dutyResetSessionLedger() { _duty.sessOn = false; _duty.workAt = 0; _duty.workTicked = 0; }
-
-/* A finished work session credits the attendance the ticker could not see.
-
-   WHY THIS EXISTS. The ticker credits the wall-clock gap between its own ticks
-   and refuses any gap over DUTY_GAP_MAX_MS, because a 40-minute gap is a
-   sleeping laptop, not an open site. A phone that suspends a backgrounded PWA
-   produces exactly that shape — a member worked a full hour on his phone,
-   switched apps, came back and finished the session, and was credited EIGHT
-   MINUTES. The measure that is not a tick is the session itself: its worked
-   time is stamped at the phase transitions (`pomoWorkedMsNow` /
-   `freeWorkedMsNow`), never accumulated per frame, so it survives suspension
-   intact. So at the end we add `workedMs` MINUS whatever the ticker already
-   counted during it — the same ledger shape `bankReadingProgress` uses, so
-   nothing is ever counted twice.
-
-   Two clamps, both load-bearing:
-     • Capped by the WALL TIME since this device first saw the session running.
-       That is what stops a RECLAIMED session — whose `totalWorkMs` legitimately
-       includes hours the tab was CLOSED (see `_reclaimFreeTotalMs`) — from
-       buying attendance for time the site was not open at all.
-     • No ledger (`workAt` 0) credits nothing. No evidence of presence, no pay.
-
-   Called from `dashSaveSession`, the single funnel every finished session goes
-   through — but BEFORE its 10-minute floor, which is a dashboard rule, not an
-   attendance one. A discarded session never reaches it and is never credited. */
-function _dutyCreditSession(workedMs) {
+/* A finished session LOCKS its credit in: `workedMs` is what the member ended with —
+   the full time, the time corrected in «هل عملت …فعلًا؟», or 0 for a discard.
+   Called from dashSaveSession (every saved end) and the discard path. */
+function _dutyFinishSession(workedMs) {
     if (!gameState.userId || !_duty.ready) return;
-    const ms = Number(workedMs);
-    if (!Number.isFinite(ms) || ms <= 0) { _dutyResetSessionLedger(); return; }
+    const id = (_duty.sess && _duty.sess.id) || _dutySessId();
+    if (!id || _duty.sessDone[id]) return;
     const key = _todayDateStr();
-    if (_duty.dayKey !== key) { _dutyBank(true); _duty.dayKey = key; _duty.liveMs = 0; _duty.liveWorkMs = 0; }
-    const onVac = !!_dutyRec(_duty.days, key).vac;
-    const cap = _duty.workAt ? Date.now() - _duty.workAt : 0;
-    const extra = Math.min(ms, cap) - _duty.workTicked;
-    _dutyResetSessionLedger();
-    if (!(extra > 0)) return;
-    const add = Math.min(extra, DUTY_DAY_MAX_MS);
-    // The recovered time IS work time — it credits the games counter even on a day
-    // off, exactly like the ticker above; only the attendance half is skipped there.
-    _duty.liveWorkMs += add;
-    if (!onVac) _duty.liveMs += add;
+    if (_duty.dayKey !== key) _dutyRollDay(key);
+    const s = _duty.sess && _duty.sess.id === id ? _duty.sess : null;
+    const base = s && s.key === key ? s.base : 0;
+    let credit = Math.max(0, (Number(workedMs) || 0) - base);
+    credit = Math.min(credit, _dutySinceMidnight());
+    if (_dutyRec(_duty.days, key).vac) credit = 0;
+    _duty.sessDone[id] = true;
+    _duty.sess = null;
+    try { localStorage.removeItem(DUTY_SB_KEY); } catch (_) {}
+    _dutyPatchSub(key, 's', id, credit);
     _dutyBank(true);
 }
 
 function _dutyPath(uid) { return `dashboards/${uid || gameState.userId}/duty/days`; }
 
-/* One transaction that ADDS the delta — never a write of a total, so two devices
-   banking the same minute can't double-count. `_duty.liveMs` is the ledger and is
-   zeroed only once the write is handed off. Same shape as bankReadingProgress(). */
+/* ── banking ──────────────────────────────────────────────────────────────────
+   Attendance is written as TOTALS, never deltas: `o/{loadId}` = this page load's
+   open time, `s/{sessionId}` = that session's credit for the day. Sending the same
+   total twice changes nothing, so a write can be retried — and it IS retried:
+
+   Every value stays in `dirty`/`inflight` until the server acknowledges it, and is
+   mirrored to localStorage (DUTY_PEND_KEY). A write that never landed — the app
+   closed right after the «أحسنت!» card, a phone that killed the tab while its
+   socket was still reconnecting — is sent again on the next visit.
+   That lost write is what used to show a member «أتممت يومك» and then mark the
+   same day as a vacation the next morning: the card was judged on the local count,
+   the server never got it, and a short day spends a vacation by itself.
+
+   The games counter (`work`) is still a delta transaction — it only unlocks the
+   games, and it is not worth a second map per load. */
+const DUTY_PEND_KEY = 'mdwnh_duty_pending';
+function _dutySavePending() {
+    try {
+        const w = Object.assign({}, _duty.inflight, _duty.dirty);
+        if (Object.keys(w).length) localStorage.setItem(DUTY_PEND_KEY, JSON.stringify({ u: gameState.userId, w }));
+        else localStorage.removeItem(DUTY_PEND_KEY);
+    } catch (_) {}
+}
+function _dutyHasPending(key) {
+    const frag = `/${key}/`;
+    for (const p in _duty.dirty) if (p.includes(frag)) return true;
+    for (const p in _duty.inflight) if (p.includes(frag)) return true;
+    return false;
+}
+function _dutySend(w) {
+    const paths = Object.keys(w);
+    if (!paths.length) return;
+    for (const p of paths) _duty.inflight[p] = w[p];
+    _dutySavePending();
+    update(ref(database), w)
+        .then(() => {
+            for (const p of paths) if (_duty.inflight[p] === w[p]) delete _duty.inflight[p];
+        })
+        .catch(() => {
+            // Back into the queue, unless a newer value is already waiting there.
+            for (const p of paths) {
+                if (_duty.inflight[p] === w[p]) delete _duty.inflight[p];
+                if (!(p in _duty.dirty)) _duty.dirty[p] = w[p];
+            }
+        })
+        .finally(_dutySavePending);
+}
 function _dutyBank(force) {
     if (!gameState.userId || !_duty.ready) return;
-    const key = _duty.dayKey;
-    const delta  = Math.round(_duty.liveMs);
-    const wDelta = Math.round(_duty.liveWorkMs);
-    if (!key || (delta <= 0 && wDelta <= 0)) return;
     if (!force && Date.now() - _duty.lastBankAt < DUTY_BANK_MS) return;
-    _duty.liveMs = 0;
-    _duty.liveWorkMs = 0;
     _duty.lastBankAt = Date.now();
-    const r = _dutyRec(_duty.days, key);
-    _duty.days[key] = {
-        ms: Math.min(DUTY_DAY_MAX_MS, r.ms + delta), vac: r.vac, ok: r.ok, fix: r.fix,
-        work: Math.min(DUTY_DAY_MAX_MS, r.work + wDelta),
-    };
-    if (delta > 0) runTransaction(ref(database, `${_dutyPath()}/${key}/ms`),
-        (curr) => Math.min(DUTY_DAY_MAX_MS, (Number(curr) || 0) + delta)).catch(() => {});
-    // A second leaf, and only while actually working — so an idle tab still costs one
-    // transaction a minute, never two, on a node nobody live-listens to.
-    if (wDelta > 0) runTransaction(ref(database, `${_dutyPath()}/${key}/work`),
-        (curr) => Math.min(DUTY_DAY_MAX_MS, (Number(curr) || 0) + wDelta)).catch(() => {});
+    const w = _duty.dirty;
+    _duty.dirty = {};
+    _dutySend(w);
+    const key = _duty.dayKey;
+    const wDelta = Math.round(_duty.liveWorkMs);
+    if (key && wDelta > 0) {
+        _duty.liveWorkMs = 0;
+        const r = _dutyRec(_duty.days, key);
+        _dutyPatchDay(key, { work: Math.min(DUTY_DAY_MAX_MS, r.work + wDelta) });
+        runTransaction(ref(database, `${_dutyPath()}/${key}/work`),
+            (curr) => Math.min(DUTY_DAY_MAX_MS, (Number(curr) || 0) + wDelta)).catch(() => {});
+    }
+}
+// On arrival: whatever a previous visit counted but never got acknowledged.
+function _dutyReplayPending() {
+    let v = null;
+    try { v = JSON.parse(localStorage.getItem(DUTY_PEND_KEY) || 'null'); } catch (_) {}
+    if (!v || v.u !== gameState.userId || !v.w) return;
+    const w = {};
+    const base = _dutyPath() + '/';
+    for (const p in v.w) {
+        if (!p.startsWith(base)) continue;
+        const rest = p.slice(base.length).split('/');   // key / sub / id
+        if (rest.length !== 3) continue;
+        const [key, sub, id] = rest;
+        // Never resurrect progress on a day that has since been taken off.
+        if (_dutyRec(_duty.days, key).vac) continue;
+        const d = _dutyDay(key);
+        const val = Number(v.w[p]) || 0;
+        if (val > 0) (d[sub] && typeof d[sub] === 'object' ? d[sub] : (d[sub] = {}))[id] = val;
+        else if (d[sub]) delete d[sub][id];
+        w[p] = v.w[p];
+    }
+    _dutySend(w);
 }
 
 /* ── vacation ─────────────────────────────────────────────────────────────────
@@ -29912,18 +30661,24 @@ function _dutySetVacation(on) {
        the same node and must survive a member toggling their day off. */
     /* Taking one wipes the day's progress, so the manual top-up ledger goes with it —
        leaving `fix` behind would claim hours that no longer exist in `ms`. */
-    const write = on ? { [`${_dutyPath()}/${key}/ms`]: 0, [`${_dutyPath()}/${key}/vac`]: ts, [`${_dutyPath()}/${key}/fix`]: null }
-                     : { [`${_dutyPath()}/${key}/vac`]: null };
+    const P = `${_dutyPath()}/${key}`;
+    const write = on ? { [`${P}/ms`]: 0, [`${P}/vac`]: ts, [`${P}/fix`]: null, [`${P}/o`]: null, [`${P}/s`]: null }
+                     : { [`${P}/vac`]: null };
+    // The wipe must not be undone by a queued total landing after it.
+    if (on) for (const q of [_duty.dirty, _duty.inflight]) for (const k in q) if (k.startsWith(P + '/')) delete q[k];
     update(ref(database), write)
         .then(() => {
-            const prev = _dutyRec(_duty.days, key);
             if (on) {
-                _duty.days[key] = { ms: 0, vac: ts, ok: prev.ok, fix: 0, work: prev.work };
-                _duty.liveMs = 0;
+                _dutyPatchDay(key, { ms: 0, vac: ts, fix: null, o: null, s: null });
+                for (const k in _duty.dirty) if (k.startsWith(P + '/')) delete _duty.dirty[k];
+                _dutySavePending();
+                // This load's open time and the running session's credit restart from zero.
+                if (_duty.dayKey === key) _duty.openMs = 0;
+                if (_duty.sess) { _duty.sess.base = _dutySessWorkedNow(); _duty.sess.last = 0; _dutySaveSessBase(); }
                 _duty.pendingWin = false;
                 _libToast('إجازة اليوم محفوظة — لا شيء مطلوب منك اليوم');
             } else {
-                _duty.days[key] = { ms: prev.ms, vac: 0, ok: prev.ok, fix: prev.fix, work: prev.work };
+                _dutyPatchDay(key, { vac: null });
                 delete _duty.celebrated[key];   // three hours from here still earns the «أحسنت!»
                 _libToast('أُلغيت الإجازة — عاد عدّاد اليوم للعمل');
             }
@@ -29941,7 +30696,7 @@ function _dutySetVacation(on) {
 /* ── «لم تُسجل ساعاتك بشكل صحيح؟» — the manual top-up ─────────────────────────
    The ticker is honest but not complete: a suspended phone tab, a laptop that
    slept, a reload the site never saw the end of — each is a stretch the member
-   really was here for and DUTY_GAP_MAX_MS refuses to credit. `_dutyCreditSession`
+   really was here for and DUTY_GAP_MAX_MS refuses to credit. `_dutySessTrack`
    recovers the WORK inside such a stretch; nothing recovers plain presence. So
    the member may add it back by hand, from the same panel the day is shown on.
 
@@ -29954,9 +30709,7 @@ function _dutySetVacation(on) {
      • Never on a day off (nothing is being counted) — the vacation must be
        cancelled first. */
 function _dutyFixRoomMs() {
-    const mid = new Date(); mid.setHours(0, 0, 0, 0);
-    const sinceMidnight = Math.min(DUTY_DAY_MAX_MS, Math.max(0, Date.now() - mid.getTime()));
-    return Math.max(0, sinceMidnight - _dutyTodayRec().ms);
+    return Math.max(0, _dutySinceMidnight() - _dutyTodayRec().ms);
 }
 function _dutyCanFix() {
     const r = _dutyTodayRec();
@@ -29993,14 +30746,13 @@ function _dutyFixApply() {
         runTransaction(ref(database, `${p}/${key}/fix`), (c) => Math.min(DUTY_DAY_MAX_MS, (Number(c) || 0) + add)),
     ])
         .then(() => {
-            const prev = _dutyRec(_duty.days, key);
-            _duty.days[key] = {
-                ms: Math.min(DUTY_DAY_MAX_MS, prev.ms + add),
-                vac: prev.vac, ok: prev.ok,
-                fix: Math.min(DUTY_DAY_MAX_MS, prev.fix + add),
-                // الإضافة اليدوية حضورٌ يُبلّغ عنه العضو، لا عملٌ مُقاس — فلا تفتح الألعاب.
-                work: prev.work,
-            };
+            // `ms` here is the raw leaf — the o/s maps are summed on read (_dutyRec).
+            const d = _dutyDay(key);
+            // الإضافة اليدوية حضورٌ يُبلّغ عنه العضو، لا عملٌ مُقاس — فلا تفتح الألعاب.
+            _dutyPatchDay(key, {
+                ms: Math.min(DUTY_DAY_MAX_MS, (Number(d.ms) || 0) + add),
+                fix: Math.min(DUTY_DAY_MAX_MS, (Number(d.fix) || 0) + add),
+            });
             _duty.fixH = 0; _duty.fixM = 0;
             _libToast(`أُضيفت ${_dutyDur(add)} إلى حضور اليوم`);
             _chalSetMode('duty');
@@ -30044,7 +30796,14 @@ function updateWorkChallenge() {
         const key = _duty.dayKey;
         if (_duty.ready && key && !_duty.celebrated[key]) {
             const r = _dutyTodayRec();
-            if (!r.vac && r.ms >= DUTY.goalMs) { _duty.celebrated[key] = true; _duty.pendingWin = true; }
+            if (!r.vac && r.ms >= DUTY.goalMs) {
+                /* Celebrate only what the SERVER has. Crossing the line forces a bank;
+                   the «أحسنت!» waits for its acknowledgement, so the card can never
+                   promise a day the database doesn't hold. */
+                if (_dutyHasPending(key)) {
+                    if (now - _duty.winBankAt > 4000) { _duty.winBankAt = now; _dutyBank(true); }
+                } else { _duty.celebrated[key] = true; _duty.pendingWin = true; }
+            }
         }
         _chalPaintCard();
         if (_chal.modalOpen && _chal.mode !== 'pay') _chalPaintTally();
@@ -30148,6 +30907,7 @@ function _chalPaintCard() {
     if (noteEl)  noteEl.textContent = !started ? 'يصبح إلزاميًا ابتداءً من ' + _dutyStartLabel()
         : okd ? 'اعتمد القائد يومك'
         : onVac ? 'اضغط لإلغاء الإجازة'
+        : localInWorkPhase() && !done ? `${_dutyDur(r.ms)} من ٣ ساعات · وقت جلستك يُحتسب الآن`
         : `${_dutyDur(r.ms)} من ٣ ساعات · الإجازات المتبقية: ${_libAr(_dutyVacLeft())}`;
     if (miniDay) miniDay.textContent = onVac ? 'إجازة' : done ? '✓' : _dutyClock(r.ms);
 
@@ -30584,6 +31344,8 @@ function setupWorkChallenge() {
             _duty.ready = true;
             _duty.dayKey = _todayDateStr();
             _duty.lastBankAt = Date.now();
+            // A visit that closed before its last write landed — send it now.
+            _dutyReplayPending();
             // A day already won (or taken off) before this tab opened must not celebrate.
             const r = _dutyTodayRec();
             if (r.vac || r.ms >= DUTY.goalMs) _duty.celebrated[_duty.dayKey] = true;
@@ -30608,41 +31370,175 @@ function setupWorkChallenge() {
 
 const JUMP_MS           = 560;   // crouch → air → landing squash, all of it
 const JUMP_COOLDOWN_MS  = 430;   // a second press before this is ignored, not queued
-const JUMP_DBL_TAP_MS   = 340;   // two presses on your own character inside this = a jump
+const JUMP_DBL_TAP_MS   = 340;   // two presses inside this = a jump
+const JUMP_DBL_TAP_PX   = 46;    // …landing this close together (anywhere, on a phone)
 let _selfTapAt = 0;
+let _anyTap = { t: 0, x: 0, y: 0 };
+
+/* ── القفز الوظيفي — tables, and the drop off the mezzanine ──────────────────────
+   A jump can now MOVE you: onto a table (you walk around up there, drawn a little
+   closer to the camera), across to the next table, off it again — and off the
+   second floor's open edge straight down to the ground.
+
+   • `player._elev` — standing on a table top. Collision up there is the walls
+     alone (`worldCollision.walls`) plus "stay above a top" (`worldCollision.tops`);
+     walking past a top's edge steps you down (`_jumpStepOff`). Relayed as `el` in
+     the position packet, never written to Firebase — a reload just puts you back
+     on the ground (`_unstickLocalPlayer`).
+   • Kinds: '' (in place) · 'up' / 'hop' / 'down' (with travel) · 'off' (walked
+     off an edge) · 'drop' (off the mezzanine, long, with a landing quake).
+   • The travel itself is driven locally (`_jumpDriveLocal`) and reaches everyone
+     through the ordinary position packets; the event only carries the kind.
+   • THE DROP LANDS WITH A QUAKE (`_jumpQuakes`): a big dust burst, a shock ring,
+     a bounce that runs through every avatar it passes, and — for anyone near who
+     is NOT in a work session — a short screen shake and Jump_Land.mp3. A member
+     working at a laptop sees the ring and nothing else. */
+const JUMP_KINDS = {
+    '':    { ms: JUMP_MS, arc: 38,  grow: 0.26, travel: [0.15, 0.72] },
+    up:    { ms: 640,     arc: 58,  grow: 0.30, travel: [0.14, 0.74] },
+    hop:   { ms: 600,     arc: 44,  grow: 0.26, travel: [0.14, 0.74] },
+    down:  { ms: 600,     arc: 34,  grow: 0.20, travel: [0.14, 0.74] },
+    off:   { ms: 300,     arc: 0,   grow: 0,    travel: null },
+    drop:  { ms: 1150,    arc: 70,  grow: 0.38, travel: [0.12, 0.80] },
+};
+const JUMP_TOP_SCALE   = 1.14;   // standing on a table: a touch closer to the camera
+const JUMP_REACH       = 96;     // how far forward a jump looks for a table / the floor
+const JUMP_DROP_REACH  = 230;    // …and for the ground below the mezzanine's edge
+const JUMP_QUAKE_MS    = 1100;
+const JUMP_QUAKE_R     = 520;    // the shock ring's reach, and who hears / feels it
+const JUMP_QUAKE_SPEED = 0.62;   // world px per ms the ring travels
+const _jumpQuakes = [];          // { x, y, t0, fl }
+let _jumpShake = { t0: 0, amp: 0 };
+let _jumpLastDir = { x: 0, y: 1 };
+
+function _jumpKind(k) { return JUMP_KINDS[k] || JUMP_KINDS['']; }
+// When a jump of this kind touches down, ms after it starts (matches _jumpFx's phases).
+function _jumpLandMs(k) { return _jumpKind(k).ms * (k === 'drop' ? 0.80 : k === 'off' ? 0 : 0.72); }
+const _JUMP_FEET = PLAYER_SIZE * 0.22;   // checkCollision samples the feet, so do we
+
+// Is (x, y) — the FEET point — over something a player can stand on?
+function _jumpTopAt(x, fy, floor) {
+    if (!worldCollision.built) return false;
+    if (floor === 2) return _maskAt(worldCollision.floor2desks, x, fy);
+    if (x >= MEET_X0) {
+        const lx = (x - MEET_X0) / WORLD_SCALE, ly = (fy - MEET_Y0) / WORLD_SCALE;
+        const r = MEET_TABLE_SOLID;
+        return lx >= r[0] && lx <= r[2] && ly >= r[1] && ly <= r[3];
+    }
+    const mx = (((x / WORLD_SCALE) + IMG_W / 2) / MASK_DIV) | 0;
+    const my = (((fy / WORLD_SCALE) + IMG_H / 2) / MASK_DIV) | 0;
+    if (mx < 0 || my < 0 || mx >= MASK_W || my >= MASK_H || !worldCollision.tops) return false;
+    return worldCollision.tops[my * MASK_W + mx] === 1;
+}
+// Collision for someone standing ON a top: leaving the top is not a plain move
+// (see _jumpStepOff), and only the walls still block.
+function _jumpElevBlocked(x, fy, floor) {
+    if (!worldCollision.built) return false;
+    if (!_jumpTopAt(x, fy, floor)) return true;
+    if (floor === 2) {
+        const inset = 4;
+        return x < PLAT_X0 + inset || x > PLAT_X1 - inset || fy < PLAT_Y0 + inset || fy > PLAT_Y1 - inset;
+    }
+    for (const [dx, dy] of _BODY_PTS) {
+        const px = x + dx * _BODY_R, py = fy + dy * _BODY_R;
+        if (px >= MEET_X0) { if (_meetMaskAt(px, py) && !_jumpTopAt(px, py, 1)) return true; }
+        else if (_maskAt(worldCollision.walls, px, py)) return true;
+    }
+    return false;
+}
+function _jumpOnPlatform(x, fy) {
+    return x >= PLAT_X0 && x <= PLAT_X1 && fy >= PLAT_Y0 && fy <= PLAT_Y1;
+}
+
+// Where does a jump from here, facing (dx, dy), take me? → { kind, x, y, floor, elev }
+function _jumpPlan(p, dx, dy) {
+    const floor = p.floor || 1;
+    const elev = !!p._elev;
+    if (!worldCollision.built || (!dx && !dy)) return { kind: '', x: p.x, y: p.y, floor, elev };
+    for (let d = 24; d <= JUMP_REACH; d += 8) {
+        const x = p.x + dx * d, y = p.y + dy * d;
+        const fy = y + _JUMP_FEET;
+        // Onto a table (or across to the next one).
+        if (_jumpTopAt(x, fy, floor) && !checkCollision(x, y, { elev: true, floor })) {
+            // Standing on the same top already → nothing to jump onto, keep looking.
+            if (elev && d < 40) continue;
+            return { kind: elev ? 'hop' : 'up', x, y, floor, elev: true };
+        }
+        // Off a table, down to the floor.
+        if (elev && !_jumpTopAt(x, fy, floor) && !checkCollision(x, y, { elev: false, floor })) {
+            if (d < 40) continue;
+            return { kind: 'down', x, y, floor, elev: false };
+        }
+    }
+    // Off the mezzanine's open edge, down to the ground floor.
+    if (floor === 2) {
+        let crossed = false;
+        for (let d = 16; d <= JUMP_DROP_REACH; d += 8) {
+            const x = p.x + dx * d, y = p.y + dy * d;
+            const fy = y + _JUMP_FEET;
+            if (!crossed) {
+                crossed = !_jumpOnPlatform(x, fy);
+                // Walls/desks in the way on the platform itself end the search.
+                if (!crossed && !elev && checkCollision(x, y, { elev: false, floor: 2 })) break;
+                if (!crossed) continue;
+            }
+            if (isOnStairs(x, y)) continue;
+            if (!checkCollision(x, y, { elev: false, floor: 1 })) {
+                // A little past the railing, so the landing isn't hugging the platform.
+                return { kind: 'drop', x, y, floor: 1, elev: false };
+            }
+        }
+    }
+    return { kind: '', x: p.x, y: p.y, floor, elev };
+}
 
 // One frame of the jump, as a PURE function of its age — no state is advanced, so
 // the PiP pass draws it without running it twice (the Lemo / hat-chain rule).
 // `s` is the scale-up (the jump itself: the avatar comes toward the camera), `dy` the
-// lift, `sx`/`sy` the squash and stretch around it.
+// lift, `sx`/`sy` the squash and stretch around it, `land` the landing phase (0..1).
 function _jumpFx(player, now) {
     const j = player && player._jump;
     if (!j) return null;
-    const t = (now - j.t0) / JUMP_MS;
+    const K = _jumpKind(j.k);
+    const t = (now - j.t0) / K.ms;
     if (t < 0 || t >= 1) return null;
-    if (t < 0.15) {                       // crouch: wind up into it
-        const e = t / 0.15;
-        const k = 1 - (1 - e) * (1 - e);
-        return { dy: 0, s: 1 - 0.05 * k, sx: 1 + 0.13 * k, sy: 1 - 0.13 * k };
+    if (j.k === 'off') {                  // walked off an edge: a short drop + squash
+        const r = 1 - easeOutBack(Math.max(0.0001, t));
+        return { dy: -14 * (1 - t) * (1 - t), s: 1, sx: 1 + 0.16 * r, sy: 1 - 0.16 * r, air: 0 };
     }
-    if (t < 0.72) {                       // airborne
-        const k = (t - 0.15) / 0.57;
-        const arc = Math.sin(k * Math.PI);        // 0 → 1 → 0 across the flight
-        // +1 at the launch, 0 at the apex, −1 on the way down: the stretch belongs to
-        // the release and to the fall, not to the top of the arc, so the crouch lets
-        // go INTO a stretch rather than snapping back through neutral.
+    const big = j.k === 'drop';
+    const t0 = big ? 0.12 : 0.15, t1 = big ? 0.80 : 0.72;
+    if (t < t0) {                         // crouch: wind up into it
+        const e = t / t0;
+        const k = 1 - (1 - e) * (1 - e);
+        const c = big ? 0.2 : 0.13;
+        return { dy: 0, s: 1 - 0.05 * k, sx: 1 + c * k, sy: 1 - c * k, air: 0 };
+    }
+    if (t < t1) {                         // airborne
+        const k = (t - t0) / (t1 - t0);
+        let arc = Math.sin(k * Math.PI);
+        // The drop rises a little, then falls much further than it rose: the
+        // ground floor is below the platform, so the fall ends well past neutral
+        // and the scale ends BELOW where it began (floor 2 is drawn larger).
+        let s = 1 + arc * K.grow;
+        if (big) {
+            arc = Math.sin(Math.min(1, k * 1.6) * Math.PI * 0.5) * (1 - k * k);
+            s = 1 + arc * K.grow - k * k * 0.18;
+        }
         const st = Math.cos(k * Math.PI);
         return {
-            dy: -arc * 38,
-            s: 1 + arc * 0.26,
+            dy: -arc * K.arc,
+            s,
             sx: 1 - 0.077 * st - 0.04 * arc,
             sy: 1 + 0.091 * st + 0.05 * arc,
+            air: 1,
         };
     }
     // Landing: squash flat on impact and spring back, with easeOutBack's overshoot
     // giving the little reverse wobble instead of snapping still.
-    const r = 1 - easeOutBack(Math.max(0.0001, (t - 0.72) / 0.28));
-    return { dy: 0, s: 1 + 0.04 * r, sx: 1 + 0.20 * r, sy: 1 - 0.20 * r };
+    const r = 1 - easeOutBack(Math.max(0.0001, (t - t1) / (1 - t1)));
+    const q = big ? 0.34 : 0.20;
+    return { dy: 0, s: 1 + 0.04 * r, sx: 1 + q * r, sy: 1 - q * r, air: 0 };
 }
 
 // Same guard list every other world interaction uses. _chatMustClose() already covers
@@ -30661,40 +31557,234 @@ function canJump() {
     return true;
 }
 
-function sendJumpWS() {
+function sendJumpWS(kind, extra) {
     const ws = presenceNet.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    try { ws.send(JSON.stringify({ t: 'jmp', uid: gameState.userId })); return true; }
+    const msg = { t: 'jmp', uid: gameState.userId };
+    if (kind) msg.k = kind;
+    if (extra) Object.assign(msg, extra);
+    try { ws.send(JSON.stringify(msg)); return true; }
     catch (_) { return false; }
 }
 
 // A jump kicks up a puff at the feet, on the JUMPER's floor — a remote jumper on the
 // mezzanine must not throw dust onto mine.
-function _jumpDust(player) {
+function _jumpDust(player, n) {
     const pos = getPlayerRenderPos(player);
-    spawnDust(pos.x, pos.y, 5, false, player.floor || 1);
+    spawnDust(pos.x, pos.y, n || 5, false, player.floor || 1);
 }
 
-function receiveJump(player) {
+// The mezzanine landing. Pure bookkeeping here; every client runs it for itself.
+function _jumpQuake(x, y, isMine) {
+    const now = Date.now();
+    _jumpQuakes.push({ x, y, t0: now, fl: 1 });
+    if (_jumpQuakes.length > 4) _jumpQuakes.shift();
+    perfWake(JUMP_QUAKE_MS + 200);
+    // A big burst, on the ground floor, arcing out in every direction.
+    const lowGfx = gameState._lowGfx;
+    const n = lowGfx ? 16 : 34;
+    for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2 + Math.random() * 0.3;
+        const sp = 3 + Math.random() * 6;
+        gameState.dustParticles.push({
+            x: x + Math.cos(a) * 10, y: y + PLAYER_SIZE / 2 + Math.sin(a) * 4,
+            vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * 0.45 - (1.5 + Math.random() * 2.5),
+            gravity: 0.16 + Math.random() * 0.1,
+            life: 1.0, decay: 0.014 + Math.random() * 0.02,
+            size: 4 + Math.random() * 7, floor: 1,
+        });
+    }
+    if (gameState.dustParticles.length > 260) gameState.dustParticles.splice(0, gameState.dustParticles.length - 260);
+    // Felt and heard nearby — never by someone working, never through an overlay.
+    const me = gameState.players[gameState.userId];
+    const dist = isMine ? 0 : (me ? Math.hypot(me.x - x, me.y - y) : Infinity);
+    const quiet = !isMine && (localInWorkPhase() || gameState.isLockedIn || _chatMustClose());
+    if (dist < JUMP_QUAKE_R && !quiet) {
+        const k = 1 - dist / JUMP_QUAKE_R;
+        _jumpShake = { t0: now, amp: 9 * (0.35 + 0.65 * k) };
+        try {
+            const fe = gameState.focusAudioEngine;
+            if (!(fe && fe.playHandled('jumpLand', 1, 0.9 * (isMine ? 1 : 0.25 + 0.6 * k)))) playSoundRobust(gameState.sounds.jumpLand);
+        } catch (_) {}
+    }
+}
+
+// Screen shake offset for render(), in screen px. Pure read of `_jumpShake`.
+function jumpShakeOffset(now) {
+    const e = now - _jumpShake.t0;
+    if (!_jumpShake.amp || e > 420) return null;
+    const k = 1 - e / 420;
+    const a = _jumpShake.amp * k * k;
+    return { x: Math.sin(e * 0.09) * a, y: Math.cos(e * 0.113) * a * 0.7 };
+}
+
+// The shock ring — world space, drawn right over the ground-floor players.
+function drawJumpQuakes() {
+    if (!_jumpQuakes.length) return;
+    const ctx = gameState.ctx;
+    const now = Date.now();
+    for (let i = _jumpQuakes.length - 1; i >= 0; i--) {
+        const q = _jumpQuakes[i];
+        const e = now - q.t0;
+        if (e > JUMP_QUAKE_MS) { if (!gameState._pipPass) _jumpQuakes.splice(i, 1); continue; }
+        const k = e / JUMP_QUAKE_MS;
+        const r = 18 + e * JUMP_QUAKE_SPEED;
+        const gy = q.y + PLAYER_SIZE / 2 - 2;
+        ctx.save();
+        ctx.globalAlpha = 0.55 * (1 - k) * (1 - k);
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 6 * (1 - k) + 1;
+        ctx.beginPath();
+        ctx.ellipse(q.x, gy, r, r * 0.42, 0, 0, Math.PI * 2);
+        ctx.stroke();
+        if (k < 0.5) {
+            ctx.globalAlpha = 0.35 * (1 - k * 2);
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.ellipse(q.x, gy, r * 0.6, r * 0.25, 0, 0, Math.PI * 2);
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+}
+
+// The shockwave passing under someone bounces them a little. Pure function of the
+// quakes' ages and the player's position → { dy, sx, sy } or null.
+function _jumpQuakeBounce(player, now) {
+    if (!_jumpQuakes.length || (player.floor || 1) !== 1) return null;
+    const pos = getPlayerRenderPos(player);
+    let dy = 0, sq = 0;
+    for (const q of _jumpQuakes) {
+        const e = now - q.t0;
+        if (e < 0 || e > JUMP_QUAKE_MS) continue;
+        const d = Math.hypot(pos.x - q.x, (pos.y - q.y) / 0.42);
+        if (d < 20 || d > JUMP_QUAKE_R) continue;
+        const front = 18 + e * JUMP_QUAKE_SPEED;
+        const lag = (front - d) / 140;            // 0 → 1 across the pulse's thickness
+        if (lag <= 0 || lag >= 1) continue;
+        const fall = 1 - d / JUMP_QUAKE_R;
+        const w = Math.sin(lag * Math.PI) * fall;
+        dy -= w * 16;
+        sq += Math.sin(lag * Math.PI * 2) * 0.12 * fall;
+    }
+    if (!dy && !sq) return null;
+    return { dy, sx: 1 + sq, sy: 1 - sq };
+}
+
+function receiveJump(player, msg) {
     if (!player) return;
     const now = Date.now();
-    if (player._jump && now - player._jump.t0 < JUMP_COOLDOWN_MS) return;
-    player._jump = { t0: now };
-    _jumpDust(player);
+    const k = (msg && typeof msg.k === 'string' && JUMP_KINDS[msg.k]) ? msg.k : '';
+    if (player._jump && now - player._jump.t0 < JUMP_COOLDOWN_MS && k !== 'off') return;
+    // A jump that TRAVELS is replayed with the avatar's own position stream, which
+    // runs one interpolation delay in the past — start the flourish in step with it.
+    const lag = (k && k !== 'off') ? ((player._netClock && player._netClock.delay) || 150) : 0;
+    player._jump = { t0: now + lag, k };
+    player._hatKick = { up: k === 'drop' ? 1.6 : 1, t: now + lag, land: _jumpLandMs(k) };
+    if (k === 'up' || k === 'hop') player._elev = true;
+    else if (k === 'down' || k === 'off' || k === 'drop') player._elev = false;
+    _jumpDust(player, k === 'drop' ? 3 : 5);
+    if (k === 'drop') {
+        const x = Number(msg.x), y = Number(msg.y);
+        const lx = Number.isFinite(x) ? x : player.x, ly = Number.isFinite(y) ? y : player.y;
+        // The quake lands where the jumper lands — one interpolation delay later on
+        // this screen, since their avatar is replayed that far in the past.
+        const delay = _jumpKind('drop').ms * 0.80 + lag;
+        setTimeout(() => _jumpQuake(lx, ly, false), delay);
+    }
+}
+
+// The local jump's travel, one frame. Returns true while it owns the player.
+function _jumpDriveLocal(p) {
+    const m = p && p._jumpMove;
+    if (!m) return false;
+    // Anything that takes the player over (the kidnap, a seat) cancels the flight.
+    if (gameState.anim.active || gameState.isLockedIn || gameState.isSitting || gameState.sitAnim.active) {
+        p._jumpMove = null;
+        return false;
+    }
+    const now = Date.now();
+    const K = _jumpKind(m.k);
+    const t = (now - m.t0) / K.ms;
+    const [a, b] = K.travel;
+    const k = Math.max(0, Math.min(1, (t - a) / (b - a)));
+    const e = k * k * (3 - 2 * k);
+    p.x = m.x0 + (m.x1 - m.x0) * e;
+    p.y = m.y0 + (m.y1 - m.y0) * e;
+    p._vx = 0; p._vy = 0;
+    p.isMoving = false; p.isSprinting = false;
+    p.smoothMove = false;
+    syncEntityRenderToTarget(p);
+    // Halfway through the flight is where the floor / the table changes hands.
+    if (k >= 0.5 && !m.swapped) {
+        m.swapped = true;
+        p._elev = m.elev;
+        if (m.floor !== (p.floor || 1)) forcePlayerFloor(p, m.floor);
+    }
+    sendPositionWS(p.x, p.y, false);
+    if (t < b) return true;
+    // Landed.
+    p._jumpMove = null;
+    p.x = m.x1; p.y = m.y1;
+    p._elev = m.elev;
+    if (m.floor !== (p.floor || 1)) forcePlayerFloor(p, m.floor);
+    syncEntityRenderToTarget(p);
+    sendPositionWS(p.x, p.y, true);
+    updatePlayerPosition(p.x, p.y);
+    if (m.k === 'drop') _jumpQuake(p.x, p.y, true);
+    else _jumpDust(p, 6);
+    return false;
+}
+
+// Walking off the edge of a top: allowed wherever the floor below is free.
+function _jumpStepOff(p, nx, ny) {
+    if (!p._elev || p._jumpMove) return false;
+    const floor = p.floor || 1;
+    if (_jumpTopAt(nx, ny + _JUMP_FEET, floor)) return false;
+    if (checkCollision(nx, ny, { elev: false, floor })) return false;
+    p._elev = false;
+    p.x = nx; p.y = ny;
+    p._jump = { t0: Date.now(), k: 'off' };
+    _jumpDust(p, 4);
+    sendJumpWS('off');
+    sendPositionWS(p.x, p.y, true);
+    return true;
 }
 
 function triggerJump() {
     const p = gameState.players[gameState.userId];
-    if (!p || !canJump()) return false;
+    if (!p || !canJump() || p._jumpMove) return false;
     const now = Date.now();
     if (p._jump && now - p._jump.t0 < JUMP_COOLDOWN_MS) return false;
-    p._jump = { t0: now };
-    _jumpDust(p);
-    sendJumpWS();
-    // The couch hop's own sound — it is the same motion, so it is the same cue.
-    if (gameState.focusAudioEngine) gameState.focusAudioEngine.playEffect('sofaStand');
+    // Facing: the way I'm moving, else the way I last moved.
+    let dx = p._vx || 0, dy = p._vy || 0;
+    const mag = Math.hypot(dx, dy);
+    if (mag > 0.4) { dx /= mag; dy /= mag; } else { dx = _jumpLastDir.x; dy = _jumpLastDir.y; }
+    // Standing still means "jump in place" — unless I'm on a table (then the jump
+    // is how I get down, so it still looks where I last faced).
+    const plan = (mag > 0.4 || p._elev) ? _jumpPlan(p, dx, dy) : { kind: '' };
+    const kind = plan.kind;
+    p._jump = { t0: now, k: kind };
+    if (kind) {
+        p._jumpMove = { k: kind, t0: now, x0: p.x, y0: p.y, x1: plan.x, y1: plan.y, floor: plan.floor, elev: plan.elev, swapped: false };
+    }
+    _jumpDust(p, kind === 'drop' ? 3 : 5);
+    sendJumpWS(kind, kind === 'drop' ? { x: Math.round(plan.x), y: Math.round(plan.y) } : null);
+    const fe = gameState.focusAudioEngine;
+    if (kind === 'drop') {
+        if (!(fe && fe.playHandled('jumpStart', 1, 0.9))) playSoundRobust(gameState.sounds.jumpStart);
+    } else if (fe) fe.playEffect('sofaStand');   // the couch hop's own sound — the same motion
     else playSoundRobust(gameState.sounds.sofaStand);
+    // Hats get a shove of their own (see _updateHatChain).
+    p._hatKick = { up: kind === 'drop' ? 1.6 : 1, t: now, land: _jumpLandMs(kind) };
+    perfWake(_jumpKind(kind).ms + 200);
     return true;
+}
+
+// Remembered for a standing jump off a table. Called from handleMovement.
+function jumpNoteDir(vx, vy) {
+    const m = Math.hypot(vx, vy);
+    if (m > 0.4) { _jumpLastDir.x = vx / m; _jumpLastDir.y = vy / m; }
 }
 
 // Two presses on your own character. The FIRST one opens the chat box (that is what a
@@ -30716,6 +31806,17 @@ function selfDoubleTapJump(world) {
         if (_chatUi.input && _chatUi.input.textContent.trim()) return false;
         closeChatBox();
     }
+    return triggerJump();
+}
+// A phone: two quick taps ANYWHERE on the world = a jump. Only a tap that nothing
+// else took counts as the first one (`jumpNoteFreeTap`, at the end of the tap chain)
+// — a first tap that sat you down or opened something must not turn the second into
+// a jump. `sx/sy` are screen coords, so "the same place" doesn't depend on the zoom.
+function jumpNoteFreeTap(sx, sy) { _anyTap = { t: Date.now(), x: sx, y: sy }; }
+function anyDoubleTapJump(sx, sy) {
+    const dbl = Date.now() - _anyTap.t < JUMP_DBL_TAP_MS && Math.hypot(sx - _anyTap.x, sy - _anyTap.y) < JUMP_DBL_TAP_PX;
+    if (!dbl) return false;
+    _anyTap = { t: 0, x: 0, y: 0 };
     return triggerJump();
 }
 
@@ -30942,7 +32043,7 @@ function _chatHexToHsl(hex) {
 }
 function _chatMenColor(uid) {
     const p = gameState.players[uid];
-    const hex = _validHex(p && p.ringColor);
+    const hex = uid === LEMO_UID ? '#41b9a6' : _validHex(p && p.ringColor);
     const key = uid + '|' + (hex || '');
     if (_chatColCache[key]) return _chatColCache[key];
     let h, s, l;
@@ -31546,11 +32647,25 @@ function _chatSend() {
     _chatMenClose();
     // A pill for someone who has left since it was picked falls back to plain text —
     // an offline member can't be pinged.
-    const read = _chatReadInput().map(p => ((p.u && !gameState.players[p.u]) ? { t: '@' + p.n } : p));
+    const read = _chatReadInput().map(p => ((p.u && p.u !== LEMO_UID && !gameState.players[p.u]) ? { t: '@' + p.n } : p));
     const parts = _chatCleanParts(read);
     if (!parts) { closeChatBox(); return; }
     const now = Date.now();
-    const uids = [...new Set(parts.filter(p => p.u && p.u !== gameState.userId).map(p => p.u))];
+    // نداء ليمو — checked first: a refusal holds the whole message, like a cooldown.
+    const callsLemo = parts.some(p => p.u === LEMO_UID);
+    if (callsLemo) {
+        let why = '';
+        if (localInWorkPhase() || gameState.isLockedIn) why = 'لا يمكنك مناداة ليمو أثناء جلسة العمل';
+        else if (lemoIsAsleep()) why = 'ليمو نائم 😴 — أيقظه أولًا من غرفة الاستراحة';
+        else if (lemoIsBusy() || _lemo.summoning) why = 'ليمو مشغول الآن — انتظر حتى يعود';
+        if (why) {
+            _chatRefuse();
+            _chatToast(() => why, 2600);
+            if (why.startsWith('ليمو نائم')) _libToast('ليمو نائم — امشِ إليه في غرفة الاستراحة لتوقظه');
+            return;
+        }
+    }
+    const uids = [...new Set(parts.filter(p => p.u && p.u !== gameState.userId && p.u !== LEMO_UID).map(p => p.u))];
     // The cooldown — a second, or a minute for someone who's working: refuse the WHOLE
     // message (the box stays open with the text in it) rather than send it with the
     // ping quietly dropped. A working member therefore can't be walked up the steps to
@@ -31575,6 +32690,13 @@ function _chatSend() {
     }
     for (const p of parts) if (p.u) p.l = _chatMen.last[p.u] ? _chatMen.last[p.u].lv : 1;
     _chatUi.lastSentAt = now;
+    if (callsLemo) {
+        lemoSummon().then(r => {
+            if (r === 'sleep') _libToast('ليمو نام قبل أن يسمعك — أيقظه أولًا');
+            else if (r === 'busy') _libToast('ليمو مشغول الآن مع غيرك');
+            else if (r === 'fail') _libToast('لم يصل النداء إلى ليمو، حاول مجددًا');
+        });
+    }
     closeChatBox(true);   // the message ends the typing bubble — see closeChatBox
     const me = gameState.players[gameState.userId];
     if (me) receiveChatMessage(me, null, parts.map(p => ({ ...p })));   // show it locally at once — no round trip
@@ -31853,11 +32975,20 @@ function _chatMenCandidates(q) {
         out.push({ uid: p.userId, name, sub, d, avatar: p.avatar });
     }
     out.sort((a, b) => a.d - b.d);
+    // ليمو — always LAST, however close he is, and never for someone in a work
+    // session (he can't be called from there). Found by either name.
+    if (!localInWorkPhase() && !gameState.isLockedIn) {
+        const lemoHit = !qn || ['ليمو', 'lemo', 'limo', 'الروبوت'].some(k => _chatMenNorm(k).includes(qn));
+        if (lemoHit) {
+            const sub = lemoIsAsleep() ? 'نائم — أيقظه أولًا' : lemoIsBusy() ? 'مشغول الآن' : 'الروبوت — سيأتي إليك';
+            out.push({ uid: LEMO_UID, name: LEMO_NAME, sub, d: Infinity, avatar: LEMO_PFP, lemo: true });
+        }
+    }
     return out;
 }
 
 function _chatSetAvatar(el, url, name) {
-    const ok = typeof url === 'string' && (/^https:\/\//.test(url) || /^data:image\//.test(url) || /^Art\//.test(url));
+    const ok = typeof url === 'string' && (/^https:\/\//.test(url) || /^data:image\//.test(url) || /^Art\//.test(url) || url === LEMO_PFP);
     if (ok) {
         el.style.backgroundImage = 'url(' + JSON.stringify(url) + ')';
         el.textContent = '';
@@ -31928,7 +33059,7 @@ function _chatMenRender(animate) {
             txt.appendChild(sb);
         }
         row.append(av, txt);
-        if (i === 0 && _chatMen.rows.length > 1) {
+        if (i === 0 && _chatMen.rows.length > 1 && !r.lemo) {
             const near = document.createElement('span');
             near.className = 'chat-men-row-near';
             near.textContent = 'الأقرب';
@@ -34082,8 +35213,9 @@ const _adm = {
     week: new Map(), weekLoading: new Map(),
     bulk: false, doneN: 0, totalN: 0,
     btn: null,          // cached — updateAdminLifecycle runs every frame
-    filter: 'all',      // the duty chips: 'all' | 'done' | 'vac' | 'short'
-    sort: 'name',       // 'name' | 'duty' (this week's open time, busiest first)
+    filter: 'all',      // the duty chips: 'all' | 'done' | 'vac' | 'short' | 'online'
+    sort: 'name',       // 'name' | 'duty' | 'work' | 'today' | 'trend'
+    tab: 'over',        // 'over' (نظرة عامة) | 'list' (الأعضاء)
     day: '',            // the calendar cell the leader has selected (see _admSetDuty)
     saving: false,      // a duty edit is in flight
 };
@@ -34310,9 +35442,18 @@ function _admMembers() {
         .filter(m => !q || _fireNormName(m.name || '').includes(q) || String(m.slug).includes(q))
         .filter(m => _admPassesFilter(m, today));
     const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ar');
-    if (_adm.sort !== 'duty') return list.sort(byName);
-    const wk = new Map(list.map(m => [m, _admWeekPresence(m.discordId ? String(m.discordId) : '')]));
-    return list.sort((a, b) => (wk.get(b) - wk.get(a)) || byName(a, b));
+    const uidOf = m => (m.discordId ? String(m.discordId) : '');
+    const keyed = (fn) => {
+        const v = new Map(list.map(m => [m, fn(uidOf(m))]));
+        return list.sort((a, b) => (v.get(b) - v.get(a)) || byName(a, b));
+    };
+    switch (_adm.sort) {
+        case 'duty':  return keyed(u => _admWeekPresence(u));
+        case 'work':  return keyed(u => { const d = _admRowData(u); return d && !d.failed ? d.thisWeek : -1; });
+        case 'today': return keyed(u => { const t = _admTodayOf(u); return t ? t.pct : -1; });
+        case 'trend': return keyed(u => { const d = _admRowData(u); return d && !d.failed ? d.thisWeek - d.prevWeek : -Infinity; });
+        default:      return list.sort(byName);
+    }
 }
 
 /* ── the daily duty, on the leader's side ─────────────────────────────────────
@@ -34329,11 +35470,23 @@ function _admDutyOf(uid) {
     const d = _admRowData(uid);
     return d && !d.failed && d.duty ? d.duty : null;
 }
+// Today, for one member: the state word, the recorded time and how far to three hours.
+function _admTodayOf(uid) {
+    const duty = uid ? _admDutyOf(uid) : null;
+    if (!duty) return null;
+    const today = _todayDateStr();
+    const r = _dutyRec(duty, today);
+    const st = _dutyStateOf(r, today, today, duty);
+    const pct = (st === 'done' || st === 'vac') ? 1 : Math.min(1, r.ms / DUTY.goalMs);
+    return { r, st, pct };
+}
 // A filtered view only lists members whose day is KNOWN — one still loading is not
 // «لم يُتمّوا», it's unread.
 function _admPassesFilter(m, today) {
     if (_adm.filter === 'all') return true;
-    const duty = m.discordId ? _admDutyOf(String(m.discordId)) : null;
+    const uid = m.discordId ? String(m.discordId) : '';
+    if (_adm.filter === 'online') return !!(uid && _admOnline(uid));
+    const duty = uid ? _admDutyOf(uid) : null;
     if (!duty) return false;
     const st = _dutyDayState(duty, today, today);
     if (_adm.filter === 'done') return st === 'done';
@@ -34342,7 +35495,7 @@ function _admPassesFilter(m, today) {
 }
 // This week's open time, for the «الأعلى حضورًا» sort. Unknown sorts last.
 function _admWeekPresence(uid) {
-    const duty = _admDutyOf(uid);
+    const duty = uid ? _admDutyOf(uid) : null;
     if (!duty) return -1;
     let ms = 0;
     for (const k of _dutyWeekKeys(_dutyWeekStart(new Date()))) {
@@ -34351,67 +35504,240 @@ function _admWeekPresence(uid) {
     }
     return ms;
 }
+// In the leader's own lobby right now — `gameState.players` only ever holds members
+// whose presence is live (see listenToPlayers). The other lobby is not visible.
+function _admOnline(uid) {
+    const p = uid ? gameState.players[uid] : null;
+    if (!p) return '';
+    if (p.isWorking && !p.isOnBreak && (p.isLockedIn || p.inFreeMode)) return 'work';
+    return 'here';
+}
+// Every number the overview needs, in one pass over the roster.
+function _admTeam() {
+    const today = _todayDateStr();
+    const weekKeys = _dutyWeekKeys(_dutyWeekStart(new Date()));
+    const t = {
+        known: 0, done: 0, vac: 0, short: 0, online: 0, working: 0,
+        work: 0, prevWork: 0, presence: 0, loaded: 0, total: 0,
+        perDay: weekKeys.map(k => ({ k, done: 0, ms: 0 })),
+        top: [], attention: [],
+    };
+    for (const m of MDWNH_ROSTER.list) {
+        if (!m.slug || m.dummy || m.active === false || !m.discordId) continue;
+        const uid = String(m.discordId);
+        t.total++;
+        const on = _admOnline(uid);
+        if (on) t.online++;
+        if (on === 'work') t.working++;
+        const d = _admRowData(uid);
+        if (d && !d.failed) {
+            t.loaded++;
+            t.work += d.thisWeek; t.prevWork += d.prevWeek;
+            if (d.thisWeek > 0) t.top.push({ m, uid, ms: d.thisWeek });
+        }
+        const duty = _admDutyOf(uid);
+        if (!duty) continue;
+        t.known++;
+        const st = _dutyDayState(duty, today, today);
+        if (st === 'done') t.done++; else if (st === 'vac') t.vac++; else t.short++;
+        let miss = 0;
+        weekKeys.forEach((k, j) => {
+            const r = _dutyRec(duty, k);
+            const s = _dutyStateOf(r, k, today, duty);
+            if (s === 'done') t.perDay[j].done++;
+            if (!r.vac) { t.perDay[j].ms += r.ms; t.presence += r.ms; }
+            if (s === 'miss') miss++;
+        });
+        // Only judged on a history that actually loaded — an unread one is not «absent».
+        const quiet = (d && !d.failed) ? (d.last ? Date.now() - d.last : Infinity) : 0;
+        if (miss > 0 || quiet > 7 * 864e5) t.attention.push({ m, uid, miss, quiet });
+    }
+    t.top.sort((a, b) => b.ms - a.ms);
+    t.attention.sort((a, b) => (b.miss - a.miss) || (b.quiet - a.quiet));
+    return t;
+}
+function _admAgo(ms) {
+    if (!ms) return 'لا جلسات';
+    const d = Date.now() - ms;
+    if (d < 3600000) return 'منذ قليل';
+    if (d < 864e5) return `منذ ${_libAr(Math.floor(d / 3600000))} س`;
+    const n = Math.floor(d / 864e5);
+    return n === 1 ? 'أمس' : n === 2 ? 'منذ يومين' : `منذ ${_libAr(n)} ${n <= 10 ? 'أيام' : 'يومًا'}`;
+}
+// «+١٢٪» — the week against last week. Nothing to compare → nothing drawn.
+function _admTrend(cur, prev) {
+    if (!(prev > 0) && !(cur > 0)) return '<span class="adm-trend is-flat">—</span>';
+    if (!(prev > 0)) return '<span class="adm-trend is-up">جديد</span>';
+    const pct = Math.round(((cur - prev) / prev) * 100);
+    const cls = pct > 0 ? 'is-up' : pct < 0 ? 'is-down' : 'is-flat';
+    const arrow = pct > 0 ? '▲' : pct < 0 ? '▼' : '';
+    return `<span class="adm-trend ${cls}">${arrow} ${_libAr(Math.abs(pct))}٪</span>`;
+}
+function _admAv(m, uid, cls) {
+    const on = uid ? _admOnline(uid) : '';
+    return `<span class="${cls || 'adm-av'}${on ? ' is-' + on : ''}">
+        <img src="${_libEsc(m ? _libAvatar(m.slug) : '')}" alt="" loading="lazy" decoding="async"
+             onerror="this.style.visibility='hidden'"><i></i></span>`;
+}
+
 function _admRenderDutyBar() {
     const host = document.getElementById('adm-duty-bar');
     if (!host) return;
-    const today = _todayDateStr();
-    let done = 0, vac = 0, shortN = 0;
-    for (const uid of _admAllUids()) {
-        const duty = _admDutyOf(uid);
-        if (!duty) continue;
-        const st = _dutyDayState(duty, today, today);
-        if (st === 'done') done++; else if (st === 'vac') vac++; else shortN++;
-    }
+    const t = _admTeam();
     const chip = (id, label, n) => `<button class="adm-chip is-${id}${_adm.filter === id ? ' is-on' : ''}" type="button" data-f="${id}">`
-        + `${label}${n === undefined ? '' : ` <b>${_libAr(n)}</b>`}</button>`;
-    const lbl = _dutyStarted() ? 'حضور اليوم — ٣ ساعات' : 'حضور اليوم — تجريبي حتى ' + _dutyStartLabel();
-    host.innerHTML = `<span class="adm-duty-lbl">${_libEsc(lbl)}</span>
-        <span class="adm-chips">${chip('all', 'الكل')}${chip('done', 'أتمّوا', done)}${chip('vac', 'في إجازة', vac)}${chip('short', 'لم يُتمّوا', shortN)}<button class="adm-chip is-sort${_adm.sort === 'duty' ? ' is-on' : ''}" type="button" data-sort="1">الأعلى حضورًا</button></span>`;
+        + `<span>${label}</span>${n === undefined ? '' : `<b>${_libAr(n)}</b>`}</button>`;
+    host.innerHTML = chip('all', 'الكل', t.total) + chip('done', 'أتمّوا اليوم', t.done)
+        + chip('short', 'لم يُتمّوا', t.short) + chip('vac', 'في إجازة', t.vac)
+        + chip('online', 'في المقر الآن', t.online);
+}
+
+/* ── the overview ─────────────────────────────────────────────────────────── */
+function _admKpi(cls, icon, label, value, foot) {
+    return `<div class="adm-kpi ${cls}">
+        <span class="adm-kpi-ico" aria-hidden="true">${icon}</span>
+        <span class="adm-kpi-k">${label}</span>
+        <span class="adm-kpi-v">${value}</span>
+        <span class="adm-kpi-foot">${foot || ''}</span>
+    </div>`;
+}
+function _admRenderOverview() {
+    const host = document.getElementById('adm-over');
+    if (!host) return;
+    const t = _admTeam();
+    const today = _todayDateStr();
+    const todayIdx = new Date().getDay();
+    const pctDone = t.known ? Math.round((t.done / t.known) * 100) : 0;
+
+    const ring = `<span class="adm-ring" style="--p:${pctDone}"><b>${_libAr(pctDone)}٪</b></span>`;
+    const kpis = [
+        _admKpi('is-teal', ring, 'أتمّوا حضور اليوم',
+            `${_libAr(t.done)}<small> / ${_libAr(t.known)}</small>`,
+            _dutyStarted() ? `${_libAr(t.vac)} في إجازة · ${_libAr(t.short)} لم يُتمّوا` : 'تجريبي حتى ' + _libEsc(_dutyStartLabel())),
+        _admKpi('is-blue', '<i class="adm-dot-live"></i>', 'في المقر الآن',
+            `${_libAr(t.online)}`,
+            t.working ? `${_libAr(t.working)} منهم في جلسة عمل` : 'لا أحد في جلسة عمل'),
+        _admKpi('is-gold', '⏱', 'عمل الفريق هذا الأسبوع',
+            _libEsc(_admDur(t.work)),
+            `${_admTrend(t.work, t.prevWork)} <span>مقارنة بالأسبوع الماضي</span>`),
+        _admKpi('is-red', '🏠', 'حضور الفريق هذا الأسبوع',
+            _libEsc(_admDur(t.presence)),
+            t.known ? `بمعدل ${_libEsc(_admDur(t.presence / t.known))} للعضو` : ''),
+    ].join('');
+
+    // The week, one bar per day: how many members met their three hours.
+    const peak = Math.max(1, t.known);
+    const bars = t.perDay.map((d, j) => {
+        const h = Math.round((d.done / peak) * 100);
+        const fut = d.k > today;
+        return `<div class="adm-bar${j === todayIdx ? ' is-today' : ''}${fut ? ' is-future' : ''}">
+            <span class="adm-bar-n">${fut ? '' : _libAr(d.done)}</span>
+            <span class="adm-bar-track"><i style="height:${fut ? 0 : Math.max(d.done ? 4 : 0, h)}%"></i></span>
+            <span class="adm-bar-d">${DUTY_DAY_SHORT[j]}</span>
+            <span class="adm-bar-h">${fut || d.ms < 60000 ? '' : _libEsc(_dutyClock(d.ms))}</span>
+        </div>`;
+    }).join('');
+
+    // Today's split as a donut — conic-gradient, no library.
+    const unknown = Math.max(0, t.total - t.known);
+    const all = Math.max(1, t.done + t.vac + t.short + unknown);
+    const a1 = (t.done / all) * 360, a2 = a1 + (t.vac / all) * 360, a3 = a2 + (t.short / all) * 360;
+    const donut = `<div class="adm-donut" style="--a1:${a1}deg;--a2:${a2}deg;--a3:${a3}deg">
+            <span><b>${_libAr(t.known)}</b><small>عضوًا</small></span></div>
+        <ul class="adm-legend">
+            <li><i class="is-done"></i>أتمّوا <b>${_libAr(t.done)}</b></li>
+            <li><i class="is-vac"></i>في إجازة <b>${_libAr(t.vac)}</b></li>
+            <li><i class="is-short"></i>لم يُتمّوا <b>${_libAr(t.short)}</b></li>
+            ${unknown ? `<li><i class="is-unk"></i>جارٍ الحساب <b>${_libAr(unknown)}</b></li>` : ''}
+        </ul>`;
+
+    const topPeak = Math.max(1, ...t.top.slice(0, 6).map(x => x.ms));
+    const top = t.top.length ? t.top.slice(0, 6).map((x, i) => `
+        <button class="adm-lrow" type="button" data-adm="${_libEsc(x.uid)}">
+            <span class="adm-lrank">${_libAr(i + 1)}</span>
+            ${_admAv(x.m, x.uid)}
+            <span class="adm-lname">${_libEsc(x.m.name || x.m.slug)}
+                <span class="adm-lbar"><i style="width:${((x.ms / topPeak) * 100).toFixed(1)}%"></i></span></span>
+            <span class="adm-lval">${_libEsc(_admDur(x.ms))}</span>
+        </button>`).join('')
+        : `<p class="adm-empty">${t.loaded ? 'لا جلسات عمل هذا الأسبوع بعد.' : 'جارٍ الحساب…'}</p>`;
+
+    const att = t.attention.length ? t.attention.slice(0, 6).map(x => `
+        <button class="adm-lrow" type="button" data-adm="${_libEsc(x.uid)}">
+            ${_admAv(x.m, x.uid)}
+            <span class="adm-lname">${_libEsc(x.m.name || x.m.slug)}
+                <small>${x.miss ? `${_libEsc(_dutyDaysAr(x.miss))} فائتة هذا الأسبوع` : ''}${x.miss && x.quiet > 7 * 864e5 ? ' · ' : ''}${x.quiet > 7 * 864e5 ? (x.quiet === Infinity ? 'لا جلسات مسجّلة' : 'آخر جلسة ' + _libEsc(_admAgo(Date.now() - x.quiet))) : ''}</small></span>
+            <span class="adm-pill is-warn">متابعة</span>
+        </button>`).join('')
+        : `<p class="adm-empty">${t.known ? 'الجميع ملتزمون هذا الأسبوع 🎉' : 'جارٍ الحساب…'}</p>`;
+
+    host.innerHTML = `
+        <div class="adm-kpis">${kpis}</div>
+        <div class="adm-grid2">
+            <div class="adm-card adm-card-wide">
+                <div class="adm-card-h"><h3>حضور الأسبوع</h3><span>من أتمّ ثلاث ساعات، يومًا بيوم</span></div>
+                <div class="adm-bars">${bars}</div>
+            </div>
+            <div class="adm-card">
+                <div class="adm-card-h"><h3>اليوم</h3><span>${_libEsc(DUTY_DAY_NAMES[todayIdx])}</span></div>
+                <div class="adm-donut-wrap">${donut}</div>
+            </div>
+        </div>
+        <div class="adm-grid2 is-even">
+            <div class="adm-card">
+                <div class="adm-card-h"><h3>الأعلى عملًا</h3><span>هذا الأسبوع</span></div>
+                <div class="adm-llist">${top}</div>
+            </div>
+            <div class="adm-card">
+                <div class="adm-card-h"><h3>يحتاجون متابعة</h3><span>أيام فائتة أو غياب طويل</span></div>
+                <div class="adm-llist">${att}</div>
+            </div>
+        </div>`;
 }
 
 function _admRowHtml(m, i) {
     const uid = m.discordId ? String(m.discordId) : '';
-    // The fresher of the full history and the two-week slice (see _admRowData).
     const data = uid ? _admRowData(uid) : null;
-    const right = !uid ? '<span class="adm-row-none">لا حساب في المقر</span>'
-        : (data && !data.failed) ? (_adm.sort === 'duty'
-            ? `<span class="adm-row-ms">${_libEsc(_admDur(Math.max(0, _admWeekPresence(uid))))}</span>
-                  <span class="adm-row-cap">حضور هذا الأسبوع</span>`
-            : `<span class="adm-row-ms">${_libEsc(_admDur(data.thisWeek))}</span>
-                  <span class="adm-row-cap">عمل هذا الأسبوع</span>`)
-        : data ? '<span class="adm-row-cap">تعذّرت القراءة</span>'
-        : '<span class="adm-row-cap">جارٍ الحساب…</span>';
-    // Seven dots for this week (Sunday on the right), and one line about today.
+    const ok = data && !data.failed;
     const duty = uid ? _admDutyOf(uid) : null;
-    let strip = '';
+    const today = _todayDateStr();
+
+    let todayCell = '<span class="adm-muted">—</span>', dots = '<span class="adm-muted">—</span>';
     if (duty) {
-        const today = _todayDateStr();
-        const dots = _dutyWeekKeys(_dutyWeekStart(new Date())).map((k, j) => {
+        const t = _admTodayOf(uid);
+        const cap = t.st === 'vac' ? 'إجازة' : t.st === 'done' ? (t.r.ok ? 'معتمد ✓' : 'أتمّ ✓') : _dutyClock(t.r.ms) + ' / ٣:٠٠';
+        todayCell = `<span class="adm-prog is-${t.st}"><span class="adm-prog-bar"><i style="width:${Math.round(t.pct * 100)}%"></i></span>`
+            + `<span class="adm-prog-cap">${_libEsc(cap)}</span></span>`;
+        dots = '<span class="adm-dd-row">' + _dutyWeekKeys(_dutyWeekStart(new Date())).map((k, j) => {
             const r = _dutyRec(duty, k);
             const st = _dutyStateOf(r, k, today, duty);
             const tip = `${DUTY_DAY_NAMES[j]}: ${st === 'future' ? '—' : r.vac ? 'إجازة' : st === 'vac' ? 'إجازة تلقائية' : _dutyDur(r.ms)}`;
             return `<i class="adm-dd is-${st}" title="${_libEsc(tip)}"></i>`;
-        }).join('');
-        const t = _dutyRec(duty, today);
-        const st = _dutyStateOf(t, today, today);
-        const cap = st === 'vac' ? 'إجازة اليوم' : st === 'done' ? 'أتمّ اليوم ✓' : `اليوم: ${_dutyDur(t.ms)}`;
-        strip = `<span class="adm-duty"><span class="adm-dd-row">${dots}</span><span class="adm-dd-cap is-${st}">${_libEsc(cap)}</span></span>`;
+        }).join('') + '</span>';
     }
+    const loading = uid && !data ? '<span class="adm-muted">…</span>' : '<span class="adm-muted">—</span>';
+    const presence = duty ? _libEsc(_admDur(Math.max(0, _admWeekPresence(uid)))) : loading;
+    const work = ok ? _libEsc(_admDur(data.thisWeek)) : (data ? '<span class="adm-muted">تعذّرت القراءة</span>' : loading);
+    const trend = ok ? _admTrend(data.thisWeek, data.prevWeek) : '';
+    const last = ok ? _libEsc(_admAgo(data.last)) : '';
+    const on = uid ? _admOnline(uid) : '';
+    const status = !uid ? '<span class="adm-pill">لا حساب في المقر</span>'
+        : on === 'work' ? '<span class="adm-pill is-work">يعمل الآن</span>'
+        : on ? '<span class="adm-pill is-here">في المقر</span>' : '';
+
     /* Past ADM_SEQ_MAX the delay stops growing and the row goes `.quiet`, which
-       swaps in an identical keyframe whose NAME is not registered for the blip —
-       thirty simultaneous chirps is noise (the same cap the task pills use). */
+       swaps in an identical keyframe whose NAME is not registered for the blip. */
     const quiet = i >= ADM_SEQ_MAX;
-    return `<button class="adm-row${uid ? '' : ' is-off'}${quiet ? ' quiet' : ''}" type="button"
-                    data-adm="${_libEsc(uid)}"
-                    style="animation-delay:${Math.min(i, ADM_SEQ_MAX) * 26}ms">
-        <img class="adm-row-av" src="${_libEsc(_libAvatar(m.slug))}" alt="" loading="lazy" decoding="async"
-             onerror="this.style.visibility='hidden'">
-        <span class="adm-row-mid">
-            <span class="adm-row-name">${_libEsc(m.name || m.slug)}</span>
-            ${strip}
-        </span>
-        <span class="adm-row-right">${right}</span>
-    </button>`;
+    return `<div class="adm-row${uid ? '' : ' is-off'}${quiet ? ' quiet' : ''}" role="button" tabindex="0"
+                data-adm="${_libEsc(uid)}" style="animation-delay:${Math.min(i, ADM_SEQ_MAX) * 26}ms">
+        <span class="adm-c adm-c-who">${_admAv(m, uid)}
+            <span class="adm-who-txt"><b>${_libEsc(m.name || m.slug)}</b>${status}</span></span>
+        <span class="adm-c adm-c-today" data-l="اليوم">${todayCell}</span>
+        <span class="adm-c adm-c-week" data-l="الأسبوع">${dots}</span>
+        <span class="adm-c adm-c-num" data-l="الحضور">${presence}</span>
+        <span class="adm-c adm-c-num" data-l="العمل">${work}</span>
+        <span class="adm-c adm-c-trend" data-l="التغيّر">${trend}</span>
+        <span class="adm-c adm-c-last" data-l="آخر جلسة">${last}</span>
+    </div>`;
 }
 
 /* `animate` is passed explicitly rather than inferred: the entrance cascade belongs
@@ -34421,19 +35747,85 @@ function _admRenderList(animate) {
     const host = document.getElementById('adm-members');
     if (!host) return;
     _admRenderDutyBar();
+    if (_adm.tab === 'over') _admRenderOverview();
     const list = _admMembers();
     host.classList.toggle('is-still', !animate);
     host.innerHTML = list.length
         ? list.map(_admRowHtml).join('')
         : `<p class="adm-empty">${_adm.filter !== 'all' ? 'لا أحد في هذه القائمة.' : 'لا يوجد عضو بهذا الاسم.'}</p>`;
+    _admPaintHead();
+}
+
+// The page title + date line, and the nav's selected tab.
+function _admPaintHead() {
+    const title = document.getElementById('adm-title');
+    const sub = document.getElementById('adm-sub');
+    const inDetail = !!_adm.uid;
+    const m = inDetail ? MDWNH_ROSTER.byDiscord[_adm.uid] : null;
+    if (title) title.textContent = inDetail ? (m ? (m.name || m.slug) : 'العضو') : _adm.tab === 'over' ? 'نظرة عامة' : 'الأعضاء';
+    if (sub) {
+        let d = '';
+        try { d = new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' }); } catch (_) {}
+        sub.textContent = d + (_dutyStarted() ? ' · الحضور الإلزامي ٣ ساعات يوميًا' : '');
+    }
+    document.querySelectorAll('#adm-nav .adm-nav-btn').forEach(b => {
+        b.classList.toggle('is-on', b.dataset.tab === (inDetail ? 'list' : _adm.tab));
+    });
+}
+
+function _admSetTab(tab) {
+    _adm.tab = tab === 'list' ? 'list' : 'over';
+    _adm.uid = null;
+    _adm.day = '';
+    document.getElementById('adm-over-view')?.toggleAttribute('hidden', _adm.tab !== 'over');
+    document.getElementById('adm-list-view')?.toggleAttribute('hidden', _adm.tab !== 'list');
+    document.getElementById('adm-detail-view')?.setAttribute('hidden', '');
+    const sc = document.getElementById('adm-scroll');
+    if (sc) sc.scrollTop = 0;
+    _uiSeqReset();
+    _admRenderList(true);
+}
+
+// «نسخ تقرير اليوم» — a plain-text roll-call the leader can paste into Telegram.
+function _admCopyReport() {
+    const today = _todayDateStr();
+    const groups = { done: [], vac: [], short: [], unk: [] };
+    for (const m of MDWNH_ROSTER.list) {
+        if (!m.slug || m.dummy || m.active === false || !m.discordId) continue;
+        const t = _admTodayOf(String(m.discordId));
+        const name = m.name || m.slug;
+        if (!t) groups.unk.push(name);
+        else if (t.st === 'done') groups.done.push(name);
+        else if (t.st === 'vac') groups.vac.push(name);
+        else groups.short.push(`${name} (${_dutyClock(t.r.ms)})`);
+    }
+    let d = today;
+    try { d = new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }); } catch (_) {}
+    const sec = (h, a) => a.length ? `\n${h} (${_libAr(a.length)}):\n${a.map(x => '• ' + x).join('\n')}\n` : '';
+    const text = `حضور المقر — ${d}\n`
+        + sec('✅ أتمّوا ساعاتهم', groups.done)
+        + sec('🌴 في إجازة', groups.vac)
+        + sec('⏳ لم يُتمّوا بعد', groups.short)
+        + sec('❔ لم تُقرأ بياناتهم', groups.unk);
+    const ok = () => _libToast('نُسخ تقرير اليوم — الصقه حيث تريد');
+    const fail = () => _libToast('تعذّر النسخ، حاول مرة أخرى');
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fail);
+        else {
+            const ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            document.execCommand('copy') ? ok() : fail();
+            ta.remove();
+        }
+    } catch (_) { fail(); }
 }
 
 /* The member's duty as a calendar: ADM_DUTY_WEEKS rows of seven days with the
    hours inside each cell. The totals count from the duty's start only — the trial
    days are shown, never held against anyone. */
 function _admDutySection(days) {
-    const head = '<h4 class="adm-h">الحضور اليومي';
-    if (!days) return `${head}</h4><p class="adm-empty">تعذّرت قراءة الحضور.</p>`;
+    if (!days) return `<div class="adm-card"><div class="adm-card-h"><h3>الحضور اليومي</h3></div><p class="adm-empty">تعذّرت قراءة الحضور.</p></div>`;
     const today = _todayDateStr();
     const cur = _dutyWeekStart(new Date());
     let rows = '', thisWeekMs = 0;
@@ -34448,8 +35840,6 @@ function _admDutySection(days) {
                 : (r.ok && r.ms < DUTY.goalMs) ? '✓'
                 : r.ms >= 60000 ? _dutyClock(r.ms) : '';
             const note = r.ok ? ' — اعتماد يدوي' : st === 'vac' && !r.vac ? ' — إجازة تلقائية' : '';
-            // How much of the day the member added by hand (see _dutyFixApply) — `ms`
-            // includes it, so the leader is told rather than left to guess.
             const fixNote = r.fix ? ' — منها ' + _dutyDur(r.fix) + ' مضافة يدويًا' : '';
             const tip = _libEsc(DUTY_DAY_NAMES[j] + ' ' + k + note + fixNote);
             /* Only a real mandatory day that has already begun can be edited — a future
@@ -34473,21 +35863,24 @@ function _admDutySection(days) {
         if (st === 'done') done++; else if (st === 'vac') vac++; else if (st === 'miss') miss++;
         d.setDate(d.getDate() + 1);
     }
+    const rate = done + miss ? Math.round((done / (done + miss)) * 100) : 0;
     const dayHead = '<div class="adm-cal-row is-head"><span></span>'
         + DUTY_DAY_SHORT.map(n => `<span class="adm-cal-h">${n}</span>`).join('') + '<span></span></div>';
-    return `${head}<i>الالتزام المتصل: ${_libEsc(_dutyDaysAr(_dutyStreak(days, today)))}</i></h4>
-        <div class="adm-stats">
-            <div class="adm-stat is-hero"><span class="adm-stat-v">${_libEsc(_admDur(thisWeekMs))}</span><span class="adm-stat-k">حضور هذا الأسبوع</span></div>
-            <div class="adm-stat"><span class="adm-stat-v">${_libAr(done)}</span><span class="adm-stat-k">أيام مكتملة</span></div>
-            <div class="adm-stat"><span class="adm-stat-v">${_libAr(vac)}</span><span class="adm-stat-k">إجازات</span></div>
-            <div class="adm-stat"><span class="adm-stat-v">${_libAr(miss)}</span><span class="adm-stat-k">أيام فائتة</span></div>
+    return `<div class="adm-kpis is-mini">
+            ${_admKpi('is-teal', '🏠', 'حضور هذا الأسبوع', _libEsc(_admDur(thisWeekMs)), '')}
+            ${_admKpi('is-gold', '✓', 'أيام مكتملة', _libAr(done), `نسبة الالتزام ${_libAr(rate)}٪`)}
+            ${_admKpi('is-blue', '🌴', 'إجازات', _libAr(vac), '')}
+            ${_admKpi('is-red', '✕', 'أيام فائتة', _libAr(miss), `الالتزام المتصل: ${_libEsc(_dutyDaysAr(_dutyStreak(days, today)))}`)}
         </div>
-        <div class="adm-cal">${dayHead}${rows}</div>
-        <div class="adm-cal-key">
-            <span><i class="is-done"></i>مكتمل</span><span><i class="is-vac"></i>إجازة</span>
-            <span><i class="is-miss"></i>فائت</span><span><i class="is-now"></i>اليوم</span>
-        </div>
-        ${_admDayEditor(days)}`;
+        <div class="adm-card">
+            <div class="adm-card-h"><h3>الحضور اليومي</h3><span>آخر ${_libAr(ADM_DUTY_WEEKS)} أسابيع</span></div>
+            <div class="adm-cal">${dayHead}${rows}</div>
+            <div class="adm-cal-key">
+                <span><i class="is-done"></i>مكتمل</span><span><i class="is-vac"></i>إجازة</span>
+                <span><i class="is-miss"></i>فائت</span><span><i class="is-now"></i>اليوم</span>
+            </div>
+            ${_admDayEditor(days)}
+        </div>`;
 }
 
 /* ── the leader's control over one day ────────────────────────────────────────
@@ -34496,27 +35889,23 @@ function _admDutySection(days) {
 
      اعتماد    — `ok: ts`, which _dutyStateOf reads as a finished day whatever the
                  member did (or didn't do). It is a field of its OWN: `ms` stays the
-                 honest open time, which is what the leader ranks people by, and a
-                 forged `ms` would quietly corrupt every total on this screen.
-                 Approving also lifts the day's vacation, so the week's allowance
-                 comes back with it.
-     رفع الإجازة — `vac: null` alone: the day goes back to being judged on its real
-                 hours (usually a miss, and the week gets its vacation back).
+                 honest open time, which is what the leader ranks people by.
+                 Approving also lifts the day's vacation.
+     رفع الإجازة — `vac: null` alone: the day goes back to being judged on its real hours.
 
-   An AUTOMATIC vacation (a short day the week's allowance covered by itself, see
-   _dutyAutoVac) has nothing stored to remove — it is derived on read. The editor
-   says so and offers اعتماد instead.
+   An AUTOMATIC vacation (see _dutyAutoVac) has nothing stored to remove — it is
+   derived on read. The editor says so and offers اعتماد instead.
 
-   Cost: one `update()` of one or two leaf fields, on a node nobody live-listens to.
-   The member's own tab keeps a login-time copy of this week, so a same-day edit
-   shows on their card after their next reload. */
+   The editor also splits the day's time into where it came from: time in the site
+   (`o`), work sessions (`s`), and hours the member added by hand (`fix`). */
 function _admDayEditor(days) {
     const today = _todayDateStr();
     const k = _adm.day;
     if (!k || k > today || k < DUTY_START_KEY) {
-        return '<p class="adm-cal-hint">اضغط على أي يوم في التقويم لاعتماده أو لرفع الإجازة عنه.</p>';
+        return '<p class="adm-cal-hint">اضغط على أي يوم في التقويم لتفاصيله، ولاعتماده أو لرفع الإجازة عنه.</p>';
     }
     const r    = _dutyRec(days, k);
+    const raw  = days[k] || {};
     const st   = _dutyDayState(days, k, today);
     const auto = st === 'vac' && !r.vac;      // derived, not stored — nothing to remove
     let lbl = k;
@@ -34531,6 +35920,11 @@ function _admDayEditor(days) {
         : st === 'done' ? 'أتمّ ساعاته'
         : st === 'now' ? 'اليوم، ما زال مفتوحًا'
         : 'يوم فائت';
+    const openMs = _dutySumMap(raw.o), sessMs = _dutySumMap(raw.s), fixMs = r.fix;
+    const legacy = Math.max(0, (Number(raw.ms) || 0) - fixMs);
+    const part = (cls, k2, v) => v >= 60000 ? `<span class="adm-part ${cls}"><i></i>${k2} <b>${_libEsc(_admDur(v))}</b></span>` : '';
+    const parts = part('is-open', 'داخل المقر', openMs + legacy) + part('is-sess', 'جلسات عمل', sessMs)
+        + part('is-fix', 'مضافة يدويًا', fixMs) + (r.work >= 60000 ? part('is-work', 'منها عمل فعلي', r.work) : '');
     const btn = (act, txt, cls) => `<button class="adm-day-btn ${cls}${_adm.saving ? ' is-busy' : ''}" type="button" data-dact="${act}">${txt}</button>`;
     let btns = r.ok ? btn('unok', 'إلغاء الاعتماد', 'is-warn') : btn('ok', 'اعتماد اليوم مكتملًا', 'is-go');
     if (r.vac) btns += btn('unvac', 'رفع الإجازة', 'is-warn');
@@ -34538,7 +35932,8 @@ function _admDayEditor(days) {
     return `<div class="adm-day-edit">
         <div class="adm-day-txt">
             <span class="adm-day-name">${_libEsc(lbl)}</span>
-            <span class="adm-day-state">${_libEsc(state)} · الوقت المسجّل: ${_libEsc(_admDur(r.ms))}</span>
+            <span class="adm-day-state">${_libEsc(state)} · المجموع: ${_libEsc(_admDur(r.ms))}</span>
+            ${parts ? `<span class="adm-parts">${parts}</span>` : ''}
         </div>
         <div class="adm-day-btns">${btns}</div>
     </div>`;
@@ -34563,17 +35958,17 @@ function _admSetDuty(uid, key, act) {
     _admRenderDetail();
     update(ref(database), write)
         .then(() => {
-            const r = _dutyRec(days, key);
-            const next = {
-                ms: r.ms,
-                vac: (act === 'ok' || act === 'unvac') ? 0 : r.vac,
-                ok: act === 'ok' ? ts : act === 'unok' ? 0 : r.ok,
+            // Patch the stored record in place — its o/s maps must survive.
+            const patch = (rec) => {
+                if (act === 'ok') { rec.ok = ts; delete rec.vac; }
+                else if (act === 'unok') delete rec.ok;
+                else delete rec.vac;
             };
-            days[key] = next;
+            patch(days[key] = days[key] || {});
             /* The list keeps its OWN slice of the same member (see _admFetchWeek), which
                is a different object whenever the two were fetched apart. */
             const w = _adm.week.get(uid);
-            if (w && w.duty && w.duty !== days) w.duty[key] = { ...next };
+            if (w && w.duty && w.duty !== days) patch(w.duty[key] = w.duty[key] || { ...days[key] });
             _libToast(act === 'ok' ? 'اعتُمد اليوم مكتملًا' : act === 'unok' ? 'أُلغي اعتماد اليوم' : 'رُفعت الإجازة عن اليوم');
         })
         .catch(() => _libToast('تعذّر الحفظ، حاول مرة أخرى'))
@@ -34581,7 +35976,7 @@ function _admSetDuty(uid, key, act) {
             _adm.saving = false;
             if (!_adm.open) return;
             if (_adm.uid === uid) _admRenderDetail();
-            _admRenderList(false);
+            else _admRenderList(false);
         });
 }
 
@@ -34593,76 +35988,91 @@ function _admRenderDetail() {
     const m = MDWNH_ROSTER.byDiscord[uid];
     const d = _adm.cache.get(uid);
     const name = m ? (m.name || m.slug) : uid;
+    _admPaintHead();
 
     if (!d) {
-        host.innerHTML = `<div class="adm-loading">جارٍ حساب ساعات ${_libEsc(name)}…</div>`;
+        host.innerHTML = `<div class="adm-loading"><span class="adm-spin"></span>جارٍ حساب ساعات ${_libEsc(name)}…</div>`;
         return;
     }
 
-    // Bars are scaled against the busiest week on screen, with an hour as the floor
-    // so a quiet stretch doesn't blow one short session up into a full bar.
+    const on = _admOnline(uid);
+    const t = _admTodayOf(uid);
+    // Bars are scaled against the busiest week on screen, with an hour as the floor.
     const peak = Math.max(3600000, ...d.weeks.map(w => w.ms));
-    const weeks = d.weeks.map((w, i) => {
-        const pct = Math.max(w.ms > 0 ? 2 : 0, (w.ms / peak) * 100);
-        const tag = i === 0 ? 'هذا الأسبوع' : i === 1 ? 'الأسبوع الماضي' : '';
-        return `<div class="adm-week${w.ms ? '' : ' is-zero'}${i < 2 ? ' is-near' : ''}">
-            <span class="adm-week-lbl">${_libEsc(_admWeekLabel(w.start))}${tag ? `<i>${tag}</i>` : ''}</span>
-            <span class="adm-week-bar"><i style="width:${pct.toFixed(1)}%"></i></span>
-            <span class="adm-week-ms">${_libEsc(_admDur(w.ms))}</span>
+    const weeks = d.weeks.slice().reverse().map((w, i, arr) => {
+        const pct = Math.max(w.ms > 0 ? 3 : 0, (w.ms / peak) * 100);
+        const isCur = i === arr.length - 1;
+        let lbl = '';
+        try { lbl = new Date(w.start).toLocaleDateString('ar-EG', { day: 'numeric', month: 'numeric' }); } catch (_) {}
+        return `<div class="adm-bar${isCur ? ' is-today' : ''}" title="${_libEsc(_admWeekLabel(w.start))}: ${_libEsc(_admDur(w.ms))} · ${_libAr(w.n)} جلسة">
+            <span class="adm-bar-n">${w.ms >= 3600000 ? _libAr(Math.round(w.ms / 3600000)) : ''}</span>
+            <span class="adm-bar-track"><i style="height:${pct.toFixed(1)}%"></i></span>
+            <span class="adm-bar-d">${_libEsc(isCur ? 'الآن' : lbl)}</span>
         </div>`;
     }).join('');
 
+    const tPeak = Math.max(1, ...d.topTasks.map(x => x.ms));
     const tasks = d.topTasks.length
-        ? d.topTasks.map(t => `<div class="adm-task">
-               <span class="adm-task-name">${_libEsc(t.name)}</span>
-               <span class="adm-task-ms">${_libEsc(_admDur(t.ms))}</span>
+        ? d.topTasks.map(x => `<div class="adm-task">
+               <span class="adm-task-name">${_libEsc(x.name)}
+                   <span class="adm-lbar"><i style="width:${((x.ms / tPeak) * 100).toFixed(1)}%"></i></span></span>
+               <span class="adm-task-ms">${_libEsc(_admDur(x.ms))}</span>
            </div>`).join('')
         : '<p class="adm-empty">لم يكتب أي مهمة بعد.</p>';
+    const avg = d.sessions ? d.total / d.sessions : 0;
+    const status = on === 'work' ? '<span class="adm-pill is-work">يعمل الآن</span>'
+        : on ? '<span class="adm-pill is-here">في المقر الآن</span>' : '<span class="adm-pill">غير متصل</span>';
+    const todayTxt = !t ? '' : t.st === 'vac' ? 'في إجازة اليوم' : t.st === 'done' ? 'أتمّ حضور اليوم ✓'
+        : `اليوم: ${_dutyDur(t.r.ms)} من ٣ ساعات`;
 
     host.innerHTML = `
-        <header class="adm-mem">
-            <img class="adm-mem-av" src="${_libEsc(m ? _libAvatar(m.slug) : '')}" alt=""
-                 onerror="this.style.visibility='hidden'">
-            <span class="adm-mem-txt">
-                <span class="adm-mem-name">${_libEsc(name)}</span>
-                <span class="adm-mem-sub">${d.last ? 'آخر جلسة: ' + _libEsc(_admDate(d.last)) : 'لا جلسات مسجّلة'}</span>
+        <header class="adm-hero">
+            ${_admAv(m, uid, 'adm-av adm-av-lg')}
+            <span class="adm-hero-txt">
+                <span class="adm-hero-name">${_libEsc(name)} ${status}</span>
+                <span class="adm-hero-sub">${d.last ? 'آخر جلسة: ' + _libEsc(_admDate(d.last)) + ' (' + _libEsc(_admAgo(d.last)) + ')' : 'لا جلسات مسجّلة'}${todayTxt ? ' · ' + _libEsc(todayTxt) : ''}</span>
+                ${t ? `<span class="adm-prog is-${t.st} is-lg"><span class="adm-prog-bar"><i style="width:${Math.round(t.pct * 100)}%"></i></span></span>` : ''}
             </span>
             <button id="adm-refresh" class="adm-refresh" type="button" title="تحديث" aria-label="تحديث">↻</button>
         </header>
 
         ${_admDutySection(d.duty)}
 
-        <h4 class="adm-h">ساعات العمل</h4>
-        <div class="adm-stats">
-            <div class="adm-stat is-hero"><span class="adm-stat-v">${_libEsc(_admDur(d.thisWeek))}</span><span class="adm-stat-k">هذا الأسبوع</span></div>
-            <div class="adm-stat"><span class="adm-stat-v">${_libEsc(_admDur(d.prevWeek))}</span><span class="adm-stat-k">الأسبوع الماضي</span></div>
-            <div class="adm-stat"><span class="adm-stat-v">${_libEsc(_admDur(d.total))}</span><span class="adm-stat-k">الإجمالي</span></div>
-            <div class="adm-stat"><span class="adm-stat-v">${_libAr(d.sessions)}</span><span class="adm-stat-k">جلسة</span></div>
+        <div class="adm-kpis is-mini">
+            ${_admKpi('is-gold', '⏱', 'عمل هذا الأسبوع', _libEsc(_admDur(d.thisWeek)), `${_admTrend(d.thisWeek, d.prevWeek)} <span>عن الماضي</span>`)}
+            ${_admKpi('is-blue', '↺', 'الأسبوع الماضي', _libEsc(_admDur(d.prevWeek)), '')}
+            ${_admKpi('is-teal', 'Σ', 'إجمالي العمل', _libEsc(_admDur(d.total)), `${_libAr(d.sessions)} جلسة`)}
+            ${_admKpi('is-red', '◷', 'متوسط الجلسة', _libEsc(_admDur(avg)), '')}
         </div>
 
-        <h4 class="adm-h">أسابيع العمل</h4>
-        <div class="adm-weeks">${weeks}</div>
-
-        <h4 class="adm-h">أكثر ما عمل عليه</h4>
-        <div class="adm-tasks">${tasks}</div>`;
+        <div class="adm-grid2">
+            <div class="adm-card adm-card-wide">
+                <div class="adm-card-h"><h3>أسابيع العمل</h3><span>آخر ${_libAr(ADM_WEEKS)} أسبوعًا · بالساعات</span></div>
+                <div class="adm-bars is-weeks">${weeks}</div>
+            </div>
+            <div class="adm-card">
+                <div class="adm-card-h"><h3>أكثر ما عمل عليه</h3></div>
+                <div class="adm-tasks">${tasks}</div>
+            </div>
+        </div>`;
 }
 
 function _admOpenMember(uid) {
     if (!uid) return;
     _adm.uid = uid;
     _adm.day = '';
+    document.getElementById('adm-over-view')?.setAttribute('hidden', '');
     document.getElementById('adm-list-view')?.setAttribute('hidden', '');
     document.getElementById('adm-detail-view')?.removeAttribute('hidden');
+    const sc = document.getElementById('adm-scroll');
+    if (sc) sc.scrollTop = 0;
     _admRenderDetail();
     _admFetchMember(uid, false).then(() => { if (_adm.open && _adm.uid === uid) _admRenderDetail(); });
 }
 
+// Back to whichever page the member was opened from.
 function _admBackToList() {
-    _adm.uid = null;
-    _adm.day = '';
-    document.getElementById('adm-detail-view')?.setAttribute('hidden', '');
-    document.getElementById('adm-list-view')?.removeAttribute('hidden');
-    _admRenderList(true);
+    _admSetTab(_adm.tab);
 }
 
 /* ── open / close ─────────────────────────────────────────────────────────── */
@@ -34677,8 +36087,7 @@ function openAdminPanel() {
     try { _closeSettingsPanel && _closeSettingsPanel(); } catch (_) {}
     document.body.classList.add('admin-active');
     overlay.setAttribute('aria-hidden', 'false');
-    _admBackToList();
-    _uiSeqReset();
+    _admSetTab(_adm.tab);
     // Nothing to press: the numbers start arriving as the panel fades in. Cheap
     // because each member is a two-week key range, not their whole log.
     _admAutoLoad(false);
@@ -34731,19 +36140,31 @@ function setupAdminUI() {
     // Scrolling the panel must never reach the world's zoom handler underneath.
     overlay?.addEventListener('wheel', (e) => { e.stopPropagation(); }, { passive: false });
 
-    document.getElementById('adm-members')?.addEventListener('click', (e) => {
+    // Any member row or list line, in any view, opens that member.
+    const openRow = (e) => {
         const row = e.target.closest('[data-adm]');
         if (row && row.dataset.adm) _admOpenMember(row.dataset.adm);
+    };
+    document.getElementById('adm-members')?.addEventListener('click', openRow);
+    document.getElementById('adm-over')?.addEventListener('click', openRow);
+    document.getElementById('adm-members')?.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault(); e.stopPropagation(); openRow(e);
     });
     document.getElementById('adm-back')?.addEventListener('click', _admBackToList);
+    document.getElementById('adm-nav')?.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-tab]');
+        if (b) _admSetTab(b.dataset.tab);
+    });
+    document.getElementById('adm-copy')?.addEventListener('click', _admCopyReport);
+    const sortSel = document.getElementById('adm-sort');
+    sortSel?.addEventListener('change', () => { _adm.sort = sortSel.value || 'name'; _admRenderList(false); });
 
-    // The duty chips: a filter (met today's three hours / took the day off / not yet)
-    // and a sort by this week's open time — the hard-workers float to the top.
+    // The duty chips filter the list (met today's three hours / took the day off / not yet / online).
     document.getElementById('adm-duty-bar')?.addEventListener('click', (e) => {
-        const b = e.target.closest('[data-f], [data-sort]');
+        const b = e.target.closest('[data-f]');
         if (!b) return;
-        if (b.dataset.f) _adm.filter = b.dataset.f;
-        else _adm.sort = _adm.sort === 'duty' ? 'name' : 'duty';
+        _adm.filter = b.dataset.f;
         _admRenderList(false);
     });
 
@@ -35248,7 +36669,7 @@ function _meetFillBubble(b, text, parts) {
     for (const p of parts) {
         if (p.u) {
             const pl = gameState.players[p.u];
-            b.appendChild(_chatMakePill(p.u, p.n || (pl && pl.username) || '', pl && pl.avatar));
+            b.appendChild(_chatMakePill(p.u, p.n || (pl && pl.username) || '', p.u === LEMO_UID ? LEMO_PFP : (pl && pl.avatar)));
         } else if (p.t) {
             b.appendChild(document.createTextNode(p.t));
         }
@@ -35786,7 +37207,7 @@ window.addEventListener('pageshow', _memRestore);
 
    Best-effort, NOT a guarantee. It makes freezing much less likely; an OS
    under real memory pressure can still kill the tab. That is why
-   `_dutyCreditSession` exists — the hours survive even when this doesn't.
+   `_dutySessTrack` credits the session clock — the hours survive even when this doesn't.
    ═══════════════════════════════════════════════════════════════════════════ */
 const _ka = { src: null, gain: null, on: false };
 

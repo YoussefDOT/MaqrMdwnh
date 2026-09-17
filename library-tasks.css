@@ -314,3 +314,44 @@
     .lib-pills .sub-head { animation: none; }
     .lib-pills .group-body { transition: none; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   المهام الفرعية — the elbow (MIRROR of MdwnhLibrary css/tasks.css)
+   A subtask is a whole task with a `parent`, so the pill is the SAME pill;
+   what says «this one hangs off the one above» is a wrapper and a line. It has
+   to be a wrapper: `.task` is overflow:hidden and would clip a pseudo-element.
+   Everything is LOGICAL — the start edge is the physical right in RTL.
+   ══════════════════════════════════════════════════════════════════════════ */
+.lib-pills { --line-2: rgba(255, 255, 255, .18); }
+.lib-pills .subrow { position: relative; margin-inline-start: 26px; min-width: 0; }
+.lib-pills .sub-tee {
+    position: absolute; pointer-events: none;
+    inset-inline-start: -18px; inline-size: 14px;
+    inset-block-start: -22px; block-size: 44px;
+    border-inline-start: 2px solid var(--line-2);
+    border-block-end: 2px solid var(--line-2);
+    border-end-start-radius: 9px;
+    opacity: .75;
+}
+.lib-pills .sub-tee::after {
+    content: ''; position: absolute; inset-block-end: -4px; inset-inline-end: -1px;
+    inline-size: 6px; block-size: 6px;
+    border-block-start: 2px solid var(--line-2);
+    border-inline-end: 2px solid var(--line-2);
+    transform: rotate(45deg);
+}
+.lib-pills .subrow .task .task-title { font-size: .86rem; }
+
+/* ضغط المهمة — the chip on a parent's own foot folds its subtasks away. */
+.lib-pills .pill-kids {
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px;
+    font: inherit; font-size: .58rem; font-weight: 800; line-height: 1.7; padding: 0 6px;
+    border-radius: 999px; background: transparent; color: var(--fg); cursor: pointer;
+    border: 1px solid color-mix(in srgb, var(--fg) 34%, transparent);
+    transition: background .2s var(--ease), transform .2s var(--ease);
+}
+.lib-pills .pill-kids:hover { background: color-mix(in srgb, var(--fg) 14%, transparent); }
+.lib-pills .pill-kids:active { transform: scale(.92); }
+.lib-pills .pill-kids svg { width: 8px; height: 8px; transition: transform .3s var(--ease); }
+.lib-pills .pill-kids.on svg { transform: rotate(-90deg); }
+.lib-pills .subrow.hid { display: none; }

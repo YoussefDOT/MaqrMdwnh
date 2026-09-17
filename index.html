@@ -30,7 +30,7 @@
     <!-- Jacquard 12 is only used by one reading-mode input — never block the boot on it. -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jacquard+12&display=swap" media="print" onload="this.media='all'">
     <!-- The library task pills, mirrored 1:1 from MdwnhLibrary. See library-tasks.css. -->
-    <link rel="stylesheet" href="library-tasks.css?v=4">
+    <link rel="stylesheet" href="library-tasks.css?v=5">
     <!-- Baloo Bhaijaan 2 is the مدونة brand face — used inside #lib-panel and the
          حضور المقر card/panel (#chal-dock, #chal-modal), so it must never block the
          boot. If it never arrives both fall back to Rubik. -->
@@ -95,6 +95,16 @@
                     </span>
                 </div>
                 <button id="menu-logout" class="menu-logout">تغيير الحساب</button>
+                <!-- نشرة الأخبار — دائمًا تحت زر الدخول. محتواها في patch-notes.json. -->
+                <button id="news-btn" class="news-btn" type="button">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 5.5h13a1.5 1.5 0 0 1 1.5 1.5v11.5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/>
+                        <path d="M18.5 9H20a1 1 0 0 1 1 1v8.5a2 2 0 0 1-2 2"/>
+                        <path d="M7.5 9.5h7M7.5 13h7M7.5 16.5h4"/>
+                    </svg>
+                    <span>نشرة الأخبار</span>
+                    <i id="news-dot" class="news-dot" hidden></i>
+                </button>
             </div>
 
             <!-- زر تثبيت التطبيق (PWA) — يخفيه السكربت في سفاري وداخل التطبيق المثبّت -->
@@ -117,6 +127,21 @@
         </div>
     </div>
 
+    <!-- نشرة الأخبار — ما الجديد في المقر، مجمّعًا بالأيام. يبنيه setupNewsUI من patch-notes.json. -->
+    <div id="news-modal" class="news-modal" aria-hidden="true" role="dialog" aria-label="نشرة الأخبار">
+        <div class="news-card">
+            <header class="news-head">
+                <span class="news-head-ico" aria-hidden="true"></span>
+                <span class="news-head-txt">
+                    <h2>نشرة الأخبار</h2>
+                    <p>كل ما تغيّر في مقر المدونة، يومًا بيوم</p>
+                </span>
+                <button id="news-close" class="news-close" type="button" aria-label="إغلاق">✕</button>
+            </header>
+            <div id="news-list" class="news-list"></div>
+        </div>
+    </div>
+
     <!-- نافذة كلمة مرور وضع التجربة -->
     <div id="siraj-pw-modal" class="modal-overlay">
         <div class="modal-content" style="max-width:320px;padding:36px 32px;">
@@ -133,7 +158,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 313 · Updated 9/14 5:40 PM</div>
+    <div id="build-number" class="build-number">Build 314 · Updated 9/17 1:32 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1547,34 +1572,88 @@
          والأرقام كلها من بيانات المقر: `dashboards/{uid}/sessions` — سجل الجلسات
          الذي يُكتب منذ إطلاق لوحة المتابعة، فلا شيء جديد يُسجَّل هنا، إنما يُحسب
          عند القراءة. الصفوف والتفاصيل يبنيها game.js. -->
+    <!-- لوحة القائد — لوحة تحكم بهوية المدونة: شريط جانبي، نظرة عامة، جدول الأعضاء،
+         وصفحة العضو. كل ما بداخل #adm-over / #adm-members / #adm-detail يبنيه game.js. -->
     <div id="admin-overlay" class="adm-overlay" aria-hidden="true">
         <div class="adm-room">
-            <header class="adm-head">
-                <span class="adm-head-txt">
-                    <h2 class="adm-title">لوحة القائد</h2>
-                    <p class="adm-sub">الحضور اليومي وساعات العمل لكل عضو</p>
-                </span>
-                <button id="admin-close" class="adm-close" type="button" aria-label="إغلاق">✕</button>
-            </header>
+            <aside class="adm-side">
+                <div class="adm-brand">
+                    <img src="Maqr%20logo.png" alt="" class="adm-brand-logo">
+                    <span class="adm-brand-txt">
+                        <b>لوحة القائد</b>
+                        <small>مقر المدونة</small>
+                    </span>
+                </div>
+                <nav class="adm-nav" id="adm-nav">
+                    <button class="adm-nav-btn is-on" type="button" data-tab="over">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="4.5" rx="2"/><rect x="13.5" y="11" width="7" height="9.5" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/></svg>
+                        <span>نظرة عامة</span>
+                    </button>
+                    <button class="adm-nav-btn" type="button" data-tab="list">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3.5"/><path d="M2.8 19.5c.8-3.4 3.3-5.4 6.2-5.4s5.4 2 6.2 5.4"/><path d="M15.5 5.3a3.5 3.5 0 0 1 0 6.4M18 14.4c1.8.8 3 2.6 3.4 5.1"/></svg>
+                        <span>الأعضاء</span>
+                    </button>
+                </nav>
+                <div class="adm-side-foot">
+                    <!-- الأرقام تُحسب تلقائيًا عند الفتح؛ هذا الزر للتحديث الفوري فقط. -->
+                    <button id="adm-refresh-all" class="adm-loadall" type="button">تحديث الأرقام</button>
+                    <button id="adm-copy" class="adm-copy" type="button">نسخ تقرير اليوم</button>
+                </div>
+            </aside>
 
-            <div id="adm-list-view" class="adm-view">
-                <label class="adm-search">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
-                        <circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>
-                    </svg>
-                    <input id="adm-search" type="search" autocomplete="off" placeholder="اكتب اسم العضو…">
-                </label>
-                <!-- حضور اليوم: عدّاد من أتمّ ساعاته الثلاث ومن أخذ إجازة، وفرز بالأعلى حضورًا. يبنيه game.js. -->
-                <div id="adm-duty-bar" class="adm-duty-bar"></div>
-                <div id="adm-members" class="adm-members"></div>
-                <!-- الأرقام تُحسب تلقائيًا عند الفتح؛ هذا الزر للتحديث الفوري فقط. -->
-                <button id="adm-refresh-all" class="adm-loadall" type="button">تحديث الأرقام</button>
-            </div>
+            <main class="adm-main">
+                <header class="adm-top">
+                    <span class="adm-top-txt">
+                        <h2 id="adm-title" class="adm-title">نظرة عامة</h2>
+                        <p id="adm-sub" class="adm-sub"></p>
+                    </span>
+                    <button id="admin-close" class="adm-close" type="button" aria-label="إغلاق">✕</button>
+                </header>
 
-            <div id="adm-detail-view" class="adm-view adm-view-detail" hidden>
-                <button id="adm-back" class="adm-back" type="button">رجوع</button>
-                <div id="adm-detail" class="adm-detail"></div>
-            </div>
+                <div class="adm-scroll" id="adm-scroll">
+                    <section id="adm-over-view" class="adm-view">
+                        <div id="adm-over" class="adm-over"></div>
+                    </section>
+
+                    <section id="adm-list-view" class="adm-view" hidden>
+                        <div class="adm-toolbar">
+                            <label class="adm-search">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true">
+                                    <circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>
+                                </svg>
+                                <input id="adm-search" type="search" autocomplete="off" placeholder="ابحث عن عضو…">
+                            </label>
+                            <label class="adm-sort">
+                                <span>الترتيب</span>
+                                <select id="adm-sort">
+                                    <option value="name">الاسم</option>
+                                    <option value="duty">الأعلى حضورًا</option>
+                                    <option value="work">الأعلى عملًا</option>
+                                    <option value="today">الأقرب لإتمام اليوم</option>
+                                    <option value="trend">الأكثر تحسنًا</option>
+                                </select>
+                            </label>
+                        </div>
+                        <!-- حضور اليوم: عدّاد من أتمّ ساعاته الثلاث ومن أخذ إجازة. يبنيه game.js. -->
+                        <div id="adm-duty-bar" class="adm-duty-bar"></div>
+                        <div class="adm-table">
+                            <div class="adm-thead" aria-hidden="true">
+                                <span>العضو</span><span>اليوم</span><span>هذا الأسبوع</span>
+                                <span>الحضور</span><span>العمل</span><span>التغيّر</span><span>آخر جلسة</span>
+                            </div>
+                            <div id="adm-members" class="adm-members"></div>
+                        </div>
+                    </section>
+
+                    <section id="adm-detail-view" class="adm-view adm-view-detail" hidden>
+                        <button id="adm-back" class="adm-back" type="button">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+                            رجوع
+                        </button>
+                        <div id="adm-detail" class="adm-detail"></div>
+                    </section>
+                </div>
+            </main>
         </div>
     </div>
 
@@ -2043,7 +2122,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=300"></script>
+        <script type="module" src="game.js?v=301"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
