@@ -2,6 +2,16 @@
   "_readme": "نشرة الأخبار — newest day FIRST. One entry per day; add a new day at the top on every push, never edit or remove old days. tag: new | fix | better.",
   "days": [
     {
+      "date": "2026-09-18",
+      "title": "الاستراحة لا تضيع",
+      "items": [
+        {
+          "tag": "fix",
+          "text": "تحديث الصفحة أثناء استراحة الجلسة الحرة لم يعد يعيدك إلى العمل؛ تعود إلى استراحتك بوقتها المتبقي."
+        }
+      ]
+    },
+    {
       "date": "2026-09-17",
       "title": "قفز حقيقي ونداء ليمو",
       "items": [

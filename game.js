@@ -4366,6 +4366,11 @@ function _buildReclaimSnapshot() {
             mode: 'free', laptopId: lapId, claimedBy: gameState.userId,
             totalWorkMs: totalMs, createdAt: fm._createdAt || Date.now(),
             workMsAtLastBreak: fm.workMsAtLastBreak || 0,   // keep the break countdown across a reclaim
+            // A reload mid-break used to come back straight into WORK — the stash
+            // never said a break was running. breakLeftMs is relative (not the local
+            // breakEndTime) because the reclaim measures the gap in server time.
+            phase:       fm.phase === 'break' ? 'break' : 'work',
+            breakLeftMs: fm.phase === 'break' ? Math.max(0, (fm.breakEndTime || 0) - Date.now()) : 0,
         };
     }
     const p = gameState.pomodoro;
@@ -6297,17 +6302,23 @@ function startGame(userData) {
                     // `totalWorkMs` are stamped together by the same device, so a
                     // plain Date.now() diff is exact here (unlike the stash path,
                     // which compares server stamps — see _freeAwayMs).
-                    const awayMs = Math.max(0, Date.now() - savedAt);
+                    // Mid-break reload: the break keeps running and is NOT work, so only
+                    // the time after the break would have ended counts as away work.
+                    const wasBreak  = state.phase === 'free-break' && state.breakEndTime > 0;
+                    const breakLeft = wasBreak ? state.breakEndTime - Date.now() : 0;
+                    const awayMs = breakLeft > 0 ? 0
+                        : Math.max(0, Date.now() - Math.max(savedAt, wasBreak ? state.breakEndTime : 0));
                     const resumedTotalMs = (state.totalWorkMs || 0) + awayMs;
                     const fm = gameState.freeMode;
                     fm.active        = true;
                     fm.laptopId      = activeLaptopId;
                     fm.isShared      = false;
-                    fm.phase         = 'idle'; // _startFreeModeWork fires via needsResume
+                    // needsResume starts work — or, mid-break, puts the break UI back.
+                    fm.phase         = breakLeft > 0 ? 'break' : 'idle';
                     fm._createdAt    = state.createdAt || Date.now();
                     fm.totalWorkMs   = resumedTotalMs;
                     fm.workStartTime = 0;
-                    fm.breakEndTime  = 0;
+                    fm.breakEndTime  = breakLeft > 0 ? state.breakEndTime : 0;
                     fm.breakPromptShown = false;
                     // Carry the break countdown across the reload instead of
                     // restarting it: the mark is where it really was, SHIFTED by the
@@ -6324,7 +6335,7 @@ function startGame(userData) {
                     // handlers (free laptop + stash) are armed later via
                     // trackSessionForReclaim() once the session state is settled.
                     update(ref(database), {
-                        [lobbyPath(`pomodoro/${lapId}/phase`)]: 'free-work',
+                        [lobbyPath(`pomodoro/${lapId}/phase`)]: breakLeft > 0 ? 'free-break' : 'free-work',
                         [lobbyPath(`pomodoro/${lapId}/savedAt`)]: 0,
                     });
                 }
@@ -6433,18 +6444,24 @@ function startGame(userData) {
                     // time into the count-up, so the user comes back to a session that
                     // never stopped. (The «هل عملت هذه المدة فعلًا؟» confirm on انهاء
                     // الجلسة is where they correct it if the away time wasn't real work.)
-                    const reclaimedTotalMs = _reclaimFreeTotalMs(ls);
+                    // Left mid-break: the break keeps running while away and is not
+                    // work — only the time past its end is credited as away work.
+                    const lsAway     = _freeAwayMs(ls);
+                    const lsBreakMs  = ls.phase === 'break' ? (ls.breakLeftMs || 0) : 0;
+                    const breakLeft  = lsBreakMs - lsAway;
+                    const creditMs   = Math.max(0, lsAway - lsBreakMs);
+                    const reclaimedTotalMs = (ls.totalWorkMs || 0) + creditMs;
                     const reclaimedBreakMark = Math.min(
                         reclaimedTotalMs,
-                        (ls.workMsAtLastBreak || 0) + _freeAwayMs(ls)
+                        (ls.workMsAtLastBreak || 0) + creditMs
                     );
                     const freeDoc = {
                         claimedBy: gameState.userId,
-                        phase: 'free-work', mode: 'free',
+                        phase: breakLeft > 0 ? 'free-break' : 'free-work', mode: 'free',
                         createdAt: ls.createdAt || now,
                         endTime: 0, totalWorkMs: reclaimedTotalMs,
                         workMsAtLastBreak: reclaimedBreakMark,
-                        breakEndTime: 0, savedAt: 0,
+                        breakEndTime: breakLeft > 0 ? now + breakLeft : 0, savedAt: 0,
                     };
                     update(ref(database), {
                         [lobbyPath(`pomodoro/${target.id}`)]: freeDoc,
@@ -6457,11 +6474,11 @@ function startGame(userData) {
                     fm.active        = true;
                     fm.laptopId      = target.id;
                     fm.isShared      = false;
-                    fm.phase         = 'idle';
+                    fm.phase         = breakLeft > 0 ? 'break' : 'idle';
                     fm._createdAt    = ls.createdAt || now;
                     fm.totalWorkMs   = reclaimedTotalMs;
                     fm.workStartTime = 0;
-                    fm.breakEndTime  = 0;
+                    fm.breakEndTime  = breakLeft > 0 ? now + breakLeft : 0;
                     fm.breakPromptShown = false;
                     // The «خذ استراحة؟» countdown resumes where it was, shifted by the
                     // away time. Only the away time is excluded from the threshold —
@@ -18259,7 +18276,8 @@ function updateFreeMode() {
     // On login restore, start work on the first frame of the game loop
     if (fm.needsResume) {
         fm.needsResume = false;
-        _startFreeModeWork();
+        if (fm.phase === 'break') _resumeFreeModeBreakUi();
+        else _startFreeModeWork();
         return;
     }
 
@@ -18426,6 +18444,24 @@ function startFreeModeBreak(durationMins) {
     } else {
         playSoundRobust(gameState.sounds.breakAdded);
     }
+}
+
+// A reload mid-break: put the break back exactly as startFreeModeBreak left it —
+// minus the sound and the state changes (those were already made before the reload).
+function _resumeFreeModeBreakUi() {
+    const fm = gameState.freeMode;
+    gameState.isLockedIn = false;
+    document.getElementById('free-mode-panel')?.classList.add('hidden');
+    document.getElementById('focus-sounds-panel')?.classList.remove('active');
+    document.getElementById('current-task-panel')?.classList.remove('active');
+    setMobileFocusMode(false);
+    const smallTimer = document.getElementById('pomodoro-small-timer');
+    const smallText  = document.getElementById('small-timer-text');
+    if (smallTimer) smallTimer.classList.remove('hidden');
+    setTimerText(smallText, formatTime(Math.max(0, fm.breakEndTime - Date.now()) / 1000));
+    updatePomoLeaveBtn();
+    if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(0, 0.5);
+    saveFreeModStateToFirebase();
 }
 
 function endFreeModeBreak() {
