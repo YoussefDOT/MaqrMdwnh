@@ -5387,8 +5387,15 @@ function desiredPlayerScale(player) {
 // Firebase node, it rides the existing users/{uid} sync (updatePlayerPosition /
 // listenToPlayers) that every client already listens to (Firebase Cost Rules:
 // reuse an already-broadcast doc over adding a new listener).
+// True while the local player is standing on a table or mid-jump (القفز). Nothing
+// in the world may be started from up there — on mobile the double-tap that jumps
+// off a work table used to land its first tap on the laptop and open the work UI.
+function localOffGround() {
+    const p = gameState.players[gameState.userId];
+    return !!(p && (p._elev || p._air));
+}
 function canSit() {
-    return !sessionBlocksInteraction()
+    return !localOffGround() && !sessionBlocksInteraction()
         && !gameState.isLockedIn && !gameState.anim.active
         && !gameState.isSitting && !gameState.sitAnim.active;
 }
@@ -10482,6 +10489,7 @@ function updateInteractions() {
     let minDist = Infinity;
     let nearestDist = Infinity;     // distance to closest laptop regardless of range (mask only)
     const pFloor = player.floor || 1;
+    const offGround = localOffGround();   // on a table / mid-jump → nothing starts
 
     gameState.laptops.forEach(laptop => {
         // Floor-gate: a ground player can't sit a second-floor laptop that visually
@@ -10489,7 +10497,7 @@ function updateInteractions() {
         if ((laptop.floor || 1) !== pFloor) return;
         const dist = Math.sqrt(Math.pow(player.x - laptop.x, 2) + Math.pow(player.y - laptop.y, 2));
         if (dist < nearestDist) nearestDist = dist;
-        if (dist < closestDist) {
+        if (dist < closestDist && !offGround) {
             gameState.activeLaptop = laptop;
             gameState.lastActiveLaptop = laptop;
             minDist = dist;
@@ -10499,7 +10507,7 @@ function updateInteractions() {
     // Dashboard entry = the second-floor papers desk. Only reachable on floor 2 and
     // when not already in a session.
     gameState.activeDashboardZone = dashboardAllowed()
-        && pFloor === 2
+        && pFloor === 2 && !offGround
         && Math.hypot(player.x - PAPERS_X, player.y - PAPERS_Y) < PAPERS_SELECT_R
         && !sessionBlocksInteraction();
 
@@ -10535,7 +10543,7 @@ function updateInteractions() {
 
     // Fireplace — floor 1 only. Drives the "انقر للنظر الى المدفئة" prompt and the
     // click gate that opens the أعضاء الشهر view.
-    gameState.nearFireplace = pFloor === 1 && !gameState.isLockedIn && !gameState.anim.active
+    gameState.nearFireplace = pFloor === 1 && !offGround && !gameState.isLockedIn && !gameState.anim.active
         && !sessionBlocksInteraction() && !fireplaceIsOpen()
         && Math.hypot(player.x - FIRE_X, player.y - FIRE_Y) < FIRE_SELECT_R;
     // Walking up to it is the earliest honest signal you're about to look at it, so the
@@ -10544,7 +10552,7 @@ function updateInteractions() {
     if (gameState.nearFireplace && !_flame.frames) _fireEnsureFrames();
 
     // رف الجوائز — floor 1 only. Same shape as the fireplace.
-    gameState.nearTrophyShelf = pFloor === 1 && !gameState.isLockedIn && !gameState.anim.active
+    gameState.nearTrophyShelf = pFloor === 1 && !offGround && !gameState.isLockedIn && !gameState.anim.active
         && !sessionBlocksInteraction() && !trophyShelfIsOpen()
         && Math.hypot(player.x - TROPHY_X, player.y - TROPHY_Y) < TROPHY_SELECT_R;
     // Walking up is the earliest honest signal you're about to open it, so the art

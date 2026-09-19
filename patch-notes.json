@@ -2,6 +2,16 @@
   "_readme": "نشرة الأخبار — newest day FIRST. One entry per day; add a new day at the top on every push, never edit or remove old days. tag: new | fix | better.",
   "days": [
     {
+      "date": "2026-09-19",
+      "title": "القفز من فوق الطاولة",
+      "items": [
+        {
+          "tag": "fix",
+          "text": "القفز من فوق طاولة العمل على الجوال لم يعد يفتح نافذة بدء الجلسة؛ لا يبدأ شيء وأنت فوق طاولة أو في الهواء."
+        }
+      ]
+    },
+    {
       "date": "2026-09-18",
       "title": "الاستراحة لا تضيع",
       "items": [
