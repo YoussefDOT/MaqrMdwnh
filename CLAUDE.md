@@ -1524,6 +1524,9 @@ Code is the `الملصقات` block right after `setupChatUI` (wired from it vi
   handling. Drawn as a **square** bubble (`STK_BUB`) in the same `player._chat` stack
   (`b.stk`, content via `_chatDrawBody`), melts out of the typing dots like text, shows
   over the seat at the meeting table (`_meetFillBubble(…, stk)`).
+- **The button is a «/»**: on an empty box it types «/» and focuses, so the member can
+  type a name at once (pressing it again removes the «/»). Only with text already in the
+  box does it fall back to plain browse.
 - **Two ways to pick**: the button (browse — all stickers, `_stkSorted()` = recently used
   first, per device in `mdwnh_sticker_recent`; a press sends), or a message that **starts**
   with «/» (`_stkSlashQuery` — the whole box one text run; a «/» anywhere else is text):

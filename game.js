@@ -34184,7 +34184,7 @@ function _stkPaintCap() {
     if (!cap) return;
     if (_stk.mode === 'search') {
         const n = _stk.rows[_stk.sel];
-        cap.textContent = n ? n + '  ·  Enter للإرسال' : 'لا يوجد ملصق بهذا الاسم';
+        cap.textContent = n ? (_stk.q ? n + '  ·  Enter للإرسال' : 'اكتب اسم الملصق للبحث') : 'لا يوجد ملصق بهذا الاسم';
     } else {
         cap.textContent = 'الملصقات  ·  اكتب / للبحث';
     }
@@ -34385,7 +34385,25 @@ function _stkSetupUI() {
 
     _stk.btn?.addEventListener('click', (e) => {
         e.preventDefault();
-        if (_stk.open) _stkClose(); else _stkOpen('browse');
+        if (_stk.open) {
+            // Closing a «/» search the button opened takes its «/» back out of the box.
+            if (_stk.mode === 'search' && _stkSlashQuery() != null) {
+                _chatUi.input.textContent = '';
+                _chatAfterInput();
+            }
+            _stkClose();
+            return;
+        }
+        // The button IS a «/»: on an empty box it types one, so typing right away
+        // searches the names. With text already in the box it can only browse — a
+        // search has to own the whole box.
+        const empty = !_chatReadInput().some(p => p.u || p.t);
+        if (!empty) { _stkOpen('browse'); return; }
+        _stk.dismissed = false;
+        _chatUi.input.textContent = '/';
+        try { _chatUi.input.focus({ preventScroll: true }); } catch (_) {}
+        _chatCaretToEnd();
+        _chatAfterInput();
     });
     _emo.btn?.addEventListener('click', (e) => {
         e.preventDefault();
