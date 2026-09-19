@@ -57,7 +57,7 @@ menu's «نشرة الأخبار» button. Before pushing, add (or extend) TODAY
 — plain, spell-checked Arabic written for members, tagged `new` / `fix` / `better`. Never edit or
 delete an older day. See **نشرة الأخبار**.
 
-**Pre-commit hook**: besides the build number below, it regenerates `Hats/hats.json` from the PNGs in `Hats/` (see Character Customization).
+**Pre-commit hook**: besides the build number below, it regenerates `Hats/hats.json` from the PNGs in `Hats/` (see Character Customization), and `Stickers/sm/` + `Stickers/stickers.json` from the masters in `Stickers/` (see الملصقات).
 
 **Build number**: A `#build-number` div sits below the `#siraj-test-link` button on the login screen showing **`Build N · Updated M/D H:MM AM/PM`** (e.g. `Build 244 · Updated 7/28 1:47 PM`) — the **date is part of the stamp**, so "when did this last ship" is answerable at a glance. The `.git/hooks/pre-commit` hook auto-increments the number and rewrites the date+time on every commit — **never hand-edit it**. Its `sed` pattern treats the `M/D ` part as optional so an older date-less stamp is upgraded in place rather than skipped. If the hook can't find the pattern at all, it logs a warning and exits cleanly. **If the stamp format ever changes, update the hook's `sed` pattern and this line together.**
 
@@ -100,6 +100,7 @@ Grep anchors for the major systems (all verified to exist):
 | جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
 | Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admTeam`, `_admRenderOverview`, `_admRenderList`, `_admRenderDetail`, `_admDutySection`, `_admCopyReport` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS`, `drawChatBeacons` |
+| الملصقات + الرموز التعبيرية | `STK_`, `_stk`, `receiveSticker`, `_stkSend`, `_stkUpdate`, `_stkSearch`, `_emo` |
 | «يكتب الآن» + الانصهار | `CHAT_TYP_`, `CHAT_MORPH_MS`, `sendTypingWS`, `_chatSetTyping`, `_chatMorphFx`, `_chatDrawTyping` |
 | القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump` |
 | نداء ليمو | `LEMO_UID`, `lemoSummon`, `_lemoCallPose`, `_lemoCallSpots`, `lemoIsAsleep`, `lemoIsBusy` |
@@ -134,7 +135,7 @@ Grep anchors for the major systems (all verified to exist):
 - **Never rename a Firebase path or key** without an explicit migration plan — old
   clients and existing data still use it.
 - **Never hand-edit generated files**: `Hats/hats.json`, `Art/Workspace/manifest.json`,
-  the `#build-number` div. The pre-commit hook owns all three.
+  `Stickers/stickers.json`, `Stickers/sm/`, the `#build-number` div. The pre-commit hook owns them.
 - **Match surrounding style** — comment density, naming, Arabic labels. All UI text is
   Arabic and spell-checked (see top of file).
 - **When a product decision is needed** (behaviour, wording, visuals not derivable from
@@ -1509,6 +1510,35 @@ the picker for that `@` without closing the box.
   it, so the fallback is `registration.showNotification`, and `sw.js` has a
   `notificationclick` that focuses the tab. **Limit:** a tab the OS has frozen or killed
   has no socket, so it hears nothing — reaching that would need Web Push and a server.
+
+### الملصقات والرموز التعبيرية — stickers + emoji
+
+Two outline buttons between the counter and send (`#chat-input-emoji`, `#chat-input-sticker`).
+Code is the `الملصقات` block right after `setupChatUI` (wired from it via `_stkSetupUI`).
+
+- **Emoji** (`_emo`, `EMO_LIST`): a grid that types the emoji at the caret via
+  `_chatInsertText`, respecting the 100. Stays open for more.
+- **A sticker is NEVER part of a message.** It goes out alone as
+  `{t:'chat',uid,m:'',k:<name>}` — zero Firebase. The empty `m` is load-bearing: an old
+  client drops an empty chat line, while an unknown `t` would fall into its position
+  handling. Drawn as a **square** bubble (`STK_BUB`) in the same `player._chat` stack
+  (`b.stk`, content via `_chatDrawBody`), melts out of the typing dots like text, shows
+  over the seat at the meeting table (`_meetFillBubble(…, stk)`).
+- **Two ways to pick**: the button (browse — all stickers, `_stkSorted()` = recently used
+  first, per device in `mdwnh_sticker_recent`; a press sends), or a message that **starts**
+  with «/» (`_stkSlashQuery` — the whole box one text run; a «/» anywhere else is text):
+  the rest is a search (`_stkSearch`, `_stkNorm` = `_fireNormName` + NFC + digits folded +
+  spaces ignored, so «اتفق» finds «أتفق» and ى = ي), first match selected, arrows move
+  (the grid is RTL: ← = next), Enter/Tab/the mobile send key sends, Escape dismisses until
+  the «/» goes. A «/» send clears the box and closes it; a browse send closes it only if
+  nothing else is typed.
+- **Assets**: `Stickers/*.webp` = 512² masters (the owner drops new ones here); the page
+  only ever loads `Stickers/sm/` (256²) + `Stickers/stickers.json`, both from the
+  pre-commit hook (needs PIL). 512² × 146 would decode to ~150 MB (invariant 25). **Names
+  are NFC in the manifest** — macOS hands filenames out NFD (decomposed hamza), git
+  commits them NFC; an NFD manifest 404s in production and breaks the search.
+- Preloaded on idle after spawn (`loadStickers` — the bytes; an undrawn `<img>` isn't
+  decoded), dropped in `_memReleaseIdle` (`_stkRelease`), re-warmed by `_memRestore`.
 
 ### «يكتب الآن» — the typing bubble, and the melt
 

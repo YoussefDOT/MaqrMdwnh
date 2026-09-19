@@ -9767,6 +9767,164 @@ body.is-mobile .chat-mention-list {
 }
 body.is-mobile .chat-men-row { height: 44px; }
 
+/* ── الملصقات والرموز التعبيرية: زرّان مفرّغان بجانب الإرسال ── */
+.chat-input-tool {
+    flex: 0 0 auto;
+    width: 28px; height: 30px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    cursor: pointer;
+    background: transparent;
+    border: 0;
+    padding: 0;
+    color: rgba(255, 255, 255, 0.55);
+    transition: color .2s, background .2s, transform .25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chat-input-tool svg { width: 19px; height: 19px; }
+.chat-input-tool:hover { color: rgba(255, 255, 255, 0.9); transform: scale(1.08); }
+.chat-input-tool:active { transform: scale(0.92); }
+.chat-input-tool.on { color: rgba(255, 255, 255, 0.95); background: rgba(255, 255, 255, 0.10); }
+
+/* النافذتان فوق الصندوق — نفس زجاج قائمة الإشارة، وتفتحان بـ opacity + visibility */
+.chat-emoji-pop,
+.chat-sticker-pop {
+    position: absolute;
+    left: 50%;
+    bottom: calc(100% + 8px);
+    border-radius: 18px;
+    background: rgba(18, 18, 18, 0.86);
+    -webkit-backdrop-filter: blur(20px) saturate(1.6);
+    backdrop-filter: blur(20px) saturate(1.6);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    box-shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
+    direction: rtl;
+    transform-origin: 50% 100%;
+    transform: translateX(-50%) translateY(8px) scale(0.94);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity .16s ease, transform .3s cubic-bezier(0.34, 1.56, 0.64, 1), visibility 0s linear .16s;
+}
+.chat-emoji-pop.open,
+.chat-sticker-pop.open {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: translateX(-50%) translateY(0) scale(1);
+    transition: opacity .16s ease, transform .34s cubic-bezier(0.34, 1.56, 0.64, 1), visibility 0s;
+}
+.chat-emoji-pop.below,
+.chat-sticker-pop.below {
+    bottom: auto;
+    top: calc(100% + 8px);
+    transform-origin: 50% 0;
+    transform: translateX(-50%) translateY(-8px) scale(0.94);
+}
+.chat-emoji-pop.below.open,
+.chat-sticker-pop.below.open { transform: translateX(-50%) translateY(0) scale(1); }
+
+.chat-emoji-pop {
+    display: grid;
+    grid-template-columns: repeat(8, 34px);
+    gap: 2px;
+    padding: 8px;
+    max-height: 164px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+}
+.chat-emoji-pop::-webkit-scrollbar { display: none; }
+.chat-emo {
+    width: 34px; height: 34px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    padding: 0;
+    border-radius: 10px;
+    background: transparent;
+    font-size: 21px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background .15s, transform .2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chat-emo:hover { background: rgba(255, 255, 255, 0.10); transform: scale(1.14); }
+.chat-emo:active { transform: scale(0.9); }
+
+.chat-sticker-pop {
+    width: 316px;
+    padding: 8px 8px 6px;
+}
+.chat-stk-cap {
+    padding: 2px 6px 7px;
+    color: rgba(255, 255, 255, 0.5);
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+}
+.chat-stk-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 4px;
+    max-height: 236px;              /* ثلاثة صفوف ونصف — نصف الصف يقول «مرّر» */
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    direction: rtl;
+}
+.chat-stk-grid::-webkit-scrollbar { display: none; }
+.chat-stk-tile {
+    aspect-ratio: 1;
+    border-radius: 14px;
+    padding: 4px;
+    cursor: pointer;
+    transition: background .15s, box-shadow .15s, transform .22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.chat-stk-tile img {
+    display: block;
+    width: 100%; height: 100%;
+    object-fit: contain;
+    pointer-events: none;
+    -webkit-user-select: none;
+    user-select: none;
+}
+.chat-stk-tile:hover { background: rgba(255, 255, 255, 0.08); transform: scale(1.05); }
+.chat-stk-tile:active { transform: scale(0.94); }
+.chat-stk-tile.sel {
+    background: rgba(255, 255, 255, 0.12);
+    box-shadow: inset 0 0 0 1.5px rgba(255, 255, 255, 0.55);
+}
+.chat-stk-empty {
+    grid-column: 1 / -1;
+    padding: 18px 10px;
+    color: rgba(255, 255, 255, 0.42);
+    font-size: 12.5px;
+    text-align: center;
+}
+
+/* الجوال: لا backdrop-filter (القاعدة ١٠)، ولوحة المفاتيح تأكل الارتفاع */
+body.is-mobile .chat-emoji-pop,
+body.is-mobile .chat-sticker-pop {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    background: rgba(18, 18, 18, 0.96);
+}
+body.is-mobile .chat-sticker-pop { width: min(316px, 88vw); }
+body.is-mobile .chat-stk-grid { max-height: min(236px, 34vh); }
+body.is-mobile .chat-emoji-pop { grid-template-columns: repeat(7, 36px); max-height: min(164px, 30vh); }
+body.is-mobile .chat-emo { width: 36px; height: 36px; }
+body.is-mobile .chat-input-tool { width: 30px; }
+/* مكان للزرين الجديدين على الشاشات الضيقة */
+body.is-mobile #chat-input { width: 48vw; }
+
+/* ملصق فوق مقعد في غرفة الاجتماعات */
+.meet-bubble.stk { padding: 5px; border-radius: 14px; }
+.meet-bubble .meet-stk { display: block; width: 76px; height: 76px; object-fit: contain; }
+body.is-mobile .meet-bubble .meet-stk { width: 60px; height: 60px; }
+
 /* عصا التحكم تتوارى أثناء الكتابة — صنف مستقل عن focus-hidden و lib-hidden
    عمدًا، فالثلاثة أنظمة تعمل معًا وإغلاق أحدها يجب ألّا يُظهرها وسط الآخر. */
 .mobile-joystick.chat-hidden {

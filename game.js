@@ -6609,6 +6609,9 @@ function startGame(userData) {
         // Hats are tiny, but the manifest read is a network hop — keep it off the
         // spawn path. Nothing waits on it: a hat draws the moment its asset lands.
         loadHatManifest().catch(() => {});
+        // Stickers: the manifest + every sticker's bytes, on idle (never the login path).
+        if (window.requestIdleCallback) requestIdleCallback(() => loadStickers(), { timeout: 8000 });
+        else setTimeout(loadStickers, 3000);
         // Lemo: listens to the lobby's lemo doc and kicks his sheets. Nothing waits
         // on it — he simply isn't drawn until the doc and a sheet land.
         startLemo();
@@ -10120,7 +10123,12 @@ function onPresenceMessage(data) {
     if (msg.t === 'sit') { startRemoteSitAnim(player, msg); return; }
     // Proximity chat — also a one-off event, never a stream. Returns before the
     // position handling below for the same reason a sit message does.
-    if (msg.t === 'chat') { receiveChatMessage(player, msg.m, msg.s); return; }
+    // A sticker rides the same event with an empty `m` (old clients drop it) and `k`.
+    if (msg.t === 'chat') {
+        if (typeof msg.k === 'string') receiveSticker(player, msg.k);
+        else receiveChatMessage(player, msg.m, msg.s);
+        return;
+    }
     // Meeting-table reaction — one-off, zero Firebase, same shape as a chat event.
     if (msg.t === 'react') { receiveMeetReaction(player, msg.r); return; }
     // «يكتب الآن» — a flag, not a stream. Re-asserted by the sender, expired here.
@@ -32803,6 +32811,8 @@ function _chatMenCooldown(uid) {
 function _chatSend() {
     if (!_chatUi.open) return;
     _chatMenClose();
+    _stkClose();
+    _emoClose();
     // A pill for someone who has left since it was picked falls back to plain text —
     // an offline member can't be pinged.
     const read = _chatReadInput().map(p => ((p.u && p.u !== LEMO_UID && !gameState.players[p.u]) ? { t: '@' + p.n } : p));
@@ -33056,6 +33066,7 @@ function _chatAfterInput() {
     _chatRefreshCount();
     _chatRemeasure();
     _chatMenUpdate();
+    _stkUpdate();
 }
 
 // The box grows a line upward as the text wraps. Its bottom edge is what's anchored
@@ -33265,6 +33276,8 @@ function _chatMenOpen() {
     _chatMen.open = true;
     _chatMen.wheelAcc = 0;
     _chatToastHide();
+    _stkClose();
+    _emoClose();
     el.classList.toggle('below', _chatFloatBelow(el));
     el.classList.add('open');
     try { gameState.focusAudioEngine?.playPitched('uiBlip', 0.9, 0.05); } catch (_) {}
@@ -33421,6 +33434,9 @@ function closeChatBox(keepTyping) {
     _chatUi.open = false;
     if (!keepTyping) sendTypingWS(false);
     _chatMenClose();
+    _stkClose();
+    _emoClose();
+    _stk.dismissed = false;
     _chatToastHide();
     _chatUi.wrap?.classList.remove('active');
     document.getElementById('mobile-joystick')?.classList.remove('chat-hidden');
@@ -33777,7 +33793,7 @@ function drawChatBubbles(floorFilter = null) {
             ctx.shadowBlur = 0;
 
             if (!mf) {
-                _chatDrawContent(ctx, L, h);
+                _chatDrawBody(ctx, b, w, h);
             } else {
                 // Clipped to the box it is growing into — a two-line message would
                 // otherwise hang out of a bubble that isn't tall enough for it yet.
@@ -33786,7 +33802,7 @@ function drawChatBubbles(floorFilter = null) {
                     _chatRoundRect(ctx, -w / 2, -h, w, h, r);
                     ctx.clip();
                     ctx.globalAlpha = a * mf.txt;
-                    _chatDrawContent(ctx, L, h);
+                    _chatDrawBody(ctx, b, w, h);
                     ctx.restore();
                 }
                 // The dots fade out as the shape opens, spreading with it.
@@ -33824,7 +33840,7 @@ function setupChatUI() {
         const t = e.inputType || '';
         if (t === 'insertParagraph' || t === 'insertLineBreak') {
             e.preventDefault();
-            if (!_chatMenPickSelected()) _chatSend();
+            if (!_stkPickSelected() && !_chatMenPickSelected()) _chatSend();
             return;
         }
         if (t === 'insertFromDrop' || t.startsWith('format')) { e.preventDefault(); return; }
@@ -33846,6 +33862,24 @@ function setupChatUI() {
     });
     input.addEventListener('drop', (e) => e.preventDefault());
     input.addEventListener('keydown', (e) => {
+        // «/» sticker search: the grid runs right-to-left, so ← is the NEXT sticker.
+        if (_stk.open && _stk.mode === 'search') {
+            const step = { ArrowLeft: 1, ArrowRight: -1, ArrowDown: STK_COLS, ArrowUp: -STK_COLS }[e.key];
+            if (step) { e.preventDefault(); e.stopPropagation(); _stkMove(step); return; }
+            if ((e.key === 'Enter' || e.key === 'Tab') && !e.isComposing) {
+                e.preventDefault(); e.stopPropagation(); _stkPickSelected(); return;
+            }
+            if (e.key === 'Escape') {
+                e.preventDefault(); e.stopPropagation();
+                _stk.dismissed = true;       // stays shut until the «/» is gone
+                _stkClose();
+                return;
+            }
+        } else if ((_stk.open || _emo.open) && e.key === 'Escape') {
+            e.preventDefault(); e.stopPropagation();
+            _stkClose(); _emoClose();
+            return;
+        }
         if (_chatMen.open) {
             if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                 e.preventDefault(); e.stopPropagation();
@@ -33969,7 +34003,424 @@ function setupChatUI() {
     window.visualViewport?.addEventListener('resize', () => { if (_chatUi.open) updateChatInputPos(true); });
     window.addEventListener('resize', () => { if (_chatUi.open) updateChatInputPos(true); });
 
+    _stkSetupUI();
     _chatRefreshCount();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  الملصقات والرموز التعبيرية — stickers + the emoji picker (part of الدردشة القريبة)
+//  ---------------------------------------------------------------------------
+//  Two outline buttons beside send. The emoji picker only types an emoji into the box.
+//  The sticker picker SENDS: a sticker is never part of a message — it goes out on its
+//  own and floats as a square bubble over the sender's head, in the same stack.
+//
+//  Two ways in: the button (every sticker, recently-used first, scroll and press), or
+//  a message that STARTS with «/» — what follows is a search (أ/إ/آ = ا, ى = ي, the
+//  roster's own folding), the first match is selected, arrow keys move, Enter sends.
+//  A «/» anywhere else in a message is just a slash.
+//
+//  COST: zero Firebase, like the chat line itself — `{t:'chat',uid,m:'',k:<name>}` on
+//  the relay. The empty `m` is on purpose: a client that predates stickers drops an
+//  empty chat line, where an unknown `t` would fall through to its position handling.
+//  "Recently used" is per device, in localStorage.
+//
+//  ASSETS: `Stickers/*.webp` are the 512² masters; what ships to the page is
+//  `Stickers/sm/` (256²) + `Stickers/stickers.json`, both regenerated by the pre-commit
+//  hook. 256² decodes to 0.26 MB against 1 MB at 512² — the whole set is ~38 MB decoded
+//  instead of ~150 (invariant 25). All of it is fetched on idle after spawn (the bytes,
+//  not the pixels — an <img> that is never drawn is not decoded), and dropped by
+//  _memReleaseIdle like every other cache.
+//
+//  Grep anchors: STK_, _stk, receiveSticker, _stkSend, _stkUpdate, _emo.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const STK_DIR        = 'Stickers/sm/';
+const STK_MANIFEST   = 'Stickers/stickers.json';
+const STK_MAX_NAME   = 64;
+const STK_BUB        = 84;       // the square bubble, world units (a player is 70)
+const STK_PAD        = 5;
+const STK_LIFE_MS    = 7600;
+const STK_COLS       = 4;        // the picker grid — the arrow keys step by it
+const STK_RECENT_KEY = 'mdwnh_sticker_recent';
+const STK_RECENT_MAX = 60;
+
+const _stk = {
+    list: [], set: null, loading: null,
+    imgs: {},                    // name → { img, ready, failed }
+    pop: null, grid: null, cap: null, btn: null,
+    open: false, mode: 'browse', // 'browse' (the button) | 'search' (a leading «/»)
+    q: '', rows: [], sel: 0, key: '',
+    dismissed: false,        // Escape closed the «/» search — stays shut until the «/» goes
+};
+
+function _stkSafeName(n) {
+    return typeof n === 'string' && n.length > 0 && n.length <= STK_MAX_NAME
+        && !/[\/\\]|\.\./.test(n) && !/[\u0000-\u001f\u007f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(n) && n === n.trim();
+}
+function _stkUrl(n) { return STK_DIR + encodeURIComponent(n) + '.webp'; }
+
+// One <img> per sticker, made on first ask. The same URL feeds the picker's <img>s,
+// so once this has fetched it the picker reads it from the cache.
+function _stkImg(n) {
+    let e = _stk.imgs[n];
+    if (e) return e;
+    const img = new Image();
+    e = _stk.imgs[n] = { img, ready: false, failed: false };
+    img.decoding = 'async';
+    try { img.fetchPriority = 'low'; } catch (_) {}
+    img.onload = () => { e.ready = true; perfWake(); };
+    img.onerror = () => { e.failed = true; };
+    img.src = _stkUrl(n);
+    return e;
+}
+
+function loadStickers() {
+    if (_stk.loading) return _stk.loading;
+    _stk.loading = fetch(STK_MANIFEST, { cache: 'no-store' })
+        .then(r => (r.ok ? r.json() : []))
+        .then(a => {
+            _stk.list = (Array.isArray(a) ? a : []).filter(_stkSafeName);
+            _stk.set = new Set(_stk.list);
+            _stkPreloadAll();
+            if (_stk.open) _stkRender();
+            return _stk.list;
+        })
+        .catch(() => { _stk.loading = null; return []; });
+    return _stk.loading;
+}
+function _stkPreloadAll() { for (const n of _stk.list) _stkImg(n); }
+
+// Called from _memReleaseIdle. Everything here is a pure cache: a bubble or the
+// picker re-asks through _stkImg, and _memRestore warms the set again.
+function _stkRelease() {
+    if (_stk.open) return;
+    for (const n of Object.keys(_stk.imgs)) {
+        try { _stk.imgs[n].img.src = ''; } catch (_) {}
+        delete _stk.imgs[n];
+    }
+}
+
+// ─── Recently used (this device only) ────────────────────────────────────────
+function _stkRecent() {
+    try {
+        const a = JSON.parse(localStorage.getItem(STK_RECENT_KEY) || '[]');
+        return Array.isArray(a) ? a.filter(x => typeof x === 'string') : [];
+    } catch (_) { return []; }
+}
+function _stkNoteUsed(n) {
+    const a = _stkRecent().filter(x => x !== n);
+    a.unshift(n);
+    try { localStorage.setItem(STK_RECENT_KEY, JSON.stringify(a.slice(0, STK_RECENT_MAX))); } catch (_) {}
+}
+function _stkSorted() {
+    const set = _stk.set || new Set();
+    const rec = _stkRecent().filter(n => set.has(n));
+    const seen = new Set(rec);
+    return rec.concat(_stk.list.filter(n => !seen.has(n)));
+}
+
+// ─── Search ──────────────────────────────────────────────────────────────────
+// _fireNormName already folds أ/إ/آ/ٱ → ا, ى → ي, ة → ه and strips harakat — so
+// «اتفق» finds «أتفق». Arabic-Indic digits read as Latin ones, and spaces are ignored,
+// so «تبقى١» finds «تبقى 1 يوم».
+function _stkNorm(s) {
+    return _fireNormName(String(s || '').normalize('NFC').replace(/[\u0653-\u0655\u0670]/g, '')).toLowerCase()
+        .replace(/[٠-٩]/g, d => String(d.charCodeAt(0) - 0x660))
+        .replace(/\s+/g, '');
+}
+function _stkSearch(q) {
+    const all = _stkSorted();
+    const nq = _stkNorm(q);
+    if (!nq) return all;
+    const starts = [], inside = [];
+    for (const n of all) {
+        const nn = _stkNorm(n);
+        if (nn.startsWith(nq)) starts.push(n);
+        else if (nn.includes(nq)) inside.push(n);
+    }
+    return starts.concat(inside);
+}
+
+// The «/» query: the WHOLE box is one text run that starts with «/». A pill, or a
+// slash anywhere but first, is a normal message.
+function _stkSlashQuery() {
+    const parts = _chatReadInput();
+    if (parts.length !== 1 || parts[0].u || typeof parts[0].t !== 'string') return null;
+    const t = parts[0].t;
+    return t.charAt(0) === '/' ? t.slice(1) : null;
+}
+
+// ─── The picker ──────────────────────────────────────────────────────────────
+function _stkRender() {
+    const grid = _stk.grid;
+    if (!grid) return;
+    grid.textContent = '';
+    _stk.rows.forEach((n, i) => {
+        const tile = document.createElement('div');
+        tile.className = 'chat-stk-tile' + (_stk.mode === 'search' && i === _stk.sel ? ' sel' : '');
+        tile.setAttribute('role', 'option');
+        tile.dataset.i = String(i);
+        tile.title = n;
+        const img = document.createElement('img');
+        img.alt = n;
+        img.draggable = false;
+        img.decoding = 'async';
+        img.loading = 'lazy';
+        img.src = _stkUrl(n);
+        tile.appendChild(img);
+        grid.appendChild(tile);
+    });
+    if (!_stk.rows.length) {
+        const empty = document.createElement('div');
+        empty.className = 'chat-stk-empty';
+        empty.textContent = _stk.list.length ? 'لا يوجد ملصق بهذا الاسم' : 'جارٍ تحميل الملصقات…';
+        grid.appendChild(empty);
+    }
+    grid.scrollTop = 0;
+    _stkPaintCap();
+}
+function _stkPaintCap() {
+    const cap = _stk.cap;
+    if (!cap) return;
+    if (_stk.mode === 'search') {
+        const n = _stk.rows[_stk.sel];
+        cap.textContent = n ? n + '  ·  Enter للإرسال' : 'لا يوجد ملصق بهذا الاسم';
+    } else {
+        cap.textContent = 'الملصقات  ·  اكتب / للبحث';
+    }
+}
+// Keep the selection in view by scrolling the GRID — never scrollIntoView.
+function _stkScrollToSel() {
+    const grid = _stk.grid;
+    const tile = grid && grid.children[_stk.sel];
+    if (!tile) return;
+    const pad = 6;
+    const top = tile.offsetTop - pad, bot = tile.offsetTop + tile.offsetHeight + pad;
+    if (top < grid.scrollTop) grid.scrollTop = Math.max(0, top);
+    else if (bot > grid.scrollTop + grid.clientHeight) grid.scrollTop = bot - grid.clientHeight;
+}
+function _stkMove(d) {
+    const n = _stk.rows.length;
+    if (!n) return;
+    const next = Math.max(0, Math.min(n - 1, _stk.sel + d));
+    if (next === _stk.sel) return;
+    _stk.sel = next;
+    for (const c of _stk.grid.children) if (c.dataset) c.classList.toggle('sel', +c.dataset.i === next);
+    _stkScrollToSel();
+    _stkPaintCap();
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.08 + Math.min(next % 9, 8) * 0.05, 0.04); } catch (_) {}
+}
+function _stkOpen(mode) {
+    if (!_stk.pop) return;
+    loadStickers();
+    _chatMenClose();
+    _emoClose();
+    _chatToastHide();
+    _stk.mode = mode;
+    if (mode === 'browse') { _stk.rows = _stkSorted(); _stk.sel = 0; _stk.key = ''; _stkRender(); }
+    _stk.open = true;
+    _stk.pop.classList.toggle('below', _chatFloatBelow(_stk.pop));
+    _stk.pop.classList.add('open');
+    _stk.btn?.classList.add('on');
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', 0.9, 0.05); } catch (_) {}
+}
+function _stkClose() {
+    if (!_stk.open) return;
+    _stk.open = false;
+    _stk.key = '';
+    _stk.pop?.classList.remove('open');
+    _stk.btn?.classList.remove('on');
+}
+
+// Re-read the «/» query after every input. The button's browse mode is left alone by
+// typing — only a leading «/» turns it into a search.
+function _stkUpdate() {
+    const q = _chatUi.open ? _stkSlashQuery() : null;
+    if (q == null) {
+        _stk.dismissed = false;
+        if (_stk.open && _stk.mode === 'search') _stkClose();
+        return;
+    }
+    if (_stk.dismissed) return;
+    const rows = _stkSearch(q);
+    const key = q + '|' + rows.join('|');
+    if (_stk.open && _stk.mode === 'search' && key === _stk.key) return;
+    _stk.q = q;
+    _stk.rows = rows;
+    _stk.key = key;
+    _stk.sel = 0;                      // the first match is selected by default
+    if (!(_stk.open && _stk.mode === 'search')) _stkOpen('search');
+    _stkRender();
+}
+
+// Enter in «/» mode. True when it handled the key (even as a refusal), so the text
+// never goes out as a message.
+function _stkPickSelected() {
+    if (!_stk.open || _stk.mode !== 'search') return false;
+    const n = _stk.rows[_stk.sel];
+    if (!n) { _chatRefuse(); return true; }
+    _stkSend(n);
+    return true;
+}
+
+// ─── Sending / receiving ─────────────────────────────────────────────────────
+function sendStickerWS(name) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+        ws.send(JSON.stringify({ t: 'chat', uid: gameState.userId, m: '', k: name }));
+        return true;
+    } catch (_) { return false; }
+}
+
+function _stkSend(name) {
+    if (!_chatUi.open || !_stkSafeName(name)) return;
+    const now = Date.now();
+    if (now - _chatUi.lastSentAt < CHAT_COOLDOWN_MS) return;   // anti-spam, as for text
+    _chatUi.lastSentAt = now;
+    _stkNoteUsed(name);
+    const wasSearch = _stk.mode === 'search';
+    _stkClose();
+    _emoClose();
+    // A «/» query is spent by the send. Anything else typed stays, and so does the box.
+    if (wasSearch) _chatUi.input.textContent = '';
+    const left = _chatReadInput().some(p => p.u || (p.t && p.t.trim()));
+    if (left) _chatAfterInput();
+    else closeChatBox(true);         // the sticker ends the typing bubble — see closeChatBox
+    const me = gameState.players[gameState.userId];
+    if (me) receiveSticker(me, name);
+    sendStickerWS(name);
+}
+
+function receiveSticker(player, name) {
+    if (!player || !_stkSafeName(name)) return;
+    _stkImg(name);
+    const fromMe = player.userId === gameState.userId;
+    const list = player._chat || (player._chat = []);
+    const ty = player._typing;
+    const morph = (ty && ty.a > 0.25) ? { w0: CHAT_TYP_W, h0: CHAT_TYP_H, t0: Date.now() } : null;
+    if (ty) player._typing = null;
+    list.push({
+        parts: [], text: '', stk: name,
+        lay: { rtl: true, lines: [], w: STK_BUB, h: STK_BUB },
+        born: Date.now(), life: STK_LIFE_MS,
+        off: morph ? 0 : -9, offV: 0,
+        sc: morph ? 1 : 0.4, scV: 0,
+        morph, a: 1, loud: 0, forMe: false, accent: null,
+    });
+    while (list.length > CHAT_STACK_MAX) list.shift();
+    _meetOnChat(player, '', null, name);
+    if (!fromMe) _chatArrivalCue(player);
+}
+
+// Inside a bubble box already translated/scaled by drawChatBubbles: (0,0) is its
+// bottom centre, `h` its height.
+function _stkDrawContent(ctx, b, w, h) {
+    const e = _stk.imgs[b.stk] || _stkImg(b.stk);
+    const S = Math.min(w, h) - STK_PAD * 2;
+    if (e.ready && e.img.naturalWidth) {
+        ctx.drawImage(e.img, -S / 2, -h / 2 - S / 2, S, S);
+    } else if (e.failed) {
+        ctx.font = CHAT_FONT;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fillText(b.stk.slice(0, 14), 0, -h / 2);
+    }
+}
+// The one content call drawChatBubbles makes: text, or a sticker.
+function _chatDrawBody(ctx, b, w, h) {
+    if (b.stk) _stkDrawContent(ctx, b, w, h);
+    else _chatDrawContent(ctx, b.lay, h);
+}
+
+// ─── The emoji picker ────────────────────────────────────────────────────────
+// Types an emoji where the caret is. Stays open for a second or a third.
+const EMO_LIST = [
+    '😀','😂','🤣','😊','😍','🥰','😎','🤔',
+    '😅','🥲','😭','😢','😡','😬','😴','🤗',
+    '😇','🫡','👀','🙄','👍','👎','👏','🙏',
+    '🤲','💪','🤝','🙌','👋','✌️','🔥','✨',
+    '🎉','💯','✅','❌','⭐','🏆','🎯','⏰',
+    '❤️','💙','💚','💛','🤍','☕','📚','💻',
+    '✍️','📝','🌙','☀️','🌧️','🌸','🍃','🍉',
+];
+const _emo = { pop: null, btn: null, open: false };
+
+function _emoOpen() {
+    if (!_emo.pop) return;
+    _chatMenClose();
+    _stkClose();
+    _chatToastHide();
+    _emo.open = true;
+    _emo.pop.classList.toggle('below', _chatFloatBelow(_emo.pop));
+    _emo.pop.classList.add('open');
+    _emo.btn?.classList.add('on');
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', 0.95, 0.05); } catch (_) {}
+}
+function _emoClose() {
+    if (!_emo.open) return;
+    _emo.open = false;
+    _emo.pop?.classList.remove('open');
+    _emo.btn?.classList.remove('on');
+}
+function _emoInsert(e) {
+    const input = _chatUi.input;
+    if (!input || !_chatUi.open) return;
+    if (_chatRoom() < e.length) { _chatRefuse(); return; }
+    const sel = window.getSelection && window.getSelection();
+    if (!sel || !sel.rangeCount || !input.contains(sel.anchorNode)) _chatCaretToEnd();
+    _chatInsertText(e);
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.2, 0.04); } catch (_) {}
+}
+
+// ─── Wiring (called from setupChatUI) ────────────────────────────────────────
+function _stkSetupUI() {
+    _stk.pop  = document.getElementById('chat-sticker-pop');
+    _stk.grid = document.getElementById('chat-sticker-grid');
+    _stk.cap  = document.getElementById('chat-sticker-cap');
+    _stk.btn  = document.getElementById('chat-input-sticker');
+    _emo.pop  = document.getElementById('chat-emoji-pop');
+    _emo.btn  = document.getElementById('chat-input-emoji');
+
+    _stk.btn?.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (_stk.open) _stkClose(); else _stkOpen('browse');
+    });
+    _emo.btn?.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (_emo.open) _emoClose(); else _emoOpen();
+    });
+
+    // A press sends (click, not pointerdown — a drag that scrolls the grid on a phone
+    // must not send whatever it started on).
+    _stk.grid?.addEventListener('click', (e) => {
+        const tile = e.target.closest && e.target.closest('.chat-stk-tile');
+        if (!tile) return;
+        const n = _stk.rows[+tile.dataset.i];
+        if (n) _stkSend(n);
+    });
+    // The grid scrolls natively; the world must not zoom under it.
+    _stk.grid?.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+
+    if (_emo.pop) {
+        const frag = document.createDocumentFragment();
+        for (const em of EMO_LIST) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'chat-emo';
+            b.textContent = em;
+            frag.appendChild(b);
+        }
+        _emo.pop.appendChild(frag);
+        _emo.pop.addEventListener('click', (e) => {
+            const b = e.target.closest && e.target.closest('.chat-emo');
+            if (!b) return;
+            e.preventDefault();
+            _emoInsert(b.textContent);
+        });
+        _emo.pop.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+    }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -36819,7 +37270,19 @@ function receiveMeetReaction(player, r) {
 // box and the world bubbles use (_chatMakePill — avatar + name in the member's
 // colour), and a bubble that mentions anyone is ringed in that member's colour.
 // Built from nodes, never innerHTML — every part is text another client sent.
-function _meetFillBubble(b, text, parts) {
+function _meetFillBubble(b, text, parts, stk) {
+    b.classList.toggle('stk', !!stk);
+    if (stk) {
+        b.style.borderColor = '';
+        b.textContent = '';
+        const img = document.createElement('img');
+        img.className = 'meet-stk';
+        img.alt = stk;
+        img.draggable = false;
+        img.src = _stkUrl(stk);
+        b.appendChild(img);
+        return;
+    }
     const mens = Array.isArray(parts) ? parts.filter(p => p && p.u) : [];
     b.style.borderColor = mens.length ? _chatMenColor(mens[0].u).ring : '';
     if (!mens.length) { b.textContent = text || ''; return; }
@@ -36833,7 +37296,7 @@ function _meetFillBubble(b, text, parts) {
         }
     }
 }
-function _meetOnChat(player, text, parts) {
+function _meetOnChat(player, text, parts, stk) {
     if (!player || !_meetSeated(player)) return;
     player._meetHopT = performance.now();
     _meetLight(player, MEET_LIT_CHAT_MS);
@@ -36842,7 +37305,7 @@ function _meetOnChat(player, text, parts) {
     if (!el) return;
     const b = el.querySelector('.meet-bubble');
     if (b) {
-        _meetFillBubble(b, text, parts);
+        _meetFillBubble(b, text, parts, stk);
         b.classList.remove('show'); void b.offsetWidth; b.classList.add('show');
         clearTimeout(el._bubT);
         el._bubT = setTimeout(() => b.classList.remove('show'),
@@ -37288,6 +37751,9 @@ function _memReleaseIdle() {
         delete _lemo.sheets[n];
     }
 
+    // Stickers — up to ~38 MB decoded once they've all been drawn; re-fetched on return.
+    _stkRelease();
+
     // The focus mask's offscreen copy (up to the canvas's own size).
     gameState.maskCanvas = null;
     gameState.maskCtx = null;
@@ -37324,6 +37790,7 @@ function _memRestore() {
     // is not evidence about the device — start the governor's measurement over.
     PERF.samples = 0; PERF.bad = 0; PERF.good = 0; PERF.checkAt = 0;
     resizeCanvas();          // the canvas is 1×1 — this has to land before rAF resumes
+    if (_stk.list.length) setTimeout(_stkPreloadAll, 3000);   // the bytes, from cache
     // The track is the one rebuild slow enough to be worth starting before it is
     // asked for, so a race entry isn't met with the retry message. On idle, never
     // on the critical path — the same warm `startGame` does after spawn.
