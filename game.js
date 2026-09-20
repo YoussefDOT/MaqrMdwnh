@@ -5863,6 +5863,18 @@ function updateFloorsAndScales() {
             player.renderScale = desiredPlayerScale(player);
             continue;
         }
+        /* Stepping off a table: drive the shrink off the DROP, so the table's 1.14×
+           is gone exactly as the feet touch the floor. The generic lerp is a fixed
+           rate, so it was still part-way through the shrink at touchdown — the avatar
+           landed a size too big and settled afterwards. */
+        const off = player._jump && player._jump.k === 'off'
+            ? (Date.now() - player._jump.t0) / JUMP_KINDS.off.ms : -1;
+        if (off >= 0 && off < JUMP_OFF_AIR) {
+            const base = desiredPlayerScale(player);            // _elev is already false
+            const u = off / JUMP_OFF_AIR;
+            player.renderScale = base * (JUMP_TOP_SCALE + (1 - JUMP_TOP_SCALE) * u);
+            continue;
+        }
         player.renderScale += (desiredPlayerScale(player) - player.renderScale) * k;
     }
 }
@@ -31495,7 +31507,14 @@ let _anyTap = { t: 0, x: 0, y: 0 };
      • on a top (`worldCollision.tops`)  → you stand on it (`_elev`, 1.14× scale);
      • on free floor                     → you're on the floor, normal size;
      • inside something you can't stand on → nudged to the nearest spot you can.
-   Walking off a top in any direction steps you down (`_jumpStepOff`).
+   Walking off a top in any direction steps you down (`_jumpStepOff`) — you do NOT
+   have to press jump to leave a table, you just keep walking and slide off the edge.
+   The step-down is AIRBORNE for `JUMP_OFF_AIR` of its length, which is the whole
+   trick: `_jumpTopAt` samples one point (the feet) while ordinary floor collision
+   samples a RING around the body, so the frame your feet clear the table your body
+   is still inside its footprint — with floor rules that reads as a wall and the edge
+   traps you. Under air rules only walls block, so the walk carries straight on over
+   the footprint and `_jumpLand` sets you down past it, at floor scale.
    On the mezzanine, drifting past its open edge while up turns the jump into a
    FALL ('fall'): Jump_Start, a drop, and the landing quake on the ground floor.
 
@@ -31512,6 +31531,8 @@ const JUMP_KINDS = {
 };
 const JUMP_AIR    = [0.10, 0.72];   // the airborne window of a jump, as fractions of JUMP_MS
 const JUMP_FALL_LAND = 0.70;        // where in a fall the feet touch the ground
+const JUMP_OFF_AIR = 0.62;          // how much of a step-off is spent in the air
+const JUMP_OFF_LIFT = 18;           // the table's height, as the step-down's drop (px)
 const JUMP_TOP_SCALE   = 1.14;   // standing on a table: a touch closer to the camera
 const JUMP_QUAKE_MS    = 1100;
 const JUMP_QUAKE_R     = 520;    // the shock ring's reach, and who hears / feels it
@@ -31521,7 +31542,11 @@ let _jumpShake = { t0: 0, amp: 0 };
 
 function _jumpKind(k) { return JUMP_KINDS[k] || JUMP_KINDS['']; }
 // When a jump of this kind touches down, ms after it starts (matches _jumpFx's phases).
-function _jumpLandMs(k) { return k === 'fall' ? JUMP_KINDS.fall.ms * JUMP_FALL_LAND : k === 'off' ? 0 : JUMP_MS * JUMP_AIR[1]; }
+function _jumpLandMs(k) {
+    if (k === 'fall') return JUMP_KINDS.fall.ms * JUMP_FALL_LAND;
+    if (k === 'off')  return JUMP_KINDS.off.ms * JUMP_OFF_AIR;
+    return JUMP_MS * JUMP_AIR[1];
+}
 const _JUMP_FEET = PLAYER_SIZE * 0.22;   // checkCollision samples the feet, so do we
 
 // Is (x, y) — the FEET point — over something a player can stand on?
@@ -31578,6 +31603,9 @@ function _jumpAirborne(p, now) {
     if (!j) return false;
     const t = (now - j.t0) / _jumpKind(j.k).ms;
     if (j.k === 'fall') return t >= 0 && t < JUMP_FALL_LAND;
+    // A step-off is airborne from frame one — see the header: the body ring is still
+    // over the table it just left, and only air rules let the walk carry through it.
+    if (j.k === 'off') return t >= 0 && t < JUMP_OFF_AIR;
     if (j.k) return false;
     return t >= JUMP_AIR[0] && t < JUMP_AIR[1];
 }
@@ -31592,9 +31620,15 @@ function _jumpFx(player, now) {
     const ms = _jumpKind(j.k).ms;
     const t = (now - j.t0) / ms;
     if (t < 0 || t >= 1) return null;
-    if (j.k === 'off') {                  // walked off an edge: a short drop + squash
-        const r = 1 - easeOutBack(Math.max(0.0001, t));
-        return { dy: -14 * (1 - t) * (1 - t), s: 1, sx: 1 + 0.16 * r, sy: 1 - 0.16 * r };
+    if (j.k === 'off') {
+        // Walked off an edge: a drop that accelerates, reaching the ground exactly when
+        // the airborne window ends, then the landing squash over what's left.
+        if (t < JUMP_OFF_AIR) {
+            const u = t / JUMP_OFF_AIR;
+            return { dy: -JUMP_OFF_LIFT * (1 - u * u), s: 1, sx: 1 - 0.05 * (1 - u), sy: 1 + 0.05 * (1 - u) };
+        }
+        const r = 1 - easeOutBack(Math.max(0.0001, (t - JUMP_OFF_AIR) / (1 - JUMP_OFF_AIR)));
+        return { dy: 0, s: 1, sx: 1 + 0.18 * r, sy: 1 - 0.18 * r };
     }
     if (j.k === 'fall') {
         // Picks up from wherever the jump was (dy0 / s0) and falls AWAY from the
@@ -31785,28 +31819,44 @@ function receiveJump(player, msg) {
     }
     if (player._jump && now - player._jump.t0 < JUMP_COOLDOWN_MS && k !== 'off') return;
     player._jump = { t0: now, k };
-    if (k === 'off') player._elev = false;
-    else player._hatKick = { up: 1, t: now, land: _jumpLandMs(k) };
+    if (k === 'off') {
+        player._elev = false;
+        player._hatKick = { up: 0.6, t: now, land: _jumpLandMs('off') };
+    } else player._hatKick = { up: 1, t: now, land: _jumpLandMs(k) };
     _jumpDust(player, 5);
 }
 
 // Where the feet came down → on a top, on the floor, or nudged out of something.
 function _jumpLand(p) {
     const floor = p.floor || 1;
-    const ok = (x, y) => {
+    const j = p._jump;
+    const stepOff = !!(j && j.k === 'off');
+    // `floorOnly` is for the SEARCH after a step-off: the table they walked off is
+    // right behind them and is the nearest «top» there is, so without this a player
+    // who stops the instant they clear the edge is shuffled straight back up onto it.
+    const ok = (x, y, floorOnly) => {
         const fy = y + _JUMP_FEET;
-        if (_jumpTopAt(x, fy, floor) && !_jumpElevBlocked(x, fy, floor)) return 'top';
+        if (!floorOnly && _jumpTopAt(x, fy, floor) && !_jumpElevBlocked(x, fy, floor)) return 'top';
         if (!checkCollision(x, y, { floor, elev: false, air: false })) return 'floor';
         return '';
     };
     let where = ok(p.x, p.y);
+    if (!where && stepOff && (j.ox || j.oy)) {
+        // Keep going the way they walked off, so they are set down BESIDE the table
+        // rather than somewhere around the far side of it.
+        for (let r = 6; r <= 96; r += 6) {
+            const nx = p.x + j.ox * r, ny = p.y + j.oy * r;
+            if (ok(nx, ny, true) === 'floor') { p.x = nx; p.y = ny; where = 'floor'; break; }
+        }
+        if (where) syncEntityRenderToTarget(p);
+    }
     if (!where) {
         search:
         for (let r = 8; r <= 180; r += 8) {
             for (let a = 0; a < 16; a++) {
                 const ang = (a / 16) * Math.PI * 2;
                 const nx = p.x + Math.cos(ang) * r, ny = p.y + Math.sin(ang) * r;
-                const w = ok(nx, ny);
+                const w = ok(nx, ny, stepOff);
                 if (w) { p.x = nx; p.y = ny; where = w; break search; }
             }
         }
@@ -31871,18 +31921,36 @@ function jumpAfterMove(p) {
     if (p._air) _jumpMaybeFall(p, Date.now());
 }
 
-// Walking off the edge of a top: allowed wherever the floor below is free.
+/* Walking off the edge of a top. Judged under AIR rules, not floor rules — see the
+   header: the frame the feet clear the table the body ring is still inside its
+   footprint, so asking "is the floor here free?" answers no and pins the player to
+   the edge until they press jump. Under air rules only a wall (and the world's
+   bounds) can refuse, so the walk simply carries on and _jumpLand puts them down. */
 function _jumpStepOff(p, nx, ny) {
     if (!p._elev || p._air) return false;
     const floor = p.floor || 1;
-    if (_jumpTopAt(nx, ny + _JUMP_FEET, floor)) return false;
-    if (checkCollision(nx, ny, { elev: false, floor, air: false })) return false;
+    const fy = ny + _JUMP_FEET;
+    if (_jumpTopAt(nx, fy, floor)) return false;                  // still on the table
+    if (nx < WORLD_BOUNDS.minX || nx > WORLD_BOUNDS.maxX
+        || ny < WORLD_BOUNDS.minY || ny > WORLD_BOUNDS.maxY) return false;
+    // _jumpAirBlocked directly, not checkCollision's `air` branch: that branch reads
+    // the local player's CURRENT `_jump`, which at this moment is still the last one
+    // they made — a stale 'fall' there would pick the wrong rule.
+    if (_jumpAirBlocked(nx, ny, fy, floor)) return false;
+    // The direction they left in, so the landing can keep going that way (_jumpLand).
+    const ddx = nx - p.x, ddy = ny - p.y, dl = Math.hypot(ddx, ddy) || 1;
     p._elev = false;
     p.x = nx; p.y = ny;
-    p._jump = { t0: Date.now(), k: 'off' };
+    const now = Date.now();
+    p._jump = { t0: now, k: 'off', ox: ddx / dl, oy: ddy / dl };
+    // Airborne from this frame, so the OTHER axis's move in the same frame already
+    // reads air rules instead of walking into the footprint it just left.
+    p._air = true;
+    p._hatKick = { up: 0.6, t: now, land: _jumpLandMs('off') };
     _jumpDust(p, 4);
     sendJumpWS('off');
     sendPositionWS(p.x, p.y, true);
+    perfWake(JUMP_KINDS.off.ms + 200);
     return true;
 }
 

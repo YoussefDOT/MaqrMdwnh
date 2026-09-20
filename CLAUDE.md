@@ -1665,6 +1665,22 @@ separate, delayed animation and only found tables straight ahead. **Don't bring 
   that is either. Works from every direction because nothing is aimed.
 - **Standing on a top** (`_elev`): `_jumpElevBlocked` — the feet must stay over a top, walls
   block; walking off in any direction → `_jumpStepOff` (the `off` kind) → normal size again.
+- **Getting DOWN never needs a press — you walk off and slide down** (`_jumpStepOff`), and the
+  step-down is **airborne for `JUMP_OFF_AIR`** of its 300 ms. That window is the whole fix, and
+  it is not decoration: **`_jumpTopAt` samples ONE point (the feet) while floor collision
+  samples a RING around the body** (`_BODY_PTS`), so the frame the feet clear the table the
+  body is still inside its footprint. Judged by floor rules that reads as a wall — the old
+  `_jumpStepOff` refused, `_vx` was zeroed, and the only way off a table was to press jump.
+  Under air rules only walls block, so the walk carries straight through the footprint and
+  `_jumpLand` sets the player down past it. **Don't put a floor-rule test back in
+  `_jumpStepOff`** — that is the bug.
+- **A step-off lands FORWARD, and never back on the table it left.** `_jumpStepOff` records the
+  direction (`ox/oy` on `_jump`); `_jumpLand` tries straight along it first, and its spiral
+  fallback is **floor-only for an `off`** — the table behind you is the nearest «top» there is,
+  so otherwise a player who stops the instant they clear the edge is shuffled back up onto it.
+- **The shrink is driven by the DROP, not the generic lerp** (`updateFloorsAndScales`): the
+  1.14× is gone exactly as the feet touch the floor. The fixed-rate lerp was still part-way
+  through at touchdown, so the avatar landed a size too big and settled afterwards.
 - **The crouch is 56 ms** (`JUMP_AIR[0]`) so the jump answers the key at once.
 - **Relay kinds**: `''` · `off` · `fall` (`{t:'jmp', uid, k, x?, y?}`).
 
