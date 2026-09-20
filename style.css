@@ -11277,6 +11277,57 @@ body.is-mobile .tro-paper-fly.is-drag  .tro-paper-sheen { opacity: 0.5; }
 .adm-top-txt { flex: 1; min-width: 0; }
 .adm-title { margin: 0; font-size: 1.7rem; font-weight: 800; line-height: 1.25; }
 .adm-sub { margin: 2px 0 0; font-size: 0.84rem; color: var(--ink-55); font-weight: 600; }
+/* ── مبدّل الأسبوع ───────────────────────────────────────────────────────────
+   في الاتجاه من اليمين إلى اليسار يأتي زر «السابق» أولًا، أي على اليمين، فسهمه
+   يشير يمينًا. «التالي» يُقفل بـ .is-off (صنف، لا خاصية disabled — انظر الأذكار). */
+.adm-week {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    padding: 3px;
+    border: 1px solid var(--ink-12);
+    border-radius: 14px;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+}
+.adm-week-btn {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    border: 0;
+    border-radius: 11px;
+    background: transparent;
+    color: var(--ink-55);
+    cursor: pointer;
+    transition: background 0.18s, color 0.18s, opacity 0.18s;
+}
+.adm-week-btn svg { width: 17px; height: 17px; }
+.adm-week-btn:hover { background: var(--ink-06); color: var(--ink); }
+.adm-week-btn:active { transform: scale(0.94); }
+.adm-week-btn.is-off { opacity: 0.22; pointer-events: none; }
+.adm-week-txt {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 1px;
+    min-width: 118px;
+    padding: 4px 10px;
+    border: 0;
+    border-radius: 11px;
+    background: transparent;
+    cursor: default;
+    line-height: 1.15;
+    transition: background 0.18s;
+}
+.adm-week-txt b { font-size: 0.82rem; font-weight: 800; color: var(--ink); }
+.adm-week-txt small { font-size: 0.63rem; font-weight: 700; color: var(--ink-30); }
+/* On a past week the label becomes the way back to this one (its title says so). */
+.adm-week.is-back { border-color: var(--gold); }
+.adm-week.is-back .adm-week-txt { cursor: pointer; }
+.adm-week.is-back .adm-week-txt:hover { background: var(--ink-06); }
+
 .adm-close {
     flex: 0 0 auto;
     width: 40px;
@@ -11851,6 +11902,12 @@ body.is-mobile .adm-top { padding: 14px 16px 8px; }
 body.is-mobile .adm-title { font-size: 1.3rem; }
 body.is-mobile .adm-sub { font-size: 0.74rem; }
 body.is-mobile .adm-close { width: 36px; height: 36px; }
+body.is-mobile .adm-week { border-radius: 12px; padding: 2px; }
+body.is-mobile .adm-week-btn { width: 28px; }
+body.is-mobile .adm-week-btn svg { width: 15px; height: 15px; }
+body.is-mobile .adm-week-txt { min-width: 92px; padding: 3px 6px; }
+body.is-mobile .adm-week-txt b { font-size: 0.72rem; }
+body.is-mobile .adm-week-txt small { font-size: 0.55rem; }
 body.is-mobile .adm-scroll { padding: 4px 14px max(20px, env(safe-area-inset-bottom)); }
 body.is-mobile .adm-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 body.is-mobile .adm-kpi { padding: 12px 12px; grid-template-areas: "ico ico" "k k" "v v" "f f"; grid-template-columns: 1fr; }

@@ -1,4 +1,4 @@
-import { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, authReady, runTransaction, query, orderByKey, startAt } from './firebase-config.js';
+import { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, authReady, runTransaction, query, orderByKey, startAt, endAt } from './firebase-config.js';
 
 // ─── Mobile detection ────────────────────────────────────────────────────────
 const MOBILE_BREAKPOINT = 1024;
@@ -35830,6 +35830,10 @@ const ADM_SEQ_MAX = 14;            // rows past this cascade silently (see _admR
 const ADM_WEEK_TTL_MS = 5 * 60000; // a list already this fresh is not re-fetched on open
 const ADM_BATCH = 5;               // members fetched at a time by the auto-load
 const ADM_DUTY_WEEKS = 6;         // weeks of the daily duty the member detail lays out
+// How far back the week switcher goes. Capped at the history the detail already
+// summarises, so an opened member can always answer for the week on screen without
+// a second read (see _admSummarise / _admRowData).
+const ADM_MAX_BACK = ADM_WEEKS - 1;
 
 const _adm = {
     open: false, wired: false, uid: null,
@@ -35843,6 +35847,7 @@ const _adm = {
     filter: 'all',      // the duty chips: 'all' | 'done' | 'vac' | 'short' | 'online'
     sort: 'name',       // 'name' | 'duty' | 'work' | 'today' | 'trend'
     tab: 'over',        // 'over' (نظرة عامة) | 'list' (الأعضاء)
+    wk: 0,              // الأسبوع المعروض — weeks back from this one (see _admSetWeek)
     day: '',            // the calendar cell the leader has selected (see _admSetDuty)
     saving: false,      // a duty edit is in flight
 };
@@ -35876,6 +35881,37 @@ function _admWeekLabel(startMs) {
     const f = d => { try { return d.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }); } catch (_) { return ''; } };
     return `${f(a)} – ${f(b)}`;
 }
+/* ── the week the panel is LOOKING AT ─────────────────────────────────────────
+   `_adm.wk` is how many weeks back the leader has stepped (0 = this week). EVERY
+   number on screen reads against it — the dots, the presence and work columns, the
+   overview's bars and donut, the member's calendar — and the two-week key range each
+   member is fetched with MOVES with it (see _admFetchWeek), so looking at an old week
+   costs exactly what looking at this one does. That is the whole reason this is a
+   switcher and not a longer read.
+
+   `_admJudgeKey()` is the day every state is judged against. In the live week that is
+   today; in a finished week it is the day AFTER the week, so nothing inside it reads
+   as «اليوم، ما زال مفتوحًا» — a past week has no open day. */
+function _admViewStartMs() { return _admWeekBack(_admWeekStart(Date.now()), _adm.wk); }
+function _admViewStartDate() {
+    const d = new Date(_admViewStartMs());
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+function _admViewKeys() { return _dutyWeekKeys(_admViewStartDate()); }
+function _admLiveWeek() { return _adm.wk === 0; }
+function _admJudgeKey() {
+    if (_admLiveWeek()) return _todayDateStr();
+    const s = _admViewStartDate();
+    return _dutyKeyOf(new Date(s.getFullYear(), s.getMonth(), s.getDate() + 7));
+}
+// «هذا الأسبوع» / «الأسبوع الماضي» / «قبل ٣ أسابيع»
+function _admWeekName(n) {
+    if (!n) return 'هذا الأسبوع';
+    if (n === 1) return 'الأسبوع الماضي';
+    if (n === 2) return 'قبل أسبوعين';
+    return `قبل ${_libAr(n)} ${n <= 10 ? 'أسابيع' : 'أسبوعًا'}`;
+}
+
 // ٥ س ٣٠ د — hours only past an hour, minutes under it, and a dash at zero.
 function _admDur(ms) {
     ms = Math.max(0, Number(ms) || 0);
@@ -35896,6 +35932,7 @@ function _admDate(ms) {
 function _admSummarise(sessions) {
     const weekMs = new Map();          // weekStart → ms
     const weekN  = new Map();          // weekStart → session count
+    const weekL  = new Map();          // weekStart → the last finish IN that week
     const tasks  = new Map();          // task name → ms
     let total = 0, n = 0, last = 0;
     for (const rec of Object.values(sessions || {})) {
@@ -35905,6 +35942,7 @@ function _admSummarise(sessions) {
         const w = _admWeekStart(fin);
         weekMs.set(w, (weekMs.get(w) || 0) + dur);
         weekN.set(w, (weekN.get(w) || 0) + 1);
+        if (fin > (weekL.get(w) || 0)) weekL.set(w, fin);
         const task = (rec.task || '').trim();
         if (task) tasks.set(task, (tasks.get(task) || 0) + dur);
         total += dur; n++;
@@ -35914,7 +35952,7 @@ function _admSummarise(sessions) {
     const weeks = [];
     for (let i = 0; i < ADM_WEEKS; i++) {
         const start = _admWeekBack(cur, i);
-        weeks.push({ start, ms: weekMs.get(start) || 0, n: weekN.get(start) || 0 });
+        weeks.push({ start, ms: weekMs.get(start) || 0, n: weekN.get(start) || 0, last: weekL.get(start) || 0 });
     }
     const topTasks = [...tasks.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5)
         .map(([name, ms]) => ({ name, ms }));
@@ -35939,9 +35977,9 @@ function _admFetchMember(uid, force) {
     ]).then(([sessions, duty]) => {
         const data = { uid, at: Date.now(), duty, ..._admSummarise(sessions) };
         _adm.cache.set(uid, data);
-        // The list reads whichever of the two is present, so the fuller answer has to
-        // replace the slice — otherwise a stale row would sit beside a fresh detail.
-        _adm.week.set(uid, { uid, thisWeek: data.thisWeek, prevWeek: data.prevWeek, last: data.last, duty, at: Date.now() });
+        /* No slice is written beside it: this copy carries EVERY week and the whole
+           duty node, so _admRowData can answer for whichever week is on screen — and
+           being the fresher `at`, it already wins over any slice sitting there. */
         return data;
     }).finally(() => { _adm.loading.delete(uid); });
     _adm.loading.set(uid, job);
@@ -35957,19 +35995,29 @@ function _admFetchMember(uid, force) {
    reading everyone's full history could not.
 
    Keep it bounded. If a row ever needs a third number, move the start back — never
-   drop the range and read the node whole. */
+   drop the range and read the node whole.
+
+   The range MOVES with the week switcher, and it is closed at both ends: on an older
+   week `startAt` alone would read everything from then until now, which is exactly the
+   unbounded read this range exists to avoid. Hence `endAt`, and hence the cache being
+   keyed by week as well as by member. */
+function _admWeekCacheKey(uid) { return _adm.wk + '|' + uid; }
 function _admFetchWeek(uid, force) {
     if (!uid) return Promise.resolve(null);
-    const have = _adm.week.get(uid);
+    const wk = _adm.wk, ck = wk + '|' + uid;
+    const have = _adm.week.get(ck);
     if (!force && have && Date.now() - have.at < ADM_WEEK_TTL_MS) return Promise.resolve(have);
-    if (_adm.weekLoading.has(uid)) return _adm.weekLoading.get(uid);
+    if (_adm.weekLoading.has(ck)) return _adm.weekLoading.get(ck);
 
-    const cur  = _admWeekStart(Date.now());
+    const cur  = _admWeekBack(_admWeekStart(Date.now()), wk);
     const prev = _admWeekBack(cur, 1);
-    const q = query(ref(database, `dashboards/${uid}/sessions`), orderByKey(), startAt(String(prev)));
+    const end  = _admWeekBack(cur, -1);    // the Sunday after the viewed week
+    const q = query(ref(database, `dashboards/${uid}/sessions`), orderByKey(),
+                    startAt(String(prev)), endAt(String(end)));
     // The duty's days over the same two weeks — date keys sort chronologically too.
     // Its own catch: a failed duty read must not throw away good work numbers.
-    const dq = query(ref(database, `dashboards/${uid}/duty/days`), orderByKey(), startAt(_dutyKeyOf(new Date(prev))));
+    const dq = query(ref(database, `dashboards/${uid}/duty/days`), orderByKey(),
+                     startAt(_dutyKeyOf(new Date(prev))), endAt(_dutyKeyOf(new Date(end))));
     const job = Promise.all([
         get(q).then(s => s.val()),
         get(dq).then(s => s.val() || {}).catch(() => null),
@@ -35982,18 +36030,20 @@ function _admFetchWeek(uid, force) {
             const w = _admWeekStart(fin);
             if (w === cur) thisWeek += dur;
             else if (w === prev) prevWeek += dur;
-            if (fin > last) last = fin;
+            // On an older week «آخر جلسة» means the last one IN it — the window's other
+            // half is last week's, which would read as the wrong date entirely.
+            if (fin > last && (wk === 0 || w === cur)) last = fin;
         }
-        const v = { uid, thisWeek, prevWeek, last, duty, at: Date.now() };
-        _adm.week.set(uid, v);
+        const v = { uid, wk, thisWeek, prevWeek, last, duty, at: Date.now() };
+        _adm.week.set(ck, v);
         return v;
     }).catch(() => {
         // A failed read must not cache a zero — leave the row asking to be retried.
-        const v = { uid, thisWeek: 0, prevWeek: 0, last: 0, at: 0, failed: true };
-        _adm.week.set(uid, v);
+        const v = { uid, wk, thisWeek: 0, prevWeek: 0, last: 0, at: 0, failed: true };
+        _adm.week.set(ck, v);
         return v;
-    }).finally(() => { _adm.weekLoading.delete(uid); });
-    _adm.weekLoading.set(uid, job);
+    }).finally(() => { _adm.weekLoading.delete(ck); });
+    _adm.weekLoading.set(ck, job);
     return job;
 }
 
@@ -36003,6 +36053,7 @@ function _admFetchWeek(uid, force) {
    once, and it stops the instant the panel closes. */
 async function _admAutoLoad(force) {
     if (_adm.bulk) return;
+    const wk = _adm.wk;             // the week this drain belongs to
     _adm.bulk = true;
     _admPaintFoot();
     // The roster is what the list IS. It never rejects and is almost always already
@@ -36016,12 +36067,14 @@ async function _admAutoLoad(force) {
 
     const uids = _admAllUids();
     const todo = force ? uids : uids.filter(u => {
-        const w = _adm.week.get(u);
+        const w = _adm.week.get(_admWeekCacheKey(u));
         return !w || Date.now() - w.at >= ADM_WEEK_TTL_MS;
     });
     let stopped = false;
     for (let i = 0; i < todo.length; i += ADM_BATCH) {
-        if (!_adm.open) { stopped = true; break; }   // closed mid-drain — stop spending reads
+        // Closed mid-drain, or the leader stepped to another week — either way these
+        // reads are no longer the ones on screen. The tail below restarts the right run.
+        if (!_adm.open || _adm.wk !== wk) { stopped = true; break; }
         _adm.doneN = i; _adm.totalN = todo.length;
         _admPaintFoot();
         await Promise.all(todo.slice(i, i + ADM_BATCH).map(u => _admFetchWeek(u, force)));
@@ -36063,11 +36116,10 @@ function _admAllUids() {
 
 function _admMembers() {
     const q = _fireNormName(_adm.q || '').trim();
-    const today = _todayDateStr();
     const list = MDWNH_ROSTER.list
         .filter(m => m.slug && !m.dummy && m.active !== false)
         .filter(m => !q || _fireNormName(m.name || '').includes(q) || String(m.slug).includes(q))
-        .filter(m => _admPassesFilter(m, today));
+        .filter(m => _admPassesFilter(m));
     const byName = (a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ar');
     const uidOf = m => (m.discordId ? String(m.discordId) : '');
     const keyed = (fn) => {
@@ -36077,7 +36129,7 @@ function _admMembers() {
     switch (_adm.sort) {
         case 'duty':  return keyed(u => _admWeekPresence(u));
         case 'work':  return keyed(u => { const d = _admRowData(u); return d && !d.failed ? d.thisWeek : -1; });
-        case 'today': return keyed(u => { const t = _admTodayOf(u); return t ? t.pct : -1; });
+        case 'today': return keyed(u => { const f = _admFocusOf(u); return f ? f.pct : -1; });
         case 'trend': return keyed(u => { const d = _admRowData(u); return d && !d.failed ? d.thisWeek - d.prevWeek : -Infinity; });
         default:      return list.sort(byName);
     }
@@ -36086,10 +36138,22 @@ function _admMembers() {
 /* ── the daily duty, on the leader's side ─────────────────────────────────────
    Read out of the same bounded slice as the work numbers (see _admFetchWeek) and
    judged with the member's own `_dutyDayState`. */
-// Whichever copy of a member is fresher: the full history (opened) or the slice the
-// auto-load refreshes every few minutes. A failed slice (`at: 0`) never wins.
+/* The VIEWED week's numbers for one member, from whichever copy is fresher: the full
+   history (an opened member — it carries all ADM_WEEKS weeks, so it answers for any of
+   them) or the slice the auto-load refreshes every few minutes. A failed slice
+   (`at: 0`) never wins. Everything downstream reads `thisWeek`/`prevWeek`/`duty`
+   without caring which week that is. */
 function _admRowData(uid) {
-    const a = uid ? _adm.cache.get(uid) : null, b = uid ? _adm.week.get(uid) : null;
+    if (!uid) return null;
+    const wk = _adm.wk;
+    const full = _adm.cache.get(uid);
+    const a = (full && wk < ADM_WEEKS) ? {
+        uid, at: full.at, duty: full.duty,
+        last: wk === 0 ? full.last : (full.weeks[wk] ? full.weeks[wk].last : 0),
+        thisWeek: full.weeks[wk] ? full.weeks[wk].ms : 0,
+        prevWeek: full.weeks[wk + 1] ? full.weeks[wk + 1].ms : 0,
+    } : null;
+    const b = _adm.week.get(_admWeekCacheKey(uid));
     if (a && b) return b.at > a.at ? b : a;
     return a || b || null;
 }
@@ -36107,25 +36171,67 @@ function _admTodayOf(uid) {
     const pct = (st === 'done' || st === 'vac') ? 1 : Math.min(1, r.ms / DUTY.goalMs);
     return { r, st, pct };
 }
+/* The viewed week as a whole, for one member: how its days came out. Only judged
+   days count — a future day and a trial day (before the duty started) are owed
+   nothing, and today is counted but never judged. */
+function _admWeekStatsOf(uid) {
+    const duty = uid ? _admDutyOf(uid) : null;
+    if (!duty) return null;
+    const judge = _admJudgeKey();
+    let done = 0, vac = 0, miss = 0, n = 0, ms = 0;
+    for (const k of _admViewKeys()) {
+        const r = _dutyRec(duty, k);
+        if (!r.vac) ms += r.ms;
+        const st = _dutyStateOf(r, k, judge, duty);
+        if (st === 'future' || st === 'pre') continue;
+        n++;
+        if (st === 'done') done++; else if (st === 'vac') vac++; else if (st !== 'now') miss++;
+    }
+    return { done, vac, miss, n, ms };
+}
+/* The ONE cell the list, the filters and the report all ask about: today while the
+   live week is on screen (nothing else in it is over), the week as a whole once the
+   leader steps back to a finished one — which is the only question a past week can
+   answer. Same three words either way, so nothing downstream had to change. */
+function _admFocusOf(uid) {
+    if (_admLiveWeek()) {
+        const t = _admTodayOf(uid);
+        if (!t) return null;
+        const cap = t.st === 'vac' ? 'إجازة' : t.st === 'done' ? (t.r.ok ? 'معتمد ✓' : 'أتمّ ✓')
+            : _dutyClock(t.r.ms) + ' / ٣:٠٠';
+        return { st: t.st, pct: t.pct, cap };
+    }
+    const w = _admWeekStatsOf(uid);
+    if (!w) return null;
+    const st = w.miss ? 'miss' : w.n ? 'done' : 'pre';
+    return {
+        st, pct: w.n ? (w.done + w.vac) / w.n : 0,
+        cap: w.n ? `${_libAr(w.done)} / ${_libAr(w.n)} أيام` : '—',
+    };
+}
 // A filtered view only lists members whose day is KNOWN — one still loading is not
 // «لم يُتمّوا», it's unread.
-function _admPassesFilter(m, today) {
+function _admPassesFilter(m) {
     if (_adm.filter === 'all') return true;
     const uid = m.discordId ? String(m.discordId) : '';
     if (_adm.filter === 'online') return !!(uid && _admOnline(uid));
-    const duty = uid ? _admDutyOf(uid) : null;
-    if (!duty) return false;
-    const st = _dutyDayState(duty, today, today);
-    if (_adm.filter === 'done') return st === 'done';
-    if (_adm.filter === 'vac')  return st === 'vac';
-    return st !== 'done' && st !== 'vac';
+    const f = _admFocusOf(uid);
+    if (!f) return false;
+    // On a finished week «في إجازة» is «أخذ إجازة فيه», not «كل الأسبوع إجازة».
+    if (_adm.filter === 'vac' && !_admLiveWeek()) {
+        const w = _admWeekStatsOf(uid);
+        return !!(w && w.vac);
+    }
+    if (_adm.filter === 'done') return f.st === 'done';
+    if (_adm.filter === 'vac')  return f.st === 'vac';
+    return f.st !== 'done' && f.st !== 'vac';
 }
-// This week's open time, for the «الأعلى حضورًا» sort. Unknown sorts last.
+// The viewed week's open time, for the «الأعلى حضورًا» sort. Unknown sorts last.
 function _admWeekPresence(uid) {
     const duty = uid ? _admDutyOf(uid) : null;
     if (!duty) return -1;
     let ms = 0;
-    for (const k of _dutyWeekKeys(_dutyWeekStart(new Date()))) {
+    for (const k of _admViewKeys()) {
         const r = _dutyRec(duty, k);
         if (!r.vac) ms += r.ms;
     }
@@ -36141,8 +36247,8 @@ function _admOnline(uid) {
 }
 // Every number the overview needs, in one pass over the roster.
 function _admTeam() {
-    const today = _todayDateStr();
-    const weekKeys = _dutyWeekKeys(_dutyWeekStart(new Date()));
+    const judge = _admJudgeKey();
+    const weekKeys = _admViewKeys();
     const t = {
         known: 0, done: 0, vac: 0, short: 0, online: 0, working: 0,
         work: 0, prevWork: 0, presence: 0, loaded: 0, total: 0,
@@ -36164,19 +36270,24 @@ function _admTeam() {
         }
         const duty = _admDutyOf(uid);
         if (!duty) continue;
-        t.known++;
-        const st = _dutyDayState(duty, today, today);
-        if (st === 'done') t.done++; else if (st === 'vac') t.vac++; else t.short++;
+        // «pre» is a trial week/day — nothing was owed, so it is not counted either way.
+        const f = _admFocusOf(uid);
+        if (f && f.st !== 'pre') {
+            t.known++;
+            if (f.st === 'done') t.done++; else if (f.st === 'vac') t.vac++; else t.short++;
+        }
         let miss = 0;
         weekKeys.forEach((k, j) => {
             const r = _dutyRec(duty, k);
-            const s = _dutyStateOf(r, k, today, duty);
+            const s = _dutyStateOf(r, k, judge, duty);
             if (s === 'done') t.perDay[j].done++;
             if (!r.vac) { t.perDay[j].ms += r.ms; t.presence += r.ms; }
             if (s === 'miss') miss++;
         });
-        // Only judged on a history that actually loaded — an unread one is not «absent».
-        const quiet = (d && !d.failed) ? (d.last ? Date.now() - d.last : Infinity) : 0;
+        /* Only judged on a history that actually loaded — an unread one is not «absent» —
+           and only in the live week: on an older one `last` is that week's own last
+           session, so «لم يعمل منذ أسابيع» would be true of everybody. */
+        const quiet = (_admLiveWeek() && d && !d.failed) ? (d.last ? Date.now() - d.last : Infinity) : 0;
         if (miss > 0 || quiet > 7 * 864e5) t.attention.push({ m, uid, miss, quiet });
     }
     t.top.sort((a, b) => b.ms - a.ms);
@@ -36213,8 +36324,11 @@ function _admRenderDutyBar() {
     const t = _admTeam();
     const chip = (id, label, n) => `<button class="adm-chip is-${id}${_adm.filter === id ? ' is-on' : ''}" type="button" data-f="${id}">`
         + `<span>${label}</span>${n === undefined ? '' : `<b>${_libAr(n)}</b>`}</button>`;
-    host.innerHTML = chip('all', 'الكل', t.total) + chip('done', 'أتمّوا اليوم', t.done)
-        + chip('short', 'لم يُتمّوا', t.short) + chip('vac', 'في إجازة', t.vac)
+    const live = _admLiveWeek();
+    host.innerHTML = chip('all', 'الكل', t.total)
+        + chip('done', live ? 'أتمّوا اليوم' : 'التزموا الأسبوع', t.done)
+        + chip('short', live ? 'لم يُتمّوا' : 'فاتتهم أيام', t.short)
+        + chip('vac', 'في إجازة', t.vac)
         + chip('online', 'في المقر الآن', t.online);
 }
 
@@ -36231,22 +36345,24 @@ function _admRenderOverview() {
     const host = document.getElementById('adm-over');
     if (!host) return;
     const t = _admTeam();
+    const live = _admLiveWeek();
     const today = _todayDateStr();
-    const todayIdx = new Date().getDay();
+    const todayIdx = live ? new Date().getDay() : -1;
     const pctDone = t.known ? Math.round((t.done / t.known) * 100) : 0;
+    const wkName = _admWeekName(_adm.wk);
 
     const ring = `<span class="adm-ring" style="--p:${pctDone}"><b>${_libAr(pctDone)}٪</b></span>`;
     const kpis = [
-        _admKpi('is-teal', ring, 'أتمّوا حضور اليوم',
+        _admKpi('is-teal', ring, live ? 'أتمّوا حضور اليوم' : 'التزموا الأسبوع كاملًا',
             `${_libAr(t.done)}<small> / ${_libAr(t.known)}</small>`,
-            _dutyStarted() ? `${_libAr(t.vac)} في إجازة · ${_libAr(t.short)} لم يُتمّوا` : 'تجريبي حتى ' + _libEsc(_dutyStartLabel())),
+            _dutyStarted() ? `${_libAr(t.vac)} في إجازة · ${_libAr(t.short)} ${live ? 'لم يُتمّوا' : 'فاتتهم أيام'}` : 'تجريبي حتى ' + _libEsc(_dutyStartLabel())),
         _admKpi('is-blue', '<i class="adm-dot-live"></i>', 'في المقر الآن',
             `${_libAr(t.online)}`,
             t.working ? `${_libAr(t.working)} منهم في جلسة عمل` : 'لا أحد في جلسة عمل'),
-        _admKpi('is-gold', '⏱', 'عمل الفريق هذا الأسبوع',
+        _admKpi('is-gold', '⏱', 'عمل الفريق ' + _libEsc(wkName),
             _libEsc(_admDur(t.work)),
-            `${_admTrend(t.work, t.prevWork)} <span>مقارنة بالأسبوع الماضي</span>`),
-        _admKpi('is-red', '🏠', 'حضور الفريق هذا الأسبوع',
+            `${_admTrend(t.work, t.prevWork)} <span>مقارنة بالأسبوع السابق له</span>`),
+        _admKpi('is-red', '🏠', 'حضور الفريق ' + _libEsc(wkName),
             _libEsc(_admDur(t.presence)),
             t.known ? `بمعدل ${_libEsc(_admDur(t.presence / t.known))} للعضو` : ''),
     ].join('');
@@ -36286,36 +36402,36 @@ function _admRenderOverview() {
                 <span class="adm-lbar"><i style="width:${((x.ms / topPeak) * 100).toFixed(1)}%"></i></span></span>
             <span class="adm-lval">${_libEsc(_admDur(x.ms))}</span>
         </button>`).join('')
-        : `<p class="adm-empty">${t.loaded ? 'لا جلسات عمل هذا الأسبوع بعد.' : 'جارٍ الحساب…'}</p>`;
+        : `<p class="adm-empty">${t.loaded ? 'لا جلسات عمل في هذا الأسبوع.' : 'جارٍ الحساب…'}</p>`;
 
     const att = t.attention.length ? t.attention.slice(0, 6).map(x => `
         <button class="adm-lrow" type="button" data-adm="${_libEsc(x.uid)}">
             ${_admAv(x.m, x.uid)}
             <span class="adm-lname">${_libEsc(x.m.name || x.m.slug)}
-                <small>${x.miss ? `${_libEsc(_dutyDaysAr(x.miss))} فائتة هذا الأسبوع` : ''}${x.miss && x.quiet > 7 * 864e5 ? ' · ' : ''}${x.quiet > 7 * 864e5 ? (x.quiet === Infinity ? 'لا جلسات مسجّلة' : 'آخر جلسة ' + _libEsc(_admAgo(Date.now() - x.quiet))) : ''}</small></span>
+                <small>${x.miss ? `${_libEsc(_dutyDaysAr(x.miss))} فائتة ${_libEsc(wkName)}` : ''}${x.miss && x.quiet > 7 * 864e5 ? ' · ' : ''}${x.quiet > 7 * 864e5 ? (x.quiet === Infinity ? 'لا جلسات مسجّلة' : 'آخر جلسة ' + _libEsc(_admAgo(Date.now() - x.quiet))) : ''}</small></span>
             <span class="adm-pill is-warn">متابعة</span>
         </button>`).join('')
-        : `<p class="adm-empty">${t.known ? 'الجميع ملتزمون هذا الأسبوع 🎉' : 'جارٍ الحساب…'}</p>`;
+        : `<p class="adm-empty">${t.known ? 'الجميع ملتزمون في هذا الأسبوع 🎉' : 'جارٍ الحساب…'}</p>`;
 
     host.innerHTML = `
         <div class="adm-kpis">${kpis}</div>
         <div class="adm-grid2">
             <div class="adm-card adm-card-wide">
-                <div class="adm-card-h"><h3>حضور الأسبوع</h3><span>من أتمّ ثلاث ساعات، يومًا بيوم</span></div>
+                <div class="adm-card-h"><h3>حضور ${_libEsc(wkName)}</h3><span>من أتمّ ثلاث ساعات، يومًا بيوم</span></div>
                 <div class="adm-bars">${bars}</div>
             </div>
             <div class="adm-card">
-                <div class="adm-card-h"><h3>اليوم</h3><span>${_libEsc(DUTY_DAY_NAMES[todayIdx])}</span></div>
+                <div class="adm-card-h"><h3>${live ? 'اليوم' : 'الأسبوع'}</h3><span>${_libEsc(live ? DUTY_DAY_NAMES[todayIdx] : _admWeekLabel(_admViewStartMs()))}</span></div>
                 <div class="adm-donut-wrap">${donut}</div>
             </div>
         </div>
         <div class="adm-grid2 is-even">
             <div class="adm-card">
-                <div class="adm-card-h"><h3>الأعلى عملًا</h3><span>هذا الأسبوع</span></div>
+                <div class="adm-card-h"><h3>الأعلى عملًا</h3><span>${_libEsc(wkName)}</span></div>
                 <div class="adm-llist">${top}</div>
             </div>
             <div class="adm-card">
-                <div class="adm-card-h"><h3>يحتاجون متابعة</h3><span>أيام فائتة أو غياب طويل</span></div>
+                <div class="adm-card-h"><h3>يحتاجون متابعة</h3><span>${live ? 'أيام فائتة أو غياب طويل' : 'أيام فائتة في هذا الأسبوع'}</span></div>
                 <div class="adm-llist">${att}</div>
             </div>
         </div>`;
@@ -36326,17 +36442,16 @@ function _admRowHtml(m, i) {
     const data = uid ? _admRowData(uid) : null;
     const ok = data && !data.failed;
     const duty = uid ? _admDutyOf(uid) : null;
-    const today = _todayDateStr();
 
     let todayCell = '<span class="adm-muted">—</span>', dots = '<span class="adm-muted">—</span>';
     if (duty) {
-        const t = _admTodayOf(uid);
-        const cap = t.st === 'vac' ? 'إجازة' : t.st === 'done' ? (t.r.ok ? 'معتمد ✓' : 'أتمّ ✓') : _dutyClock(t.r.ms) + ' / ٣:٠٠';
-        todayCell = `<span class="adm-prog is-${t.st}"><span class="adm-prog-bar"><i style="width:${Math.round(t.pct * 100)}%"></i></span>`
-            + `<span class="adm-prog-cap">${_libEsc(cap)}</span></span>`;
-        dots = '<span class="adm-dd-row">' + _dutyWeekKeys(_dutyWeekStart(new Date())).map((k, j) => {
+        const f = _admFocusOf(uid);
+        todayCell = `<span class="adm-prog is-${f.st}"><span class="adm-prog-bar"><i style="width:${Math.round(f.pct * 100)}%"></i></span>`
+            + `<span class="adm-prog-cap">${_libEsc(f.cap)}</span></span>`;
+        const judge = _admJudgeKey();
+        dots = '<span class="adm-dd-row">' + _admViewKeys().map((k, j) => {
             const r = _dutyRec(duty, k);
-            const st = _dutyStateOf(r, k, today, duty);
+            const st = _dutyStateOf(r, k, judge, duty);
             const tip = `${DUTY_DAY_NAMES[j]}: ${st === 'future' ? '—' : r.vac ? 'إجازة' : st === 'vac' ? 'إجازة تلقائية' : _dutyDur(r.ms)}`;
             return `<i class="adm-dd is-${st}" title="${_libEsc(tip)}"></i>`;
         }).join('') + '</span>';
@@ -36358,8 +36473,8 @@ function _admRowHtml(m, i) {
                 data-adm="${_libEsc(uid)}" style="animation-delay:${Math.min(i, ADM_SEQ_MAX) * 26}ms">
         <span class="adm-c adm-c-who">${_admAv(m, uid)}
             <span class="adm-who-txt"><b>${_libEsc(m.name || m.slug)}</b>${status}</span></span>
-        <span class="adm-c adm-c-today" data-l="اليوم">${todayCell}</span>
-        <span class="adm-c adm-c-week" data-l="الأسبوع">${dots}</span>
+        <span class="adm-c adm-c-today" data-l="${_admLiveWeek() ? 'اليوم' : 'الأسبوع'}">${todayCell}</span>
+        <span class="adm-c adm-c-week" data-l="الأيام">${dots}</span>
         <span class="adm-c adm-c-num" data-l="الحضور">${presence}</span>
         <span class="adm-c adm-c-num" data-l="العمل">${work}</span>
         <span class="adm-c adm-c-trend" data-l="التغيّر">${trend}</span>
@@ -36398,6 +36513,43 @@ function _admPaintHead() {
     document.querySelectorAll('#adm-nav .adm-nav-btn').forEach(b => {
         b.classList.toggle('is-on', b.dataset.tab === (inDetail ? 'list' : _adm.tab));
     });
+    _admPaintWeek();
+}
+
+/* ── الأسبوع المعروض ──────────────────────────────────────────────────────────
+   The switcher itself. «التالي» locks with a CLASS at this week, never the
+   `disabled` attribute (iOS leaks touches through a disabled button — the same rule
+   the azkar «انتهيت» button follows), and _admSetWeek re-checks the bounds anyway. */
+function _admPaintWeek() {
+    const name = document.getElementById('adm-week-name');
+    const range = document.getElementById('adm-week-range');
+    if (name) name.textContent = _admWeekName(_adm.wk);
+    if (range) range.textContent = _admWeekLabel(_admViewStartMs());
+    const box = document.getElementById('adm-week');
+    if (box) box.classList.toggle('is-back', _adm.wk > 0);
+    document.querySelectorAll('#adm-week .adm-week-btn').forEach(b => {
+        const step = Number(b.dataset.wk) || 0;
+        const to = _adm.wk + step;
+        b.classList.toggle('is-off', to < 0 || to > ADM_MAX_BACK);
+    });
+    const copy = document.getElementById('adm-copy');
+    if (copy) copy.textContent = _admLiveWeek() ? 'نسخ تقرير اليوم' : 'نسخ تقرير الأسبوع';
+    const th = document.getElementById('adm-th-focus');
+    if (th) th.textContent = _admLiveWeek() ? 'اليوم' : 'الأسبوع';
+}
+
+/* Stepping weeks re-reads nothing that is already cached for that week (the slices are
+   keyed by week and live for ADM_WEEK_TTL_MS), so going back and forth is free after
+   the first look. The day editor's selection is dropped: it belonged to the old view. */
+function _admSetWeek(n) {
+    const wk = Math.max(0, Math.min(ADM_MAX_BACK, n | 0));
+    if (wk === _adm.wk) return;
+    _adm.wk = wk;
+    _adm.day = '';
+    _uiSeqReset();
+    if (_adm.uid) _admRenderDetail(); else _admRenderList(true);
+    _admPaintWeek();
+    _admAutoLoad(false);
 }
 
 function _admSetTab(tab) {
@@ -36413,28 +36565,30 @@ function _admSetTab(tab) {
     _admRenderList(true);
 }
 
-// «نسخ تقرير اليوم» — a plain-text roll-call the leader can paste into Telegram.
+/* «نسخ تقرير اليوم» — a plain-text roll-call the leader can paste into Telegram. It
+   follows the week switcher: on a finished week it is that week's roll-call instead,
+   read from the same _admFocusOf every row on screen is drawn from. */
 function _admCopyReport() {
-    const today = _todayDateStr();
+    const live = _admLiveWeek();
     const groups = { done: [], vac: [], short: [], unk: [] };
     for (const m of MDWNH_ROSTER.list) {
         if (!m.slug || m.dummy || m.active === false || !m.discordId) continue;
-        const t = _admTodayOf(String(m.discordId));
+        const f = _admFocusOf(String(m.discordId));
         const name = m.name || m.slug;
-        if (!t) groups.unk.push(name);
-        else if (t.st === 'done') groups.done.push(name);
-        else if (t.st === 'vac') groups.vac.push(name);
-        else groups.short.push(`${name} (${_dutyClock(t.r.ms)})`);
+        if (!f) groups.unk.push(name);
+        else if (f.st === 'done') groups.done.push(name);
+        else if (f.st === 'vac') groups.vac.push(name);
+        else groups.short.push(`${name} (${f.cap})`);
     }
-    let d = today;
-    try { d = new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }); } catch (_) {}
+    let d = _admWeekLabel(_admViewStartMs());
+    if (live) { try { d = new Date().toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }); } catch (_) { d = _todayDateStr(); } }
     const sec = (h, a) => a.length ? `\n${h} (${_libAr(a.length)}):\n${a.map(x => '• ' + x).join('\n')}\n` : '';
     const text = `حضور المقر — ${d}\n`
-        + sec('✅ أتمّوا ساعاتهم', groups.done)
+        + sec(live ? '✅ أتمّوا ساعاتهم' : '✅ التزموا الأسبوع كاملًا', groups.done)
         + sec('🌴 في إجازة', groups.vac)
-        + sec('⏳ لم يُتمّوا بعد', groups.short)
+        + sec(live ? '⏳ لم يُتمّوا بعد' : '⏳ فاتتهم أيام', groups.short)
         + sec('❔ لم تُقرأ بياناتهم', groups.unk);
-    const ok = () => _libToast('نُسخ تقرير اليوم — الصقه حيث تريد');
+    const ok = () => _libToast(live ? 'نُسخ تقرير اليوم — الصقه حيث تريد' : 'نُسخ تقرير الأسبوع — الصقه حيث تريد');
     const fail = () => _libToast('تعذّر النسخ، حاول مرة أخرى');
     try {
         if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fail);
@@ -36453,15 +36607,16 @@ function _admCopyReport() {
    days are shown, never held against anyone. */
 function _admDutySection(days) {
     if (!days) return `<div class="adm-card"><div class="adm-card-h"><h3>الحضور اليومي</h3></div><p class="adm-empty">تعذّرت قراءة الحضور.</p></div>`;
-    const today = _todayDateStr();
-    const cur = _dutyWeekStart(new Date());
+    const today = _todayDateStr();       // the EDITABLE bound — a future day has nothing to approve
+    const judge = _admJudgeKey();        // the day states are judged against (see _admViewKeys)
+    const cur = _admViewStartDate();     // the calendar opens on the week the leader is looking at
     let rows = '', thisWeekMs = 0;
     for (let i = 0; i < ADM_DUTY_WEEKS; i++) {
         const start = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate() - 7 * i);
         let ms = 0;
         const cells = _dutyWeekKeys(start).map((k, j) => {
             const r = _dutyRec(days, k);
-            const st = _dutyStateOf(r, k, today, days);
+            const st = _dutyStateOf(r, k, judge, days);
             if (!r.vac) ms += r.ms;
             const txt = st === 'future' ? '' : st === 'vac' ? '🌴'
                 : (r.ok && r.ms < DUTY.goalMs) ? '✓'
@@ -36478,7 +36633,7 @@ function _admDutySection(days) {
         let lbl = '';
         try { lbl = start.toLocaleDateString('ar-EG', { day: 'numeric', month: 'short' }); } catch (_) {}
         rows += `<div class="adm-cal-row${i === 0 ? ' is-cur' : ''}">
-            <span class="adm-cal-lbl">${_libEsc(i === 0 ? 'هذا الأسبوع' : lbl)}</span>${cells}
+            <span class="adm-cal-lbl">${_libEsc(i === 0 ? _admWeekName(_adm.wk) : lbl)}</span>${cells}
             <span class="adm-cal-ms">${_libEsc(_admDur(ms))}</span></div>`;
     }
     let done = 0, vac = 0, miss = 0;
@@ -36494,13 +36649,13 @@ function _admDutySection(days) {
     const dayHead = '<div class="adm-cal-row is-head"><span></span>'
         + DUTY_DAY_SHORT.map(n => `<span class="adm-cal-h">${n}</span>`).join('') + '<span></span></div>';
     return `<div class="adm-kpis is-mini">
-            ${_admKpi('is-teal', '🏠', 'حضور هذا الأسبوع', _libEsc(_admDur(thisWeekMs)), '')}
+            ${_admKpi('is-teal', '🏠', 'حضور ' + _libEsc(_admWeekName(_adm.wk)), _libEsc(_admDur(thisWeekMs)), '')}
             ${_admKpi('is-gold', '✓', 'أيام مكتملة', _libAr(done), `نسبة الالتزام ${_libAr(rate)}٪`)}
             ${_admKpi('is-blue', '🌴', 'إجازات', _libAr(vac), '')}
             ${_admKpi('is-red', '✕', 'أيام فائتة', _libAr(miss), `الالتزام المتصل: ${_libEsc(_dutyDaysAr(_dutyStreak(days, today)))}`)}
         </div>
         <div class="adm-card">
-            <div class="adm-card-h"><h3>الحضور اليومي</h3><span>آخر ${_libAr(ADM_DUTY_WEEKS)} أسابيع</span></div>
+            <div class="adm-card-h"><h3>الحضور اليومي</h3><span>${_libAr(ADM_DUTY_WEEKS)} أسابيع من ${_libEsc(_admWeekLabel(_admViewStartMs()))}</span></div>
             <div class="adm-cal">${dayHead}${rows}</div>
             <div class="adm-cal-key">
                 <span><i class="is-done"></i>مكتمل</span><span><i class="is-vac"></i>إجازة</span>
@@ -36533,7 +36688,7 @@ function _admDayEditor(days) {
     }
     const r    = _dutyRec(days, k);
     const raw  = days[k] || {};
-    const st   = _dutyDayState(days, k, today);
+    const st   = _dutyStateOf(r, k, _admJudgeKey(), days);
     const auto = st === 'vac' && !r.vac;      // derived, not stored — nothing to remove
     let lbl = k;
     try {
@@ -36592,10 +36747,13 @@ function _admSetDuty(uid, key, act) {
                 else delete rec.vac;
             };
             patch(days[key] = days[key] || {});
-            /* The list keeps its OWN slice of the same member (see _admFetchWeek), which
-               is a different object whenever the two were fetched apart. */
-            const w = _adm.week.get(uid);
-            if (w && w.duty && w.duty !== days) patch(w.duty[key] = w.duty[key] || { ...days[key] });
+            /* The list keeps its OWN slices of the same member (see _admFetchWeek) — one
+               per week looked at, each a different object whenever it was fetched apart.
+               Patch them all: the edited day belongs to exactly one of those weeks, and
+               which one depends on where in the calendar the leader pressed. */
+            for (const w of _adm.week.values()) {
+                if (w && w.uid === uid && w.duty && w.duty !== days) patch(w.duty[key] = w.duty[key] || { ...days[key] });
+            }
             _libToast(act === 'ok' ? 'اعتُمد اليوم مكتملًا' : act === 'unok' ? 'أُلغي اعتماد اليوم' : 'رُفعت الإجازة عن اليوم');
         })
         .catch(() => _libToast('تعذّر الحفظ، حاول مرة أخرى'))
@@ -36624,17 +36782,20 @@ function _admRenderDetail() {
 
     const on = _admOnline(uid);
     const t = _admTodayOf(uid);
+    const wi = Math.min(_adm.wk, ADM_WEEKS - 1);       // the viewed week's index in d.weeks
+    const curMs = d.weeks[wi] ? d.weeks[wi].ms : 0;
+    const prvMs = d.weeks[wi + 1] ? d.weeks[wi + 1].ms : 0;
     // Bars are scaled against the busiest week on screen, with an hour as the floor.
     const peak = Math.max(3600000, ...d.weeks.map(w => w.ms));
     const weeks = d.weeks.slice().reverse().map((w, i, arr) => {
         const pct = Math.max(w.ms > 0 ? 3 : 0, (w.ms / peak) * 100);
-        const isCur = i === arr.length - 1;
+        const isCur = i === arr.length - 1 - wi;        // the week the switcher is on
         let lbl = '';
         try { lbl = new Date(w.start).toLocaleDateString('ar-EG', { day: 'numeric', month: 'numeric' }); } catch (_) {}
         return `<div class="adm-bar${isCur ? ' is-today' : ''}" title="${_libEsc(_admWeekLabel(w.start))}: ${_libEsc(_admDur(w.ms))} · ${_libAr(w.n)} جلسة">
             <span class="adm-bar-n">${w.ms >= 3600000 ? _libAr(Math.round(w.ms / 3600000)) : ''}</span>
             <span class="adm-bar-track"><i style="height:${pct.toFixed(1)}%"></i></span>
-            <span class="adm-bar-d">${_libEsc(isCur ? 'الآن' : lbl)}</span>
+            <span class="adm-bar-d">${_libEsc(isCur ? (_admLiveWeek() ? 'الآن' : 'المعروض') : lbl)}</span>
         </div>`;
     }).join('');
 
@@ -36649,7 +36810,7 @@ function _admRenderDetail() {
     const avg = d.sessions ? d.total / d.sessions : 0;
     const status = on === 'work' ? '<span class="adm-pill is-work">يعمل الآن</span>'
         : on ? '<span class="adm-pill is-here">في المقر الآن</span>' : '<span class="adm-pill">غير متصل</span>';
-    const todayTxt = !t ? '' : t.st === 'vac' ? 'في إجازة اليوم' : t.st === 'done' ? 'أتمّ حضور اليوم ✓'
+    const todayTxt = (!t || !_admLiveWeek()) ? '' : t.st === 'vac' ? 'في إجازة اليوم' : t.st === 'done' ? 'أتمّ حضور اليوم ✓'
         : `اليوم: ${_dutyDur(t.r.ms)} من ٣ ساعات`;
 
     host.innerHTML = `
@@ -36658,7 +36819,7 @@ function _admRenderDetail() {
             <span class="adm-hero-txt">
                 <span class="adm-hero-name">${_libEsc(name)} ${status}</span>
                 <span class="adm-hero-sub">${d.last ? 'آخر جلسة: ' + _libEsc(_admDate(d.last)) + ' (' + _libEsc(_admAgo(d.last)) + ')' : 'لا جلسات مسجّلة'}${todayTxt ? ' · ' + _libEsc(todayTxt) : ''}</span>
-                ${t ? `<span class="adm-prog is-${t.st} is-lg"><span class="adm-prog-bar"><i style="width:${Math.round(t.pct * 100)}%"></i></span></span>` : ''}
+                ${t && _admLiveWeek() ? `<span class="adm-prog is-${t.st} is-lg"><span class="adm-prog-bar"><i style="width:${Math.round(t.pct * 100)}%"></i></span></span>` : ''}
             </span>
             <button id="adm-refresh" class="adm-refresh" type="button" title="تحديث" aria-label="تحديث">↻</button>
         </header>
@@ -36666,8 +36827,8 @@ function _admRenderDetail() {
         ${_admDutySection(d.duty)}
 
         <div class="adm-kpis is-mini">
-            ${_admKpi('is-gold', '⏱', 'عمل هذا الأسبوع', _libEsc(_admDur(d.thisWeek)), `${_admTrend(d.thisWeek, d.prevWeek)} <span>عن الماضي</span>`)}
-            ${_admKpi('is-blue', '↺', 'الأسبوع الماضي', _libEsc(_admDur(d.prevWeek)), '')}
+            ${_admKpi('is-gold', '⏱', 'عمل ' + _libEsc(_admWeekName(_adm.wk)), _libEsc(_admDur(curMs)), `${_admTrend(curMs, prvMs)} <span>عن الأسبوع السابق له</span>`)}
+            ${_admKpi('is-blue', '↺', 'الأسبوع السابق له', _libEsc(_admDur(prvMs)), '')}
             ${_admKpi('is-teal', 'Σ', 'إجمالي العمل', _libEsc(_admDur(d.total)), `${_libAr(d.sessions)} جلسة`)}
             ${_admKpi('is-red', '◷', 'متوسط الجلسة', _libEsc(_admDur(avg)), '')}
         </div>
@@ -36708,6 +36869,7 @@ function openAdminPanel() {
     const overlay = document.getElementById('admin-overlay');
     if (!overlay) return;
     _adm.open = true;
+    _adm.wk = 0;                           // every open starts on this week
     gameState.keys = {};                   // drop any held movement key
     // The gear's panel hangs off the tools box this button lives in, so leaving it
     // open behind a full-screen overlay just strands it.
@@ -36784,6 +36946,15 @@ function setupAdminUI() {
         if (b) _admSetTab(b.dataset.tab);
     });
     document.getElementById('adm-copy')?.addEventListener('click', _admCopyReport);
+
+    /* The week switcher. `data-wk` is a STEP (−1 back, +1 forward) except on the label
+       itself, which is 0 = jump back to this week. */
+    document.getElementById('adm-week')?.addEventListener('click', (e) => {
+        const b = e.target.closest('[data-wk]');
+        if (!b) return;
+        const step = Number(b.dataset.wk) || 0;
+        _admSetWeek(step ? _adm.wk + step : 0);
+    });
     const sortSel = document.getElementById('adm-sort');
     sortSel?.addEventListener('change', () => { _adm.sort = sortSel.value || 'name'; _admRenderList(false); });
 

@@ -57,6 +57,12 @@ menu's «نشرة الأخبار» button. Before pushing, add (or extend) TODAY
 — plain, spell-checked Arabic written for members, tagged `new` / `fix` / `better`. Never edit or
 delete an older day. See **نشرة الأخبار**.
 
+**Exception — لوحة القائد never appears in the news.** Anything that only نواف (or a سراج
+ghost) can see or use — the leader's panel, the crown button, `adminAllowed`, the
+اعتماد/رفع الإجازة writes — is **not member-facing**, so it gets **no patch-notes entry at
+all**. Members can't open it, and a line about a screen they will never see is noise. If a
+push contains only admin-panel work, it ships with `patch-notes.json` untouched.
+
 **Pre-commit hook**: besides the build number below, it regenerates `Hats/hats.json` from the PNGs in `Hats/` (see Character Customization), and `Stickers/sm/` + `Stickers/stickers.json` from the masters in `Stickers/` (see الملصقات).
 
 **Build number**: A `#build-number` div sits below the `#siraj-test-link` button on the login screen showing **`Build N · Updated M/D H:MM AM/PM`** (e.g. `Build 244 · Updated 7/28 1:47 PM`) — the **date is part of the stamp**, so "when did this last ship" is answerable at a glance. The `.git/hooks/pre-commit` hook auto-increments the number and rewrites the date+time on every commit — **never hand-edit it**. Its `sed` pattern treats the `M/D ` part as optional so an older date-less stamp is upgraded in place rather than skipped. If the hook can't find the pattern at all, it logs a warning and exits cleanly. **If the stamp format ever changes, update the hook's `sed` pattern and this line together.**
@@ -98,7 +104,7 @@ Grep anchors for the major systems (all verified to exist):
 | Daily duty (حضور المقر — was تحدي المثابرة) | `DUTY`, `updateWorkChallenge`, `_dutyTick`, `_dutySessTrack`, `_dutyFinishSession`, `_dutyBank`, `_dutyReplayPending`, `_dutySetVacation`, `_dutyFixApply`, `_chalPayDue`, `_chalClaim` |
 | Trophy shelf | `TROPHIES`, `updateTrophies`, `_troBank`, `_troClaim`, `_troCeremony` |
 | جوائز العام sheet | `AWD`, `_awdOpen`, `_awdPose`, `_awdRun`, `_awdClose` |
-| Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admTeam`, `_admRenderOverview`, `_admRenderList`, `_admRenderDetail`, `_admDutySection`, `_admCopyReport` |
+| Leader's panel | `ADMIN_UIDS`, `adminAllowed`, `_admFetchMember`, `_admTeam`, `_admRenderOverview`, `_admRenderList`, `_admRenderDetail`, `_admDutySection`, `_admCopyReport`, `_admSetWeek`, `_admFocusOf` |
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS`, `drawChatBeacons` |
 | الملصقات + الرموز التعبيرية | `STK_`, `_stk`, `receiveSticker`, `_stkSend`, `_stkUpdate`, `_stkSearch`, `_emo` |
 | «يكتب الآن» + الانصهار | `CHAT_TYP_`, `CHAT_MORPH_MS`, `sendTypingWS`, `_chatSetTyping`, `_chatMorphFx`, `_chatDrawTyping` |
@@ -3293,6 +3299,43 @@ nothing new is stored and there is no migration to run.
 **A week starts on SUNDAY, local, and is walked with `setDate()`** — never a millisecond
 division. A DST hop is an hour, and an hour either side of a boundary would drop a whole
 evening of work into the wrong column. Same rule as `_chalMidnights()`.
+
+### مبدّل الأسبوع — the panel reads ONE week, and that week moves
+`_adm.wk` is how many weeks back the leader has stepped (0 = this week, capped at
+`ADM_MAX_BACK` = `ADM_WEEKS - 1`). **Every number on screen reads against it** — the dots,
+the الحضور and العمل columns, the overview's bars/donut/leaderboards, the member's calendar
+and its KPIs, and the copied report. Stepping back is the answer to "the leader can't see
+previous weeks' stats".
+
+- **The bounded read MOVES with it, it does not grow.** `_admFetchWeek` now asks
+  `startAt(prevWeekStart)` **`.endAt(weekAfter)`** — closed at BOTH ends. On an older week
+  `startAt` alone would read everything from then until now, which is exactly the unbounded
+  read the range exists to avoid. `endAt` is exported from `firebase-config.js` for this.
+- **`_adm.week` is keyed `wk + '|' + uid`** (`_admWeekCacheKey`), so each week has its own
+  slice and its own TTL — stepping back and forth is free after the first look.
+- **`_admFetchMember`'s full history answers for ANY week** (it summarises `ADM_WEEKS`), so
+  it no longer writes a slice beside itself; `_admRowData` projects it onto the viewed week
+  and, being the fresher `at`, wins over any slice. That is why `ADM_MAX_BACK` stops at
+  `ADM_WEEKS - 1`.
+- **`_admJudgeKey()` is the day states are judged against**: today in the live week, the day
+  **after** the week in a finished one — so nothing in a past week reads as «اليوم، ما زال
+  مفتوحًا». A past week has no open day.
+- **`_admFocusOf(uid)` is the one cell the list, the filters, the sort and the report all
+  ask.** Live week → **today** (unchanged, byte-for-byte the old behaviour). Finished week →
+  **the week as a whole** (`_admWeekStatsOf`: done / vac / miss over its judged days), which
+  is the only question a past week can answer. Same three state words either way, so nothing
+  downstream needed a second code path. Labels flip with it (أتمّوا اليوم → التزموا الأسبوع،
+  نسخ تقرير اليوم → نسخ تقرير الأسبوع).
+- **«يحتاجون متابعة» drops its quiet-member test off the live week.** On an older week `last`
+  is that week's own last session, so "no session in 7+ days" would be true of everybody.
+- **`_admAutoLoad` captures the week it is draining** and aborts when the leader steps, then
+  restarts through the same `stopped` tail — otherwise a drain would keep spending reads on
+  a week nobody is looking at.
+- **`_admSetDuty` patches EVERY slice of that member**, not just one: the edited day belongs
+  to whichever week the leader pressed in the six-week calendar, which may not be the slice
+  currently on screen.
+- The switcher locks «التالي» with a **`.is-off` class, never the `disabled` attribute**
+  (iOS touch leak), and `openAdminPanel` resets to this week on every open.
 
 ### Cost — the list is automatic because its read is BOUNDED
 Nothing has to be pressed: `_admAutoLoad()` runs on open and fills every row. That is

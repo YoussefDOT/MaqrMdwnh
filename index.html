@@ -158,7 +158,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 324 · Updated 9/19 8:30 PM</div>
+    <div id="build-number" class="build-number">Build 326 · Updated 9/20 1:57 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1627,6 +1627,21 @@
                         <h2 id="adm-title" class="adm-title">نظرة عامة</h2>
                         <p id="adm-sub" class="adm-sub"></p>
                     </span>
+                    <!-- مبدّل الأسبوع: كل أرقام اللوحة تُقرأ على الأسبوع المعروض،
+                         ونطاق القراءة لكل عضو ينتقل معه (انظر _admFetchWeek في game.js)،
+                         فالنظر إلى أسبوع قديم يكلّف ما يكلّفه النظر إلى هذا الأسبوع. -->
+                    <div id="adm-week" class="adm-week">
+                        <button class="adm-week-btn" type="button" data-wk="1" aria-label="الأسبوع السابق">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 5l7 7-7 7"/></svg>
+                        </button>
+                        <button class="adm-week-txt" type="button" data-wk="0" title="عودة إلى هذا الأسبوع">
+                            <b id="adm-week-name">هذا الأسبوع</b>
+                            <small id="adm-week-range"></small>
+                        </button>
+                        <button class="adm-week-btn" type="button" data-wk="-1" aria-label="الأسبوع التالي">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 5l-7 7 7 7"/></svg>
+                        </button>
+                    </div>
                     <button id="admin-close" class="adm-close" type="button" aria-label="إغلاق">✕</button>
                 </header>
 
@@ -1658,7 +1673,7 @@
                         <div id="adm-duty-bar" class="adm-duty-bar"></div>
                         <div class="adm-table">
                             <div class="adm-thead" aria-hidden="true">
-                                <span>العضو</span><span>اليوم</span><span>هذا الأسبوع</span>
+                                <span>العضو</span><span id="adm-th-focus">اليوم</span><span>أيام الأسبوع</span>
                                 <span>الحضور</span><span>العمل</span><span>التغيّر</span><span>آخر جلسة</span>
                             </div>
                             <div id="adm-members" class="adm-members"></div>
@@ -2142,7 +2157,7 @@
 
         <!-- البرمجيات -->
         <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=311"></script>
+        <script type="module" src="game.js?v=312"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
