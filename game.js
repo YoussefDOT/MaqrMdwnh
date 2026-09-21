@@ -36520,7 +36520,7 @@ function _admRowHtml(m, i) {
         dots = '<span class="adm-dd-row">' + _admViewKeys().map((k, j) => {
             const r = _dutyRec(duty, k);
             const st = _dutyStateOf(r, k, judge, duty);
-            const tip = `${DUTY_DAY_NAMES[j]}: ${st === 'future' ? '—' : r.vac ? 'إجازة' : st === 'vac' ? 'إجازة تلقائية' : _dutyDur(r.ms)}`;
+            const tip = `${DUTY_DAY_NAMES[j]}: ${st === 'future' ? '—' : (r.vac ? 'إجازة · ' : st === 'vac' ? 'إجازة تلقائية · ' : '') + _dutyDur(r.ms)}`;
             return `<i class="adm-dd is-${st}" title="${_libEsc(tip)}"></i>`;
         }).join('') + '</span>';
     }
@@ -36557,7 +36557,13 @@ function _admRenderList(animate) {
     const host = document.getElementById('adm-members');
     if (!host) return;
     _admRenderDutyBar();
-    if (_adm.tab === 'over') _admRenderOverview();
+    if (_adm.tab === 'over') {
+        _admRenderOverview();
+        // Same rule as the rows: the cards' entrance belongs to the open only. The
+        // auto-load re-renders this once per batch, and replaying it read as the panel
+        // "refreshing itself" several times.
+        document.getElementById('adm-over')?.classList.toggle('is-still', !animate);
+    }
     const list = _admMembers();
     host.classList.toggle('is-still', !animate);
     host.innerHTML = list.length
@@ -36686,10 +36692,13 @@ function _admDutySection(days) {
             const r = _dutyRec(days, k);
             const st = _dutyStateOf(r, k, judge, days);
             if (!r.vac) ms += r.ms;
-            const txt = st === 'future' ? '' : st === 'vac' ? '🌴'
+            // A vacation still shows what was worked (its blue says vacation) — an automatic
+            // one is a SHORT day (2:50 of 3 h), and the leader has to see how close it was.
+            const txt = st === 'future' ? '' : st === 'vac' ? (r.ms >= 60000 ? _dutyClock(r.ms) : '🌴')
                 : (r.ok && r.ms < DUTY.goalMs) ? '✓'
                 : r.ms >= 60000 ? _dutyClock(r.ms) : '';
-            const note = r.ok ? ' — اعتماد يدوي' : st === 'vac' && !r.vac ? ' — إجازة تلقائية' : '';
+            const note = (r.ok ? ' — اعتماد يدوي' : st === 'vac' && !r.vac ? ' — إجازة تلقائية' : '')
+                + (st !== 'future' ? ' — ' + _dutyDur(r.ms) : '');
             const fixNote = r.fix ? ' — منها ' + _dutyDur(r.fix) + ' مضافة يدويًا' : '';
             const tip = _libEsc(DUTY_DAY_NAMES[j] + ' ' + k + note + fixNote);
             /* Only a real mandatory day that has already begun can be edited — a future
@@ -36848,6 +36857,12 @@ function _admRenderDetail() {
         return;
     }
 
+    /* The entrance plays once per member opened — a day pressed in the calendar, the
+       full history landing or a save re-render all of this, and replaying every card
+       each time read as the page refreshing. */
+    host.classList.toggle('is-still', !_adm.detailAnim);
+    _adm.detailAnim = false;
+
     const on = _admOnline(uid);
     const t = _admTodayOf(uid);
     const wi = Math.min(_adm.wk, ADM_WEEKS - 1);       // the viewed week's index in d.weeks
@@ -36917,6 +36932,7 @@ function _admOpenMember(uid) {
     if (!uid) return;
     _adm.uid = uid;
     _adm.day = '';
+    _adm.detailAnim = true;
     document.getElementById('adm-over-view')?.setAttribute('hidden', '');
     document.getElementById('adm-list-view')?.setAttribute('hidden', '');
     document.getElementById('adm-detail-view')?.removeAttribute('hidden');

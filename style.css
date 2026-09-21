@@ -11661,6 +11661,8 @@ body.is-mobile .tro-paper-fly.is-drag  .tro-paper-sheen { opacity: 0.5; }
 .adm-row:focus-visible { outline: 2px solid var(--blue); outline-offset: -2px; }
 .adm-row.is-off { opacity: 0.55; cursor: default; }
 .adm-members.is-still .adm-row { animation: none; }
+.adm-over.is-still :is(.adm-card, .adm-kpi),
+.adm-detail.is-still :is(.adm-card, .adm-kpi, .adm-hero, .adm-day-edit) { animation: none; }
 @keyframes admRowIn {
     from { opacity: 0; transform: translateY(8px); }
     to   { opacity: 1; transform: none; }
