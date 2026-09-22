@@ -29374,8 +29374,9 @@ function _libTaskPill(t, i, opts) {
     el.innerHTML = pts + media +
         '<span class="pill-main">' +
             '<span class="task-title">' + _libEsc(t.title) + '</span>' +
-            (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
-            '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>' +
+            // one line under the title: the وصف, or the nudge when there is none
+            (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>'
+                : '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>') +
         '</span>' +
         '<span class="pill-end">' + _libCdHtml(t) + (hasFoot ? '' : action) + '</span>' +
         (hasFoot ? '<span class="pill-foot">' + labels +
