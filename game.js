@@ -29004,6 +29004,12 @@ const LIB_TAGS = {
     coord:   { label: 'تنسيق', color: '#2f8fe0' },
 };
 const LIB_TAG_ORDER = ['content', 'prod', 'comm', 'coord'];
+// Mirrors TAG_ICONS — the قسم's doodle behind each pill, off the library's own deployment.
+const LIB_TAG_ICONS = {
+    content: LIB_SITE_URL + '/assets/stickers/sparkle.webp',
+    prod:    LIB_SITE_URL + '/assets/stickers/burst.webp',
+    comm:    LIB_SITE_URL + '/assets/stickers/spiral.webp',
+};
 
 const LIB_ICON = {
     tri:   '<svg viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M6 8.6 1.2 3.4A.7.7 0 0 1 1.7 2.2h8.6a.7.7 0 0 1 .5 1.2z"/></svg>',
@@ -29078,6 +29084,7 @@ const LIB_NUDGE_URGENT = [
 const _lib = {
     me: null,           // this player's roster member ({slug,name,dbKey,admin}) or null
     tasks: null,        // { id: task } — the whole library/tasks tree, or null
+    torder: {},         // { id: rank } — the member's own dragged order, library/torder/<slug>
     error: false,       // last fetch failed AND nothing is cached
     fetchedAt: 0,
     loading: null,      // in-flight fetch promise, so two callers share one request
@@ -29357,7 +29364,9 @@ function _libTagsHtml(t) {
     const keys = LIB_TAG_ORDER.filter(k => t.tags && t.tags[k]);
     if (!keys.length) return '';
     return '<span class="task-tags">' + keys.map(k =>
-        '<span class="task-tag" style="--tc:' + LIB_TAGS[k].color + '">' + _libEsc(LIB_TAGS[k].label) + '</span>'
+        '<span class="task-tag" style="--tc:' + LIB_TAGS[k].color + '">' + _libEsc(LIB_TAGS[k].label) +
+        (LIB_TAG_ICONS[k] ? '<img class="tag-ico" src="' + LIB_TAG_ICONS[k] + '" alt="" aria-hidden="true" decoding="async">' : '') +
+        '</span>'
     ).join('') + '</span>';
 }
 
@@ -29375,11 +29384,13 @@ function _libTaskPill(t, i, opts) {
     const full = _libIsFullyDone(t);
     const c = _libCountdown(t.due);
     const color = t.color || '#41b9a6';
+    const kidsN = opts.kids ? (opts.kids.get(t.id) || []).length : 0;
 
     const el = document.createElement('article');
     el.className = 'task' +
         (done || (watching && full) ? ' done' : '') +
         (opts.subs && opts.subs.has(t.id) ? ' subpill' : '') +
+        (kidsN ? ' parent' : '') +
         (c.late ? ' overdue' : '') +
         (!c.late && c.ms <= LIB_DAY_MS ? ' urgent' : '');
     el.style.setProperty('--c', color);
@@ -29398,6 +29409,11 @@ function _libTaskPill(t, i, opts) {
         : t.pic
             ? '<img class="task-img" alt="" decoding="async">'
             : '<span class="task-emoji">' + _libEsc(t.emoji || '📌') + '</span>';
+    // the pill's own chrome — the قسم's mark, and the striped ring a PARENT wears
+    const decoKey = LIB_TAG_ORDER.find(k => t.tags && t.tags[k] && LIB_TAG_ICONS[k]);
+    const chrome =
+        (decoKey ? '<img class="pill-deco" src="' + LIB_TAG_ICONS[decoKey] + '" alt="" aria-hidden="true" decoding="async">' : '') +
+        (kidsN ? '<i class="pill-ring" aria-hidden="true"></i>' : '');
     const pts = (t.points && !done && !(watching && full))
         ? '<span class="task-pts"><img src="' + _libEsc(_libSticker(t.points)) + '" alt="' + _libAr(t.points) + ' نقطة" loading="lazy" decoding="async"></span>'
         : '';
@@ -29433,7 +29449,7 @@ function _libTaskPill(t, i, opts) {
     if (_libAssignees(t).length >= LIB_CROWD) {
         // THE CROWD PILL — one line under the title, the chip, then the foot line
         el.classList.add('crowd');
-        el.innerHTML = pts + media +
+        el.innerHTML = chrome + pts + media +
             '<span class="pill-main">' +
                 '<span class="task-title">' + _libEsc(t.title) + '</span>' +
                 (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : quote) +
@@ -29443,7 +29459,7 @@ function _libTaskPill(t, i, opts) {
                 '<span class="pill-act">' + _libWhoRow(t, watching) + action + '</span></span>';
     } else {
         // THE CLASSIC PILL — one row
-        el.innerHTML = pts + media +
+        el.innerHTML = chrome + pts + media +
             '<span class="pill-main">' +
                 '<span class="task-title">' + _libEsc(t.title) + '</span>' +
                 (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
@@ -29517,7 +29533,48 @@ function _libKidsChip(t, opts) {
     return '<button class="pill-kids' + (shut ? ' on' : '') + '" type="button"' +
         ' aria-expanded="' + String(!shut) + '"' +
         ' aria-label="' + (shut ? 'إظهار المهام الفرعية' : 'طي المهام الفرعية') + '">' +
-        LIB_ICON.tri + '<span>' + _libAr(n) + '</span></button>';
+        '<i>' + LIB_ICON.tri + '</i><span>' + _libAr(n) + ' فرعية</span></button>';
+}
+
+/* ── the member's own order — mirror of `byRank()` in MdwnhLibrary/js/tasks.js
+   `library/torder/<slug>` = { id: rank }, written by the grip in the library.
+   Unranked tasks lead their group in موعد order, then the ranked ones. */
+const _libRankOf = id => (_lib.torder && _lib.torder[id] != null ? Number(_lib.torder[id]) : null);
+function _libByRank(list) {
+    const fresh = list.filter(t => _libRankOf(t.id) == null);
+    const kept = list.filter(t => _libRankOf(t.id) != null).sort((a, b) => _libRankOf(a.id) - _libRankOf(b.id));
+    return fresh.concat(kept);
+}
+
+/* The fold SLIDES — mirror of `foldRows()` in MdwnhLibrary/js/tasks.js. Height,
+   the 10px gap and opacity run to/from zero, so the pills under the family
+   glide instead of jumping; `.seen` stops the pill's entrance replaying. */
+function _libFoldRows(rows, shut) {
+    const reduce = matchMedia('(prefers-reduced-motion:reduce)').matches;
+    rows.forEach(r => {
+        clearTimeout(r._fold);
+        r.classList.add('seen');
+        if (reduce) { r.classList.toggle('hid', shut); return; }
+        const was = r.classList.contains('hid');
+        const from = was ? 0 : r.getBoundingClientRect().height;
+        r.classList.remove('hid');
+        r.style.height = '';
+        const full = r.scrollHeight;
+        r.classList.add('folding', 'fold-still');
+        r.style.height = from + 'px';
+        r.style.marginBlockStart = was ? '-10px' : getComputedStyle(r).marginBlockStart;
+        r.style.opacity = was ? '0' : getComputedStyle(r).opacity;
+        void r.offsetHeight;
+        r.classList.remove('fold-still');
+        r.style.height = (shut ? 0 : full) + 'px';
+        r.style.marginBlockStart = shut ? '-10px' : '0px';
+        r.style.opacity = shut ? '0' : '1';
+        r._fold = setTimeout(() => {
+            r.classList.remove('folding');
+            r.style.height = r.style.marginBlockStart = r.style.opacity = '';
+            r.classList.toggle('hid', shut);
+        }, 380);
+    });
 }
 
 /* ── a collapsible group ──────────────────────────────────────────────────── */
@@ -29526,7 +29583,7 @@ function _libBlock(id, cls, title, items, opts, seq) {
     seq = seq || { n: 0 };
     // The count stays FLAT — a subtask is a task, and the number must agree with
     // what there is to finish. Only the layout nests.
-    const nested = _libNest(items);
+    const nested = _libNest(_libByRank(items));
     opts = Object.assign({}, opts || {}, { subs: nested.subs, kids: nested.kids });
     const sec = document.createElement('section');
     sec.className = 'subgroup ' + cls + (_lib.shut[id] ? ' collapsed' : '');
@@ -29569,7 +29626,7 @@ function _libBlock(id, cls, title, items, opts, seq) {
             e.stopPropagation();                   // the pill itself opens the library
             const shut = !_lib.shutKids.has(pid);
             if (shut) _lib.shutKids.add(pid); else _lib.shutKids.delete(pid);
-            rows.forEach(r => r.classList.toggle('hid', shut));
+            _libFoldRows(rows, shut);
             btn.classList.toggle('on', shut);
             btn.setAttribute('aria-expanded', String(!shut));
             btn.setAttribute('aria-label', shut ? 'إظهار المهام الفرعية' : 'طي المهام الفرعية');
@@ -29970,8 +30027,13 @@ function _libEnsureTasks(force) {
     if (!force && _lib.tasks && (Date.now() - _lib.fetchedAt) < LIB_REFETCH_MS) {
         return Promise.resolve(_lib.tasks);
     }
-    _lib.loading = libGet(`${LIB_ROOT}/tasks`)
-        .then(data => {
+    // the order rides the same one-shot read: a few bytes, never a listener
+    const ord = _lib.me && _lib.me.slug
+        ? libGet(`${LIB_ROOT}/torder/${_lib.me.slug}`).catch(() => undefined)
+        : Promise.resolve(undefined);
+    _lib.loading = Promise.all([libGet(`${LIB_ROOT}/tasks`), ord])
+        .then(([data, o]) => {
+            if (o !== undefined) _lib.torder = (o && typeof o === 'object') ? o : {};
             _lib.tasks = (data && typeof data === 'object') ? data : {};
             _lib.fetchedAt = Date.now();
             _lib.error = false;

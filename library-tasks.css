@@ -51,7 +51,7 @@
 .lib-pills .task {
     position: relative; overflow: hidden; isolation: isolate;
     display: flex; flex-direction: row; align-items: center; gap: 8px;
-    width: 100%; padding: 9px 11px; border-radius: 18px;
+    width: 100%; padding: 9px 11px; border-radius: 20px;
     text-align: start; color: var(--fg, #fff); background: var(--c, #41b9a6);
     box-shadow: 0 16px 30px -22px var(--c, #000), 0 4px 14px rgba(0, 0, 0, .5);
     transition: transform .3s var(--ease), box-shadow .3s var(--ease);
@@ -72,10 +72,14 @@
 .lib-pills .lib-panel-body.silent * { animation: none; }
 
 .lib-pills .task::before {
-    content: ""; position: absolute; inset: 0; z-index: -1;
-    background: linear-gradient(165deg, rgba(255, 255, 255, .17), transparent 58%);
+    content: ""; position: absolute; inset: 0; z-index: -1; border-radius: inherit;
+    background:
+        linear-gradient(165deg, rgba(255, 255, 255, .2), rgba(255, 255, 255, 0) 55%),
+        linear-gradient(0deg, rgba(0, 0, 0, .14), rgba(0, 0, 0, 0) 55%);
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, .26), inset 0 0 0 1px rgba(255, 255, 255, .08);
 }
 .lib-pills .task:hover { transform: translateY(-3px) scale(1.012); }
+.lib-pills .task-title { text-shadow: 0 1px 0 rgba(0, 0, 0, .1); }
 
 .lib-pills .task.done { filter: saturate(.6) brightness(.86); }
 .lib-pills .task.done::after {
@@ -101,11 +105,12 @@
 .lib-pills .task-emoji {
     width: 42px; height: 42px; flex: 0 0 auto; border-radius: 13px;
     display: grid; place-items: center; font-size: 1.3rem; line-height: 1;
-    background: rgba(0, 0, 0, .18);
+    background: rgba(0, 0, 0, .18); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .12);
 }
 .lib-pills .task-img {
     width: 62px; aspect-ratio: 2/1; flex: 0 0 auto; border-radius: 10px; object-fit: cover;
     background: rgba(0, 0, 0, .14);
+    box-shadow: 0 0 0 1.5px rgba(255, 255, 255, .28), 0 6px 14px -8px rgba(0, 0, 0, .7);
 }
 /* min-width:0 + nowrap is what stops the title collapsing into one word per
    line when the row runs out of width */
@@ -125,10 +130,20 @@
     min-width: 0; flex: 0 1 auto;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.lib-pills .task-tags { display: flex; gap: 4px; overflow: hidden; flex: 0 0 auto; }
+.lib-pills .task-tags { display: flex; gap: 5px; flex: 0 0 auto; }
 .lib-pills .task-tag {
     font-size: .58rem; font-weight: 800; padding: 1px 6px; border-radius: 999px;
     background: var(--tc); color: #12100c; white-space: nowrap;
+}
+/* own-colour fill + an OVERLAY-blended ring, on BOTH pill shapes now */
+.lib-pills .task-tags .task-tag { position: relative; font-weight: 900; padding: 1px 7px; display: inline-flex; align-items: center; gap: 3px; }
+.lib-pills .tag-ico {
+    width: 10px; height: 10px; object-fit: contain; flex: 0 0 auto;
+    filter: brightness(0) invert(1) drop-shadow(0 0 .6px rgba(0, 0, 0, .55));
+}
+.lib-pills .task-tags .task-tag::after {
+    content: ""; position: absolute; inset: -2px; border-radius: inherit; pointer-events: none;
+    border: 2px solid rgba(0, 0, 0, .7); mix-blend-mode: overlay;
 }
 
 /* the sticker sits over the media, which in RTL is the row's start edge */
@@ -344,17 +359,29 @@
 
 /* ضغط المهمة — the chip on a parent's own foot folds its subtasks away. */
 .lib-pills .pill-kids {
-    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 3px;
-    font: inherit; font-size: .58rem; font-weight: 800; line-height: 1.7; padding: 0 6px;
-    border-radius: 999px; background: transparent; color: var(--fg); cursor: pointer;
-    border: 1px solid color-mix(in srgb, var(--fg) 34%, transparent);
-    transition: background .2s var(--ease), transform .2s var(--ease);
+    flex: 0 0 auto; display: inline-flex; align-items: center; gap: 5px;
+    height: 24px; padding: 0 10px 0 4px;
+    font: inherit; font-size: .68rem; font-weight: 900; line-height: 1; white-space: nowrap;
+    border-radius: 999px; background: rgba(0, 0, 0, .3); color: #fff; cursor: pointer;
+    border: 1.5px solid color-mix(in srgb, #fff 45%, transparent);
+    box-shadow: 0 4px 10px -6px rgba(0, 0, 0, .6);
+    transition: background .2s var(--ease), transform .25s var(--pop);
 }
-.lib-pills .pill-kids:hover { background: color-mix(in srgb, var(--fg) 14%, transparent); }
-.lib-pills .pill-kids:active { transform: scale(.92); }
-.lib-pills .pill-kids svg { width: 8px; height: 8px; transition: transform .3s var(--ease); }
+.lib-pills .pill-kids i {
+    width: 17px; height: 17px; border-radius: 50%; display: grid; place-items: center;
+    background: #fff; color: #111;
+}
+.lib-pills .pill-kids:hover { background: rgba(0, 0, 0, .45); transform: scale(1.06); }
+.lib-pills .pill-kids:active { transform: scale(.94); }
+.lib-pills .pill-kids svg { width: 9px; height: 9px; transition: transform .3s var(--ease); }
 .lib-pills .pill-kids.on svg { transform: rotate(-90deg); }
 .lib-pills .subrow.hid { display: none; }
+.lib-pills .subrow.folding {
+    overflow: hidden;
+    transition: height .34s var(--ease), margin .34s var(--ease), opacity .26s var(--ease);
+}
+.lib-pills .subrow.fold-still, .lib-pills .subrow.fold-still * { transition: none !important; }
+.lib-pills .subrow.seen .task { animation: none; }
 
 /* «بلا موعد» keeps the countdown's slot (a task may carry no `due` now) */
 .lib-pills .pill-cd.nodue .u { font-size: .58rem; opacity: .6; text-align: center; line-height: 1.25; }
@@ -393,12 +420,7 @@
     border-top: 1px solid color-mix(in srgb, var(--fg, #fff) 16%, transparent);
 }
 .lib-pills .task.crowd .task-tags { flex: 0 1 auto; flex-wrap: wrap; gap: 5px; min-width: 0; overflow: visible; }
-/* own-colour fill + an OVERLAY-blended ring: a darker shade of what it sits on */
-.lib-pills .task.crowd .task-tag { position: relative; flex: 0 0 auto; font-size: .58rem; font-weight: 900; padding: 1px 7px; }
-.lib-pills .task.crowd .task-tag::after {
-    content: ""; position: absolute; inset: -2px; border-radius: inherit; pointer-events: none;
-    border: 2px solid rgba(0, 0, 0, .7); mix-blend-mode: overlay;
-}
+.lib-pills .task.crowd .task-tag { flex: 0 0 auto; }
 .lib-pills .pill-act { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-inline-start: auto; }
 .lib-pills .task.crowd .pill-check { width: 28px; height: 28px; }
 .lib-pills .task.crowd .pill-check svg { width: 14px; height: 14px; }
@@ -432,3 +454,35 @@
 .lib-pills .task.crowd.done .pill-cd { background: rgba(0, 0, 0, .2); color: var(--fg, #fff); box-shadow: none; }
 .lib-pills .subrow .task.crowd .task-img { width: 68px; }
 .lib-pills .subrow .task.crowd .task-emoji { width: 36px; height: 36px; }
+
+/* ── mirrors «THE PILL'S OWN CHROME» in MdwnhLibrary/css/tasks.css ─────────────
+   The قسم's doodle, white and huge at the physical left; the striped ring a
+   PARENT wears; the quieter subtask. maqr has no grip — ordering is done in the
+   library — but it READS the member's order, so the list is the same one. */
+.lib-pills .pill-deco {
+    position: absolute; z-index: -1; pointer-events: none;
+    inset-inline-end: -18px; top: 50%; height: 165%; width: auto; max-width: none;
+    transform: translateY(-50%) rotate(-14deg);
+    filter: brightness(0) invert(1); opacity: .16;
+    transition: transform .5s var(--pop), opacity .3s var(--ease);
+}
+.lib-pills .task:hover .pill-deco { transform: translateY(-50%) rotate(-4deg) scale(1.08); opacity: .22; }
+.lib-pills .task.done .pill-deco { opacity: .08; }
+.lib-pills .pill-ring {
+    position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: inherit;
+    padding: 3px;
+    background: repeating-linear-gradient(-45deg,
+        color-mix(in srgb, var(--fg, #fff) 78%, transparent) 0 5px, transparent 5px 10px);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+    opacity: .8;
+}
+.lib-pills .task.parent { box-shadow: 0 18px 32px -20px var(--c, #000), 0 6px 18px rgba(0, 0, 0, .55); }
+.lib-pills .subrow .task {
+    border-radius: 16px; padding-block: 7px;
+    box-shadow: 0 10px 20px -18px var(--c, #000), 0 3px 10px rgba(0, 0, 0, .4);
+}
+.lib-pills .subrow .task::before { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--fg, #fff) 26%, transparent); }
+.lib-pills .subrow .task .task-img { width: 54px; }
+.lib-pills .subrow .task .task-emoji { width: 36px; height: 36px; font-size: 1.1rem; }
