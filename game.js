@@ -31456,14 +31456,21 @@ function _chalPaintTally() {
         if (rec.ok || rec.ms >= DUTY.goalMs) wkDone++;
     }
     if (tally) {
-        const todayLine = r.ok ? '<div class="ok">اعتمد القائد يومك ✓</div>'
-            : r.vac ? '<div class="vac">اليوم إجازة 🌴</div>'
-            : r.ms >= DUTY.goalMs ? `<div class="ok">أتممت ساعاتك اليوم ✓ — <b>${_dutyDur(r.ms)}</b></div>`
-            : `<div>اليوم: <b>${_dutyDur(r.ms)}</b> من ٣ ساعات</div>`;
-        const weekLine = `<div>في المقر هذا الأسبوع: <b>${_dutyDur(wkMs)}</b> · الأيام المكتملة: <b>${_libAr(wkDone)}</b></div>`;
-        const vacLine = !started ? '<div>الإجازات تبدأ مع بدء الإلزام.</div>'
-            : `<div>الإجازات المتبقية هذا الأسبوع: <b>${_libAr(_dutyVacLeft())}</b> من ${_libAr(DUTY.vacPerWeek)}</div>`;
-        tally.innerHTML = todayLine + weekLine + vacLine;
+        /* Four small cards in one row — label, big value, a quiet line under it.
+           Each value is its own box, so no neutral separator sits between digits
+           (the bidi trap the payout rungs are boxed for). */
+        const card = (cls, label, value, sub) =>
+            `<div class="chal-stat${cls ? ' ' + cls : ''}"><span class="chal-stat-lbl">${label}</span>`
+            + `<b class="chal-stat-val">${value}</b><span class="chal-stat-sub">${sub}</span></div>`;
+        const todayCard = r.ok ? card('ok', 'اليوم', '✓', 'اعتمده القائد')
+            : r.vac ? card('vac', 'اليوم', '🌴', 'إجازة')
+            : r.ms >= DUTY.goalMs ? card('ok', 'اليوم', _dutyDur(r.ms), 'أتممت ساعاتك ✓')
+            : card('', 'اليوم', _dutyDur(r.ms), 'من ٣ ساعات');
+        const weekCard = card('', 'هذا الأسبوع', _dutyDur(wkMs), 'في المقر');
+        const doneCard = card(wkDone ? 'ok' : '', 'أيام مكتملة', _libAr(wkDone), 'هذا الأسبوع');
+        const vacCard  = !started ? card('vac', 'الإجازات', '—', 'تبدأ مع الإلزام')
+            : card('vac', 'الإجازات', _libAr(_dutyVacLeft()), 'متبقية من ' + _libAr(DUTY.vacPerWeek));
+        tally.innerHTML = '<div class="chal-stats">' + todayCard + weekCard + doneCard + vacCard + '</div>';
     }
     if (vacBtn) {
         /* A vacation that EXISTS can always be undone — the undo is never gated on the

@@ -9322,6 +9322,39 @@ body.is-mobile .chal-fill { background-size: 188px 100%; }
 .chal-modal.pay .chal-modal-close { display: none; }
 .chal-tally .vac { color: var(--cd-blue-ink); }
 
+/* ── بطاقات الحصيلة (وجه الحضور) — أربع بطاقات في صف واحد ─────────────────── */
+.chal-stats {
+    display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px;
+    line-height: 1.35;
+}
+.chal-stat {
+    display: flex; flex-direction: column; align-items: center; gap: 2px;
+    min-width: 0;
+    padding: 8px 4px 7px;
+    border-radius: 14px;
+    background: var(--cd-ink-06);
+    border: 1.5px solid var(--cd-line);
+}
+.chal-stat-lbl, .chal-stat-sub {
+    max-width: 100%;
+    font-size: 0.64rem; font-weight: 700;
+    color: var(--cd-ink-40);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.chal-tally .chal-stat-val {
+    font-size: 0.95rem; font-weight: 900; line-height: 1.3;
+    color: var(--cd-ink);
+    white-space: nowrap;
+}
+.chal-stat.ok  { background: rgba(59, 185, 171, 0.10); border-color: rgba(59, 185, 171, 0.30); }
+.chal-stat.vac { background: rgba(8, 111, 180, 0.07);  border-color: rgba(8, 111, 180, 0.24); }
+.chal-tally .chal-stat.ok  .chal-stat-val { color: var(--cd-teal-ink); }
+.chal-tally .chal-stat.vac .chal-stat-val { color: var(--cd-blue-ink); }
+body.is-mobile .chal-stats { gap: 5px; }
+body.is-mobile .chal-stat { padding: 7px 3px 6px; border-radius: 12px; }
+body.is-mobile .chal-tally .chal-stat-val { font-size: 0.84rem; }
+body.is-mobile .chal-stat-lbl, body.is-mobile .chal-stat-sub { font-size: 0.6rem; }
+
 /* ── خطّ أيام الأسبوع (الحضور اليومي) ───────────────────────────────────────
    الساعات تجلس فوق كل نقطة في مكان الملصق، والإجازة بلون بارد. */
 .chal-step-hrs {
