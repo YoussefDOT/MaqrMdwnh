@@ -3660,6 +3660,20 @@ shapes. The crowd rules are a separate block at the foot of `library-tasks.css`.
 `library/taskimg/<id>` (`_libCover`, memoised in `_lib.covers` by id+pic); `t.img` still
 renders records from before the split. **An undated task** (`due` absent) prints «بلا موعد»,
 sorts last and is never «الحريقة».
+**In sync as of 2026-09-22 — the pill's chrome and the ORDER.** Each قسم's doodle is drawn
+white and huge at the pill's physical left (`LIB_TAG_ICONS`, off the library's own
+deployment) and again, small, inside its tag pill; the tag states its own ink off
+`data-tag` (محتوى dark, the other three white) and the mark is drawn in that same ink, with
+no shadow on either. A PARENT wears a striped ring (`.pill-ring`); a subtask is smaller and
+flatter. The fold chip is labelled («٢ فرعية») and the fold SLIDES (`_libFoldRows`).
+**Every pill carries a GRIP** (`.pill-grip`, `_libStartDrag`) and the drag is the library's
+own, 1:1: a `.tunit` wraps each top-level pill with its subtasks (so a parent carries its
+family and a subtask cannot leave it), the carried row follows the pointer on an
+un-transitioned transform while its neighbours slide on a transitioned one, and it is
+animated into the open gap before the DOM is reordered in one `.drag-still` frame. The
+order is written to **`library/torder/<slug>`** — the SAME record the library writes, read
+here in the same one-shot fetch as the tree (`_libByRank`) — so a drag in either place is
+the order in both.
 
 ---
 

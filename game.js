@@ -29365,7 +29365,7 @@ function _libTagsHtml(t) {
     const keys = LIB_TAG_ORDER.filter(k => t.tags && t.tags[k]);
     if (!keys.length) return '';
     return '<span class="task-tags">' + keys.map(k =>
-        '<span class="task-tag" style="--tc:' + LIB_TAGS[k].color + '">' + _libEsc(LIB_TAGS[k].label) +
+        '<span class="task-tag" data-tag="' + k + '" style="--tc:' + LIB_TAGS[k].color + '">' + _libEsc(LIB_TAGS[k].label) +
         (LIB_TAG_ICONS[k] ? '<img class="tag-ico" src="' + LIB_TAG_ICONS[k] + '" alt="" aria-hidden="true" decoding="async">' : '') +
         '</span>'
     ).join('') + '</span>';
@@ -29392,6 +29392,7 @@ function _libTaskPill(t, i, opts) {
         (done || (watching && full) ? ' done' : '') +
         (opts.subs && opts.subs.has(t.id) ? ' subpill' : '') +
         (kidsN ? ' parent' : '') +
+        (opts.sortable ? ' sortable' : '') +
         (c.late ? ' overdue' : '') +
         (!c.late && c.ms <= LIB_DAY_MS ? ' urgent' : '');
     el.style.setProperty('--c', color);
@@ -29410,11 +29411,13 @@ function _libTaskPill(t, i, opts) {
         : t.pic
             ? '<img class="task-img" alt="" decoding="async">'
             : '<span class="task-emoji">' + _libEsc(t.emoji || '📌') + '</span>';
-    // the pill's own chrome — the قسم's mark, and the striped ring a PARENT wears
+    // the pill's own chrome — the قسم's mark, the striped ring a PARENT wears,
+    // and the grip that drags it (the same order, on the same node, as the library)
     const decoKey = LIB_TAG_ORDER.find(k => t.tags && t.tags[k] && LIB_TAG_ICONS[k]);
     const chrome =
         (decoKey ? '<img class="pill-deco" src="' + LIB_TAG_ICONS[decoKey] + '" alt="" aria-hidden="true" decoding="async">' : '') +
-        (kidsN ? '<i class="pill-ring" aria-hidden="true"></i>' : '');
+        (kidsN ? '<i class="pill-ring" aria-hidden="true"></i>' : '') +
+        (opts.sortable ? '<span class="pill-grip" aria-label="اسحب لترتيب المهمة" title="اسحب للترتيب">' + LIB_GRIP + '</span>' : '');
     const pts = (t.points && !done && !(watching && full))
         ? '<span class="task-pts"><img src="' + _libEsc(_libSticker(t.points)) + '" alt="' + _libAr(t.points) + ' نقطة" loading="lazy" decoding="async"></span>'
         : '';
@@ -29470,6 +29473,12 @@ function _libTaskPill(t, i, opts) {
             action;
     }
     if (!t.img && t.pic) _libCover(t, el.querySelector('.task-img'));
+
+    const grip = el.querySelector('.pill-grip');
+    if (grip) {
+        grip.addEventListener('pointerdown', (e) => _libStartDrag(e, grip));
+        grip.addEventListener('click', (e) => e.stopPropagation());   // the pill opens the library
+    }
 
     const btn = el.querySelector('.pill-check');
     if (btn && btn.tagName === 'BUTTON') {
@@ -29537,6 +29546,171 @@ function _libKidsChip(t, opts) {
         '<i>' + LIB_ICON.tri + '</i><span>' + _libAr(n) + ' فرعية</span></button>';
 }
 
+/* ── ترتيب المهام بالسحب — carried 1:1 from MdwnhLibrary/js/tasks.js ─────────
+   The grip is the only handle (the pill itself opens the library), the order
+   is the member's own `library/torder/<slug>`, and it is the SAME node the
+   library writes — so a drag here shows up there and the other way round.
+
+   Smooth, never a snap: the carried row follows the pointer on an
+   un-transitioned transform while the rows it passes slide on a transitioned
+   one; on release it is animated into the gap already open for it, and only
+   once it lands is the DOM reordered and every transform cleared in one
+   un-transitioned frame. Near either edge of whatever scrolls, the list
+   scrolls itself — but only while the row can still travel that way. */
+const LIB_GRIP = '<svg viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">' +
+    '<circle cx="2.5" cy="3" r="1.5"/><circle cx="7.5" cy="3" r="1.5"/>' +
+    '<circle cx="2.5" cy="8" r="1.5"/><circle cx="7.5" cy="8" r="1.5"/>' +
+    '<circle cx="2.5" cy="13" r="1.5"/><circle cx="7.5" cy="13" r="1.5"/></svg>';
+let _libDrag = null;
+const LIB_EDGE = 64, LIB_SLIDE_MS = 230;
+
+function _libScrollerOf(el) {
+    for (let n = el.parentElement; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
+        const o = getComputedStyle(n).overflowY;
+        if ((o === 'auto' || o === 'scroll') && n.scrollHeight > n.clientHeight + 1) return n;
+    }
+    return document.scrollingElement || document.documentElement;
+}
+
+function _libStartDrag(e, grip) {
+    if (_libDrag || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    const row = grip.closest('.subrow');
+    const unit = row || grip.closest('.tunit');
+    if (!unit || !unit.parentElement) return;
+    const box = unit.parentElement;
+    const sibs = Array.prototype.slice.call(box.children).filter(n => row
+        ? n.classList.contains('subrow') && !n.classList.contains('hid')
+        : n.classList.contains('tunit'));
+    const from = sibs.indexOf(unit);
+    e.preventDefault(); e.stopPropagation();
+    if (sibs.length < 2 || from < 0) return;
+
+    const sc = _libScrollerOf(box);
+    const rects = sibs.map(n => { const r = n.getBoundingClientRect(); return { top: r.top, h: r.height }; });
+    const gap = rects.length > 1 ? Math.max(0, rects[1].top - rects[0].top - rects[0].h) : LIB_LIST_GAP;
+    _libDrag = {
+        unit, box, sibs, rects, from, to: from, gap, sub: !!row, sc,
+        id: e.pointerId, grip, y0: e.clientY, y: e.clientY, s0: sc.scrollTop,
+        dy: 0, raf: 0, landing: false
+    };
+    try { grip.setPointerCapture(e.pointerId); } catch (_) {}
+    grip.addEventListener('pointermove', _libDragMove);
+    grip.addEventListener('pointerup', _libDragEnd);
+    grip.addEventListener('pointercancel', _libDragEnd);
+    _libHideWhoPop();
+    document.body.classList.add('tdrag');
+    unit.classList.add('dragging');
+    sibs.forEach(n => { if (n !== unit) n.classList.add('drag-sib'); });
+    _libDrag.raf = requestAnimationFrame(_libDragFrame);
+}
+
+function _libDragMove(e) {
+    if (!_libDrag || e.pointerId !== _libDrag.id) return;
+    _libDrag.y = e.clientY;
+}
+
+function _libDragFrame() {
+    const d = _libDrag;
+    if (!d || d.landing) return;
+    const page = d.sc === document.scrollingElement || d.sc === document.documentElement;
+    const box = page ? null : d.sc.getBoundingClientRect();
+    const top = page ? 0 : box.top;
+    const bot = page ? innerHeight : box.bottom;
+
+    const r = d.rects, f = d.from, last = r.length - 1;
+    const lo = r[0].top - r[f].top;
+    const hi = (r[last].top + r[last].h) - (r[f].top + r[f].h);
+    const raw = (d.y - d.y0) + (d.sc.scrollTop - d.s0);
+    let v = 0;
+    if (d.y < top + LIB_EDGE && raw > lo) v = -Math.ceil((top + LIB_EDGE - d.y) / LIB_EDGE * 14);
+    else if (d.y > bot - LIB_EDGE && raw < hi) v = Math.ceil((d.y - (bot - LIB_EDGE)) / LIB_EDGE * 14);
+    if (v) d.sc.scrollTop += v;
+
+    let dy = (d.y - d.y0) + (d.sc.scrollTop - d.s0);
+    dy = Math.max(lo, Math.min(hi, dy));
+    d.dy = dy;
+    d.unit.style.transform = 'translate3d(0,' + dy + 'px,0)';
+
+    // a row is passed once the carried one's LEADING edge crosses its middle
+    const head = r[f].top + dy, foot = head + r[f].h;
+    let to = f;
+    for (let j = f + 1; j <= last; j++) if (foot > r[j].top + r[j].h / 2) to = j;
+    for (let j = f - 1; j >= 0; j--) if (head < r[j].top + r[j].h / 2) to = j;
+    if (to !== d.to) {
+        d.to = to;
+        const step = r[f].h + d.gap;
+        d.sibs.forEach((n, j) => {
+            if (j === f) return;
+            const sh = (f < to && j > f && j <= to) ? -step : (to < f && j >= to && j < f) ? step : 0;
+            n.style.transform = sh ? 'translate3d(0,' + sh + 'px,0)' : '';
+        });
+    }
+    d.raf = requestAnimationFrame(_libDragFrame);
+}
+
+function _libDragEnd(e) {
+    const d = _libDrag;
+    if (!d || e.pointerId !== d.id || d.landing) return;
+    d.landing = true;
+    cancelAnimationFrame(d.raf);
+    d.grip.removeEventListener('pointermove', _libDragMove);
+    d.grip.removeEventListener('pointerup', _libDragEnd);
+    d.grip.removeEventListener('pointercancel', _libDragEnd);
+    try { d.grip.releasePointerCapture(d.id); } catch (_) {}
+
+    const r = d.rects, f = d.from, to = e.type === 'pointercancel' ? f : d.to;
+    if (to !== d.to) d.sibs.forEach(n => { if (n !== d.unit) n.style.transform = ''; });
+    let land = 0;
+    if (to > f) for (let j = f + 1; j <= to; j++) land += r[j].h + d.gap;
+    if (to < f) for (let j = to; j < f; j++) land -= r[j].h + d.gap;
+    const u = d.unit;
+    u.classList.add('landing');
+    u.style.transform = 'translate3d(0,' + land + 'px,0)';
+
+    let done = false;
+    const settle = () => {
+        if (done) return;
+        done = true;
+        const all = d.sibs;
+        all.forEach(n => n.classList.add('drag-still'));
+        if (to !== f) {
+            const ref = to > f ? all[to].nextSibling : all[to];
+            d.box.insertBefore(u, ref);
+        }
+        all.forEach(n => { n.style.transform = ''; n.classList.remove('drag-sib', 'landing'); });
+        void d.box.offsetHeight;                 // commit the reorder with no transition
+        all.forEach(n => n.classList.remove('drag-still'));
+        u.classList.remove('dragging');
+        document.body.classList.remove('tdrag');
+        _libDrag = null;
+        if (to !== f) _libSaveOrder(d.box, d.sub);
+    };
+    u.addEventListener('transitionend', (ev) => {
+        if (ev.target === u && ev.propertyName === 'transform') settle();
+    });
+    setTimeout(settle, LIB_SLIDE_MS + 60);
+    if (Math.abs(land - d.dy) < 0.5) settle();
+}
+
+/* Ranks are written for the level that was just reordered, and the map goes up
+   WHOLE, pruned of tasks that no longer exist — exactly as the library writes
+   it, because it is the same record. */
+function _libSaveOrder(box, sub) {
+    const sel = sub ? ':scope > .subrow > .task' : ':scope > .tunit';
+    const ids = Array.prototype.slice.call(box.querySelectorAll(sel)).map(n => n.dataset.id);
+    const next = {};
+    Object.keys(_lib.torder || {}).forEach(k => { if (_lib.tasks && _lib.tasks[k]) next[k] = _lib.torder[k]; });
+    ids.forEach((id, i) => { next[id] = i; });
+    const was = _lib.torder;
+    _lib.torder = next;
+    if (!_lib.me || !_lib.me.slug) return;
+    libPut(`${LIB_ROOT}/torder/${_lib.me.slug}`, next).catch(() => {
+        _lib.torder = was;
+        _libToast('تعذّر حفظ الترتيب، حاول مجددًا');
+        _libRender(true);
+    });
+}
+
 /* ── the member's own order — mirror of `byRank()` in MdwnhLibrary/js/tasks.js
    `library/torder/<slug>` = { id: rank }, written by the grip in the library.
    Unranked tasks lead their group in موعد order, then the ranked ones. */
@@ -29601,6 +29775,11 @@ function _libBlock(id, cls, title, items, opts, seq) {
     // spend cascade slots — the next group would start its delays halfway
     // through a run nobody can see.
     const rowsOf = new Map(), pillOf = new Map();
+    /* Every top-level pill rides in a `.tunit` with its subtasks — the thing a
+       grip carries, so a parent takes its family with it and a subtask's own
+       drag is bounded by the unit it lives in. Mirror of the library's block(). */
+    let unit = null;
+    if (!opts.pick) opts.sortable = true;
     nested.items.forEach(t => {
         const pill = _libTaskPill(t, _lib.shut[id] ? LIB_SEQ_MAX + 1 : seq.n++, opts);
         /* The elbow cannot live on the pill — `.task` is overflow:hidden and would
@@ -29612,11 +29791,16 @@ function _libBlock(id, cls, title, items, opts, seq) {
             row.appendChild(pill);
             if (!rowsOf.has(t.parent)) rowsOf.set(t.parent, []);
             rowsOf.get(t.parent).push(row);
-            lst.appendChild(row);
+            unit.appendChild(row);
+            if (!unit.classList.contains('fam')) unit.classList.add('fam');
             return;
         }
         pillOf.set(t.id, pill);
-        lst.appendChild(pill);
+        unit = document.createElement('div');
+        unit.className = 'tunit';
+        unit.dataset.id = t.id;
+        unit.appendChild(pill);
+        lst.appendChild(unit);
     });
     // The fold is wired here: only the group that laid the rows out knows them.
     rowsOf.forEach((rows, pid) => {
@@ -29752,6 +29936,10 @@ function _libDropPill(el, after) {
     if (!el || !el.parentNode) { done(); return; }
     // A subtask lives inside its own `.subrow`, which carries the elbow — drop both.
     if (el.parentNode.classList && el.parentNode.classList.contains('subrow')) el = el.parentNode;
+    // a top-level pill rides alone in its `.tunit`, and the UNIT is what holds
+    // the list's gap open — so the unit is what collapses
+    else if (el.parentNode.classList && el.parentNode.classList.contains('tunit') &&
+             el.parentNode.children.length === 1) el = el.parentNode;
     if (window.matchMedia('(prefers-reduced-motion:reduce)').matches) {
         el.parentNode.removeChild(el); done(); return;
     }
@@ -29841,6 +30029,8 @@ const _libRestOf = list => { const f = _libFireFamilies(list); return list.filte
 function _libRender(silent) {
     const host = document.getElementById('lib-panel-body');
     if (!host) return;
+    // a rebuild under a finger mid-drag would pull the row out of its hand
+    if (_libDrag && silent) return;
     // A silent rebuild is the same DOM again — without this it replays the whole
     // list's entrance animation under the reader.
     host.classList.toggle('silent', !!silent);

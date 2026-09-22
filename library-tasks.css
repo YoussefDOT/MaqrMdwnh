@@ -139,8 +139,12 @@
 .lib-pills .task-tags .task-tag { position: relative; font-weight: 900; padding: 1px 7px; display: inline-flex; align-items: center; gap: 3px; }
 .lib-pills .tag-ico {
     width: 10px; height: 10px; object-fit: contain; flex: 0 0 auto;
-    filter: brightness(0) invert(1) drop-shadow(0 0 .6px rgba(0, 0, 0, .55));
+    filter: brightness(0) invert(1);
 }
+/* each قسم states its own ink, and its mark is drawn in that same ink — no shadow */
+.lib-pills .task-tags .task-tag { color: #fff; }
+.lib-pills .task-tags .task-tag[data-tag="content"] { color: #12100c; }
+.lib-pills .task-tags .task-tag[data-tag="content"] .tag-ico { filter: brightness(0); }
 .lib-pills .task-tags .task-tag::after {
     content: ""; position: absolute; inset: -2px; border-radius: inherit; pointer-events: none;
     border: 2px solid rgba(0, 0, 0, .7); mix-blend-mode: overlay;
@@ -486,3 +490,43 @@
 .lib-pills .subrow .task::before { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--fg, #fff) 26%, transparent); }
 .lib-pills .subrow .task .task-img { width: 54px; }
 .lib-pills .subrow .task .task-emoji { width: 36px; height: 36px; font-size: 1.1rem; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   ترتيب المهام بالسحب — carried 1:1 from MdwnhLibrary/css/tasks.css
+   The whole start-edge strip is the handle (a finger needs more than six
+   dots), and `touch-action:none` is what stops a drag on it being read as a
+   scroll of the panel.
+   ══════════════════════════════════════════════════════════════════════════ */
+.lib-pills .task.sortable { padding-inline-start: 24px; }
+.lib-pills .task.sortable .task-pts { inset-inline-start: 16px; }
+.lib-pills .pill-grip {
+    position: absolute; z-index: 2; inset-block: 0; inset-inline-start: 0; width: 24px;
+    display: grid; place-items: center;
+    color: var(--fg, #fff); opacity: .38; cursor: grab;
+    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
+    transition: opacity .2s var(--ease);
+}
+.lib-pills .pill-grip svg { width: 8px; height: 13px; transition: transform .25s var(--pop); }
+.lib-pills .task:hover .pill-grip { opacity: .75; }
+.lib-pills .pill-grip:hover { opacity: 1; }
+.lib-pills .pill-grip:hover svg { transform: scale(1.2); }
+@media (hover: none) { .lib-pills .pill-grip { opacity: .55; } }
+
+/* `.tunit` is one top-level pill and its subtasks — what a top-level grip
+   carries. Its gap is the list's own, so a lone pill does not move. */
+.lib-pills .tunit { display: flex; flex-direction: column; gap: 10px; position: relative; min-width: 0; }
+body.tdrag, body.tdrag * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
+.lib-pills .drag-sib { transition: transform .23s var(--ease); will-change: transform; }
+body.tdrag .lib-pills .task:hover { transform: none; }
+/* the group body clips (it is what makes a collapse work), and a lifted row
+   has to be allowed out of it for the length of the drag */
+body.tdrag .lib-pills .group-body > .task-list { overflow: visible; }
+.lib-pills .dragging { position: relative; z-index: 30; will-change: transform; }
+.lib-pills .dragging > .task {
+    transform: scale(1.025);
+    box-shadow: 0 26px 44px -18px rgba(0, 0, 0, .85), 0 0 0 2px color-mix(in srgb, var(--fg, #fff) 40%, transparent);
+    transition: transform .25s var(--pop), box-shadow .25s var(--ease);
+}
+.lib-pills .dragging > .task .pill-grip { opacity: 1; }
+.lib-pills .dragging.landing { transition: transform .23s var(--ease); }
+.lib-pills .drag-still, .lib-pills .drag-still * { transition: none !important; }
