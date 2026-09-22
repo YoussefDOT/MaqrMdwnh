@@ -2,6 +2,16 @@
   "_readme": "نشرة الأخبار — newest day FIRST. One entry per day; add a new day at the top on every push, never edit or remove old days. tag: new | fix | better.",
   "days": [
     {
+      "date": "2026-09-22",
+      "title": "صورة تلقائية لجلستك",
+      "items": [
+        {
+          "tag": "new",
+          "text": "إذا ضغطت «حفظ» في بطاقة نهاية الجلسة دون أن تضع صورة، تظهر صورة لك وأنت تعمل على جهازك التُقطت في أثناء الجلسة، ثم تُحفظ البطاقة كالمعتاد."
+        }
+      ]
+    },
+    {
       "date": "2026-09-20",
       "title": "النزول عن الطاولة",
       "items": [

@@ -1086,6 +1086,7 @@ class FocusAudioEngine {
             paperInvoiceExit: null,
             paperInvoiceFlip: null,
             invoiceCardSave: null,
+            sparkle: null,
             // Sofa relax seating
             sofaSit: null,
             sofaStand: null,
@@ -1222,6 +1223,7 @@ class FocusAudioEngine {
             this.buffers.paperInvoiceExit  = await loadBuffer('Sound/Paper_Invoice_Exit.mp3');
             this.buffers.paperInvoiceFlip  = await loadBuffer('Sound/Paper_Invoice_Flip.mp3');
             this.buffers.invoiceCardSave   = await loadBuffer('Sound/Invoice_Card_Sounds.mp3');
+            this.buffers.sparkle           = await loadBuffer('Sound/Sparkle.mp3');
             this.buffers.sofaSit           = await loadBuffer('Sound/Sofa_Sit.mp3');
             this.buffers.sofaStand         = await loadBuffer('Sound/Sofa_Stand.mp3');
             this.buffers.jumpStart         = await loadBuffer('Sound/Jump_Start.mp3');
@@ -2604,6 +2606,7 @@ const gameState = {
         paperInvoiceExit:        _lazyAudio('Sound/Paper_Invoice_Exit.mp3'),
         paperInvoiceFlip:        _lazyAudio('Sound/Paper_Invoice_Flip.mp3'),
         invoiceCardSave:         _lazyAudio('Sound/Invoice_Card_Sounds.mp3'),
+        sparkle:                 _lazyAudio('Sound/Sparkle.mp3'),
     },
     canvas: null,
     ctx: null,
@@ -11021,6 +11024,7 @@ const SLOW_TASKS = [
     { f: updatePomoLeaveBtn,            world: true },
     { f: updateSharedPomoProximity,     world: true },
     { f: updateMinigameLobbyProximity,  world: true },
+    { f: _autoShotTick,                 world: true },
 ];
 let _slowTaskI = 0;
 function runSlowTasks() {
@@ -15754,12 +15758,14 @@ function _pipVignette(ctx, W, H) {
 // Render the world into an arbitrary canvas/context by temporarily swapping the
 // gameState render targets. Every draw function reads gameState.ctx/zoom/camera,
 // so this transparently retargets them, then restores the originals.
-function renderPiPInto(ctx, canvas, dpr) {
+// `view` ({zoom, x, y}) points it at another camera — the end-card auto snapshot
+// uses that; it also skips the PiP-only chrome (timer / prayer card).
+function renderPiPInto(ctx, canvas, dpr, view) {
     if (!ctx || !canvas) return;
     const s = gameState;
     const _ctx = s.ctx, _canvas = s.canvas, _zoom = s.zoom, _cx = s.camera.x, _cy = s.camera.y, _dpr = s.dpr;
-    s.ctx = ctx; s.canvas = canvas; s.zoom = s.pip.zoomLevel;
-    s.camera.x = s.pip.camera.x; s.camera.y = s.pip.camera.y; s.dpr = dpr;
+    s.ctx = ctx; s.canvas = canvas; s.zoom = view ? view.zoom : s.pip.zoomLevel;
+    s.camera.x = view ? view.x : s.pip.camera.x; s.camera.y = view ? view.y : s.pip.camera.y; s.dpr = dpr;
     // PiP runs its own rAF, so this pass must not advance any shared simulation
     // state a second time — the hat springs would integrate at double speed.
     s._pipPass = true;
@@ -15804,9 +15810,9 @@ function renderPiPInto(ctx, canvas, dpr) {
         _pipVignette(ctx, W, H);
         _drawChatBubblesOnTop(W, H); // over everything, same as render()
         // Video PiP has no DOM overlay — paint the timer + label onto the frame.
-        if (s.pip.mode === 'video') _pipDrawCanvasChrome(ctx, W, H);
+        if (!view && s.pip.mode === 'video') _pipDrawCanvasChrome(ctx, W, H);
         // Prayer time → draw the prayer card over everything (all PiP modes).
-        if (s.prayer.isOverlayActive) _pipDrawPrayer(ctx, W, H);
+        if (!view && s.prayer.isOverlayActive) _pipDrawPrayer(ctx, W, H);
         ctx.restore();  // dpr scale
     } catch (e) {
         console.error('[pip] render error (loop kept alive)', e);
@@ -24243,6 +24249,59 @@ function successPhotoState(state) {
     if (addBtn) addBtn.style.display = (state === 'removed') ? 'block' : 'none';
 }
 
+// ── Auto photo: a snapshot of you at your laptop, used when حفظ is pressed with
+// no photo dropped. The world is rendered into a small offscreen canvas through
+// the PiP context-swap (draw-only — nothing advances), framed on the player and
+// their laptop. It has to be taken DURING the work phase: by the time the end card
+// opens the session is torn down and (in free mode) the player has stood up.
+// Local only, never persisted on its own — it is just the card's photo, so it is
+// archived exactly like a dropped one (saveInvoice reads it from the DOM).
+const AUTO_SHOT_FIRST_MS = 8000;    // first shot this long into the work phase
+const AUTO_SHOT_EVERY_MS = 90000;   // then refreshed at this rate
+const AUTO_SHOT_W = 640, AUTO_SHOT_H = 480, AUTO_SHOT_ZOOM = 2.4;
+const _autoShot = { url: '', sess: '', workSince: 0, at: 0 };
+
+function _autoShotLaptop() {
+    const id = gameState.freeMode.active ? gameState.freeMode.laptopId
+        : (gameState.pomodoro.active ? gameState.pomodoro.laptopId : null);
+    return id != null ? gameState.laptops.find(l => l.id === id) : null;
+}
+
+function _autoShotTick() {
+    const sess = _dutySessId();
+    // A new session never inherits the last one's photo. An ENDED session ('') keeps
+    // it — the end card opens after the teardown and still needs it.
+    if (sess && sess !== _autoShot.sess) {
+        _autoShot.sess = sess; _autoShot.url = ''; _autoShot.at = 0; _autoShot.workSince = 0;
+    }
+    const now = Date.now();
+    const ok = sess && localInWorkPhase() && !document.hidden
+        && !gameState.azkar.active && !gameState.prayer.isOverlayActive
+        && !gameState._dupSessionDetected;
+    if (!ok) { _autoShot.workSince = 0; return; }
+    if (!_autoShot.workSince) _autoShot.workSince = now;
+    if (now - _autoShot.workSince < AUTO_SHOT_FIRST_MS) return;
+    if (_autoShot.at && now - _autoShot.at < AUTO_SHOT_EVERY_MS) return;
+    const player = gameState.players[gameState.userId];
+    const lap = _autoShotLaptop();
+    if (!player || !lap) return;
+    const { x: px, y: py } = getPlayerRenderPos(player);
+    if (Math.hypot(px - lap.sitX, py - lap.sitY) > 30) return;   // not seated yet (mid-kidnap)
+    _autoShot.at = now;
+    try {
+        const cv = document.createElement('canvas');
+        cv.width = AUTO_SHOT_W; cv.height = AUTO_SHOT_H;
+        const ctx = cv.getContext('2d');
+        installLowGfxShadowGuard(ctx);
+        // Frame the player with the laptop beside them, nudged up for the timer badge.
+        const cx = px * 0.62 + lap.x * 0.38, cy = py * 0.62 + lap.y * 0.38 - 14;
+        renderPiPInto(ctx, cv, 1, { zoom: AUTO_SHOT_ZOOM, x: -cx, y: -cy });
+        const url = cv.toDataURL('image/jpeg', 0.86);
+        if (url && url.startsWith('data:image/jpeg')) _autoShot.url = url;
+        cv.width = cv.height = 0;   // hand the backing store back at once
+    } catch (e) { console.warn('[auto-shot]', e); }
+}
+
 // Reset to the default (add zone) state — called each time the card opens.
 function clearSuccessPhoto() {
     successPhotoState('drop');
@@ -24506,7 +24565,37 @@ function _successCardOnShow() {
     }
 }
 
+// حفظ with the photo slot still empty (the add zone showing — not removed with ✕)
+// and an auto snapshot in hand → the snapshot fades in with Sparkle.mp3 first, then
+// the usual save sequence runs (it archives the photo like a dropped one).
+const AUTO_SHOT_REVEAL_MS = 1100;
 function runSaveSequence() {
+    if (_saveSeqRunning) return;
+    const wrap = document.getElementById('success-photo-wrap');
+    const drop = document.getElementById('success-photo-drop');
+    const taped = document.getElementById('success-photo-taped');
+    const img = document.getElementById('success-photo-img');
+    const emptySlot = wrap && drop && wrap.style.display !== 'none' && drop.style.display !== 'none';
+    if (!emptySlot || !_autoShot.url || !taped || !img) { _runSaveSequenceMain(); return; }
+    _saveSeqRunning = true;   // swallow repeat presses during the reveal
+    clearTimeout(_saveBtnTimer);
+    const saveBtn = document.getElementById('success-save');
+    if (saveBtn) { saveBtn.classList.remove('show'); saveBtn.classList.add('gone'); }
+    img.src = _autoShot.url;
+    _autoShot.url = '';        // used once
+    taped.classList.remove('auto-in');
+    successPhotoState('photo');
+    void taped.offsetWidth;    // restart the reveal keyframes
+    taped.classList.add('auto-in');
+    gameState.focusAudioEngine?.playEffect('sparkle');
+    setTimeout(() => {
+        taped.classList.remove('auto-in');
+        _saveSeqRunning = false;
+        _runSaveSequenceMain();
+    }, AUTO_SHOT_REVEAL_MS);
+}
+
+function _runSaveSequenceMain() {
     if (_saveSeqRunning) return;
     const modal = document.getElementById('success-modal');
     const card  = document.getElementById('success-card');
