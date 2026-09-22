@@ -28878,6 +28878,7 @@ const LIB_TAG_ORDER = ['content', 'prod', 'comm', 'coord'];
 const LIB_ICON = {
     tri:   '<svg viewBox="0 0 12 12" fill="currentColor" aria-hidden="true"><path d="M6 8.6 1.2 3.4A.7.7 0 0 1 1.7 2.2h8.6a.7.7 0 0 1 .5 1.2z"/></svg>',
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.5 12.5l5 5 10-11"/></svg>',
+    eye:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5C7.9 5 4.7 8.7 3.6 11.3a1.3 1.3 0 0 0 0 1.1C4.7 15.3 7.9 19 12 19s7.3-3.7 8.4-6.3a1.3 1.3 0 0 0 0-1.1C19.3 8.7 16.1 5 12 5z"/><circle cx="12" cy="12" r="2.9"/></svg>',
 };
 
 // The library's nudges, verbatim. One is picked per task per panel session (see
@@ -28964,6 +28965,7 @@ const _lib = {
     quotes: new Map(),
     shut: {},           // which groups the reader collapsed — session only, like the library's
     shutKids: new Set(),// which PARENT tasks have their subtasks folded — session only, like the library's
+    covers: new Map(),  // `<id>:<pic>` → the cover's data URI, read once per session (see _libCover)
     toastTimer: 0,
     wired: false,
 };
@@ -29012,6 +29014,8 @@ function _libQuoteFor(t, ms) {
 }
 
 function _libCountdown(due) {
+    // no موعد: never late, never urgent — the pill prints «بلا موعد»
+    if (due == null) return { ms: Infinity, late: false, days: 0, hours: 0, none: true };
     const ms = (Number(due) || 0) - Date.now(), abs = Math.abs(ms);
     return { ms, late: ms < 0, days: Math.floor(abs / LIB_DAY_MS), hours: Math.floor((abs % LIB_DAY_MS) / 36e5) };
 }
@@ -29030,7 +29034,10 @@ const _libAssignees   = t => Object.keys(t.assignees || {});
 const _libIsDoneFor   = (t, slug) => !!(t.done && t.done[slug]);
 const _libHasEarned   = (t, slug) => !!(t.earned && t.earned[slug]);
 const _libIsFullyDone = t => { const a = _libAssignees(t); return a.length > 0 && a.every(s => _libIsDoneFor(t, s)); };
-const _libSortByDue   = list => list.slice().sort((a, b) => (Number(a.due) || 0) - (Number(b.due) || 0));
+// An undated task sorts LAST, never first — `|| 0` read it as due in 1970.
+// A compare, not a subtraction: Infinity − Infinity is NaN.
+const _libDueOf       = t => (t.due == null ? Infinity : Number(t.due));
+const _libSortByDue   = list => list.slice().sort((a, b) => { const x = _libDueOf(a), y = _libDueOf(b); return x < y ? -1 : x > y ? 1 : 0; });
 
 /* ── the toast ───────────────────────────────────────────────────────────── */
 function _libToast(msg) {
@@ -29046,19 +29053,14 @@ function _libToast(msg) {
     }, 3400);
 }
 
-/* ── who is on the task — the faces cluster ──────────────────────────────────
-   Mirrors `whoHtml()` in the library. Two shapes on purpose: the member on the
-   task sees their own face big at the far (physically left) end with everyone
-   else stacked beside it; someone WATCHING a task they are not on has no "me"
-   to anchor, so every face is the same size in a grid. A task carrying the whole
-   team is neither — «الجميع» is the fact all those faces were standing in for. */
-/* The cluster is CAPPED at six cells — five faces and a «+N» disc — because a
-   task carrying twenty-three of the twenty-eight assignable members is not
-   «الجميع» and so drew twenty-two faces as eight columns, which pushed the
-   countdown and the إتمام button out through the pill's own `overflow:hidden`.
-   Mirrors `WHO_MAX` / `restHtml()` in the library; resync both together. */
+/* ── who is on the task — the faces ───────────────────────────────────────────
+   Mirrors `whoHtml()` in the library, which owns the rule: one face big, two a
+   level pair, three+ the SAME big faces overlapping in one row — four at most,
+   then a black «+N» disc as the fifth. The reader never gets a lone portrait of
+   themselves, and their own face always survives the cap (drawn FIRST: right-
+   most, on top). A task carrying the whole team is «الجميع». Resync together. */
 const LIB_ALL_MIN = 3;
-const LIB_WHO_MAX = 5;
+const LIB_WHO_MAX = 4;
 
 function _libIsEveryone(list) {
     const pool = MDWNH_ROSTER.list.filter(m => !m.admin && !m.dummy && m.active !== false);
@@ -29076,43 +29078,29 @@ function _libAvImg(t, slug, cls) {
         '</span>';
 }
 
-/* The stack, capped: five faces then a disc carrying the rest, which opens a
-   popup of everybody on the task. Two rows of three, whatever the head-count. */
-function _libRestHtml(t, list) {
-    const over = list.length - LIB_WHO_MAX;
-    const show = over > 0 ? list.slice(0, LIB_WHO_MAX) : list;
-    return '<span class="who-rest">' +
-        show.map(s => _libAvImg(t, s)).join('') +
-        (over > 0
-            ? '<button class="av more" type="button" data-libtask="' + _libEsc(t.id) + '" ' +
-              'title="كل المكلَّفين" aria-label="عرض كل المكلَّفين">+' + _libAr(over) + '</button>'
-            : '') +
-        '</span>';
-}
-
 function _libWhoHtml(t, watching) {
     const list = _libAssignees(t);
     if (!list.length) return '';
     if (_libIsEveryone(list)) return '<span class="who-all">الجميع</span>';
 
     const meSlug = _lib.me && _lib.me.slug;
-    const mine = !watching && meSlug && list.indexOf(meSlug) !== -1;
-    if (mine) {
+    let row;
+    if (!watching && meSlug && list.indexOf(meSlug) !== -1) {
         const others = list.filter(s => s !== meSlug);
-        // solo: the pill is already yours, and a lone portrait of yourself is the
-        // one face nobody needs shown
-        if (!others.length) return '';
-        if (others.length === 1) {
-            return '<span class="who pair" style="--av:32px">' +
-                _libAvImg(t, others[0]) + _libAvImg(t, meSlug, 'me') + '</span>';
-        }
-        return '<span class="who lead" style="--av:38px">' +
-            _libRestHtml(t, others) + _libAvImg(t, meSlug, 'me') + '</span>';
-    }
+        if (!others.length) return '';              // solo: the pill is already yours
+        row = [meSlug].concat(others);
+    } else if (watching) row = list;
+    else return '';
 
-    if (!watching) return '';
-    if (list.length === 1) return '<span class="who solo" style="--av:38px">' + _libAvImg(t, list[0]) + '</span>';
-    return '<span class="who grid">' + _libRestHtml(t, list) + '</span>';
+    const over = row.length > LIB_WHO_MAX ? row.length - LIB_WHO_MAX : 0;
+    const show = over ? row.slice(0, LIB_WHO_MAX) : row;
+    return '<span class="who n' + Math.min(show.length, 3) + '">' +
+        show.map(s => _libAvImg(t, s, s === meSlug ? 'self' : '')).join('') +
+        (over
+            ? '<button class="av more" type="button" data-libtask="' + _libEsc(t.id) + '" ' +
+              'title="كل المكلَّفين" aria-label="عرض كل المكلَّفين">+' + _libAr(over) + '</button>'
+            : '') +
+        '</span>';
 }
 
 /* ── «+N» — the rest of the team ─────────────────────────────────────────────
@@ -29167,15 +29155,37 @@ document.addEventListener('mouseover', (e) => {
 }, true);
 document.addEventListener('scroll', _libHideWhoPop, true);
 
-// ONE unit, never two — days until the last day, then hours. «١ يوم ٧ ساعة» is
-// four lines in a 30px column that nobody reads as a number.
+// The time left is a CHIP — the one thing on the pill you act on. ONE unit:
+// days until the last day, then hours. Late wears the same number-over-unit
+// shape in red; no موعد keeps the slot and says so.
 function _libCdHtml(t) {
     const c = _libCountdown(t.due);
-    if (c.late) return '<span class="pill-cd late" data-due="' + (Number(t.due) || 0) + '">تأخّرت ' + _libAr(c.days) + ' يوم</span>';
+    if (c.none) return '<span class="pill-cd nodue"><span class="u">بلا موعد</span></span>';
+    if (c.late) {
+        const d = c.days >= 1;
+        return '<span class="pill-cd late"><span class="n">' + _libAr(d ? c.days : c.hours) + '</span>' +
+            '<span class="u">' + (d ? 'يوم تأخير' : 'ساعة تأخير') + '</span></span>';
+    }
     const big = c.days >= 1;
     return '<span class="pill-cd" data-due="' + (Number(t.due) || 0) + '">' +
         '<span class="n">' + _libAr(big ? c.days : c.hours) + '</span>' +
         '<span class="u">' + (big ? 'يوم' : 'ساعة') + '</span></span>';
+}
+
+/* A cover is a RESOURCE in the library, not a field: the record carries `pic`
+   (the ms it was written) and the bytes live at `library/taskimg/<id>`. maqr
+   has no worker on this page, so it is a plain one-shot fetch, memoised per
+   session by id+version — a replaced cover is a new key. `t.img` is a record
+   from before that split and still carries its own picture. */
+function _libCover(t, img) {
+    const key = t.id + ':' + t.pic;
+    const hit = _lib.covers.get(key);
+    if (hit) { img.src = hit; return; }
+    libGet('library/taskimg/' + t.id).then(v => {
+        if (typeof v !== 'string' || !v) return;
+        _lib.covers.set(key, v);
+        img.src = v;
+    }).catch(() => {});
 }
 
 function _libTagsHtml(t) {
@@ -29220,7 +29230,9 @@ function _libTaskPill(t, i, opts) {
 
     const media = t.img
         ? '<img class="task-img" src="' + _libEsc(t.img) + '" alt="" loading="lazy" decoding="async">'
-        : '<span class="task-emoji">' + _libEsc(t.emoji || '📌') + '</span>';
+        : t.pic
+            ? '<img class="task-img" alt="" decoding="async">'
+            : '<span class="task-emoji">' + _libEsc(t.emoji || '📌') + '</span>';
     const pts = (t.points && !done && !(watching && full))
         ? '<span class="task-pts"><img src="' + _libEsc(_libSticker(t.points)) + '" alt="' + _libAr(t.points) + ' نقطة" loading="lazy" decoding="async"></span>'
         : '';
@@ -29248,18 +29260,25 @@ function _libTaskPill(t, i, opts) {
         action = '<button class="pill-check" type="button" aria-label="إتمام المهمة">' + LIB_ICON.check + '</button>';
     }
 
+    /* The library's look «أ»: cover | words | the clock over the button, then
+       ONE foot line — labels on the right, faces on the left. The nudge WRAPS
+       to two lines in the words column. «تحت إشرافك» marks a task in مهامي
+       that I also supervise. Nothing on the foot and no وصف → `.compact`. */
+    const mineSup = !watching && meSlug && t.supervisors && t.supervisors[meSlug];
+    const foot = _libKidsChip(t, opts) + _libTagsHtml(t) +
+        (mineSup ? '<span class="task-tag sup-tag">' + LIB_ICON.eye + 'تحت إشرافك</span>' : '') +
+        _libWhoHtml(t, watching);
+    if (!foot && !t.desc) el.classList.add('compact');
+
     el.innerHTML = pts + media +
         '<span class="pill-main">' +
             '<span class="task-title">' + _libEsc(t.title) + '</span>' +
             (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
-            '<span class="pill-foot">' +
-                _libKidsChip(t, opts) +
-                '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>' +
-                _libTagsHtml(t) +
-            '</span>' +
+            '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>' +
         '</span>' +
-        _libCdHtml(t) + _libWhoHtml(t, watching) +
-        action;
+        '<span class="pill-end">' + _libCdHtml(t) + action + '</span>' +
+        (foot ? '<span class="pill-foot">' + foot + '</span>' : '');
+    if (!t.img && t.pic) _libCover(t, el.querySelector('.task-img'));
 
     const btn = el.querySelector('.pill-check');
     if (btn && btn.tagName === 'BUTTON') {
@@ -29571,7 +29590,7 @@ function _libOpenMine() {
    in الحريقة on its own — an orphan pill, while the library (one «مهامي» list)
    shows it under its parent. A family goes where its most urgent member goes:
    the burning subtask still sits in الحريقة, now with its parent over it. */
-const _libIsFire = t => ((Number(t.due) || 0) - Date.now()) <= LIB_FIRE_MS;
+const _libIsFire = t => t.due != null && (Number(t.due) - Date.now()) <= LIB_FIRE_MS;   // no موعد is never «الحريقة»
 function _libFireFamilies(list) {
     const byId = new Map(list.map(t => [t.id, t]));
     const rootOf = t => {
@@ -29642,7 +29661,7 @@ function _libTickCountdowns() {
     let needsRebuild = false;
     host.querySelectorAll('.pill-cd[data-due]').forEach(cd => {
         const c = _libCountdown(Number(cd.dataset.due));
-        if (c.late && !cd.classList.contains('late')) { needsRebuild = true; return; }
+        if (c.late) { needsRebuild = true; return; }
         const big = c.days >= 1;
         const n = cd.querySelector('.n'), u = cd.querySelector('.u');
         if (n) n.textContent = _libAr(big ? c.days : c.hours);
