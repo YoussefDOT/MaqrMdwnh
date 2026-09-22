@@ -3648,14 +3648,14 @@ the row with its pill. Orphans render as ordinary pills.
 `library-tasks.css` and `_libTaskPill()` are hand-copies of `MdwnhLibrary/css/tasks.css` and
 `taskPill()`. **Nothing automates the sync.** If the pill changes there, change it in both
 places here — the library's own `CLAUDE.md` carries the matching note.
-**In sync as of the library's look «أ» (2026-09-22):** cover | words | the time-left CHIP,
-then ONE foot line — tags (own-colour fill + an overlay-blended ring), «تحت إشرافك» on a
-task in مهامي I also supervise, and `.pill-act` at the far left: the faces (one, a pair, or
-up to four overlapping then a black «+N», `LIB_WHO_MAX = 4`, own face first) with the
-button beside them. ONE line under the title — the وصف, or the nudge (wrapping to two) when
-there is none. The cover is the 2:1 crop (a square was tried and reverted). Deliberately
-small: 24px faces, 28px button. Nothing for the foot → `.task.compact`, where the button
-sits beside the chip instead.
+**In sync as of 2026-09-22 — TWO pill shapes, by head-count.** One or two people keep the
+CLASSIC single row (`_libWhoHtml` / `_libRestHtml`, face cluster beside the button). THREE
+OR MORE (`LIB_CROWD`) get the CROWD pill, `.task.crowd`: cover | one line under the title
+(the وصف, or the nudge wrapping to two) | a time-left CHIP (gold on the last day, red when
+late), then ONE foot line — tags with an overlay-blended ring on the right, and
+`.pill-act` on the left: `_libWhoRow` (24px faces, four then a black «+N», own face first)
+with the button beside them. «تحت إشرافك» marks a task in مهامي I also supervise, on both
+shapes. The crowd rules are a separate block at the foot of `library-tasks.css`.
 **The cover is fixed too**: a record with `pic` gets its bytes by ONE fetch of
 `library/taskimg/<id>` (`_libCover`, memoised in `_lib.covers` by id+pic); `t.img` still
 renders records from before the split. **An undated task** (`due` absent) prints «بلا موعد»,

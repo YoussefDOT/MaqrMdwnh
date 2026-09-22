@@ -29152,14 +29152,18 @@ function _libToast(msg) {
     }, 3400);
 }
 
-/* ── who is on the task — the faces ───────────────────────────────────────────
-   Mirrors `whoHtml()` in the library, which owns the rule: one face big, two a
-   level pair, three+ the SAME big faces overlapping in one row — four at most,
-   then a black «+N» disc as the fifth. The reader never gets a lone portrait of
-   themselves, and their own face always survives the cap (drawn FIRST: right-
-   most, on top). A task carrying the whole team is «الجميع». Resync together. */
+/* ── who is on the task — TWO pill shapes, by head-count ──────────────────────
+   Mirrors the library (`CROWD` there): one or two people keep the CLASSIC
+   single row — face cluster beside the button (own face big on the far left, a
+   level pair, a capped stack for a watcher). THREE OR MORE get the CROWD pill
+   (`.task.crowd`): a time-left chip, and a foot line with the labels on the
+   right and, on the left, the same 24px faces in one overlapping row — four,
+   then a black «+N» — with the button beside them. Own face first. A task
+   carrying the whole team is «الجميع» in either shape. Resync together. */
+const LIB_CROWD = 3;
 const LIB_ALL_MIN = 3;
-const LIB_WHO_MAX = 4;
+const LIB_WHO_MAX = 5;   // the classic stack
+const LIB_ROW_MAX = 4;   // the crowd's row
 
 function _libIsEveryone(list) {
     const pool = MDWNH_ROSTER.list.filter(m => !m.admin && !m.dummy && m.active !== false);
@@ -29177,29 +29181,59 @@ function _libAvImg(t, slug, cls) {
         '</span>';
 }
 
+const _libMoreBtn = (t, over) =>
+    '<button class="av more" type="button" data-libtask="' + _libEsc(t.id) + '" ' +
+    'title="كل المكلَّفين" aria-label="عرض كل المكلَّفين">+' + _libAr(over) + '</button>';
+
+/* The classic stack, capped: five faces then the disc, two rows of three. */
+function _libRestHtml(t, list) {
+    const over = list.length - LIB_WHO_MAX;
+    const show = over > 0 ? list.slice(0, LIB_WHO_MAX) : list;
+    return '<span class="who-rest">' +
+        show.map(s => _libAvImg(t, s)).join('') + (over > 0 ? _libMoreBtn(t, over) : '') +
+        '</span>';
+}
+
 function _libWhoHtml(t, watching) {
     const list = _libAssignees(t);
     if (!list.length) return '';
     if (_libIsEveryone(list)) return '<span class="who-all">الجميع</span>';
 
     const meSlug = _lib.me && _lib.me.slug;
-    let row;
-    if (!watching && meSlug && list.indexOf(meSlug) !== -1) {
+    const mine = !watching && meSlug && list.indexOf(meSlug) !== -1;
+    if (mine) {
         const others = list.filter(s => s !== meSlug);
         if (!others.length) return '';              // solo: the pill is already yours
-        row = [meSlug].concat(others);
-    } else if (watching) row = list;
+        if (others.length === 1) {
+            return '<span class="who pair" style="--av:32px">' +
+                _libAvImg(t, others[0]) + _libAvImg(t, meSlug, 'self') + '</span>';
+        }
+        return '<span class="who lead" style="--av:38px">' +
+            _libRestHtml(t, others) + _libAvImg(t, meSlug, 'self') + '</span>';
+    }
+
+    if (!watching) return '';
+    if (list.length === 1) return '<span class="who solo" style="--av:38px">' + _libAvImg(t, list[0]) + '</span>';
+    return '<span class="who grid">' + _libRestHtml(t, list) + '</span>';
+}
+
+/* The crowd's row: own face first, four faces, then the black «+N». */
+function _libWhoRow(t, watching) {
+    const list = _libAssignees(t);
+    if (!list.length) return '';
+    if (_libIsEveryone(list)) return '<span class="who-all">الجميع</span>';
+
+    const meSlug = _lib.me && _lib.me.slug;
+    let row;
+    if (!watching && meSlug && list.indexOf(meSlug) !== -1) row = [meSlug].concat(list.filter(s => s !== meSlug));
+    else if (watching) row = list;
     else return '';
 
-    const over = row.length > LIB_WHO_MAX ? row.length - LIB_WHO_MAX : 0;
-    const show = over ? row.slice(0, LIB_WHO_MAX) : row;
-    return '<span class="who n' + Math.min(show.length, 3) + '">' +
+    const over = row.length > LIB_ROW_MAX ? row.length - LIB_ROW_MAX : 0;
+    const show = over ? row.slice(0, LIB_ROW_MAX) : row;
+    return '<span class="who row">' +
         show.map(s => _libAvImg(t, s, s === meSlug ? 'self' : '')).join('') +
-        (over
-            ? '<button class="av more" type="button" data-libtask="' + _libEsc(t.id) + '" ' +
-              'title="كل المكلَّفين" aria-label="عرض كل المكلَّفين">+' + _libAr(over) + '</button>'
-            : '') +
-        '</span>';
+        (over ? _libMoreBtn(t, over) : '') + '</span>';
 }
 
 /* ── «+N» — the rest of the team ─────────────────────────────────────────────
@@ -29257,9 +29291,10 @@ document.addEventListener('scroll', _libHideWhoPop, true);
 // The time left is a CHIP — the one thing on the pill you act on. ONE unit:
 // days until the last day, then hours. Late wears the same number-over-unit
 // shape in red; no موعد keeps the slot and says so.
-function _libCdHtml(t) {
+function _libCdHtml(t, chip) {
     const c = _libCountdown(t.due);
     if (c.none) return '<span class="pill-cd nodue"><span class="u">بلا موعد</span></span>';
+    if (c.late && !chip) return '<span class="pill-cd late">تأخّرت ' + _libAr(c.days) + ' يوم</span>';
     if (c.late) {
         const d = c.days >= 1;
         return '<span class="pill-cd late"><span class="n">' + _libAr(d ? c.days : c.hours) + '</span>' +
@@ -29359,28 +29394,33 @@ function _libTaskPill(t, i, opts) {
         action = '<button class="pill-check" type="button" aria-label="إتمام المهمة">' + LIB_ICON.check + '</button>';
     }
 
-    /* The library's look «أ»: cover | words | the time-left chip, then ONE foot
-       line — labels on the right, the faces with the button beside them on the
-       left. The nudge WRAPS to two lines. «تحت إشرافك» marks a task in مهامي
-       that I also supervise. Nothing for the foot → `.compact`: no line, and
-       the button sits beside the chip. */
+    // «تحت إشرافك»: a task in مهامي that I also supervise
     const mineSup = !watching && meSlug && t.supervisors && t.supervisors[meSlug];
-    const labels = _libKidsChip(t, opts) + _libTagsHtml(t) +
-        (mineSup ? '<span class="task-tag sup-tag">' + LIB_ICON.eye + 'تحت إشرافك</span>' : '');
-    const who = _libWhoHtml(t, watching);
-    const hasFoot = !!(labels || who);
-    if (!hasFoot) el.classList.add('compact');
+    const supTag = mineSup ? '<span class="task-tag sup-tag">' + LIB_ICON.eye + 'تحت إشرافك</span>' : '';
+    const quote = '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>';
 
-    el.innerHTML = pts + media +
-        '<span class="pill-main">' +
-            '<span class="task-title">' + _libEsc(t.title) + '</span>' +
-            // one line under the title: the وصف, or the nudge when there is none
-            (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>'
-                : '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>') +
-        '</span>' +
-        '<span class="pill-end">' + _libCdHtml(t) + (hasFoot ? '' : action) + '</span>' +
-        (hasFoot ? '<span class="pill-foot">' + labels +
-            '<span class="pill-act">' + who + action + '</span></span>' : '');
+    if (_libAssignees(t).length >= LIB_CROWD) {
+        // THE CROWD PILL — one line under the title, the chip, then the foot line
+        el.classList.add('crowd');
+        el.innerHTML = pts + media +
+            '<span class="pill-main">' +
+                '<span class="task-title">' + _libEsc(t.title) + '</span>' +
+                (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : quote) +
+            '</span>' +
+            '<span class="pill-end">' + _libCdHtml(t, true) + '</span>' +
+            '<span class="pill-foot">' + _libKidsChip(t, opts) + _libTagsHtml(t) + supTag +
+                '<span class="pill-act">' + _libWhoRow(t, watching) + action + '</span></span>';
+    } else {
+        // THE CLASSIC PILL — one row
+        el.innerHTML = pts + media +
+            '<span class="pill-main">' +
+                '<span class="task-title">' + _libEsc(t.title) + '</span>' +
+                (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
+                '<span class="pill-foot">' + _libKidsChip(t, opts) + quote + _libTagsHtml(t) + supTag + '</span>' +
+            '</span>' +
+            _libCdHtml(t) + _libWhoHtml(t, watching) +
+            action;
+    }
     if (!t.img && t.pic) _libCover(t, el.querySelector('.task-img'));
 
     const btn = el.querySelector('.pill-check');
