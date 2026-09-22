@@ -29260,15 +29260,17 @@ function _libTaskPill(t, i, opts) {
         action = '<button class="pill-check" type="button" aria-label="إتمام المهمة">' + LIB_ICON.check + '</button>';
     }
 
-    /* The library's look «أ»: cover | words | the clock over the button, then
-       ONE foot line — labels on the right, faces on the left. The nudge WRAPS
-       to two lines in the words column. «تحت إشرافك» marks a task in مهامي
-       that I also supervise. Nothing on the foot and no وصف → `.compact`. */
+    /* The library's look «أ»: cover | words | the time-left chip, then ONE foot
+       line — labels on the right, the faces with the button beside them on the
+       left. The nudge WRAPS to two lines. «تحت إشرافك» marks a task in مهامي
+       that I also supervise. Nothing for the foot → `.compact`: no line, and
+       the button sits beside the chip. */
     const mineSup = !watching && meSlug && t.supervisors && t.supervisors[meSlug];
-    const foot = _libKidsChip(t, opts) + _libTagsHtml(t) +
-        (mineSup ? '<span class="task-tag sup-tag">' + LIB_ICON.eye + 'تحت إشرافك</span>' : '') +
-        _libWhoHtml(t, watching);
-    if (!foot && !t.desc) el.classList.add('compact');
+    const labels = _libKidsChip(t, opts) + _libTagsHtml(t) +
+        (mineSup ? '<span class="task-tag sup-tag">' + LIB_ICON.eye + 'تحت إشرافك</span>' : '');
+    const who = _libWhoHtml(t, watching);
+    const hasFoot = !!(labels || who);
+    if (!hasFoot) el.classList.add('compact');
 
     el.innerHTML = pts + media +
         '<span class="pill-main">' +
@@ -29276,8 +29278,9 @@ function _libTaskPill(t, i, opts) {
             (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
             '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>' +
         '</span>' +
-        '<span class="pill-end">' + _libCdHtml(t) + action + '</span>' +
-        (foot ? '<span class="pill-foot">' + foot + '</span>' : '');
+        '<span class="pill-end">' + _libCdHtml(t) + (hasFoot ? '' : action) + '</span>' +
+        (hasFoot ? '<span class="pill-foot">' + labels +
+            '<span class="pill-act">' + who + action + '</span></span>' : '');
     if (!t.img && t.pic) _libCover(t, el.querySelector('.task-img'));
 
     const btn = el.querySelector('.pill-check');

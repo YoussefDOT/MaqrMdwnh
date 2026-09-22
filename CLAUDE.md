@@ -3648,11 +3648,12 @@ the row with its pill. Orphans render as ordinary pills.
 `library-tasks.css` and `_libTaskPill()` are hand-copies of `MdwnhLibrary/css/tasks.css` and
 `taskPill()`. **Nothing automates the sync.** If the pill changes there, change it in both
 places here — the library's own `CLAUDE.md` carries the matching note.
-**In sync as of the library's look «أ» (2026-09-22):** cover | words | the time-left CHIP
-over the button, then ONE foot line — tags (own-colour fill + an overlay-blended ring),
-«تحت إشرافك» on a task in مهامي I also supervise, and the faces at the far left: one, a
-pair, or up to four overlapping then a black «+N» (`LIB_WHO_MAX = 4`, own face first).
-The nudge wraps to two lines. No foot and no وصف → `.task.compact`.
+**In sync as of the library's look «أ» (2026-09-22):** cover | words | the time-left CHIP,
+then ONE foot line — tags (own-colour fill + an overlay-blended ring), «تحت إشرافك» on a
+task in مهامي I also supervise, and `.pill-act` at the far left: the faces (one, a pair, or
+up to four overlapping then a black «+N», `LIB_WHO_MAX = 4`, own face first) with the
+button beside them. The nudge wraps to two lines. Nothing for the foot → `.task.compact`,
+where the button sits beside the chip instead.
 **The cover is fixed too**: a record with `pic` gets its bytes by ONE fetch of
 `library/taskimg/<id>` (`_libCover`, memoised in `_lib.covers` by id+pic); `t.img` still
 renders records from before the split. **An undated task** (`due` absent) prints «بلا موعد»,
