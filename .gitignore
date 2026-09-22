@@ -28,3 +28,7 @@ Sound/player_Fall.full.mp3
 # (cropped to their painted bbox) and Art/Meeting_Table_Real.webp; the full-canvas
 # PNGs are parked in a subfolder so the pre-commit manifest globber never sees them.
 Art/Workspace/masters/
+
+# Hat masters (the 1000² originals). What ships is Hats/*.png cropped to the painted
+# art and capped at 384px. Parked in a subfolder so the hats.json hook never lists them.
+Hats/masters/

@@ -6623,7 +6623,7 @@ function startGame(userData) {
         warmGameSounds();
         // Hats are tiny, but the manifest read is a network hop — keep it off the
         // spawn path. Nothing waits on it: a hat draws the moment its asset lands.
-        loadHatManifest().catch(() => {});
+        loadHatManifest().then(_prefetchHats).catch(() => {});
         // Stickers: the manifest + every sticker's bytes, on idle (never the login path).
         if (window.requestIdleCallback) requestIdleCallback(() => loadStickers(), { timeout: 8000 });
         else setTimeout(loadStickers, 3000);
@@ -26907,6 +26907,27 @@ function ensureHatAsset(id) {
     return entry;
 }
 
+// Warm every hat's BYTES on idle after spawn, a few at a time, so a hat someone
+// walks in wearing (or one picked in تخصيص) comes off the cache instead of the
+// network. Bytes only — nothing is decoded here: a decoded crop is up to 384² ×4
+// per hat, and holding the whole set for the session would be ~15 MB for hats
+// nobody is wearing (invariant 25). ensureHatAsset still decodes on first draw.
+function _prefetchHats(list) {
+    const ids = (list || []).slice();
+    if (!ids.length) return;
+    const idle = window.requestIdleCallback
+        ? (fn) => requestIdleCallback(fn, { timeout: 6000 })
+        : (fn) => setTimeout(fn, 1500);
+    const next = () => {
+        const batch = ids.splice(0, 4);
+        if (!batch.length) return;
+        Promise.all(batch.map(id =>
+            fetch(hatUrl(id), { priority: 'low' }).then(r => r.ok && r.blob()).catch(() => null)
+        )).then(() => idle(next));
+    };
+    idle(next);
+}
+
 // Normalise whatever Firebase handed us into a safe hat descriptor (or null).
 function sanitizeHat(raw) {
     if (!raw || typeof raw !== 'object' || typeof raw.id !== 'string' || !raw.id) return null;
@@ -27199,6 +27220,16 @@ function ccSyncFromPlayer(player) {
 
 function _ccEl(id) { return document.getElementById(id); }
 
+// One hat unit in the preview, in px. In the world a unit is PLAYER_SIZE — the
+// avatar PICTURE — while the ring around it is PLAYER_SIZE + 8 across. The preview's
+// #cc-char box is the RING, so a unit is its width × 70/78 (the ring's CSS padding
+// is the same 4/78 so the picture lines up). Using the whole box made every hat in
+// the panel sit ~11% off its in-world size relative to the face.
+function _ccUnit(charEl) {
+    const W = (charEl && charEl.clientWidth) || 160;
+    return W * PLAYER_SIZE / (PLAYER_SIZE + 8);
+}
+
 // The character's drop + bounce. One rAF tween: fall (accelerating, stretched),
 // then a damped squash oscillation on impact. The contact shadow tightens as the
 // character nears the floor, which is what gives the scene its depth.
@@ -27379,7 +27410,7 @@ function _ccReflect() {
     // Preview hats — mirror drawPlayerHats' maths against the preview's own size, so
     // what you place here is exactly what lands in the world.
     if (charEl && layer) {
-        const S = charEl.clientWidth || 160;   // preview size stands in for PLAYER_SIZE
+        const S = _ccUnit(charEl);   // the preview's PLAYER_SIZE (the picture, not the ring)
         layer.querySelectorAll('.cc-hat').forEach(imgEl => {
             const idx = Number(imgEl.dataset.idx);
             const hat = _cc.hats[idx];
@@ -27705,7 +27736,7 @@ function setupCharCustomUI() {
             if (!start) return;
             const hat = _cc.hats[start.idx];
             if (!hat) return;
-            const S = charEl.clientWidth || 160;
+            const S = _ccUnit(charEl);
             hat.x = Math.max(-1.5, Math.min(1.5, start.hx + (e.clientX - start.px) / S));
             hat.y = Math.max(-2.0, Math.min(1.0, start.hy + (e.clientY - start.py) / S));
             _ccReflect();

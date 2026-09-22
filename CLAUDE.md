@@ -3698,8 +3698,22 @@ AppleDouble sidecars (`._name.png`) and dotfiles are filtered out at both ends. 
 manifest is re-read on **every** open of the picker, so a hat added mid-session appears
 without a reload. Preloaded on idle after spawn — never on the login path.
 
+### Shipped hats are pre-cropped + capped at 384px
+The 1000² masters live in `Hats/masters/` (gitignored — the hook only lists top-level
+files). What ships is each hat cropped to its painted art and capped at **384px** on
+its long side (the biggest a hat is ever drawn: scale 1 × floor 2 × zoom 2 × dpr 2 ≈
+336px). Emoji hats are Apple Color Emoji rendered at its native 160px strike. **Name
+new hats without hamza/madda letters** (أ إ آ ئ ؤ) — macOS hands those filenames out
+decomposed (NFD) and the id would stop matching the committed file. After spawn,
+`_prefetchHats` warms every hat's **bytes** on idle (never decodes — invariant 25).
+
+**The preview's hat unit is the avatar PICTURE, not the ring** (`_ccUnit`): in the
+world a unit is `PLAYER_SIZE` (70, the picture) inside a 78px ring, so the panel's
+unit is `#cc-char` width × 70/78, and `.cc-ring`'s padding is the same 4/78. Using the
+whole ring box drew every hat ~11% off its in-world size.
+
 ### Cropping is mandatory
-The source PNGs are 1000×1000 with the hat floating in the middle of mostly-empty canvas.
+Old source PNGs were 1000×1000 with the hat floating in the middle of mostly-empty canvas.
 `_cropHatImage()` alpha-scans to a tight bbox and caches the cropped canvas in
 `_hats.cache[id]` (`{ img, canvas, url, ready, failed }`). **Both** the picker previews and
 the in-world draw use the crop — uncropped, a preview would be a speck and every

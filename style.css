@@ -7866,7 +7866,7 @@ body:not(.is-mobile) .reading-end-modal.active {
     position: absolute; inset: 0;
     border-radius: 50%;
     background: var(--cc-ring, #086fb6);
-    padding: 9px;
+    padding: 5.128%;   /* 4/78 of the width — the world ring's exact proportion (see _ccUnit) */
     box-shadow: 0 18px 44px rgba(0,0,0,0.55), 0 0 34px -6px var(--cc-ring, #086fb6);
     display: flex; align-items: center; justify-content: center;
     transition: background 0.14s linear, box-shadow 0.14s linear;
