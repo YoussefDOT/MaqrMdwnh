@@ -24584,8 +24584,18 @@ function runSaveSequence() {
     img.src = _autoShot.url;
     _autoShot.url = '';        // used once
     taped.classList.remove('auto-in');
+    // The taped photo is bigger than the drop box, so swapping them would jump the
+    // whole card taller in one frame. Pin the slot at its old size and ease it to
+    // the new one — the card grows smoothly around the photo fading in.
+    const fromH = wrap.offsetHeight;
     successPhotoState('photo');
-    void taped.offsetWidth;    // restart the reveal keyframes
+    const toH = wrap.offsetHeight;
+    wrap.style.transition = 'none';
+    wrap.style.height = fromH + 'px';   // height only — the card's width never moves
+    void wrap.offsetWidth;     // commit the old size, and restart the reveal keyframes
+    wrap.style.transition = 'height 0.6s cubic-bezier(0.22, 1, 0.36, 1)';
+    wrap.style.height = toH + 'px';
+    setTimeout(() => { wrap.style.transition = wrap.style.height = ''; }, 650);
     taped.classList.add('auto-in');
     gameState.focusAudioEngine?.playEffect('sparkle');
     setTimeout(() => {
