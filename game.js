@@ -29009,6 +29009,7 @@ const LIB_TAG_ICONS = {
     content: LIB_SITE_URL + '/assets/stickers/sparkle.webp',
     prod:    LIB_SITE_URL + '/assets/stickers/burst.webp',
     comm:    LIB_SITE_URL + '/assets/stickers/spiral.webp',
+    coord:   LIB_SITE_URL + '/assets/stickers/spiral.webp',
 };
 
 const LIB_ICON = {
