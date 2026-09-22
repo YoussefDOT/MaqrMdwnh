@@ -50,6 +50,9 @@
 
 .lib-pills .task {
     position: relative; overflow: hidden; isolation: isolate;
+    /* a pill's paint is its own business — keeps an invalidation inside the
+       pill instead of walking the panel */
+    contain: layout paint;
     display: flex; flex-direction: row; align-items: center; gap: 8px;
     width: 100%; padding: 9px 11px; border-radius: 20px;
     text-align: start; color: var(--fg, #fff); background: var(--c, #41b9a6);
@@ -518,9 +521,11 @@
 body.tdrag, body.tdrag * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
 .lib-pills .drag-sib { transition: transform .23s var(--ease); will-change: transform; }
 body.tdrag .lib-pills .task:hover { transform: none; }
-/* the group body clips (it is what makes a collapse work), and a lifted row
-   has to be allowed out of it for the length of the drag */
-body.tdrag .lib-pills .group-body > .task-list { overflow: visible; }
+/* The group body KEEPS CLIPPING through a drag. Unclipping it to let the
+   lifted row's shadow out instead let the row's own transform out: the panel
+   grew a horizontal scrollbar, a vertical one, and a few pixels of width on
+   every drag. The carried row is clamped inside its own run anyway, so there
+   is nothing to see out there. */
 .lib-pills .dragging { position: relative; z-index: 30; will-change: transform; }
 .lib-pills .dragging > .task {
     transform: scale(1.025);
@@ -530,3 +535,18 @@ body.tdrag .lib-pills .group-body > .task-list { overflow: visible; }
 .lib-pills .dragging > .task .pill-grip { opacity: 1; }
 .lib-pills .dragging.landing { transition: transform .23s var(--ease); }
 .lib-pills .drag-still, .lib-pills .drag-still * { transition: none !important; }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   WHAT A PHONE DOES NOT PAY FOR — mirror of the block at the foot of
+   MdwnhLibrary/css/tasks.css. Measured there on a Samsung A32 (Chrome, 4× CPU
+   throttle, a 46-pill list): the coloured 30px bloom under every pill and the
+   `filter` on every done one are what a wall of rows costs to re-raster.
+   ══════════════════════════════════════════════════════════════════════════ */
+@media (pointer:coarse){
+  .lib-pills .task{box-shadow:0 6px 14px rgba(0,0,0,.5);transition:none}
+  .lib-pills .task.parent{box-shadow:0 8px 18px rgba(0,0,0,.55)}
+  .lib-pills .subrow .task{box-shadow:0 4px 10px rgba(0,0,0,.42)}
+  .lib-pills .task.done{filter:none;opacity:.78}
+  .lib-pills .task-title{text-shadow:none}
+  .lib-pills .pill-deco{transition:none}
+}
