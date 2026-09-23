@@ -2,6 +2,16 @@
   "_readme": "نشرة الأخبار — newest day FIRST. One entry per day; add a new day at the top on every push, never edit or remove old days. tag: new | fix | better.",
   "days": [
     {
+      "date": "2026-09-23",
+      "title": "قبعات جديدة",
+      "items": [
+        {
+          "tag": "new",
+          "text": "ثلاث قبعات جديدة في «تخصيص»: دوار شمس، وقبعة السراج، ونظارة ٢."
+        }
+      ]
+    },
+    {
       "date": "2026-09-22",
       "title": "صورة تلقائية لجلستك وقبعات جديدة",
       "items": [
