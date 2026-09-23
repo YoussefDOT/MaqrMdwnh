@@ -1254,6 +1254,35 @@ body {
    its own styles once the entrance finishes. */
 .boot-msg.in   { animation: bootMsgIn 0.45s var(--bounce) backwards; }
 
+/* The way out of a stuck load (see the boot failsafe in index.html). */
+.boot-retry {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    margin-top: -6px;
+    animation: bootMsgIn 0.45s var(--bounce) backwards;
+}
+.boot-retry[hidden] { display: none; }
+.boot-retry p {
+    margin: 0;
+    font-size: 0.86rem;
+    color: rgba(255,255,255,0.55);
+    text-align: center;
+}
+.boot-retry button {
+    padding: 10px 22px;
+    border-radius: 50px;
+    border: 1px solid rgba(255,255,255,0.16);
+    background: rgba(255,255,255,0.08);
+    color: rgba(255,255,255,0.9);
+    font-family: var(--font-main);
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+.boot-retry button:active { transform: scale(0.96); }
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
    MENU (القائمة الرئيسية) — Discord-only entry.
@@ -1642,6 +1671,9 @@ body {
     cursor: pointer;
     transition: background 0.2s, color 0.2s, border-color 0.2s, transform 0.28s var(--bounce);
 }
+/* `display: inline-flex` above beats the UA's [hidden] rule — the button starts
+   hidden and is only revealed where it can really install (see index.html). */
+#pwa-install-btn[hidden] { display: none; }
 #pwa-install-btn:hover {
     background: rgba(8,111,180,0.18);
     border-color: rgba(8,111,180,0.45);

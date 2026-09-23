@@ -1,0 +1,79 @@
+{
+  "v": 1,
+  "ground": {
+    "f": "Baked_Ground.webp",
+    "w": 2210,
+    "h": 3160,
+    "bytes": 577266
+  },
+  "second": {
+    "f": "Baked_Second.webp",
+    "box": [
+      29,
+      34,
+      1234,
+      1080
+    ],
+    "bytes": 125160
+  },
+  "lights1": {
+    "f": "Baked_Lights1.png",
+    "box": [
+      1892,
+      171,
+      2096,
+      706
+    ],
+    "bytes": 2347
+  },
+  "lights2": {
+    "f": "Baked_Lights2.png",
+    "box": [
+      920,
+      88,
+      966,
+      690
+    ],
+    "bytes": 3532
+  },
+  "overlay2": {
+    "f": "Baked_Overlay2.webp",
+    "srcW": 2210,
+    "srcH": 3160,
+    "bytes": 294520
+  },
+  "overlay": {
+    "f": "Baked_Overlay.webp",
+    "srcW": 3081,
+    "srcH": 2747,
+    "bytes": 74320
+  },
+  "masks": {
+    "f": "Baked_Masks.bin",
+    "w": 1105,
+    "h": 1580,
+    "bytes": 13625
+  },
+  "sources": {
+    "Extension_Extra_Work_Table.webp": "683b7bc617",
+    "Workspace_0001_(Overlay)Day-Overlay.png": "ccbd44cf40",
+    "Workspace_0002_(Normal)Day-Overlay-2.png": "5a446a5d17",
+    "Workspace_0003_Second_Floor_Papers_Table.png": "1105294c66",
+    "Workspace_0004_Second_Floor_Laptops_Table.png": "bf51d61c08",
+    "Workspace_0004_Second_Floor_Laptops_Table_Laptop_Lights.png": "5f305013d4",
+    "Workspace_0005_Second_Floor_Background.png": "e3eea7bbb3",
+    "Workspace_0006_Games_Table.png": "6e3c92a7d0",
+    "Workspace_0007_Stairs.png": "5e0d6be342",
+    "Workspace_0008_Laptops_Table.png": "401b90d13d",
+    "Workspace_0008_Laptops_Table_Laptop_Lights.png": "74d70f0466",
+    "Workspace_0009_Sofa.png": "4abc4256f2",
+    "Workspace_0010_Books_Library.png": "64e100750c",
+    "Workspace_0011_Books_Sofas.png": "06b21e2273",
+    "Workspace_0012_Fireplace.png": "d3770c5dcd",
+    "Workspace_0013_Walls.png": "8156df6441",
+    "Workspace_0013b_Trophy_Shelf.png": "a74cf20c46",
+    "Workspace_0014_Background.png": "b4fef49c9a",
+    "__script": "4ec872d367",
+    "__lightboxes": "60660ab197"
+  }
+}

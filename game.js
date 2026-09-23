@@ -1,4 +1,163 @@
-import { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, authReady, runTransaction, query, orderByKey, startAt, endAt } from './firebase-config.js';
+import { database, pointsDatabase, ref, onValue, get, authReady, query, orderByKey, startAt, endAt, orderByChild, equalTo, onChildAdded, onChildChanged, onChildRemoved, goOffline,
+         update as _fbUpdate, set as _fbSet, remove as _fbRemove, runTransaction as _fbRunTransaction, onDisconnect as _fbOnDisconnect } from './firebase-config.js?v=3';
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  ملكية الجلسة — one account, one live tab
+// ═══════════════════════════════════════════════════════════════════════════════
+// Every Firebase WRITE in this file goes through the five wrappers below (they
+// shadow the SDK's names, so no call site had to change). They exist for one bug:
+// a member leaves a session running on the PC, opens the site on the phone, ends
+// the session there — and comes back to a PC tab that is still "in the session".
+// Worse, that zombie tab kept WRITING: its free-mode save re-created the laptop doc
+// the phone had just deleted, its reclaim stash was stamped as abandoned when it
+// finally closed, and the next login restored a session that had already ended.
+//
+// The rule now: the NEWEST login owns the account, and an older tab never writes
+// again. `users/{uid}/activeSession` holds the newest login's token and is NOT
+// cleared on disconnect any more, so it always names the last device in.
+//   • owned      — writes go straight through.
+//   • unverified — the socket dropped, the device slept, or the tab came back from
+//                  the background. Writes are HELD (in order) while one transaction
+//                  asks the server whether the token is still ours. Yes → flush and
+//                  re-arm presence. No → dead.
+//   • dead       — another device took over. The writes are dropped, every
+//                  onDisconnect this tab armed is cancelled (so closing it later
+//                  can't free the laptop the other device is using, or stamp the
+//                  stash), then the socket goes offline for good.
+// Only real members are tracked; the menu and Siraj ghosts are never gated.
+const _own = {
+    state: 'owned',        // 'owned' | 'unverified' | 'dead'
+    tracking: false,       // set by startGame for a real (non-ghost) member
+    queue: [],             // writes held while 'unverified', flushed in order
+    armed: new Map(),      // path → ref of every onDisconnect this tab armed
+    verifying: false,
+    connectedOnce: false,
+    aliveAt: Date.now(),   // wall clock of the last sign this JS was running
+    hiddenAt: 0,
+};
+// Re-arms presence + the disconnect handlers; startGame fills it in.
+let _ownArmPresence = null;
+// A gap this long between two ticks of a 5 s interval means the tab was frozen or
+// the machine slept — long enough for another device to have taken over. Chrome's
+// intensive background throttling runs timers once a minute, which stays under it.
+const OWN_GAP_MS = 90000;
+const OWN_QUEUE_MAX = 3000;
+const _OWN_NEVER = () => new Promise(() => {});
+
+function _ownCheckGap() {
+    const now = Date.now();
+    if (_own.tracking && _own.state === 'owned' && now - _own.aliveAt > OWN_GAP_MS) _ownSuspect();
+    _own.aliveAt = now;
+}
+
+function _ownGate(run) {
+    if (_own.state === 'dead') return _OWN_NEVER();   // a displaced tab writes nothing, ever
+    _ownCheckGap();
+    if (_own.state === 'unverified') {
+        return new Promise((resolve, reject) => {
+            if (_own.queue.length >= OWN_QUEUE_MAX) _own.queue.shift();
+            _own.queue.push({ run, resolve, reject });
+        });
+    }
+    return run();
+}
+
+function update(r, v)             { return _ownGate(() => _fbUpdate(r, v)); }
+function set(r, v)                { return _ownGate(() => _fbSet(r, v)); }
+function remove(r)                { return _ownGate(() => _fbRemove(r)); }
+function runTransaction(r, fn, o) { return _ownGate(() => _fbRunTransaction(r, fn, o)); }
+function onDisconnect(r) {
+    const arm = (fn) => _ownGate(() => {
+        try { _own.armed.set(r.toString(), r); } catch (_) {}
+        return fn(_fbOnDisconnect(r));
+    });
+    return {
+        set:    (v) => arm(od => od.set(v)),
+        update: (v) => arm(od => od.update(v)),
+        remove: ()  => arm(od => od.remove()),
+        setWithPriority: (v, p) => arm(od => od.setWithPriority(v, p)),
+        // Cancelling only ever touches THIS connection's own handlers — always safe.
+        cancel: () => _fbOnDisconnect(r).cancel(),
+    };
+}
+
+function _ownSessionRef() { return ref(database, `users/${gameState.userId}/activeSession`); }
+
+// Something happened that could have let another device take over. Hold writes
+// and ask the server.
+function _ownSuspect() {
+    if (!_own.tracking || _own.state !== 'owned') return;
+    _own.state = 'unverified';
+    _ownVerify();
+}
+
+// One transaction: keep the token if it is still ours (or nobody's), abort if a
+// newer login holds the account. `applyLocally: false` — only the SERVER's answer
+// counts, never the local cache. It waits for a connection on its own.
+function _ownVerify() {
+    if (_own.verifying || _own.state !== 'unverified') return;
+    _own.verifying = true;
+    const tok = gameState._sessionToken;
+    _fbRunTransaction(_ownSessionRef(), (cur) => {
+        if (cur === null || cur === undefined || cur === tok) return tok;
+        return undefined;   // abort — someone newer owns the account
+    }, { applyLocally: false }).then((res) => {
+        _own.verifying = false;
+        if (_own.state !== 'unverified') return;
+        if (res && res.committed) _ownRestore();
+        else _ownDie();
+    }).catch(() => {
+        _own.verifying = false;
+        setTimeout(_ownVerify, 3000);
+    });
+}
+
+// Still ours: send what was held, in order, then re-arm presence exactly like a
+// fresh connection (the old socket's onDisconnect handlers may have fired).
+function _ownRestore() {
+    _own.state = 'owned';
+    const q = _own.queue; _own.queue = [];
+    for (const w of q) {
+        try { Promise.resolve(w.run()).then(w.resolve, w.reject); }
+        catch (e) { w.reject(e); }
+    }
+    if (typeof _ownArmPresence === 'function') _ownArmPresence();
+}
+
+// Another device took over. Everything here is local teardown — the only network
+// traffic is cancelling our own disconnect handlers, then we go offline for good.
+function _ownDie() {
+    if (_own.state === 'dead') return;
+    _own.state = 'dead';
+    _own.queue = [];   // held writes are dropped — they were never sent
+    gameState._dupSessionDetected = true;
+    const cancels = [];
+    for (const r of _own.armed.values()) {
+        try { cancels.push(_fbOnDisconnect(r).cancel().catch(() => {})); } catch (_) {}
+    }
+    Promise.race([Promise.all(cancels), new Promise(r => setTimeout(r, 4000))])
+        .then(() => { try { goOffline(database); } catch (_) {} });
+    try { disconnectPresenceSocket(); } catch (_) {}
+    try { if (gameState.pip && gameState.pip.active) closePiPMode(); } catch (_) {}
+    try { _keepAliveSet(false); } catch (_) {}
+    try { gameState.focusYTPlayer && gameState.focusYTPlayer.pause(); } catch (_) {}
+    try { const fe = gameState.focusAudioEngine; if (fe) { fe.stopAll(); if (fe.ctx) fe.ctx.suspend().catch(() => {}); } } catch (_) {}
+    try { if (gameState._timerWorker) { gameState._timerWorker.terminate(); gameState._timerWorker = null; } } catch (_) {}
+    try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
+    document.getElementById('dup-session-overlay')?.classList.add('active');
+}
+
+// The interval that proves this JS is still running (see OWN_GAP_MS), plus the
+// return from the background: a phone that was away long enough may have lost
+// its socket without the SDK noticing yet, so ask before writing anything.
+setInterval(_ownCheckGap, 5000);
+document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { _own.hiddenAt = Date.now(); return; }
+    if (_own.hiddenAt && Date.now() - _own.hiddenAt > 20000) _ownSuspect();
+    _own.hiddenAt = 0;
+    _ownCheckGap();
+});
+window.addEventListener('pageshow', (e) => { if (e.persisted) _ownSuspect(); });
 
 // ─── Mobile detection ────────────────────────────────────────────────────────
 const MOBILE_BREAKPOINT = 1024;
@@ -300,24 +459,51 @@ function clearDiscordSession() {
     try { sessionStorage.removeItem(DISCORD_SILENT_RETRY_KEY); } catch (_) {}
 }
 
-// Discord's implicit-grant access token expires (~7d) with no refresh token —
-// the old behaviour just dumped the user back to the lobby's "Login with
-// Discord" button, which felt like getting randomly logged out. Since the
-// user already authorized this app, redirecting through Discord's authorize
-// URL again skips the consent screen and bounces straight back with a fresh
-// token — a brief redirect flicker instead of a dead session. Guarded by a
-// sessionStorage flag so a genuinely revoked authorization (Discord shows its
-// real login/consent screen) can't loop forever.
-const DISCORD_SILENT_RETRY_KEY = 'mdwnh_discord_silent_retry';
-function attemptSilentDiscordReauth() {
-    if (sessionStorage.getItem(DISCORD_SILENT_RETRY_KEY) === '1') return false;
-    sessionStorage.setItem(DISCORD_SILENT_RETRY_KEY, '1');
-    window.location.href = getDiscordAuthorizeUrl();
-    return true;
+// ── Who this browser belongs to — kept until the member presses تسجيل الخروج ──
+// Discord's implicit-grant token dies after 7 days and there is no refresh token,
+// so the old flow sent anyone who hadn't opened the site for a week back through
+// Discord — which shows its "Authorize" screen again (and a login screen inside a
+// PWA, whose cookies are its own). That was the "it keeps forgetting me" report.
+// But the token was never protecting anything: nothing server-side checks it, and
+// the site trusts this browser's localStorage either way. So the IDENTITY is now
+// kept on its own, independent of the token's lifetime, and an expired or revoked
+// token simply means the name/avatar aren't re-fetched this time. Only the explicit
+// logout on the menu forgets it.
+const DISCORD_KNOWN_USER_KEY = 'mdwnh_discord_user';
+function _saveKnownDiscordUser(user) {
+    if (!user || !user.id) return;
+    try { localStorage.setItem(DISCORD_KNOWN_USER_KEY, JSON.stringify({ id: user.id, username: user.username, avatar: user.avatar })); } catch (_) {}
 }
+function _loadKnownDiscordUser() {
+    try {
+        const u = JSON.parse(localStorage.getItem(DISCORD_KNOWN_USER_KEY) || 'null');
+        return (u && typeof u.id === 'string' && u.id) ? u : null;
+    } catch (_) { return null; }
+}
+function _forgetKnownDiscordUser() {
+    try { localStorage.removeItem(DISCORD_KNOWN_USER_KEY); } catch (_) {}
+}
+// Ask the browser not to evict this site's storage under pressure (Chromium grants
+// it silently to an installed or much-used site; Safari to a home-screen app). Never
+// on Firefox, which turns the request into a permission prompt.
+function _requestPersistentStorage() {
+    try {
+        if (_isFirefoxBrowser() || !navigator.storage || !navigator.storage.persist) return;
+        navigator.storage.persisted().then(p => { if (!p) navigator.storage.persist().catch(() => {}); }).catch(() => {});
+    } catch (_) {}
+}
+
+// Discord's implicit-grant access token expires (~7d) with no refresh token. The
+// old answer was a redirect back through Discord on expiry — which showed its
+// "Authorize" screen again (and a login screen inside a PWA), i.e. the "it keeps
+// forgetting me" bug. The identity now outlives the token instead (see
+// DISCORD_KNOWN_USER_KEY), so there is no redirect at all. The key survives only
+// because older builds left it in sessionStorage; clearing it is harmless.
+const DISCORD_SILENT_RETRY_KEY = 'mdwnh_discord_silent_retry';
 
 // Cache user info inside the session record so it survives API failures.
 function _cacheDiscordUser(user) {
+    _saveKnownDiscordUser(user);
     try {
         const raw = localStorage.getItem(DISCORD_SESSION_KEY);
         if (!raw) return;
@@ -329,9 +515,10 @@ function _cacheDiscordUser(user) {
 function _loadCachedDiscordUser() {
     try {
         const raw = localStorage.getItem(DISCORD_SESSION_KEY);
-        if (!raw) return null;
-        return JSON.parse(raw).cachedUser || null;
-    } catch { return null; }
+        const u = raw ? JSON.parse(raw).cachedUser : null;
+        if (u && u.id) return u;
+    } catch (_) {}
+    return _loadKnownDiscordUser();
 }
 
 // Snapshot of users/{uid} taken by resolveUserLobby — reused by
@@ -342,11 +529,19 @@ let _lobbyResolveCache = null;
 // Returns the symbol DISCORD_TOKEN_REVOKED when Discord says 401 (token truly dead).
 // Returns null on network error / temporary failure — caller should NOT clear the session.
 const DISCORD_TOKEN_REVOKED = Symbol('revoked');
+// Never waited on for long: Discord is slow or blocked on some members' networks,
+// and a fetch with no timeout left the boot screen spinning for minutes. Past this
+// the cached identity is used, exactly as for any other network failure.
+const DISCORD_FETCH_TIMEOUT_MS = 6000;
 async function fetchDiscordUser(token) {
+    const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const timer = ac ? setTimeout(() => ac.abort(), DISCORD_FETCH_TIMEOUT_MS) : 0;
     try {
         const res = await fetch('https://discord.com/api/users/@me', {
-            headers: { Authorization: `Bearer ${token}` }
+            headers: { Authorization: `Bearer ${token}` },
+            signal: ac ? ac.signal : undefined,
         });
+        clearTimeout(timer);
         if (res.status === 401) return DISCORD_TOKEN_REVOKED;
         if (!res.ok) return null; // 429, 5xx, etc. — transient, keep session
         const data = await res.json();
@@ -403,19 +598,28 @@ async function rosterLobbyFor(discordId) {
     return (m && ROSTER_GENDER_LOBBY[m.gender]) || null;
 }
 
+// A promise that gives up after `ms` (resolves to `fallback`). For boot-path reads
+// that must never be allowed to hang the loader on a bad network.
+function _withTimeout(p, ms, fallback = null) {
+    return Promise.race([p, new Promise(r => setTimeout(() => r(fallback), ms))]);
+}
+const LOBBY_READ_TIMEOUT_MS = 7000;
+
 // Determine the user's lobby from existing Firebase data.
 // Returns 'male' | 'female' | null (null => caller shows first-time chooser).
 async function resolveUserLobby(discordId) {
-    const snap = await get(ref(database, `users/${discordId}`));
-    const data = snap.val() || {};
+    // Bounded: an unreachable database must not keep the boot screen up forever —
+    // past the timeout the roster and the cached lobby still answer.
+    const snap = await _withTimeout(get(ref(database, `users/${discordId}`)).catch(() => null), LOBBY_READ_TIMEOUT_MS);
+    const data = (snap && snap.val()) || {};
     // Cache the snapshot so enterGameAsDiscordUser doesn't re-read the same node
     // seconds later (one less round-trip between pressing الدخول and spawning).
-    _lobbyResolveCache = { id: discordId, data };
+    if (snap) _lobbyResolveCache = { id: discordId, data };
 
     // The roster fetch was kicked off at module load and is in flight alongside
-    // the read above, so this is normally already resolved. It has to be awaited
-    // AFTER that read, not before it — `_mdwnhRosterReady` is declared further
-    // down the file and is still in its TDZ on the synchronous part of this call.
+    // the read above, so this is normally already resolved. (init() now runs after
+    // the whole module has evaluated, so `_mdwnhRosterReady` — declared at the foot
+    // of the file — is never in its TDZ here any more.)
     const rosterLobby = await rosterLobbyFor(discordId);
     if (rosterLobby) {
         // Repair a wrong stored lobby in place, so the rest of the app (which
@@ -517,8 +721,10 @@ function _bootCycleMessage(immediate) {
 let _worldLayersDone = 0;
 function _bootRealProgress() {
     if (_worldReady) return 1;
-    // Cap at 0.96 — the last 4% belongs to the collision morphology passes, which
-    // only finish when _worldReady flips (the branch above).
+    // The baked world reports real downloaded BYTES of its essential files; the
+    // legacy loader counts layers. Capped at 0.96 either way — the last stretch is
+    // decoding, which only finishes when _worldReady flips (the branch above).
+    if (!_worldLegacy) return Math.min(0.96, _worldProgress);
     return Math.min(0.96, _worldLayersDone / WORLD_LAYERS.length);
 }
 
@@ -539,10 +745,33 @@ function _bootTick() {
     _boot.rafId = requestAnimationFrame(_bootTick);
 }
 
+// The retry button under the bar (markup + the pre-module failsafe in index.html).
+// game.js owns it once running: offered only if this phase of the boot has gone on
+// far longer than it ever should — the load keeps going underneath either way.
+const BOOT_RETRY_AFTER_MS = { instant: 20000, slide: 45000 };
+function _bootRetry(show) {
+    const el = document.getElementById('boot-retry');
+    if (el) el.hidden = !show;
+}
+function _bootArmRetry(mode) {
+    clearTimeout(_boot.retryTimer);
+    _bootRetry(false);
+    _boot.retryTimer = setTimeout(() => {
+        if (_bootEls() && _boot.el.classList.contains('active')) _bootRetry(true);
+    }, BOOT_RETRY_AFTER_MS[mode] || 30000);
+}
+function _bootDisarmRetry() {
+    clearTimeout(_boot.retryTimer); _boot.retryTimer = 0;
+    _bootRetry(false);
+    try { sessionStorage.removeItem('mdwnh_boot_retry'); } catch (_) {}
+}
+
 // mode: 'instant' (page-load session check) | 'slide' (pressed الدخول)
 function showBootScreen(mode) {
     const el = _bootEls();
     if (!el) return;
+    window.__maqrBooted = true;   // the index.html failsafe stands down — we own the loader now
+    _bootArmRetry(mode);
     _boot.startedAt = performance.now();
     el.classList.remove('slide-out');
     el.classList.add('active');
@@ -568,6 +797,7 @@ function showBootScreen(mode) {
 function hideBootScreenInstant() {
     const el = _bootEls();
     if (!el) return;
+    _bootDisarmRetry();
     el.classList.remove('active', 'slide-in', 'slide-out');
     clearInterval(_boot.msgTimer); _boot.msgTimer = null;
     // Must die with the boot screen, or it fires later and hides the very menu
@@ -588,6 +818,7 @@ function finishBootScreen() {
     // at, say, 40%) still completes the bar instead of sliding away mid-fill.
     _boot.forceFull = true;
     clearInterval(_boot.msgTimer); _boot.msgTimer = null;
+    _bootDisarmRetry();
 
     setTimeout(() => {
         el.classList.remove('slide-in');
@@ -700,6 +931,7 @@ function showUserPill(user, lobby) {
         logout._wired = true;
         logout.addEventListener('click', () => {
             clearDiscordSession();
+            _forgetKnownDiscordUser();   // the ONE place this browser forgets who you are
             try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
             pill.classList.remove('ready', 'launching');
             logout.classList.remove('ready');
@@ -972,10 +1204,8 @@ async function initDiscordOAuth() {
     parseDiscordOauthHash();
 
     const session = loadDiscordSession();
-    if (!session) {
-        // Token missing/expired but we know who they were — try a silent
-        // re-auth before giving up and showing the manual login button.
-        if (_loadCachedDiscordUser() && attemptSilentDiscordReauth()) return;
+    const cachedUser = _loadCachedDiscordUser();
+    if (!session && !cachedUser) {
         showMenuSignedOut();
         return;
     }
@@ -984,40 +1214,40 @@ async function initDiscordOAuth() {
     // The Discord token check and the Firebase lobby lookup are INDEPENDENT
     // network round-trips — when we know the user's id from the cached session,
     // fire the lobby lookup in parallel instead of after the Discord reply.
-    // (Used to be serial: Discord RTT + Firebase RTT stacked up on the spinner.)
-    const cachedUser = _loadCachedDiscordUser();
     const earlyLobbyPromise = cachedUser?.id
         ? resolveUserLobby(cachedUser.id).catch(() => null)
         : null;
 
-    // fetchDiscordUser returns: user object | DISCORD_TOKEN_REVOKED | null (network error).
-    const fetchResult = await fetchDiscordUser(session.token);
     let user;
-    if (fetchResult === DISCORD_TOKEN_REVOKED) {
-        // Discord explicitly rejected the token — try a silent re-auth first
-        // (covers the routine 7-day expiry); only fall back to the manual
-        // login button if Discord itself won't auto-approve any more.
-        clearDiscordSession();
-        if (cachedUser && attemptSilentDiscordReauth()) return;
-        showMenuSignedOut();
-        return;
-    } else if (fetchResult === null) {
-        // Network failure / Discord API down — don't kill the session.
-        // Fall back to the user info we cached last time it succeeded.
+    if (!session) {
+        // The token expired (Discord gives 7 days, no refresh token) — but we still
+        // know exactly who this is. Carry on as them; nothing needs the token.
         user = cachedUser;
-        if (!user) {
-            // No cache at all (e.g. first ever load with no network) — can't proceed.
-            showMenuSignedOut();
-            return;
-        }
     } else {
-        user = fetchResult;
-        _cacheDiscordUser(user); // keep cache fresh for future network failures
-        try { sessionStorage.removeItem(DISCORD_SILENT_RETRY_KEY); } catch (_) {}
+        // fetchDiscordUser returns: user object | DISCORD_TOKEN_REVOKED | null (network error).
+        const fetchResult = await fetchDiscordUser(session.token);
+        if (fetchResult === DISCORD_TOKEN_REVOKED) {
+            // The token is dead, the identity isn't (see DISCORD_KNOWN_USER_KEY).
+            clearDiscordSession();
+            user = cachedUser;
+            if (!user) { showMenuSignedOut(); return; }
+        } else if (fetchResult === null) {
+            // Network failure / Discord slow or blocked — don't kill the session.
+            user = cachedUser;
+            if (!user) { showMenuSignedOut(); return; }
+        } else {
+            user = fetchResult;
+            _cacheDiscordUser(user); // keep cache fresh for future network failures
+            try { sessionStorage.removeItem(DISCORD_SILENT_RETRY_KEY); } catch (_) {}
+        }
     }
 
+    // Whichever way we got here, remember who this is on its own key — the session
+    // record carrying the old cached user is about to be cleared or to expire.
+    _saveKnownDiscordUser(user);
+
     // Reuse the parallel lookup when it was for the same user; otherwise resolve now.
-    const resolvedLobby = (earlyLobbyPromise && cachedUser.id === user.id)
+    const resolvedLobby = (earlyLobbyPromise && cachedUser && cachedUser.id === user.id)
         ? await earlyLobbyPromise
         : await resolveUserLobby(user.id);
     if (resolvedLobby) {
@@ -1189,51 +1419,54 @@ class FocusAudioEngine {
     async loadSoundEffects() {
         const loadBuffer = async (url) => {
             const response = await fetch(url);
+            if (!response.ok) throw new Error('HTTP ' + response.status);
             const arrayBuffer = await response.arrayBuffer();
             return await this.ctx.decodeAudioData(arrayBuffer);
         };
-        // Core UI sounds (sequential — small, fast).
-        // The entrance whoosh + UI blip load FIRST: the entrance sound must be ready
-        // the instant login finishes, otherwise it lags behind the cinematic (and on
-        // a gesture-less auto-resume it must be decoded before the first tap so it
-        // can fire immediately). Loading them 8th (behind the timer/invite sounds)
-        // was the "audio delayed by a bit" on re-entry.
+        // The entrance whoosh + UI blip load FIRST and alone: the entrance sound must
+        // be ready the instant login finishes (it plays over the reveal), and the
+        // blip is every button. Decode from the page-load prefetch if it's ready.
         try {
-            // Entrance whoosh: decode from the page-load prefetch if it's ready (no
-            // second network round-trip), else fetch normally. Loaded FIRST so it's
-            // ready the instant الدخول is pressed.
             let entAb = _entranceArrayBufferPromise ? await _entranceArrayBufferPromise : null;
-            this.buffers.entranceSound  = entAb
+            this.buffers.entranceSound = entAb
                 ? await this.ctx.decodeAudioData(entAb.slice(0))
                 : await loadBuffer('Sound/Enterance_Sound.mp3');
-            this.buffers.uiBlip         = await loadBuffer('Sound/Menu_Ui.mp3');           // JUICE
-            this.buffers.timeBreak      = await loadBuffer('Sound/TimeBreak.mp3');
-            this.buffers.timeReturn     = await loadBuffer('Sound/TimeReturn.mp3');
-            this.buffers.kidnap         = await loadBuffer('Sound/LaptopGrab.mp3');
-            this.buffers.yipee          = await loadBuffer('Sound/Yipee.mp3');
-            this.buffers.breakAdded     = await loadBuffer('Sound/BreakAdded.mp3');
-            this.buffers.inviteSent     = await loadBuffer('Sound/Invite_Sent.mp3');
-            this.buffers.inviteAccepted = await loadBuffer('Sound/Invite_Accepted.mp3');
-            this.buffers.paperIntro     = await loadBuffer('Sound/Paper_Intro.mp3');
-            this.buffers.paperSwipe     = await loadBuffer('Sound/Paper_Swipe.mp3');
-            this.buffers.paperDaysSwap  = await loadBuffer('Sound/Paper_DaysSwap.mp3');
-            this.buffers.paperExit      = await loadBuffer('Sound/Paper_Exit.mp3');
-            this.buffers.paperTaskComplete = await loadBuffer('Sound/Paper_Task_Complete.mp3');
-            this.buffers.paperInvoiceIntro = await loadBuffer('Sound/Paper_Invoice_Intro.mp3');
-            this.buffers.paperInvoiceExit  = await loadBuffer('Sound/Paper_Invoice_Exit.mp3');
-            this.buffers.paperInvoiceFlip  = await loadBuffer('Sound/Paper_Invoice_Flip.mp3');
-            this.buffers.invoiceCardSave   = await loadBuffer('Sound/Invoice_Card_Sounds.mp3');
-            this.buffers.sparkle           = await loadBuffer('Sound/Sparkle.mp3');
-            this.buffers.sofaSit           = await loadBuffer('Sound/Sofa_Sit.mp3');
-            this.buffers.sofaStand         = await loadBuffer('Sound/Sofa_Stand.mp3');
-            this.buffers.jumpStart         = await loadBuffer('Sound/Jump_Start.mp3');
-            this.buffers.jumpLand          = await loadBuffer('Sound/Jump_Land.mp3');
-            this.buffers.chatMention       = await loadBuffer('Sound/chat_mention.mp3');
-            this.buffers.mentionPing       = await loadBuffer('Sound/mention_ping.mp3');
-            this.buffers.mentionAlarm      = await loadBuffer('Sound/mention_alarm.mp3');
-        } catch(e) {
-            console.log("Failed to load Web Audio sound effects:", e);
-        }
+        } catch (e) { console.log('Entrance sound failed to load:', e); }
+        try { this.buffers.uiBlip = await loadBuffer('Sound/Menu_Ui.mp3'); } catch (e) {}
+        // Everything else: each file on its OWN, three at a time, once the world is
+        // up. It used to be one sequential chain in a single try — the first file
+        // that failed (a dropped connection) silently took every sound after it
+        // with it for the whole session, and all 23 decodes ran on a weak phone's
+        // CPU in exactly the seconds the world art was decoding behind the loader.
+        const rest = [
+            ['timeBreak', 'Sound/TimeBreak.mp3'], ['timeReturn', 'Sound/TimeReturn.mp3'],
+            ['kidnap', 'Sound/LaptopGrab.mp3'], ['yipee', 'Sound/Yipee.mp3'],
+            ['breakAdded', 'Sound/BreakAdded.mp3'], ['inviteSent', 'Sound/Invite_Sent.mp3'],
+            ['inviteAccepted', 'Sound/Invite_Accepted.mp3'],
+            ['chatMention', 'Sound/chat_mention.mp3'], ['mentionPing', 'Sound/mention_ping.mp3'],
+            ['mentionAlarm', 'Sound/mention_alarm.mp3'],
+            ['sofaSit', 'Sound/Sofa_Sit.mp3'], ['sofaStand', 'Sound/Sofa_Stand.mp3'],
+            ['jumpStart', 'Sound/Jump_Start.mp3'], ['jumpLand', 'Sound/Jump_Land.mp3'],
+            ['paperIntro', 'Sound/Paper_Intro.mp3'], ['paperSwipe', 'Sound/Paper_Swipe.mp3'],
+            ['paperDaysSwap', 'Sound/Paper_DaysSwap.mp3'], ['paperExit', 'Sound/Paper_Exit.mp3'],
+            ['paperTaskComplete', 'Sound/Paper_Task_Complete.mp3'],
+            ['paperInvoiceIntro', 'Sound/Paper_Invoice_Intro.mp3'], ['paperInvoiceExit', 'Sound/Paper_Invoice_Exit.mp3'],
+            ['paperInvoiceFlip', 'Sound/Paper_Invoice_Flip.mp3'], ['invoiceCardSave', 'Sound/Invoice_Card_Sounds.mp3'],
+            ['sparkle', 'Sound/Sparkle.mp3'],
+        ];
+        const waitWorld = async () => {
+            for (let i = 0; i < 200 && !_worldReady; i++) await new Promise(r => setTimeout(r, 250));
+        };
+        await waitWorld();
+        const loadOne = async ([key, url]) => {
+            for (let attempt = 0; attempt < 3 && !this.buffers[key]; attempt++) {
+                try { this.buffers[key] = await loadBuffer(url); }
+                catch (e) { await new Promise(r => setTimeout(r, 2000 * (attempt + 1))); }
+            }
+        };
+        let next = 0;
+        const worker = async () => { while (next < rest.length) await loadOne(rest[next++]); };
+        await Promise.all([worker(), worker(), worker()]);
         // Boss-fight sounds (15 files) are only used inside the boss minigame, which
         // most players never open. Decoding them all on audio-init competes for
         // CPU/network during the critical startup window — a big cause of first-load
@@ -4593,20 +4826,32 @@ function _playMenuSfx(key, volume = 1) {
 
 // Initialize game
 function init() {
-    _prefetchEntranceSound();   // FIRST: warm the entrance sound so it's ready at login
-    _menuSfxLoad();             // pill hover/click + boot-finish cues
-    setMobileClass(); // set body.is-mobile before anything renders
-    loadAssets();
+    // Every step on its own guard: one subsystem throwing must never take the
+    // login down with it (a throw anywhere in here used to leave the boot screen
+    // spinning forever — see the note at the call site).
+    const step = (name, fn) => { try { fn(); } catch (err) { console.error('[init] ' + name + ' failed:', err); } };
+    step('entrance sound', _prefetchEntranceSound);   // FIRST: warm the entrance sound so it's ready at login
+    step('menu sfx', _menuSfxLoad);                   // pill hover/click + boot-finish cues
+    step('mobile class', setMobileClass);             // set body.is-mobile before anything renders
+    step('assets', loadAssets);
     // Race track (6 MB PNG + pixel classification) is deliberately NOT loaded
     // here — startGame() loads it on idle, race entry ensures it. See loadRaceTrackAsset.
-    setupMenuScreen();       // ← وضع التجربة entry; the menu itself is driven by initDiscordOAuth
-    setupBossConfirmUI();
-    initWindParticles();
-    initAmbientMotes();
-    initLaptops();
-    initDiscordOAuth();      // Discord button on lobby; auto-resume if session exists
-    _juiceWireResume();      // JUICE: resume audio on the first gesture (refresh autoplay)
-    setupJuiceUi();          // JUICE: wire the UI blip early so the login/lobby menu blips too
+    step('menu', setupMenuScreen);       // ← وضع التجربة entry; the menu itself is driven by initDiscordOAuth
+    step('boss confirm', setupBossConfirmUI);
+    step('wind', initWindParticles);
+    step('motes', initAmbientMotes);
+    step('laptops', initLaptops);
+    // Discord button on lobby; auto-resume if session exists. An unexpected throw
+    // in there used to leave the boot screen up forever — fall back to the menu.
+    initDiscordOAuth().catch((err) => {
+        console.error('[boot] initDiscordOAuth failed:', err);
+        const u = _loadCachedDiscordUser();
+        const lobby = u && (() => { try { return localStorage.getItem(`mdwnh_discord_lobby_${u.id}`); } catch (_) { return null; } })();
+        if (u && lobby && LOBBY_CONFIG[lobby]) showUserPill(u, lobby);
+        else showMenuSignedOut();
+    });
+    step('juice resume', _juiceWireResume);   // JUICE: resume audio on the first gesture (refresh autoplay)
+    step('juice ui', setupJuiceUi);           // JUICE: wire the UI blip early so the login/lobby menu blips too
 }
 
 // ─── World-art loader ───────────────────────────────────────────────────────────
@@ -4632,7 +4877,6 @@ function init() {
 // bitmap deterministically, where an <img> only releases on GC whenever it feels
 // like it.
 const WORLD_FETCH_MAX_RETRIES = 5;
-const WORLD_FETCH_TIMEOUT_MS = 25000;
 const WORLD_FETCH_CONCURRENCY = 4;
 
 // Paint order, bottom → top. `cache` = which pre-composited canvas it belongs to;
@@ -4768,15 +5012,19 @@ function _shrinkResidentLayer(kind, bmp) {
 // The manifest itself is tiny and fetched `no-store`, so it's always current;
 // if it fails we fall back to plain un-hashed URLs (slower, still correct).
 let _worldManifest = null;
+// Art/Workspace/baked.json — what tools/bake_world.py produced (see the WORLD BAKE
+// block below). null = no baked world; the legacy per-layer loader runs instead.
+let _worldBaked = null;
 async function _loadWorldManifest() {
-    try {
-        const res = await fetch('Art/Workspace/manifest.json', { cache: 'no-store' });
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        _worldManifest = await res.json();
-    } catch (err) {
-        console.warn('[world-art] no manifest — loading un-hashed (uncached) URLs:', err.message || err);
-        _worldManifest = null;
-    }
+    // Both tiny, both `no-store`, fetched together. Neither may hang the load: a
+    // manifest that never answers costs the cache, not the world.
+    const grab = (url) => _withTimeout(
+        fetch(url, { cache: 'no-store' }).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); }),
+        8000).catch(() => null);
+    const [man, baked] = await Promise.all([grab('Art/Workspace/manifest.json'), grab('Art/Workspace/baked.json')]);
+    _worldManifest = (man && typeof man === 'object') ? man : null;
+    if (!_worldManifest) console.warn('[world-art] no manifest — loading un-hashed (uncached) URLs');
+    _worldBaked = (baked && baked.v === 1 && baked.ground && baked.second && baked.masks) ? baked : null;
 }
 function _worldSrc(file) {
     const h = _worldManifest && _worldManifest[file];
@@ -4791,37 +5039,23 @@ function _layerReady(x) {
     return x.width > 0;
 }
 
-// Fetch one layer's bytes, with a real timeout and capped retries. A stalled
-// request is the other half of this bug: it never fires an error, it just sits
-// pending forever, so nothing retried and a reload re-issued it onto the same
-// wedged connection pool. AbortController gives us the hard cutoff <img> never
-// could. Retries append a unique query so they're a brand-new URL to both the
-// service worker and the HTTP cache — no wedged or truncated copy can be reused.
+// (LEGACY loader only — the baked world uses _fetchUntil.) Fetch one layer's bytes
+// with a stall timeout and capped retries. A stalled request never fires an error,
+// it just sits pending forever — so a request that has gone SILENT is aborted and
+// retried; one that is merely slow is left to finish. Retries append a unique query
+// so they're a brand-new URL to the HTTP cache — no wedged or truncated copy can be
+// reused.
 async function _fetchWorldBlob(src, maxRetries = WORLD_FETCH_MAX_RETRIES) {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
         const url = attempt === 0
             ? src
             : src + (src.includes('?') ? '&' : '?') + '_retry=' + attempt + '.' + Date.now();
-        const ac = new AbortController();
-        const timer = setTimeout(() => ac.abort(), WORLD_FETCH_TIMEOUT_MS);
         try {
-            const res = await fetch(url, {
-                signal: ac.signal,
-                // Retries must not be answered from any cache — a wedged or
-                // truncated copy is exactly what we're retrying to get away from.
-                cache: attempt === 0 ? 'default' : 'reload',
-                // Yield to the requests that decide how fast the menu appears
-                // (Discord token, Firebase lobby, fonts, logo). Ignored where
-                // unsupported.
-                priority: 'low',
-            });
-            if (!res.ok) throw new Error('HTTP ' + res.status);
-            const blob = await res.blob();          // completes only once the FULL body lands
-            if (!blob.size) throw new Error('empty body');
-            clearTimeout(timer);
-            return blob;
+            // Judged on silence, not on the clock (see _streamFetch): the old flat
+            // 25 s timeout cut a big layer off on any slow link, every attempt.
+            _worldProgressAt = Date.now();
+            return await _streamFetch(url, () => { _worldProgressAt = Date.now(); }, attempt > 0);
         } catch (err) {
-            clearTimeout(timer);
             if (attempt === maxRetries) {
                 console.warn('[world-art] gave up fetching:', src, err);
                 return null;
@@ -4874,9 +5108,22 @@ function loadAssets() {
     for (const im of Object.values(gameState.assets)) {
         if (im instanceof Image) { try { im.fetchPriority = 'low'; im.decoding = 'async'; } catch (_) {} }
     }
-    gameState.assets.book.src = 'Art/Book.png';
-    gameState.assets.race.src = 'Art/race.png';
-    gameState.assets.coffeeZone.src     = 'Art/Coffee.png';
+    // None of this is needed until well after the world is up — and on a slow link
+    // every byte of it was competing with the world during the boot. So it waits
+    // for the world, then for an idle moment. (race.png / Coffee.png / Laptop.png
+    // were the old break-room zone signs; they no longer exist — three 404s a load.)
+    const later = () => {
+        if (!_worldReady) { setTimeout(later, 1500); return; }
+        const go = () => _loadPropArt();
+        if (window.requestIdleCallback) requestIdleCallback(go, { timeout: 8000 }); else setTimeout(go, 2000);
+    };
+    setTimeout(later, 1500);
+}
+
+function _loadPropArt() {
+    if (_loadPropArt.done) return;
+    _loadPropArt.done = true;
+    gameState.assets.book.src = 'Art/Book_small.webp';
     gameState.assets.coffeeMug.src      = 'Art/Hands.png';
     gameState.assets.coffeeHandsFg.src  = 'Art/Hands Foreground.png';
     gameState.assets.coffeeSugar.src    = 'Art/fig.png';
@@ -4884,7 +5131,6 @@ function loadAssets() {
     gameState.assets.coffeeGoldFig.src  = 'Art/Golden Fig.png';
     gameState.assets.coffeeWaterBg.src  = 'Art/Water BG.png';
     gameState.assets.coffeeBubble.src   = 'Art/Bubbles.png';
-    gameState.assets.laptopBossZone.src   = 'Art/Laptop.png?v=2';
     gameState.assets.bossBg.src           = 'Art/LaptopBossFight/LaptopBG.png';
     gameState.assets.bossGround.src       = 'Art/LaptopBossFight/Laptop Ground.png';
     gameState.assets.bossOverlay.src      = 'Art/LaptopBossFight/Laptop Overlay.png';
@@ -5096,16 +5342,370 @@ const worldCache = { ground: null, second: null, meet: null, w: 0, h: 0 };
 // screen for no reason.
 let _worldReady = false;
 
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  WORLD BAKE — the world as a handful of small, pre-composited files
+// ═══════════════════════════════════════════════════════════════════════════════
+// The world used to arrive as 16 full-canvas PNGs (~12.5 MB): fetched four at a
+// time, decoded one by one (27.9 MB each, decoded), composited into caches, then
+// rasterised into collision masks and put through ~17 morphology passes — all
+// before the boot screen could lift. On a slow link the 3.6 MB background alone
+// outlasted the old flat 25 s fetch timeout, six times over, and the world stayed
+// black for good; on a weak phone the decode + mask work was seconds of CPU.
+//
+// tools/bake_world.py now does all of that ONCE, at commit time (the pre-commit
+// hook runs it): one ground WebP, one mezzanine WebP cropped to its painted bbox,
+// pre-cropped glow sheets, pre-shrunk overlays and the finished collision masks,
+// run-length encoded. ~1 MB in total, verified pixel-exact against the old
+// in-browser mask maths. What's left here is: download (streamed, judged on
+// PROGRESS not on the clock), decode a few images, and never give up.
+//
+//   essential — ground, mezzanine, masks. The boot waits for these (and only
+//               these), retrying forever with backoff while the loader is up.
+//   the rest  — meeting room, glow sheets, day overlays. They land whenever they
+//               land and are drawn from that frame on; a failure keeps retrying in
+//               the background until it works (that is the "black world that never
+//               fixes itself" — nothing ever tried again).
+//
+// The compressed bytes of every decoded piece are KEPT (~1 MB). If the GPU drops
+// a cache canvas (a context loss — Chrome on a phone under memory pressure), or a
+// decode is refused, the piece is rebuilt from those bytes with no network at all.
+let _worldLegacy = false;
+let _worldProgress = 0;         // 0..1 — bytes of the essential files downloaded
+let _worldProgressAt = 0;       // Date.now() of the last byte / layer that arrived
+const _baked = { blobs: {}, parts: {}, healer: {}, essentialDone: false, started: false };
+
+// Resolution of the world textures per tier. The mezzanine crop freed ~23 MB of
+// what used to be a mostly-transparent full-size canvas, which is what pays for a
+// sharper ground on phones (0.62 → 0.85 on متوسط) at the same memory total.
+function _bakedScale() {
+    if (isPotato()) return 0.7;
+    if (isReducedGraphics()) return 0.85;
+    return 1;
+}
+
+// Stream one file. The ONLY timeout is on silence: a slow link that keeps
+// delivering bytes is never cut off (the old flat 25 s timeout aborted a 3.6 MB
+// file on any link under ~150 KB/s — forever, since every retry started over).
+const WORLD_STALL_MS = 15000;
+async function _streamFetch(url, onBytes, reload) {
+    const ac = new AbortController();
+    let stall = setTimeout(() => ac.abort(), WORLD_STALL_MS);
+    const poke = () => { clearTimeout(stall); stall = setTimeout(() => ac.abort(), WORLD_STALL_MS); };
+    try {
+        const res = await fetch(url, { signal: ac.signal, cache: reload ? 'reload' : 'default', priority: 'low' });
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        poke();
+        const type = res.headers.get('content-type') || '';
+        if (!res.body || !res.body.getReader) {
+            const b = await res.blob();
+            if (onBytes) onBytes(b.size);
+            if (!b.size) throw new Error('empty body');
+            return b;
+        }
+        const reader = res.body.getReader();
+        const chunks = [];
+        let got = 0;
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            poke();
+            chunks.push(value);
+            got += value.byteLength;
+            if (onBytes) onBytes(got);
+        }
+        if (!got) throw new Error('empty body');
+        return new Blob(chunks, type ? { type } : undefined);
+    } finally {
+        clearTimeout(stall);
+    }
+}
+
+// Keep trying until it works. Attempt 0 is the plain (cacheable) URL; later ones
+// skip the HTTP cache, and from the third on carry `_retry=` so even a wedged
+// service worker is bypassed. Backoff tops out at `capMs`; an offline device just
+// waits for the `online` event instead of burning attempts.
+async function _fetchUntil(file, onBytes, capMs) {
+    const src = _worldSrc(file);
+    for (let attempt = 0; ; attempt++) {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+            await new Promise(r => { const on = () => { window.removeEventListener('online', on); r(); }; window.addEventListener('online', on); setTimeout(on, 30000); });
+        }
+        const url = attempt < 2 ? src : src + (src.includes('?') ? '&' : '?') + '_retry=' + attempt + '.' + Date.now();
+        try {
+            return await _streamFetch(url, onBytes, attempt > 0);
+        } catch (err) {
+            if (attempt === 0 || attempt % 5 === 0) console.warn('[world-art] retrying', file, '—', (err && err.message) || err);
+            await new Promise(r => setTimeout(r, Math.min(capMs, 500 * Math.pow(2, Math.min(attempt, 6)))));
+        }
+    }
+}
+
+// Decode to an ImageBitmap at `scale`. createImageBitmap's resize options produce a
+// CPU-side bitmap straight away (Chrome/Firefox) — which, unlike a GPU cache
+// canvas, cannot be wiped by a GPU context loss. A browser that ignores the
+// options hands back the full-size bitmap; it's then scaled through a canvas.
+async function _decodeScaled(blob, scale) {
+    if (scale >= 0.999) return await createImageBitmap(blob);
+    const bmp = await createImageBitmap(blob);
+    const tw = Math.max(1, Math.round(bmp.width * scale)), th = Math.max(1, Math.round(bmp.height * scale));
+    try {
+        const small = await createImageBitmap(bmp, { resizeWidth: tw, resizeHeight: th, resizeQuality: 'high' });
+        if (small.width === tw && small.height === th) { bmp.close(); return small; }
+        small.close();
+    } catch (_) {}
+    const c = document.createElement('canvas');
+    c.width = tw; c.height = th;
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(bmp, 0, 0, tw, th);
+    bmp.close();
+    _watchCacheCanvas(c);
+    return c;
+}
+
+// A cache that is a <canvas> can be dropped by the GPU. Chrome says so with
+// `contextlost`/`contextrestored` (and restores it BLANK); rebuild from the kept
+// bytes. The periodic health check below covers browsers without the events.
+function _watchCacheCanvas(c) {
+    try {
+        c.addEventListener('contextrestored', () => { console.warn('[world-art] cache canvas restored blank — rebuilding'); _bakedRebuildAll(); });
+    } catch (_) {}
+}
+
+// Decode a piece with a couple of spaced retries (a refused decode is usually the
+// tab being briefly out of memory, and the bytes are already here).
+async function _bakedDecode(key, blob, scale) {
+    for (let i = 0; i < 4; i++) {
+        try { return await _decodeScaled(blob, scale); }
+        catch (err) {
+            console.warn('[world-art] decode failed:', key, (err && err.message) || err);
+            await new Promise(r => setTimeout(r, 1200 * (i + 1)));
+        }
+    }
+    return null;
+}
+
+// Masks.bin → { name: Uint8Array(MASK_W*MASK_H) }. Runs alternate 0/1 from 0,
+// each an LEB128 varint (see rle() in tools/bake_world.py).
+function _decodeBakedMasks(buf) {
+    const u8 = new Uint8Array(buf);
+    const dv = new DataView(buf);
+    if (u8[0] !== 77 || u8[1] !== 81 || u8[2] !== 77 || u8[3] !== 49) throw new Error('bad masks magic');
+    const W = dv.getUint16(4, true), H = dv.getUint16(6, true), n = u8[8];
+    if (W !== MASK_W || H !== MASK_H) throw new Error('masks are ' + W + '×' + H);
+    const total = W * H, out = {};
+    let p = 9;
+    for (let k = 0; k < n; k++) {
+        const nl = u8[p++];
+        let name = '';
+        for (let i = 0; i < nl; i++) name += String.fromCharCode(u8[p + i]);
+        p += nl;
+        const len = dv.getUint32(p, true); p += 4;
+        const end = p + len;
+        const m = new Uint8Array(total);
+        let pos = 0, val = 0;
+        while (p < end) {
+            let run = 0, sh = 0, b;
+            do { b = u8[p++]; run |= (b & 0x7F) << sh; sh += 7; } while (b & 0x80);
+            if (val) m.fill(1, pos, Math.min(total, pos + run));
+            pos += run; val ^= 1;
+        }
+        if (pos !== total) throw new Error('mask ' + name + ' is ' + pos + ' px');
+        out[name] = m;
+    }
+    return out;
+}
+
+// The same OR / ghost-rect assembly the in-browser loader did after its
+// morphology — only the morphology itself moved to the bake.
+function _buildCollisionFromMasks(M) {
+    const f1 = new Uint8Array(MASK_W * MASK_H);
+    _orMask(f1, M.walls);
+    _orMask(f1, M.furn);
+    const tops = new Uint8Array(MASK_W * MASK_H);
+    _orMask(tops, M.furn);
+    _fillMaskRectSrc(tops, GROUND_TABLE_GHOST_PX0, GROUND_TABLE_GHOST_PY0, GROUND_TABLE_GHOST_PX1, GROUND_TABLE_GHOST_PY1);
+    _fillMaskRectSrc(tops, EXT_TABLE_GHOST[0], EXT_TABLE_GHOST[1], EXT_TABLE_GHOST[2], EXT_TABLE_GHOST[3]);
+    worldCollision.tops = tops;
+    worldCollision.walls = M.walls;
+    _orMask(f1, M.fire);
+    _fillMaskRectSrc(f1, STAIR_GHOST_PX0, STAIR_GHOST_PY0, STAIR_GHOST_PX1, STAIR_GHOST_PY1);
+    _fillMaskRectSrc(f1, GROUND_TABLE_GHOST_PX0, GROUND_TABLE_GHOST_PY0, GROUND_TABLE_GHOST_PX1, GROUND_TABLE_GHOST_PY1);
+    _fillMaskRectSrc(f1, EXT_TABLE_GHOST[0], EXT_TABLE_GHOST[1], EXT_TABLE_GHOST[2], EXT_TABLE_GHOST[3]);
+    worldCollision.floor1 = f1;
+    worldCollision.meet = _buildMeetMask();
+    worldCollision.floor2desks = M.desks;
+    worldCollision.stairs = M.stairs;
+    worldCollision.built = true;
+    _unstickLocalPlayer();
+}
+
+// Turn one piece's bytes into what the renderer draws. Returns true when drawn.
+async function _bakedApply(key, blob) {
+    const A = gameState.assets, B = _worldBaked, sc = _bakedScale();
+    if (key === 'masks') {
+        _buildCollisionFromMasks(_decodeBakedMasks(await blob.arrayBuffer()));
+        return true;
+    }
+    // Two files, one picture: whichever lands first just waits for the other
+    // (that is a success, not a failure to retry); the second one composes.
+    if (key === 'meetRoom' || key === 'meetTable') {
+        if (!_baked.blobs.meetRoom || !_baked.blobs.meetTable) return true;
+        return _bakedComposeMeet();
+    }
+    const img = await _bakedDecode(key, blob, (key === 'ground' || key === 'second') ? sc : 1);
+    if (!img) return false;
+    const old = _baked.parts[key];
+    _baked.parts[key] = img;
+    if (key === 'ground') worldCache.ground = img;
+    else if (key === 'second') { worldCache.second = img; worldCache.secondBox = B.second.box; }
+    else if (key === 'lights1' || key === 'lights2') {
+        img.srcOX = B[key].box[0]; img.srcOY = B[key].box[1];
+        A[key === 'lights1' ? 'wLaptopLights' : 'wSecondLaptopLights'] = img;
+    } else if (key === 'extLights') {
+        img.srcOX = EXT_LIGHTS_BOX[0]; img.srcOY = EXT_LIGHTS_BOX[1];
+        A.wExtLaptopLights = img;
+    } else if (key === 'overlay2' || key === 'overlay') {
+        img.srcW = B[key].srcW; img.srcH = B[key].srcH;
+        A[key === 'overlay2' ? 'wOverlayDay2' : 'wOverlayDay'] = img;
+    }
+    if (old && old !== img && old.close) { try { old.close(); } catch (_) {} }
+    return true;
+}
+
+// The meeting room is the one piece still composed at runtime: two small WebPs
+// (room + table) into one canvas at the ground's texel density.
+async function _bakedComposeMeet() {
+    const room = _baked.blobs.meetRoom, table = _baked.blobs.meetTable;
+    if (!room || !table) return false;
+    const sc = _bakedScale();
+    const [r, t] = await Promise.all([_bakedDecode('meetRoom', room, 1), _bakedDecode('meetTable', table, 1)]);
+    if (!r || !t) return false;
+    const c = document.createElement('canvas');
+    c.width = Math.round(MEET_IMG_W * sc); c.height = Math.round(MEET_IMG_H * sc);
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(r, 0, 0, c.width, c.height);
+    const sx = c.width / MEET_IMG_W, sy = c.height / MEET_IMG_H;
+    const [bx0, by0, bx1, by1] = MEET_TABLE_BOX;
+    g.drawImage(t, bx0 * sx, by0 * sy, (bx1 - bx0) * sx, (by1 - by0) * sy);
+    if (r.close) r.close();
+    if (t.close) t.close();
+    _watchCacheCanvas(c);
+    worldCache.meet = c;
+    return true;
+}
+
+// Fetch → keep the bytes → apply; on any failure, again later, forever.
+function _bakedHeal(key, file, essential, onBytes) {
+    if (_baked.healer[key]) return _baked.healer[key];
+    const run = (async () => {
+        for (let round = 0; ; round++) {
+            if (!_baked.blobs[key]) _baked.blobs[key] = await _fetchUntil(file, onBytes, essential ? 10000 : 60000);
+            try {
+                if (await _bakedApply(key, _baked.blobs[key])) return true;
+            } catch (err) {
+                console.warn('[world-art] could not use', key, '—', (err && err.message) || err);
+            }
+            // Bytes that decode to nothing are suspect — fetch them fresh next time.
+            _baked.blobs[key] = null;
+            await new Promise(r => setTimeout(r, Math.min(60000, 3000 * (round + 1))));
+        }
+    })();
+    _baked.healer[key] = run;
+    return run;
+}
+
+// Rebuild every drawn piece from the kept bytes (a cache canvas came back blank).
+let _bakedRebuilding = false;
+async function _bakedRebuildAll() {
+    if (_bakedRebuilding || _worldLegacy || !_worldBaked) return;
+    _bakedRebuilding = true;
+    try {
+        for (const key of Object.keys(_baked.blobs)) {
+            if (key === 'masks' || key === 'meetTable') continue;
+            if (_baked.blobs[key]) { try { await _bakedApply(key, _baked.blobs[key]); } catch (_) {} }
+        }
+    } finally { _bakedRebuilding = false; }
+}
+
+// Cheap self-check (every 20 s, and on return to the tab): a cache canvas whose
+// 2D context was lost, or a bitmap that got closed under us, is rebuilt. Covers
+// the browsers that never fire `contextrestored`.
+function _bakedHealthCheck() {
+    if (_worldLegacy || !_worldBaked || !_baked.essentialDone) return;
+    const bad = (x) => {
+        if (!x) return true;
+        if (x.width === 0) return true;
+        if (x.getContext) { try { const g = x.getContext('2d'); if (g && g.isContextLost && g.isContextLost()) return true; } catch (_) {} }
+        return false;
+    };
+    if (bad(worldCache.ground) || bad(worldCache.second) || (worldCache.meet && bad(worldCache.meet))) _bakedRebuildAll();
+}
+setInterval(_bakedHealthCheck, 20000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(_bakedHealthCheck, 300); });
+
+async function _loadBakedWorld() {
+    const B = _worldBaked;
+    _baked.started = true;
+    const ess = ['ground', 'second', 'masks'];
+    const totalEss = ess.reduce((n, k) => n + ((B[k] && B[k].bytes) || 1), 0);
+    const got = {};
+    const progress = (k) => (n) => {
+        got[k] = n;
+        let sum = 0;
+        for (const e of ess) sum += Math.min(got[e] || 0, (B[e] && B[e].bytes) || 1);
+        _worldProgress = Math.min(0.97, sum / totalEss);
+        _worldProgressAt = Date.now();
+    };
+    const essential = Promise.all(ess.map(k => _bakedHeal(k, B[k].f, true, progress(k))));
+    // The rest start now too — small, and on a fast link they are in before the boot lifts.
+    const rest = [
+        ['lights1', B.lights1 && B.lights1.f], ['lights2', B.lights2 && B.lights2.f],
+        ['extLights', 'Extension_Extra_Work_Table_Laptop_Lights.png'],
+        ['meetRoom', 'Extension_Meeting_Room.webp'], ['meetTable', 'Extension_Meeting_Room_Table.webp'],
+        ['overlay2', B.overlay2 && B.overlay2.f], ['overlay', B.overlay && B.overlay.f],
+    ];
+    for (const [k, f] of rest) if (f) _bakedHeal(k, f, false);
+    await essential;
+    _baked.essentialDone = true;
+    _worldProgress = 1;
+    _worldReady = true;
+    if (gameState.userId) finishBootScreen();
+}
+
+// Entry point (loadAssets). The baked world when it exists; the legacy per-layer
+// pipeline when it doesn't — or when this browser can't decode WebP at all (iOS 13
+// and older), which the ground decode tells us within the first seconds.
+async function loadWorldArt() {
+    await _loadWorldManifest();
+    if (_worldBaked && await _webpDecodes()) {
+        await _loadBakedWorld();
+        return;
+    }
+    await _loadWorldArtLegacy();
+}
+
+// A 1×1 lossy WebP. Every browser this site otherwise supports decodes it.
+async function _webpDecodes() {
+    try {
+        const b64 = 'UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA';
+        const bin = atob(b64), u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        const bmp = await createImageBitmap(new Blob([u8], { type: 'image/webp' }));
+        const ok = bmp.width === 1;
+        bmp.close();
+        return ok;
+    } catch (_) { return false; }
+}
+
 // Load the whole world: fetch in parallel, decode one at a time in paint order,
 // compose + mask + free each layer as it lands. See the WORLD_LAYERS block above
 // for why the decode is serial — it's the entire point of this pipeline.
-async function loadWorldArt() {
+async function _loadWorldArtLegacy() {
     const A = gameState.assets;
-
-    // Must land before the first layer fetch — it's what decides the URLs. It's a
-    // sub-KB read, so this costs nothing next to the ~18 MB it saves on every
-    // visit after the first.
-    await _loadWorldManifest();
+    _worldLegacy = true;
 
     // Cache resolution. The world only ever occupies WORLD_W (≈1193) logical px, so
     // what matters is texels-per-world-px = scale * IMG_W / WORLD_W, versus the
@@ -6122,6 +6722,7 @@ function playMinigameReadySound(volume) {
 function startGame(userData) {
     gameState.currentUser = userData.username;
     gameState.userId = userData.userId;
+    if (!gameState.isSirajGhost) _requestPersistentStorage();   // keep who you are (and the cache) from being evicted
 
     // Remember we're actively in-game so an unintended reload auto-resumes.
     // Siraj ghosts are ephemeral (deleted on disconnect) — never auto-resume them.
@@ -6155,27 +6756,25 @@ function startGame(userData) {
         set(activeRef, true);
         onDisconnect(ref(database, `users/${gameState.userId}`)).remove();
     } else {
-        // Single-session enforcement: each login writes a unique token. If another
-        // tab/device logs in with the same account, it overwrites the token. The
-        // original tab detects the mismatch and shows a "logged in elsewhere" overlay.
+        // Single-session enforcement: each login writes a unique token, and the
+        // NEWEST login owns the account (see ملكية الجلسة at the top of this file).
+        // The claim is unconditional and immediate — a pending local write, so any
+        // older server value that arrives before its ack can't read as a takeover.
         const _tok = `${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
         gameState._sessionToken = _tok;
         const sessionRef = ref(database, `users/${gameState.userId}/activeSession`);
+        _own.tracking = true;
+        _own.state = 'owned';
+        set(sessionRef, _tok);
 
-        // CRITICAL presence fix (the perennial "ghost laptop / working user
-        // invisible to others" bug): a flaky mobile connection drops the Firebase
-        // socket, which fires the `onDisconnect` ops server-side (activeInGame=false,
-        // laptop freed). The socket then silently reconnects — but the original code
-        // only set presence ONCE at login, so activeInGame stayed false forever and
-        // the still-working user rendered as a claimed-but-empty ghost laptop to
-        // everyone else. Re-assert presence (and RE-ARM the disconnect handlers,
-        // which fire only once) on EVERY (re)connection via `.info/connected`.
-        const connectedRef = ref(database, '.info/connected');
-        onValue(connectedRef, (snap) => {
-            if (snap.val() !== true) return;
-            // If another device took over this account, don't fight back on reconnect.
-            if (gameState._dupSessionDetected) return;
-            // (Re)arm disconnect cleanup first, then assert the live value.
+        // Presence + the handlers that clean up after us, armed on the first
+        // connection and re-armed after every verified reconnect (onDisconnect ops
+        // fire once — the perennial "ghost laptop" bug was presence set only once).
+        // The token is deliberately NOT nulled on disconnect any more: it has to
+        // keep naming the last device in, or a tab that wakes up after the phone
+        // took over (and left) would find it empty and take the session back.
+        _ownArmPresence = () => {
+            if (_own.state !== 'owned') return;
             onDisconnect(activeRef).set(false);
             set(activeRef, true);
             // Free the sofa seat too, so a closed tab doesn't leave the seat claimed
@@ -6186,20 +6785,29 @@ function startGame(userData) {
             for (const f of ['sitSeatId', 'sitX', 'sitY']) {
                 onDisconnect(ref(database, `users/${gameState.userId}/${f}`)).set(null);
             }
-            onDisconnect(sessionRef).set(null);
-            set(sessionRef, gameState._sessionToken);
             // Undo any session-freeing onDisconnect that fired during the dropout so
             // the laptop comes back to us instead of lingering as a ghost / staying free.
             reassertActiveSessionAfterReconnect();
+        };
+        const connectedRef = ref(database, '.info/connected');
+        onValue(connectedRef, (snap) => {
+            if (_own.state === 'dead') return;
+            if (snap.val() !== true) {
+                // Dropped. Whatever we write until the server has confirmed we still
+                // own the account is held, not sent.
+                if (_own.connectedOnce) _ownSuspect();
+                return;
+            }
+            if (!_own.connectedOnce) { _own.connectedOnce = true; _ownArmPresence(); return; }
+            // A RE-connect. Prove ownership first; _ownRestore re-arms presence.
+            if (_own.state === 'owned') _ownSuspect();
+            else _ownVerify();
         });
 
         onValue(sessionRef, snap => {
             const live = snap.val();
-            if (live && live !== gameState._sessionToken) {
-                document.getElementById('dup-session-overlay')?.classList.add('active');
-                // Halt the game loop gently — the overlay reload button will refresh.
-                gameState._dupSessionDetected = true;
-            }
+            // Another device logged in after us — hand everything over and stop.
+            if (live && live !== gameState._sessionToken) _ownDie();
         });
 
         // On PC sleep/wake or tab refocus, re-assert presence + re-broadcast our
@@ -6207,9 +6815,11 @@ function startGame(userData) {
         // who saw us drop refresh us instantly instead of leaving us as a faded ghost.
         const _resyncPresence = () => {
             if (gameState._dupSessionDetected) return;
+            // Never re-write the session token here: blindly asserting it on focus
+            // is how a woken PC used to steal the account back from the phone.
+            // Ownership is proven by _ownVerify; this write is held until it is.
             update(ref(database), {
                 [`users/${gameState.userId}/activeInGame`]: true,
-                [`users/${gameState.userId}/activeSession`]: gameState._sessionToken,
             });
             const _p = gameState.players[gameState.userId];
             if (_p) updatePlayerPosition(_p.x, _p.y);
@@ -6295,12 +6905,23 @@ function startGame(userData) {
     // doc holds the user's PRIVATE state (focus mix, YouTube player, reclaim
     // stash) — moved out of users/{uid} so its frequent writes stop fanning out
     // to every client on the global /users listener. See dashProfilePath().
+    // Waiting on the server with nothing on screen reads as "stuck". Say so, and
+    // keep saying so, until the restore below lands.
+    let _spawned = false;
+    const _connNote = setInterval(() => {
+        if (_spawned || gameState._dupSessionDetected) { clearInterval(_connNote); return; }
+        if (_boot.gateOpen) _libToast('جارٍ الاتصال بالخادم… لحظات من فضلك');
+    }, 9000);
     Promise.all([
-        get(ref(database, lobbyPath('pomodoro'))),
+        // Every read is allowed to fail — one rejected read used to skip the whole
+        // restore, and the member was left in a world with no avatar of their own.
+        get(ref(database, lobbyPath('pomodoro'))).catch(() => null),
         get(ref(database, `users/${gameState.userId}`)).catch(() => null),
         get(ref(database, dashProfilePath())).catch(() => null),
     ]).then(([pomoSnapshot, _userSnapshot, _profileSnapshot]) => {
-        const pomoData = pomoSnapshot.val() || {};
+        _spawned = true;
+        clearInterval(_connNote);
+        const pomoData = (pomoSnapshot && pomoSnapshot.val()) || {};
         syncLaptopsFromPomodoro(pomoData);
         let activeLaptopId = null;
         let restoringFreeMode = false;
@@ -6641,6 +7262,22 @@ function startGame(userData) {
                 setTimeout(loadRaceTrackAsset, 6000);
             }
         }
+    }).catch((err) => {
+        // A throw halfway through the restore must not leave the member without a
+        // body: put them on a normal spawn and let the entrance play.
+        console.error('[restore] failed:', err);
+        _spawned = true;
+        clearInterval(_connNote);
+        if (!gameState.players[gameState.userId]) {
+            const sp = getRandomSpawnPosition();
+            gameState.players[gameState.userId] = {
+                userId: gameState.userId, username: gameState.currentUser,
+                x: sp.x, y: sp.y, renderX: sp.x, renderY: sp.y, floor: 1, renderScale: 1,
+            };
+            try { updatePlayerPosition(sp.x, sp.y); } catch (_) {}
+            gameState.positionInitialized = true;
+        }
+        try { beginEntrance(gameState.pomodoro.active || gameState.freeMode.active); } catch (_) {}
     });
 
     // Background interval using Web Worker to bypass tab throttling completely
@@ -6668,6 +7305,7 @@ function startGame(userData) {
         updateFreeMode();
     };
     timerWorker.postMessage('start');
+    gameState._timerWorker = timerWorker;   // terminated if another device takes over (_ownDie)
 
     // JUICE EXPERIMENT: cinematic login entrance (black fade + zoom-in + character
     // drop + screenshake + pitched entrance sound). No-op when JUICE_ENTRANCE is off
@@ -6689,13 +7327,14 @@ function startGame(userData) {
     // composited yet: the black/half-empty room the user kept seeing, which only a
     // fresh tab (a clean connection pool) escaped. So: give up only when the loader
     // has genuinely STOPPED making progress, or at a far-away hard ceiling.
-    const BOOT_STALL_MS = 25000;    // no layer finished in this long → something's wedged
+    const BOOT_STALL_MS = 25000;    // no byte / layer arrived in this long → something's wedged
     const BOOT_MAX_MS   = 120000;   // absolute ceiling; never trap the user
     const startedAt = Date.now();
     let lastDone = _worldLayersDone, lastMovedAt = startedAt;
     const watchdog = setInterval(() => {
         if (_worldReady) { clearInterval(watchdog); return; }   // loadWorldArt finishes the boot itself
         if (_worldLayersDone !== lastDone) { lastDone = _worldLayersDone; lastMovedAt = Date.now(); }
+        if (_worldProgressAt > lastMovedAt) lastMovedAt = _worldProgressAt;   // the baked world streams bytes
         const stalled = Date.now() - lastMovedAt > BOOT_STALL_MS;
         const capped  = Date.now() - startedAt   > BOOT_MAX_MS;
         if (!stalled && !capped) return;
@@ -7004,13 +7643,14 @@ function updatePresenceGrace() {
         if (!p || p._presenceLostAt == null) continue;
         // A WebSocket packet is proof of life that beat Firebase to us — the relay
         // has no presence concept, so anything arriving means they're still here.
-        // Defer (not null) the deadline: nulling would rely on the `/users` onValue
-        // listener firing again to re-arm it, but RTDB suppresses no-op writes, so
-        // in a quiet lobby (nobody else's presence changing) it could stay null
-        // forever and the ghost would never get removed. Pushing the deadline keeps
-        // this self-contained — it still cancels a real reconnect (onPresenceMessage
-        // already nulls it immediately on any packet) while guaranteeing removal
-        // exactly PRESENCE_GRACE_MS after the last real sign of life either way.
+        // Nobody sends one unasked any more (the idle broadcast is gone — see
+        // WS_KEEPALIVE_MS), so while Firebase says they left we ASK every few
+        // seconds (_askAlive) and a present member answers. Each answer defers the
+        // deadline rather than nulling it: removal lands exactly PRESENCE_GRACE_MS
+        // after the last real sign of life, and nothing depends on the players
+        // listener ever firing for them again (RTDB suppresses no-op writes).
+        // Presence coming back in Firebase clears it (_onUserData).
+        if (!(now - (p._askedAt || 0) < ALIVE_ASK_EVERY_MS)) _askAlive(id);   // keep asking while Firebase says gone
         if (now - (p._lastWsSampleAt || 0) < PRESENCE_GRACE_MS) { p._presenceLostAt = now; continue; }
         if (now - p._presenceLostAt < PRESENCE_GRACE_MS) continue;
         p._presenceLostAt = null;
@@ -7518,11 +8158,17 @@ function resizeCanvas() {
     // fill-rate bound, and a budget phone at dpr 2.5–3 renders 6–9× the pixels of
     // dpr 1. Capping to 1.5 (1.25 on potato) cuts that dramatically — the single
     // biggest mobile win — for only a slight sharpness loss.
+    // (Raised: 1.5/1.25 and 1.25/1.0 under توفير الطاقة. A frame now costs a
+    // fraction of what those caps were set for — the mezzanine is drawn at 18% of
+    // its old area, the hidden full-screen clears are skipped, every shadow is
+    // baked into a sprite — and dpr 1.0 on a phone is what made small things look
+    // blocky, worst of all zoomed out. The governor below still sheds resolution
+    // on any device that then can't hold its frame rate.)
     const reduced = isReducedGraphics();
-    if (reduced) dpr = Math.min(dpr, isPotato() ? 1.25 : 1.5);
+    if (reduced) dpr = Math.min(dpr, isPotato() ? 1.5 : 2);
     // توفير الطاقة: every backing-store pixel is filled up to 30 times a second on
-    // a panel that is already dense enough to hide the softness.
-    if (PERF.powerSave) dpr = Math.min(dpr, isPotato() ? 1.0 : 1.25);
+    // a panel that is already dense enough to hide most of the softness.
+    if (PERF.powerSave) dpr = Math.min(dpr, isPotato() ? 1.25 : 1.75);
     // Dynamic resolution (see PERF): the governor shrinks the BACKING STORE when
     // even the 30fps cap isn't being held. The CSS size below never changes, so the
     // browser upscales and the only cost is a little softness — much cheaper than
@@ -9628,8 +10274,34 @@ function startPomodoroPhase(phase) {
 function listenToPomodoro() {
     const pomodoroRef = ref(database, lobbyPath('pomodoro'));
     onValue(pomodoroRef, (snapshot) => {
-        syncLaptopsFromPomodoro(snapshot.val());
+        const data = snapshot.val();
+        syncLaptopsFromPomodoro(data);
+        _healOwnLaptopDoc(data);
     });
+}
+
+// Our live session's laptop doc vanished while we're still in the session. The one
+// way that happens outside a real exit: another tab/device of ours held this
+// session and its socket died late — the server then fires ITS onDisconnect
+// (remove the laptop) after we had already taken the session over. Wait a beat (a
+// real end clears the local state within the same tick), then put the doc back.
+let _healLaptopTimer = 0;
+function _healOwnLaptopDoc(data) {
+    if (gameState._dupSessionDetected || gameState.isSirajGhost || !_sessionIsSolo()) return;
+    if (!gameState.pomodoro.active && !gameState.freeMode.active) return;
+    const lapId = _activeSessionLaptopId();
+    if (lapId === null || lapId === undefined) return;
+    const doc = getPomodoroEntry(data, lapId);
+    if (doc && doc.claimedBy) return;
+    clearTimeout(_healLaptopTimer);
+    _healLaptopTimer = setTimeout(() => {
+        if (gameState._dupSessionDetected || gameState.anim.active) return;
+        if (!gameState.pomodoro.active && !gameState.freeMode.active) return;
+        if (_activeSessionLaptopId() !== lapId) return;
+        const lap = gameState.laptops.find(l => l.id === lapId);
+        if (lap && lap.claimedBy) return;
+        reassertActiveSessionAfterReconnect();
+    }, 2500);
 }
 
 function doLogout() {
@@ -9786,188 +10458,203 @@ function initializePlayerPosition() {
     gameState.positionInitialized = true;
 }
 
+// The players listener. It used to be ONE `onValue` on the whole `/users` node:
+// every change to any member of EITHER lobby (a position, a presence heartbeat,
+// «بعيد») re-built the entire users tree as JS objects on every client — hundreds
+// of accounts, dozens of fields each, several times a second on a phone that was
+// only ever going to look at one of them. Now it is child events on a query for
+// THIS lobby only: a change hands over that one member, and the other lobby is
+// never synced at all (the rules carry `.indexOn: lobby`, so the server filters).
+// A member who stops matching (left the lobby / went inactive / was removed) goes
+// through the same grace period as before (_playerGone → updatePresenceGrace).
 function listenToPlayers() {
-    const usersRef = ref(database, 'users');
+    const q = query(ref(database, 'users'), orderByChild('lobby'), equalTo(gameState.selectedLobby));
+    const onUser = (snap) => { try { _onUserData(snap.key, snap.val()); } catch (e) { console.error('[players]', e); } };
+    // Reads under `users` need the anonymous sign-in to have landed first — a
+    // listener attached before it is silently cancelled (permission denied), and
+    // then nobody else ever appears for the whole session.
+    authReady.then(() => {
+        onChildAdded(q, onUser);
+        onChildChanged(q, onUser);
+        onChildRemoved(q, (snap) => _playerGone(snap.key));
+        // `value` fires once, after every initial child_added — the moment "is
+        // anyone else here?" becomes answerable (Lemo's empty-lobby check waits on it).
+        onValue(q, () => { if (!gameState._playersSnapAt) gameState._playersSnapAt = Date.now(); }, { onlyOnce: true });
+    });
+}
 
-    onValue(usersRef, (snapshot) => {
-        const users = snapshot.val();
-        if (users) {
-            const currentIdsInSnapshot = new Set();
-            for (const [userId, userData] of Object.entries(users)) {
-                // Lobby separation is decided solely by users/{uid}/lobby.
-                if (userData.lobby !== gameState.selectedLobby) continue;
+// Don't yank a member out on the spot. `activeInGame` going false does NOT mean
+// they left — Firebase fires their onDisconnect server-side the instant their
+// socket blips (flaky mobile data, a sleeping laptop), and their own
+// `.info/connected` listener sets it straight back to true a moment later.
+// Removing immediately is what made players pop out and back in mid-session for
+// everyone else. Start a grace clock instead; updatePresenceGrace commits the exit
+// only if they're still gone when it expires, and any sign of life cancels it.
+function _playerGone(userId) {
+    if (!userId || userId === gameState.userId) return;
+    const p = gameState.players[userId];
+    if (!p) return;
+    if (p._presenceLostAt == null) {
+        p._presenceLostAt = performance.now();
+        // Ask them straight away over the relay — a present member answers within a
+        // round trip and the grace clock is cancelled before it could ever expire.
+        _askAlive(userId);
+    }
+}
 
-                // Only players actually in the website are rendered. (This used to
-                // also admit `status === 'in-voice'` users — the Discord voice-channel
-                // integration — who were drawn as faded ghosts. That's gone.)
-                if (userData.activeInGame === true) {
-                    currentIdsInSnapshot.add(userId);
-                    const isCurrentUser = userId === gameState.userId;
-                    if (!gameState.players[userId]) {
-                        // Explicit presence check — `!userData.x` wrongly treats a
-                        // legitimate x:0 (the centre-column laptop sits at world x≈0)
-                        // as "no position", which scattered working users to a random
-                        // spot for everyone else.
-                        const hasPos = userData.x !== undefined && userData.x !== null
-                                    && userData.y !== undefined && userData.y !== null;
-                        const spawnX = hasPos ? userData.x : 0;
-                        const spawnY = hasPos ? userData.y : 0;
-                        gameState.players[userId] = {
-                            userId,
-                            username: userData.username,
-                            avatar: userData.avatar,
-                            x: spawnX,
-                            y: spawnY,
-                            renderX: spawnX,
-                            renderY: spawnY,
-                            currentTask: userData.currentTask || "",
-                            isMoving: userData.isMoving || false,
-                            isSprinting: userData.isSprinting || false,
-                            floor:              (userData.floor === 2) ? 2 : 1,
-                            renderScale:        (userData.floor === 2) ? FLOOR2_SCALE : 1,
-                            sitSeatId:          userData.sitSeatId || null,
-                            sitX:               userData.sitX ?? null,
-                            sitY:               userData.sitY ?? null,
-                            isLockedIn: userData.isLockedIn || false,
-                            isWorking:          userData.isWorking  || false,
-                            isOnBreak:          userData.isOnBreak  || false,
-                            inFreeMode:         userData.inFreeMode || false,
-                            freeWorkStartTime:  userData.freeWorkStartTime || 0,
-                            freeTotalWorkMs:    userData.freeTotalWorkMs   || 0,
-                            freePaused:         userData.freePaused === true,
-                            awaySince:          userData.awaySince || 0,
-                            coopHostId:         userData.coopHostId || null,
-                            isReading:          userData.isReading || false,
-                            readingBook:        userData.readingBook || null,
-                            readingEnd:         userData.readingEnd || null,
-                            booksSofa:          userData.booksSofa || null,
-                            // Customization (تخصيص الشخصية) — everyone sees everyone's.
-                            ringColor:          _validHex(userData.ringColor),
-                            hats:               sanitizeHats(userData),
-                            // Hold a new remote player invisible until their position settles,
-                            // then pop them in (see SPAWN_SETTLE_MS) — no "snap on join". The
-                            // pop-in `_entryT` is set at promotion time, not here.
-                            _pendingSpawn: (!isCurrentUser) ? performance.now() : null,
-                            _entryT: null,
-                        };
-                        // Kick the hat PNG loading the moment we learn about it (login /
-                        // loading screen, well before this player is ever drawn) instead of
-                        // waiting for the first draw call — was causing a hat to pop in a
-                        // beat late on spawn. ensureHatAsset is idempotent/cached.
-                        for (const h of sanitizeHats(userData)) ensureHatAsset(h.id);
-                    } else {
-                        const player = gameState.players[userId];
-                        // Presence came back — a blip, not a departure. Cancel the grace
-                        // clock silently: they never visibly left, so there's nothing to
-                        // re-animate.
-                        player._presenceLostAt = null;
-                        // JUICE: reconnected mid scale-down → cancel the exit and re-pop in.
-                        if (player._exitT != null) { player._exitT = null; player._entryT = performance.now(); }
-                        player.username = userData.username;
-                        player.avatar = userData.avatar;
-                        player.currentTask = userData.currentTask || "";
-                        // Customization applies to the LOCAL player too (a save from
-                        // another device / tab must land here as well), so it sits
-                        // outside the !isCurrentUser block below.
-                        player.ringColor = _validHex(userData.ringColor);
-                        player.hats      = sanitizeHats(userData);
-                        for (const h of player.hats) ensureHatAsset(h.id);
-                        if (isCurrentUser) ccSyncFromPlayer(player);
+function _onUserData(userId, userData) {
+    // Lobby separation is decided solely by users/{uid}/lobby.
+    if (!userData || userData.lobby !== gameState.selectedLobby) { _playerGone(userId); return; }
 
-                        if (isCurrentUser) {
-                            const taskInput = document.getElementById('current-task-input');
-                            if (taskInput && !gameState.taskInputInitialized) {
-                                taskInput.value = userData.currentTask || "";
-                                gameState.taskInputInitialized = true;
-                            }
-                        }
+    // Only players actually in the website are rendered. (This used to
+    // also admit `status === 'in-voice'` users — the Discord voice-channel
+    // integration — who were drawn as faded ghosts. That's gone.)
+    if (userData.activeInGame === true) {
+        const isCurrentUser = userId === gameState.userId;
+        if (!gameState.players[userId]) {
+            // Explicit presence check — `!userData.x` wrongly treats a
+            // legitimate x:0 (the centre-column laptop sits at world x≈0)
+            // as "no position", which scattered working users to a random
+            // spot for everyone else.
+            const hasPos = userData.x !== undefined && userData.x !== null
+                        && userData.y !== undefined && userData.y !== null;
+            const spawnX = hasPos ? userData.x : 0;
+            const spawnY = hasPos ? userData.y : 0;
+            gameState.players[userId] = {
+                userId,
+                username: userData.username,
+                avatar: userData.avatar,
+                x: spawnX,
+                y: spawnY,
+                renderX: spawnX,
+                renderY: spawnY,
+                currentTask: userData.currentTask || "",
+                isMoving: userData.isMoving || false,
+                isSprinting: userData.isSprinting || false,
+                floor:              (userData.floor === 2) ? 2 : 1,
+                renderScale:        (userData.floor === 2) ? FLOOR2_SCALE : 1,
+                sitSeatId:          userData.sitSeatId || null,
+                sitX:               userData.sitX ?? null,
+                sitY:               userData.sitY ?? null,
+                isLockedIn: userData.isLockedIn || false,
+                isWorking:          userData.isWorking  || false,
+                isOnBreak:          userData.isOnBreak  || false,
+                inFreeMode:         userData.inFreeMode || false,
+                freeWorkStartTime:  userData.freeWorkStartTime || 0,
+                freeTotalWorkMs:    userData.freeTotalWorkMs   || 0,
+                freePaused:         userData.freePaused === true,
+                awaySince:          userData.awaySince || 0,
+                coopHostId:         userData.coopHostId || null,
+                isReading:          userData.isReading || false,
+                readingBook:        userData.readingBook || null,
+                readingEnd:         userData.readingEnd || null,
+                booksSofa:          userData.booksSofa || null,
+                // Customization (تخصيص الشخصية) — everyone sees everyone's.
+                ringColor:          _validHex(userData.ringColor),
+                hats:               sanitizeHats(userData),
+                // Hold a new remote player invisible until their position settles,
+                // then pop them in (see SPAWN_SETTLE_MS) — no "snap on join". The
+                // pop-in `_entryT` is set at promotion time, not here.
+                _pendingSpawn: (!isCurrentUser) ? performance.now() : null,
+                _entryT: null,
+            };
+            // Kick the hat PNG loading the moment we learn about it (login /
+            // loading screen, well before this player is ever drawn) instead of
+            // waiting for the first draw call — was causing a hat to pop in a
+            // beat late on spawn. ensureHatAsset is idempotent/cached.
+            for (const h of sanitizeHats(userData)) ensureHatAsset(h.id);
+        } else {
+            const player = gameState.players[userId];
+            // Presence came back — a blip, not a departure. Cancel the grace
+            // clock silently: they never visibly left, so there's nothing to
+            // re-animate.
+            player._presenceLostAt = null;
+            // JUICE: reconnected mid scale-down → cancel the exit and re-pop in.
+            if (player._exitT != null) { player._exitT = null; player._entryT = performance.now(); }
+            player.username = userData.username;
+            player.avatar = userData.avatar;
+            player.currentTask = userData.currentTask || "";
+            // Customization applies to the LOCAL player too (a save from
+            // another device / tab must land here as well), so it sits
+            // outside the !isCurrentUser block below.
+            player.ringColor = _validHex(userData.ringColor);
+            player.hats      = sanitizeHats(userData);
+            for (const h of player.hats) ensureHatAsset(h.id);
+            if (isCurrentUser) ccSyncFromPlayer(player);
 
-                        if (!isCurrentUser) {
-                            // Only retarget when a real position is present — a transient
-                            // undefined must not snap the player to (0,0).
-                            if (userData.x !== undefined && userData.x !== null
-                             && userData.y !== undefined && userData.y !== null) {
-                                setEntityTarget(player, userData.x, userData.y);
-                                if (player._pendingSpawn != null) {
-                                    // Still settling: pin render to the latest position (no travel,
-                                    // no buffer) so nothing is visible until we pop them in.
-                                    player.renderX = userData.x; player.renderY = userData.y;
-                                    player._netBuf = null;
-                                } else {
-                                    // Only feed the interpolation buffer from Firebase when the
-                                    // WebSocket isn't the live source. A Firebase write carries a
-                                    // STALE position (round-trip latency) but a fresh timestamp, so
-                                    // interleaving it during active WS streaming yanks the avatar
-                                    // backward → the "snapping" users reported. The WS path keeps
-                                    // movement smooth; Firebase is only the fallback when WS is quiet.
-                                    const _now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-                                    if (_now - (player._lastWsSampleAt || 0) > 1000) {
-                                        // No sender stamp here (a Firebase write has no send
-                                        // clock) → arrival-stamped, and the animation flags
-                                        // must come from THIS snapshot, not a stale WS one.
-                                        player._netM = userData.isMoving ? 1 : 0;
-                                        player._netS = userData.isSprinting ? 1 : 0;
-                                        pushNetSample(player, userData.x, userData.y);
-                                    }
-                                }
-                            }
-                            player.isMoving          = userData.isMoving || false;
-                            player.isSprinting       = userData.isSprinting || false;
-                            player.sitSeatId         = userData.sitSeatId || null;
-                            player.sitX              = userData.sitX ?? null;
-                            player.sitY              = userData.sitY ?? null;
-                            // Only trust Firebase floor when the WebSocket isn't the live
-                            // source (WS carries floor too, and is fresher).
-                            if ((userData.floor === 1 || userData.floor === 2)
-                                && (performance.now() - (player._lastWsSampleAt || 0) > 1000)) {
-                                player.floor = userData.floor;
-                            }
-                            player.isLockedIn        = userData.isLockedIn || false;
-                            player.isWorking         = userData.isWorking  || false;
-                            player.isOnBreak         = userData.isOnBreak  || false;
-                            player.inFreeMode        = userData.inFreeMode || false;
-                            player.freeWorkStartTime = userData.freeWorkStartTime || 0;
-                            player.freeTotalWorkMs   = userData.freeTotalWorkMs   || 0;
-                            player.freePaused        = userData.freePaused === true;
-                            player.awaySince         = userData.awaySince || 0;
-                            player.coopHostId        = userData.coopHostId || null;
-                            player.isReading          = userData.isReading || false;
-                            player.readingBook        = userData.readingBook || null;
-                            player.readingEnd         = userData.readingEnd || null;
-                            player.booksSofa          = userData.booksSofa || null;
-                        }
-                    }
-                    if (userData.avatar && !gameState.avatarCache[userId]) {
-                        const img = new Image();
-                        img.crossOrigin = "anonymous";
-                        img.src = userData.avatar;
-                        img.onload = () => { gameState.avatarCache[userId] = img; };
-                        img.onerror = () => { gameState.avatarCache[userId] = 'failed'; };
-                    }
+            if (isCurrentUser) {
+                const taskInput = document.getElementById('current-task-input');
+                if (taskInput && !gameState.taskInputInitialized) {
+                    taskInput.value = userData.currentTask || "";
+                    gameState.taskInputInitialized = true;
                 }
             }
-            Object.keys(gameState.players).forEach(id => {
-                if (id === gameState.userId || currentIdsInSnapshot.has(id)) return;
-                const p = gameState.players[id];
-                if (!p) { delete gameState.players[id]; return; }
-                // Don't yank them out on the spot. `activeInGame` going false does NOT
-                // mean they left — Firebase fires their onDisconnect server-side the
-                // instant their socket blips (flaky mobile data, a sleeping laptop),
-                // and their own `.info/connected` listener sets it straight back to
-                // true a moment later. Removing immediately is what made players pop
-                // out and back in mid-session for everyone else. Start a grace clock
-                // instead; updatePresenceGrace commits the exit only if they're still
-                // gone when it expires, and any sign of life cancels it.
-                if (p._presenceLostAt == null) p._presenceLostAt = performance.now();
-            });
-            const playerCount = Object.keys(gameState.players).length;
-            const countElem = document.getElementById('player-count');
-            if (countElem) countElem.textContent = `${playerCount} مستخدم${playerCount > 10 ? '' : (playerCount > 2 ? 'ين' : '')}`;
+
+            if (!isCurrentUser) {
+                // Only retarget when a real position is present — a transient
+                // undefined must not snap the player to (0,0).
+                if (userData.x !== undefined && userData.x !== null
+                 && userData.y !== undefined && userData.y !== null) {
+                    setEntityTarget(player, userData.x, userData.y);
+                    if (player._pendingSpawn != null) {
+                        // Still settling: pin render to the latest position (no travel,
+                        // no buffer) so nothing is visible until we pop them in.
+                        player.renderX = userData.x; player.renderY = userData.y;
+                        player._netBuf = null;
+                    } else {
+                        // Only feed the interpolation buffer from Firebase when the
+                        // WebSocket isn't the live source. A Firebase write carries a
+                        // STALE position (round-trip latency) but a fresh timestamp, so
+                        // interleaving it during active WS streaming yanks the avatar
+                        // backward → the "snapping" users reported. The WS path keeps
+                        // movement smooth; Firebase is only the fallback when WS is quiet.
+                        const _now = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+                        if (_now - (player._lastWsSampleAt || 0) > 1000) {
+                            // No sender stamp here (a Firebase write has no send
+                            // clock) → arrival-stamped, and the animation flags
+                            // must come from THIS snapshot, not a stale WS one.
+                            player._netM = userData.isMoving ? 1 : 0;
+                            player._netS = userData.isSprinting ? 1 : 0;
+                            pushNetSample(player, userData.x, userData.y);
+                        }
+                    }
+                }
+                player.isMoving          = userData.isMoving || false;
+                player.isSprinting       = userData.isSprinting || false;
+                player.sitSeatId         = userData.sitSeatId || null;
+                player.sitX              = userData.sitX ?? null;
+                player.sitY              = userData.sitY ?? null;
+                // Only trust Firebase floor when the WebSocket isn't the live
+                // source (WS carries floor too, and is fresher).
+                if ((userData.floor === 1 || userData.floor === 2)
+                    && (performance.now() - (player._lastWsSampleAt || 0) > 1000)) {
+                    player.floor = userData.floor;
+                }
+                player.isLockedIn        = userData.isLockedIn || false;
+                player.isWorking         = userData.isWorking  || false;
+                player.isOnBreak         = userData.isOnBreak  || false;
+                player.inFreeMode        = userData.inFreeMode || false;
+                player.freeWorkStartTime = userData.freeWorkStartTime || 0;
+                player.freeTotalWorkMs   = userData.freeTotalWorkMs   || 0;
+                player.freePaused        = userData.freePaused === true;
+                player.awaySince         = userData.awaySince || 0;
+                player.coopHostId        = userData.coopHostId || null;
+                player.isReading          = userData.isReading || false;
+                player.readingBook        = userData.readingBook || null;
+                player.readingEnd         = userData.readingEnd || null;
+                player.booksSofa          = userData.booksSofa || null;
+            }
         }
-        // Lemo's empty-lobby check waits on this: "is anyone else here?" can only be
-        // answered once the first snapshot has been through.
-        if (!gameState._playersSnapAt) gameState._playersSnapAt = Date.now();
-    });
+        if (userData.avatar && !gameState.avatarCache[userId]) {
+            const img = new Image();
+            img.crossOrigin = "anonymous";
+            img.src = userData.avatar;
+            img.onload = () => { gameState.avatarCache[userId] = img; };
+            img.onerror = () => { gameState.avatarCache[userId] = 'failed'; };
+        }
+    } else {
+        _playerGone(userId);
+    }
 }
 
 // ============================================================================
@@ -10070,7 +10757,11 @@ function sendPositionWS(x, y, force) {
     }
     presenceNet.lastSendAt = now;
     presenceNet.lastVX = hx; presenceNet.lastVY = hy;
-    const payload = JSON.stringify({
+    try { ws.send(_posPayload(x, y, p)); return true; } catch (_) { return false; }
+}
+
+function _posPayload(x, y, p, extra) {
+    const o = {
         uid: gameState.userId,
         // A tenth of a unit, not a whole one: whole-unit rounding moved every
         // sample up to half a unit, which over a ~27-unit packet spacing replayed
@@ -10088,8 +10779,33 @@ function sendPositionWS(x, y, force) {
         // The FRAME's time, not now: this position was computed this frame, and
         // performance.now() here also counts whatever ran before us in it.
         w: Math.round(_netFrameNow() * 10) / 10,
-    });
-    try { ws.send(payload); return true; } catch (_) { return false; }
+    };
+    if (extra) Object.assign(o, extra);
+    return JSON.stringify(o);
+}
+
+// Proof of life, on demand. Firebase just said `uid` left — which is usually a
+// socket blip on their side, not a departure. Ask them over the relay; a present
+// member answers within a round trip and the grace clock never runs out. The ask
+// IS a normal position packet (plus `t`/`q`), so a client from before this change
+// simply reads it as our position and nothing else.
+const WS_KEEPALIVE_MS = 25000;
+const ALIVE_ASK_EVERY_MS = 4000;
+function _askAlive(uid) {
+    const ws = presenceNet.ws;
+    const me = gameState.players[gameState.userId];
+    if (!ws || ws.readyState !== WebSocket.OPEN || !me) return;
+    const p = gameState.players[uid];
+    if (p) p._askedAt = performance.now();
+    try { ws.send(_posPayload(me.x, me.y, me, { t: 'alive?', q: uid })); } catch (_) {}
+}
+let _aliveAnsweredAt = 0;
+function _answerAlive() {
+    const now = performance.now();
+    if (now - _aliveAnsweredAt < 1000) return;
+    _aliveAnsweredAt = now;
+    const p = gameState.players[gameState.userId];
+    if (p) sendPositionWS(p.x, p.y, true);
 }
 
 function onPresenceMessage(data) {
@@ -10103,10 +10819,13 @@ function onPresenceMessage(data) {
     if (msg.t === 'spk' || msg.t === 'vc') { if (msg.on === 1) perfWake(); onMeetVoiceMsg(msg); return; }
     if (msg.t === 'meetq') { _meetOnBotQuery(); return; }
     if (!msg.uid || msg.uid === gameState.userId) return;
+    // Someone's Firebase view says we left — say otherwise. (The ask is also their
+    // position, so it carries on through the normal handling below.)
+    if (msg.t === 'alive?' && msg.q === gameState.userId) _answerAlive();
     // A one-off event (sit, chat, typing, reaction, jump, bye) is about to animate
     // something — leave the calm frame rate now rather than on the next scan.
     // Plain position packets carry no `t`; real movement is caught by the scan.
-    if (msg.t && msg.t !== 'meet') perfWake();
+    if (msg.t && msg.t !== 'meet' && msg.t !== 'alive?') perfWake();
     if (msg.t === 'bye') {
         // Firebase presence owns add/remove; just stop their walk animation so
         // they don't keep "moonwalking" until the next Firebase update.
@@ -10130,7 +10849,10 @@ function onPresenceMessage(data) {
     // Firebase presence currently claims, so it cancels a pending removal too (see
     // updatePresenceGrace).
     player._lastWsSampleAt = (typeof performance !== 'undefined') ? performance.now() : Date.now();
-    player._presenceLostAt = null;
+    // (No longer nulls `_presenceLostAt`: updatePresenceGrace defers it for as long
+    // as packets keep coming. Nulling it here meant a member whose Firebase presence
+    // was already false, and who then really left, was never removed — nothing
+    // would ever re-arm the clock.)
     // "I'm at the meeting table" — only MdwnhBot uses it (it follows the meeting).
     if (msg.t === 'meet') return;
     // Sofa hop — a one-off event, not a position stream. Must return before the
@@ -11098,7 +11820,10 @@ function gameLoop(timestamp) {
     // was missed or raced.
     if (gameState.userId && (gameState.isLockedIn || gameState.pomodoro.active || gameState.freeMode.active || gameState.isSitting)) {
         const _now = Date.now();
-        if (!gameState._lastPosHeartbeat || _now - gameState._lastPosHeartbeat > 4000) {
+        // 15 s, not 4: the values are byte-identical almost every time (seated), so
+        // this is pure radio wake-ups on a phone. A real change is written the
+        // moment it happens anyway; this only re-asserts what's already there.
+        if (!gameState._lastPosHeartbeat || _now - gameState._lastPosHeartbeat > 15000) {
             gameState._lastPosHeartbeat = _now;
             const _p = gameState.players[gameState.userId];
             if (_p) updatePlayerPosition(_p.x, _p.y);
@@ -11111,7 +11836,9 @@ function gameLoop(timestamp) {
     // page is open, or they stay a low-opacity ghost for everyone else.
     if (gameState.userId && !gameState.isSirajGhost) {
         const _now = Date.now();
-        if (!gameState._lastPresenceHeartbeat || _now - gameState._lastPresenceHeartbeat > 10000) {
+        // 30 s: presence is already re-asserted on every (re)connect and every
+        // position write — this is the belt-and-braces pass, not the mechanism.
+        if (!gameState._lastPresenceHeartbeat || _now - gameState._lastPresenceHeartbeat > 30000) {
             gameState._lastPresenceHeartbeat = _now;
             update(ref(database), { [`users/${gameState.userId}/activeInGame`]: true });
             // Picks up the prayer/azkar overlays opening & closing without adding a
@@ -11121,23 +11848,22 @@ function gameLoop(timestamp) {
         }
     }
 
-    // WebSocket presence ping — the real fix for "a present player vanishes then
-    // reappears (logout→login anim) even with the site open". An idle/standing user
-    // sends NO position packets, so if their Firebase `activeInGame` merely blips
-    // (a flaky connection to Firebase while the socket is fine), observers get no
-    // sign of life and updatePresenceGrace removes them after PRESENCE_GRACE_MS,
-    // then re-adds them when presence heals. A forced position packet every ~3s (well
-    // under the 8s grace) keeps `_lastWsSampleAt` fresh on every observer, so a truly-
-    // connected peer's grace never expires. Only skipped while moving (sendPositionWS
-    // already streams ~11/s then). Costs nothing on Firebase — it's the relay.
+    // Relay keep-alive. This used to be a full position packet every 3 s from every
+    // idle member, BROADCAST to the whole lobby — as "proof of life" for the rare
+    // moment someone's Firebase presence blips. On a phone that meant a radio that
+    // never got to sleep: something arrived every fraction of a second, all
+    // session long, which is a big part of what heats a phone that is otherwise
+    // just showing a still picture. Proof of life is now asked for only when it's
+    // needed (_askAlive, when Firebase says someone left), and the socket itself is
+    // kept open by a bare "ping" the relay answers on its own without forwarding
+    // it to anyone (see presence-server). An older relay forwards it; every client
+    // ignores a message that isn't JSON, so that is harmless.
     if (gameState.userId && !gameState.isSirajGhost) {
-        const _p = gameState.players[gameState.userId];
-        if (_p && !_p.isMoving) {
-            const _now = Date.now();
-            if (!gameState._lastWsPing || _now - gameState._lastWsPing > 3000) {
-                gameState._lastWsPing = _now;
-                sendPositionWS(_p.x, _p.y, true);
-            }
+        const _now = Date.now();
+        if (!gameState._lastWsPing || _now - gameState._lastWsPing > WS_KEEPALIVE_MS) {
+            gameState._lastWsPing = _now;
+            const ws = presenceNet.ws;
+            if (ws && ws.readyState === WebSocket.OPEN) { try { ws.send('ping'); } catch (_) {} }
         }
     }
 
@@ -11295,11 +12021,23 @@ function render() {
     // rendered the (smooth, hand-painted) world nearest-neighbour. It's one shared
     // context — re-assert it here rather than chasing every minigame exit path.
     ctx.imageSmoothingEnabled = true;
+    // `medium` = mipmapped sampling. Zoomed out, the world texture, the avatars and
+    // the baked labels are all drawn smaller than they are, and plain bilinear
+    // ('low', the default) then skips texels and shimmers — the "it looks cheap when
+    // I zoom out" report. Mipmaps are built once per image and cached, and a draw
+    // that isn't shrinking never touches them, so this costs nothing per frame.
+    // (The ctx.restore() at the end puts it back for the minigame renderers.)
+    ctx.imageSmoothingQuality = 'medium';
 
-    ctx.fillStyle = COLORS.black;
-    ctx.fillRect(0, 0, W, H);
-
-    drawBackgroundAtmosphere(W, H);
+    // The ground is opaque over the whole world rect. Whenever that rect covers the
+    // screen (nearly always, unless zoomed right out or at an edge), the black
+    // clear and the atmosphere gradients under it are painted and then entirely
+    // painted over — two or three full-screen passes for nothing, every frame.
+    if (!_worldCoversView(W, H)) {
+        ctx.fillStyle = COLORS.black;
+        ctx.fillRect(0, 0, W, H);
+        drawBackgroundAtmosphere(W, H);
+    }
 
     ctx.save();
     ctx.translate(W / 2, H / 2);
@@ -11396,6 +12134,18 @@ function render() {
     _renderPanelToggles();
 }
 
+// Does the (opaque) ground cover every pixel of the main canvas this frame? The
+// margin absorbs the entrance / landing shake, which translates the world a few px.
+function _worldCoversView(W, H) {
+    if (!_layerReady(worldCache.ground)) return false;
+    const z = gameState.zoom, cam = gameState.camera, m = 48;
+    const left   = W / 2 + (-WORLD_W / 2 + cam.x) * z;
+    const right  = W / 2 + ( WORLD_W / 2 + cam.x) * z;
+    const top    = H / 2 + (-WORLD_H / 2 + cam.y) * z;
+    const bottom = H / 2 + ( WORLD_H / 2 + cam.y) * z;
+    return left <= -m && top <= -m && right >= W + m && bottom >= H + m;
+}
+
 // Chat bubbles are the last thing painted in the world: they used to be drawn per
 // floor right after that floor's players, so the mezzanine art, the floor-2 players,
 // the prompts, the day overlays and the focus mask all painted over them. Re-applies
@@ -11441,6 +12191,12 @@ function _renderPanelToggles() {
 function _drawWorldLayer(img) {
     if (!_layerReady(img)) return;
     gameState.ctx.drawImage(img, -WORLD_W / 2, -WORLD_H / 2, WORLD_W, WORLD_H);
+}
+// A layer that covers only part of the scene, placed by its bbox in SOURCE px.
+function _drawWorldLayerBox(img, box) {
+    if (!_layerReady(img)) return;
+    const [x0, y0, x1, y1] = box;
+    gameState.ctx.drawImage(img, sx2w(x0), sy2w(y0), (x1 - x0) * WORLD_SCALE, (y1 - y0) * WORLD_SCALE);
 }
 
 // Per-laptop screen "on" light — cropped from the matching *_Laptop_Lights.png overlay
@@ -11494,7 +12250,11 @@ function drawSecondFloor() {
     const ctx = gameState.ctx;
     ctx.save();
     ctx.globalAlpha = vis;
-    _drawWorldLayer(worldCache.second);
+    // The baked mezzanine is cropped to its painted bbox — 18% of the scene. The
+    // old full-size cache was blended over the WHOLE screen every frame, 82% of it
+    // transparent pixels.
+    if (worldCache.secondBox) _drawWorldLayerBox(worldCache.second, worldCache.secondBox);
+    else _drawWorldLayer(worldCache.second);
     ctx.restore();
 }
 
@@ -14185,45 +14945,58 @@ function getLaptopBadgePosition(laptop) {
 // same pixels — and it is the same trick `_tintedAvatar` and `worldCache` already
 // use, applied to the one hot path that was still doing the work live.
 //
-// Reduced tiers only. There `dpr` is capped at 1.5 AND canvas shadows are already
-// forced to 0 (installLowGfxShadowGuard), so a 2× supersampled flat sprite is
-// indistinguishable from the live draw. عالية keeps the original code path exactly
-// as it was, shadows and all.
-const _SPR_SS  = 2;      // supersample, so a sprite survives dpr×zoom up to ~2
-const _SPR_MAX = 48;     // LRU entries; see the size note on _pillSprite
+// EVERY tier now (it used to be the reduced tiers only), and the drop shadows are
+// BAKED INTO the sprites. Measured on a desktop GPU: of a whole frame's cost at
+// عالية, ~80% was live `shadowBlur` on the avatars and badges — a Gaussian blur per
+// draw, per frame. Baked once, a shadow costs nothing, so عالية gets cheap AND the
+// reduced tiers (where the shadows used to be switched off to survive) get them
+// back. The sprites are baked at the density the screen needs right now — dpr ×
+// zoom, rounded up to a level (1, 1.5, 2, 3) that is part of the cache key — so
+// they are as sharp as the live draw at any zoom a phone reaches. Past ×3 (a hard
+// zoom-in on a dense screen, or the PiP window) the live path takes over: there is
+// far less on screen then, so it can afford itself.
+const _SPR_MAX = 160;    // LRU entries: names + badges for a full lobby, several zoom levels
 const _sprCache = new Map();
 
-// Sprites are baked at a FIXED 2× and stretched by the live transform, so they are
-// only honest while the device+camera stay under that. Past it (a hard zoom-in, or
-// the PiP window, which runs the same draw code at zoom 2.1–4.6) the live path is
-// both sharper and affordable — there is far less on screen when you are zoomed in.
+function _sprLevel() {
+    const d = (gameState.dpr || 1) * (gameState.zoom || 1);
+    return d <= 1.05 ? 1 : d <= 1.55 ? 1.5 : d <= 2.1 ? 2 : d <= 3.1 ? 3 : 0;
+}
 function _spritesOk() {
-    if (!gameState._lowGfx || gameState._pipPass) return false;
-    return (gameState.dpr || 1) * (gameState.zoom || 1) <= _SPR_SS + 0.2;
+    if (gameState._pipPass) return false;
+    return _sprLevel() > 0;
 }
 
-// `build()` runs ONLY on a miss and returns { w, h, base?, paint } in logical px.
+// `build()` runs ONLY on a miss and returns { w, h, base?, pad?, paint } in logical
+// px. `pad` is room around w×h for a baked shadow; paint() draws at (0,0)..(w,h).
 function _spr(key, build) {
+    const lvl = _sprLevel() || 3;
+    key = lvl + '|' + key;
     let e = _sprCache.get(key);
     if (e) { _sprCache.delete(key); _sprCache.set(key, e); return e; }   // LRU touch
     let spec;
     try { spec = build(); } catch (_) { return null; }
     if (!spec || !(spec.w > 0) || !(spec.h > 0)) return null;
+    const pad = spec.pad || 0;
     let c;
     try {
         c = document.createElement('canvas');
-        c.width  = Math.max(1, Math.ceil(spec.w * _SPR_SS));
-        c.height = Math.max(1, Math.ceil(spec.h * _SPR_SS));
+        c.width  = Math.max(1, Math.ceil((spec.w + pad * 2) * lvl));
+        c.height = Math.max(1, Math.ceil((spec.h + pad * 2) * lvl));
         const g = c.getContext('2d');
-        g.scale(_SPR_SS, _SPR_SS);
+        g.scale(lvl, lvl);
+        g.translate(pad, pad);
         spec.paint(g);
     } catch (_) { return null; }   // any failure → caller falls back to drawing live
-    e = { c, w: spec.w, h: spec.h, base: spec.base || 0 };
+    e = { c, w: spec.w, h: spec.h, base: spec.base || 0, pad };
     _sprCache.set(key, e);
     if (_sprCache.size > _SPR_MAX) _sprCache.delete(_sprCache.keys().next().value);
     return e;
 }
-function _sprDraw(ctx, e, x, y) { ctx.drawImage(e.c, x, y, e.w, e.h); }
+function _sprDraw(ctx, e, x, y) {
+    const p = e.pad || 0;
+    ctx.drawImage(e.c, x - p, y - p, e.w + p * 2, e.h + p * 2);
+}
 
 // A sprite baked before Rubik finished downloading would be stuck wearing the
 // fallback face for the rest of the session — caching is only safe if the cache
@@ -14267,7 +15040,10 @@ function _pillSprite(text, font, h, r, color, textColor) {
         m.font = font;
         const tw = m.measureText(text).width;
         const w = tw + 24;
-        return { w, h, paint: (g) => {
+        // The live badge's own shadow (blur 10, 50% black), baked: pad = the blur's reach.
+        return { w, h, pad: 14, paint: (g) => {
+            g.shadowBlur = 10;
+            g.shadowColor = 'rgba(0,0,0,0.5)';
             g.beginPath();
             g.moveTo(r, 0);
             g.lineTo(w - r, 0);
@@ -14280,6 +15056,8 @@ function _pillSprite(text, font, h, r, color, textColor) {
             g.quadraticCurveTo(0, 0, r, 0);
             g.fillStyle = color;
             g.fill();
+            g.shadowBlur = 0;
+            g.shadowColor = 'transparent';
             g.fillStyle = textColor;
             g.font = font;
             g.textAlign = 'center';
@@ -14957,23 +15735,33 @@ function _tintedAvatar(userId, img, kind) {   // kind: 'gray' (working)
 // than a timestamp — a changed ring colour or a picture that finished loading must
 // show up on the very next frame.
 const AV_SPR_R = PLAYER_SIZE / 2 + 4;     // the ring's radius — same as the live path
+// The ring's drop shadow is baked in, so the sprite reaches AV_SPR_PAD past the
+// ring: draw it at ±(AV_SPR_R + AV_SPR_PAD).
+const AV_SPR_PAD = 16;
 function _avatarComposite(player, img, ringColor, gray, isCurrentUser) {
     const hasImg = img && img !== 'failed';
-    const key = `${ringColor}|${gray ? 1 : 0}|${hasImg ? (img.src || 'i') : 'n'}|${hasImg ? '' : (player.username || '?').charAt(0)}|${isCurrentUser ? 1 : 0}`;
+    const lvl = _sprLevel() || 3;
+    const key = `${lvl}|${ringColor}|${gray ? 1 : 0}|${hasImg ? (img.src || 'i') : 'n'}|${hasImg ? '' : (player.username || '?').charAt(0)}|${isCurrentUser ? 1 : 0}`;
     if (player._avSprKey === key && player._avSpr) return player._avSpr;
     try {
-        const R = AV_SPR_R, S = Math.ceil(R * 2 * _SPR_SS);
+        const R = AV_SPR_R, P = AV_SPR_PAD, S = Math.ceil((R + P) * 2 * lvl);
         const c = document.createElement('canvas');
         c.width = c.height = S;
         const g = c.getContext('2d');
-        g.scale(_SPR_SS, _SPR_SS);
-        g.translate(R, R);
-        // Ring (no shadow: the guard forces shadowBlur to 0 on these tiers anyway,
-        // so baking one would ADD something the live path doesn't draw).
+        g.scale(lvl, lvl);
+        g.translate(R + P, R + P);
+        // Ring, with the live path's own drop shadow (blur 10, 30% black, 4 px down)
+        // baked under it — the shadow that used to cost a blur per avatar per frame.
+        g.shadowBlur = 10;
+        g.shadowColor = 'rgba(0, 0, 0, 0.3)';
+        g.shadowOffsetY = 4;
         g.beginPath();
         g.arc(0, 0, R, 0, Math.PI * 2);
         g.fillStyle = ringColor;
         g.fill();
+        g.shadowBlur = 0;
+        g.shadowOffsetY = 0;
+        g.shadowColor = 'transparent';
         // Picture, clipped to the inner circle — done once, here, instead of 60×/s.
         g.save();
         g.beginPath();
@@ -15285,7 +16073,8 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         if (_spritesOk()) _avSpr = _avatarComposite(player, img, ringColor, shouldGrayWorld, isCurrentUser);
 
         if (_avSpr) {
-            ctx.drawImage(_avSpr, -AV_SPR_R, -AV_SPR_R, AV_SPR_R * 2, AV_SPR_R * 2);
+            const _e = AV_SPR_R + AV_SPR_PAD;
+            ctx.drawImage(_avSpr, -_e, -_e, _e * 2, _e * 2);
         } else {
             ctx.shadowBlur = 10;
             ctx.shadowColor = 'rgba(0, 0, 0, 0.3)';
@@ -15434,7 +16223,21 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
     }
 }
 
-if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', init); } else { init(); }
+// init() must NEVER run while this module is still evaluating. It used to be called
+// right here, synchronously — so anything init touched that is declared further
+// down the file was still in its temporal dead zone. That is exactly how the boot
+// died for two weeks: init → setMobileClass → graphicsTier → isWeakDevice read
+// `_weakDeviceCache` (declared ~1500 lines below) and threw a ReferenceError on
+// every phone that had never picked a graphics tier. The loader just sat there,
+// and no refresh could ever fix it. A microtask runs after the WHOLE module has
+// evaluated, so every declaration is initialised by then — whatever is added later.
+if (document.readyState === 'loading') { document.addEventListener('DOMContentLoaded', init); } else { Promise.resolve().then(init); }
+
+// Dev-only handle (localhost / LAN): lets a console or a profiler reach the live
+// state without exporting anything from the module. Never present in production.
+if (/^(localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.)/.test(location.hostname)) {
+    window.__mq = { gameState, PERF, worldCache, worldCollision, render, _own };
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // SHARED POMODORO
@@ -16625,9 +17428,13 @@ function isWeakDevice() {
 function graphicsTier() {
     const explicit = getGraphicsQuality();
     if (explicit) return explicit;
-    // A weak phone GPU starts on بطاطس: it is the tier that thing can actually hold
-    // for hours without cooking itself (an explicit choice in الإعدادات still wins).
-    if (isMobile() && isWeakDevice()) return 'potato';
+    // A weak phone GPU used to start on بطاطس (no lighting, no particles, dpr 1).
+    // Measured since: the GPU was never the bottleneck at these sizes — live
+    // shadows, a mezzanine blended over the whole screen and ~12 MB of art decoded
+    // at boot were, and all three are gone. It starts on متوسطة now, and the
+    // governor still drops it to بطاطس by itself if it really can't hold 30 fps.
+    // (An explicit choice in الإعدادات always wins.)
+    if (isMobile() && isWeakDevice()) return PERF.forcePotato ? 'potato' : 'low';
     const auto = (isMobile() || _isFirefoxBrowser() || _isSafariBrowser()) ? 'low' : 'high';
     // The governor's last rung (see PERF.forcePotato). Only reachable on device-auto,
     // and only after this device has failed the 30fps cap at 72% resolution.
@@ -26552,9 +27359,11 @@ const BOOK_PROP_SPEED = 1 / 2.5;                        // slide units/sec (0→
 // fires (800ms after endReadingSession) — much faster than the normal slide, and
 // timed to finish alongside the camera's zoom-out (READING_EXIT_MS ≈ 900ms).
 const BOOK_PROP_EXIT_SPEED = 1 / 0.5;
-// Art/Book.png is a 2048² canvas with the book floating in the middle — draw only
-// the painted region so the sprite isn't 75% empty space.
-const BOOK_SRC = { x: 515, y: 423, w: 1004, h: 933 };
+// Art/Book_small.webp is Art/Book.png (a 2048² canvas, the book floating in its
+// middle — 16 MB decoded, held all session) cropped to the painted book and capped
+// at 384 px, the most it is ever drawn (PLAYER_SIZE·0.8 at max zoom on a dense
+// screen). 23 KB and 0.5 MB decoded; same aspect, so it draws identically.
+const BOOK_SRC = { x: 0, y: 0, w: 384, h: 357 };
 // Fast start, slow finish — distinct from the symmetric _easeInOutCubic used by
 // the reading camera tween.
 const _easeOutQuint = (x) => 1 - Math.pow(1 - x, 5);
@@ -27906,6 +28715,10 @@ const _flame = { frames: null, loading: null, raf: 0, i: 0, last: 0 };
 // Resolves once every frame has settled. A frame that fails to load resolves anyway —
 // one gap in the flicker beats no flame at all.
 function _fireEnsureFrames() {
+    // The overlay's own art (index.html data-src) — off the boot path, on walk-up.
+    document.querySelectorAll('#fireplace-overlay img[data-src]').forEach(im => {
+        if (!im.getAttribute('src')) im.src = im.dataset.src;
+    });
     if (_flame.frames) return Promise.resolve(_flame.frames);
     if (_flame.loading) return _flame.loading;
     _flame.loading = Promise.all(
@@ -29198,17 +30011,16 @@ function _libToast(msg) {
 }
 
 /* ── who is on the task — TWO pill shapes, by head-count ──────────────────────
-   Mirrors the library (`CROWD` there): one or two people keep the CLASSIC
-   single row — face cluster beside the button (own face big on the far left, a
-   level pair, a capped stack for a watcher). THREE OR MORE get the CROWD pill
-   (`.task.crowd`): a time-left chip, and a foot line with the labels on the
-   right and, on the left, the same 24px faces in one overlapping row — four,
-   then a black «+N» — with the button beside them. Own face first. A task
-   carrying the whole team is «الجميع» in either shape. Resync together. */
-const LIB_CROWD = 3;
+   Mirrors the library: ONE pill shape whatever the head-count — cover, words,
+   the faces, the countdown (ALWAYS on the physical left of the faces) and the
+   button. Only the faces change: one or two keep the portrait / level pair,
+   THREE OR MORE are one overlapping row of 28px faces — four, then a black
+   «+N» — own face first. A task carrying the whole team is «الجميع».
+   Resync together. */
 const LIB_ALL_MIN = 3;
-const LIB_WHO_MAX = 5;   // the classic stack
-const LIB_ROW_MAX = 4;   // the crowd's row
+const LIB_WHO_MAX = 5;   // a watcher's pair stack
+const LIB_ROW = 3;       // from this many people the faces are a row
+const LIB_ROW_MAX = 4;   // the row: faces before «+N»
 
 function _libIsEveryone(list) {
     const pool = MDWNH_ROSTER.list.filter(m => !m.admin && !m.dummy && m.active !== false);
@@ -29246,15 +30058,12 @@ function _libWhoHtml(t, watching) {
 
     const meSlug = _lib.me && _lib.me.slug;
     const mine = !watching && meSlug && list.indexOf(meSlug) !== -1;
+    if (list.length >= LIB_ROW && (mine || watching)) return _libWhoRow(t, watching);
     if (mine) {
         const others = list.filter(s => s !== meSlug);
         if (!others.length) return '';              // solo: the pill is already yours
-        if (others.length === 1) {
-            return '<span class="who pair" style="--av:32px">' +
-                _libAvImg(t, others[0]) + _libAvImg(t, meSlug, 'self') + '</span>';
-        }
-        return '<span class="who lead" style="--av:38px">' +
-            _libRestHtml(t, others) + _libAvImg(t, meSlug, 'self') + '</span>';
+        return '<span class="who pair" style="--av:32px">' +
+            _libAvImg(t, others[0]) + _libAvImg(t, meSlug, 'self') + '</span>';
     }
 
     if (!watching) return '';
@@ -29262,7 +30071,7 @@ function _libWhoHtml(t, watching) {
     return '<span class="who grid">' + _libRestHtml(t, list) + '</span>';
 }
 
-/* The crowd's row: own face first, four faces, then the black «+N». */
+/* Three or more: own face first, four faces, then the black «+N». */
 function _libWhoRow(t, watching) {
     const list = _libAssignees(t);
     if (!list.length) return '';
@@ -29336,15 +30145,10 @@ document.addEventListener('scroll', _libHideWhoPop, true);
 // The time left is a CHIP — the one thing on the pill you act on. ONE unit:
 // days until the last day, then hours. Late wears the same number-over-unit
 // shape in red; no موعد keeps the slot and says so.
-function _libCdHtml(t, chip) {
+function _libCdHtml(t) {
     const c = _libCountdown(t.due);
     if (c.none) return '<span class="pill-cd nodue"><span class="u">بلا موعد</span></span>';
-    if (c.late && !chip) return '<span class="pill-cd late">تأخّرت ' + _libAr(c.days) + ' يوم</span>';
-    if (c.late) {
-        const d = c.days >= 1;
-        return '<span class="pill-cd late"><span class="n">' + _libAr(d ? c.days : c.hours) + '</span>' +
-            '<span class="u">' + (d ? 'يوم تأخير' : 'ساعة تأخير') + '</span></span>';
-    }
+    if (c.late) return '<span class="pill-cd late">تأخّرت ' + _libAr(c.days) + ' يوم</span>';
     const big = c.days >= 1;
     return '<span class="pill-cd" data-due="' + (Number(t.due) || 0) + '">' +
         '<span class="n">' + _libAr(big ? c.days : c.hours) + '</span>' +
@@ -29417,13 +30221,11 @@ function _libTaskPill(t, i, opts) {
         : t.pic
             ? '<img class="task-img" alt="" decoding="async">'
             : '<span class="task-emoji">' + _libEsc(t.emoji || '📌') + '</span>';
-    // the pill's own chrome — the قسم's mark, the striped ring a PARENT wears,
-    // and the grip that drags it (the same order, on the same node, as the library)
+    // the pill's own chrome — the قسم's mark and the striped ring a PARENT wears
     const decoKey = LIB_TAG_ORDER.find(k => t.tags && t.tags[k] && LIB_TAG_ICONS[k]);
     const chrome =
         (decoKey ? '<img class="pill-deco" src="' + LIB_TAG_ICONS[decoKey] + '" alt="" aria-hidden="true" decoding="async">' : '') +
-        (kidsN ? '<i class="pill-ring" aria-hidden="true"></i>' : '') +
-        (opts.sortable ? '<span class="pill-grip" aria-label="اسحب لترتيب المهمة" title="اسحب للترتيب">' + LIB_GRIP + '</span>' : '');
+        (kidsN ? '<i class="pill-ring" aria-hidden="true"></i>' : '');
     const pts = (t.points && !done && !(watching && full))
         ? '<span class="task-pts"><img src="' + _libEsc(_libSticker(t.points)) + '" alt="' + _libAr(t.points) + ' نقطة" loading="lazy" decoding="async"></span>'
         : '';
@@ -29456,35 +30258,20 @@ function _libTaskPill(t, i, opts) {
     const supTag = mineSup ? '<span class="task-tag sup-tag">' + LIB_ICON.eye + 'تحت إشرافك</span>' : '';
     const quote = '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>';
 
-    if (_libAssignees(t).length >= LIB_CROWD) {
-        // THE CROWD PILL — one line under the title, the chip, then the foot line
-        el.classList.add('crowd');
-        el.innerHTML = chrome + pts + media +
-            '<span class="pill-main">' +
-                '<span class="task-title">' + _libEsc(t.title) + '</span>' +
-                (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : quote) +
-            '</span>' +
-            '<span class="pill-end">' + _libCdHtml(t, true) + '</span>' +
-            '<span class="pill-foot">' + _libKidsChip(t, opts) + _libTagsHtml(t) + supTag +
-                '<span class="pill-act">' + _libWhoRow(t, watching) + action + '</span></span>';
-    } else {
-        // THE CLASSIC PILL — one row
-        el.innerHTML = chrome + pts + media +
-            '<span class="pill-main">' +
-                '<span class="task-title">' + _libEsc(t.title) + '</span>' +
-                (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
-                '<span class="pill-foot">' + _libKidsChip(t, opts) + quote + _libTagsHtml(t) + supTag + '</span>' +
-            '</span>' +
-            _libCdHtml(t) + _libWhoHtml(t, watching) +
-            action;
-    }
+    // ONE row, whatever the head-count; the clock sits left of the faces
+    el.innerHTML = chrome + pts + media +
+        '<span class="pill-main">' +
+            '<span class="task-title">' + _libEsc(t.title) + '</span>' +
+            (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
+            '<span class="pill-foot">' + _libKidsChip(t, opts) + quote + _libTagsHtml(t) + supTag + '</span>' +
+        '</span>' +
+        _libWhoHtml(t, watching) + _libCdHtml(t) +
+        action;
     if (!t.img && t.pic) _libCover(t, el.querySelector('.task-img'));
 
-    const grip = el.querySelector('.pill-grip');
-    if (grip) {
-        grip.addEventListener('pointerdown', (e) => _libStartDrag(e, grip));
-        grip.addEventListener('click', (e) => e.stopPropagation());   // the pill opens the library
-    }
+    // the whole pill is the handle: hold it (or, with a mouse, press and pull)
+    if (opts.sortable) el.addEventListener('pointerdown', (e) => _libArmHold(e, el));
+    el.addEventListener('dragstart', (e) => e.preventDefault());
 
     const btn = el.querySelector('.pill-check');
     if (btn && btn.tagName === 'BUTTON') {
@@ -29513,7 +30300,8 @@ function _libTaskPill(t, i, opts) {
         : () => window.open(LIB_SITE_URL, '_blank', 'noopener');
     el.tabIndex = 0;
     el.setAttribute('role', 'button');
-    el.addEventListener('click', () => { if (!moved) enter(); });
+    // the release of a drag still lands a click on the pill it dropped
+    el.addEventListener('click', () => { if (!moved && Date.now() - _libDragEndAt > 400) enter(); });
     el.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); enter(); }
     });
@@ -29563,12 +30351,16 @@ function _libKidsChip(t, opts) {
    once it lands is the DOM reordered and every transform cleared in one
    un-transitioned frame. Near either edge of whatever scrolls, the list
    scrolls itself — but only while the row can still travel that way. */
-const LIB_GRIP = '<svg viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">' +
-    '<circle cx="2.5" cy="3" r="1.5"/><circle cx="7.5" cy="3" r="1.5"/>' +
-    '<circle cx="2.5" cy="8" r="1.5"/><circle cx="7.5" cy="8" r="1.5"/>' +
-    '<circle cx="2.5" cy="13" r="1.5"/><circle cx="7.5" cy="13" r="1.5"/></svg>';
-let _libDrag = null;
-const LIB_EDGE = 64, LIB_SLIDE_MS = 230;
+/* No grip: the WHOLE PILL is the handle — mirror of `armHold()` in the
+   library. A finger has to sit still for LIB_HOLD_MS (a finger that moves
+   first is scrolling the panel); a mouse lifts on press-and-pull. The pill is
+   not `touch-action:none` — the panel has to scroll from any pill — so a
+   non-passive `touchmove` cancels the scroll for exactly the length of a drag. */
+let _libDrag = null, _libHold = null, _libDragEndAt = 0;
+const LIB_EDGE = 64, LIB_SLIDE_MS = 230, LIB_HOLD_MS = 320, LIB_SLOP = 8;
+
+document.addEventListener('touchmove', (e) => { if (_libDrag && e.cancelable) e.preventDefault(); }, { passive: false });
+document.addEventListener('contextmenu', (e) => { if (_libDrag || _libHold) e.preventDefault(); }, true);
 
 function _libScrollerOf(el) {
     for (let n = el.parentElement; n && n !== document.body && n !== document.documentElement; n = n.parentElement) {
@@ -29578,17 +30370,52 @@ function _libScrollerOf(el) {
     return document.scrollingElement || document.documentElement;
 }
 
-function _libStartDrag(e, grip) {
-    if (_libDrag || (e.pointerType === 'mouse' && e.button !== 0)) return;
-    const row = grip.closest('.subrow');
-    const unit = row || grip.closest('.tunit');
+function _libArmHold(e, el) {
+    if (_libDrag || _libHold || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    if (e.target.closest('button,a,input,textarea,select')) return;
+    if (e.pointerType === 'mouse') e.preventDefault();   // no text selection, no image drag
+    const h = _libHold = { el, id: e.pointerId, x: e.clientX, y: e.clientY, mouse: e.pointerType === 'mouse', timer: 0 };
+    if (!h.mouse) {
+        el.classList.add('holding');
+        h.timer = setTimeout(() => {
+            if (_libHold !== h) return;
+            _libDisarmHold();
+            if (navigator.vibrate) try { navigator.vibrate(12); } catch (_) {}
+            _libStartDrag(el, h.id, h.y);
+        }, LIB_HOLD_MS);
+    }
+    addEventListener('pointermove', _libHoldMove, true);
+    addEventListener('pointerup', _libHoldEnd, true);
+    addEventListener('pointercancel', _libHoldEnd, true);
+}
+function _libHoldMove(e) {
+    const h = _libHold;
+    if (!h || e.pointerId !== h.id) return;
+    if (Math.hypot(e.clientX - h.x, e.clientY - h.y) <= LIB_SLOP) return;
+    _libDisarmHold();
+    if (h.mouse) _libStartDrag(h.el, h.id, h.y);
+}
+function _libHoldEnd(e) { if (_libHold && e.pointerId === _libHold.id) _libDisarmHold(); }
+function _libDisarmHold() {
+    if (!_libHold) return;
+    clearTimeout(_libHold.timer);
+    _libHold.el.classList.remove('holding');
+    _libHold = null;
+    removeEventListener('pointermove', _libHoldMove, true);
+    removeEventListener('pointerup', _libHoldEnd, true);
+    removeEventListener('pointercancel', _libHoldEnd, true);
+}
+
+function _libStartDrag(el, pid, y0) {
+    if (_libDrag) return;
+    const row = el.closest('.subrow');
+    const unit = row || el.closest('.tunit');
     if (!unit || !unit.parentElement) return;
     const box = unit.parentElement;
     const sibs = Array.prototype.slice.call(box.children).filter(n => row
         ? n.classList.contains('subrow') && !n.classList.contains('hid')
         : n.classList.contains('tunit'));
     const from = sibs.indexOf(unit);
-    e.preventDefault(); e.stopPropagation();
     if (sibs.length < 2 || from < 0) return;
 
     const sc = _libScrollerOf(box);
@@ -29596,14 +30423,16 @@ function _libStartDrag(e, grip) {
     const gap = rects.length > 1 ? Math.max(0, rects[1].top - rects[0].top - rects[0].h) : LIB_LIST_GAP;
     _libDrag = {
         unit, box, sibs, rects, from, to: from, gap, sub: !!row, sc,
-        id: e.pointerId, grip, y0: e.clientY, y: e.clientY, s0: sc.scrollTop,
+        id: pid, el, y0, y: y0, s0: sc.scrollTop,
         dy: 0, raf: 0, landing: false
     };
-    try { grip.setPointerCapture(e.pointerId); } catch (_) {}
-    grip.addEventListener('pointermove', _libDragMove);
-    grip.addEventListener('pointerup', _libDragEnd);
-    grip.addEventListener('pointercancel', _libDragEnd);
+    try { el.setPointerCapture(pid); } catch (_) {}
+    el.addEventListener('pointermove', _libDragMove);
+    el.addEventListener('pointerup', _libDragEnd);
+    el.addEventListener('pointercancel', _libDragEnd);
     _libHideWhoPop();
+    const sel = window.getSelection && window.getSelection();
+    if (sel && sel.removeAllRanges) sel.removeAllRanges();
     document.body.classList.add('tdrag');
     unit.classList.add('dragging');
     sibs.forEach(n => { if (n !== unit) n.classList.add('drag-sib'); });
@@ -29659,10 +30488,11 @@ function _libDragEnd(e) {
     if (!d || e.pointerId !== d.id || d.landing) return;
     d.landing = true;
     cancelAnimationFrame(d.raf);
-    d.grip.removeEventListener('pointermove', _libDragMove);
-    d.grip.removeEventListener('pointerup', _libDragEnd);
-    d.grip.removeEventListener('pointercancel', _libDragEnd);
-    try { d.grip.releasePointerCapture(d.id); } catch (_) {}
+    _libDragEndAt = Date.now();
+    d.el.removeEventListener('pointermove', _libDragMove);
+    d.el.removeEventListener('pointerup', _libDragEnd);
+    d.el.removeEventListener('pointercancel', _libDragEnd);
+    try { d.el.releasePointerCapture(d.id); } catch (_) {}
 
     const r = d.rects, f = d.from, to = e.type === 'pointercancel' ? f : d.to;
     if (to !== d.to) d.sibs.forEach(n => { if (n !== d.unit) n.style.transform = ''; });
@@ -38596,6 +39426,6 @@ function _keepAliveSet(on) {
 
 if (isTouchDevice()) {
     setInterval(() => {
-        _keepAliveSet(!!(gameState.pomodoro.active || gameState.freeMode.active));
+        _keepAliveSet(!gameState._dupSessionDetected && !!(gameState.pomodoro.active || gameState.freeMode.active));
     }, 5000);
 }

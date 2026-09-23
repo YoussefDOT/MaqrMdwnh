@@ -35,6 +35,13 @@ export default {
 export class LobbyRoom {
   constructor(state, env) {
     this.state = state;
+    // Keep-alive without an audience: a client's bare "ping" is answered "pong"
+    // by the runtime itself — it is NOT forwarded to the lobby and does not even
+    // wake this object from hibernation. Clients used to prove they were alive by
+    // broadcasting a position every 3 s, which kept every phone's radio awake.
+    try {
+      this.state.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+    } catch (_) { /* older runtime: pings are forwarded, and clients ignore them */ }
   }
 
   async fetch(request) {

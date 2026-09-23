@@ -32,3 +32,6 @@ Art/Workspace/masters/
 # Hat masters (the 1000² originals). What ships is Hats/*.png cropped to the painted
 # art and capped at 384px. Parked in a subfolder so the hats.json hook never lists them.
 Hats/masters/
+
+# Python bytecode (tools/bake_world.py)
+__pycache__/

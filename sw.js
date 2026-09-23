@@ -34,7 +34,7 @@
 // unloadable-forever images that a reload can't clear on its own.
 // v5 exists so the old stale-while-revalidate copies of the world art (cached
 // under their un-hashed URLs) are evicted rather than lingering forever unread.
-const CACHE_VERSION = 'mdwnh-media-v5';
+const CACHE_VERSION = 'mdwnh-media-v5';   // (not bumped for the baked world: new files, new URLs)
 
 const IS_LOCAL = /^(localhost|127\.0\.0\.1|\[::1\]|.*\.local)$/.test(self.location.hostname)
     || /^(10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(self.location.hostname);   // LAN phone testing
@@ -101,9 +101,20 @@ self.addEventListener('fetch', (e) => {
         }
 
         // A retry (`_retry=…`) exists precisely because a previous attempt wedged —
-        // it must never be answered from, or written to, the cache.
+        // it is never ANSWERED from the cache. But a retry that succeeds is the real
+        // file: store it under its canonical URL (without `_retry`), or a device on
+        // a bad link would pay for the whole download again on every visit.
         if (url.searchParams.has('_retry')) {
-            try { return await fetch(req); } catch (err) { return Response.error(); }
+            try {
+                const res = await fetch(req);
+                if (res && res.status === 200 && res.type === 'basic' && url.searchParams.has('h')) {
+                    const canon = new URL(url.href);
+                    canon.searchParams.delete('_retry');
+                    e.waitUntil(cache.put(canon.href, res.clone())
+                        .then(() => dropOtherVersions(cache, canon)).catch(() => {}));
+                }
+                return res;
+            } catch (err) { return Response.error(); }
         }
 
         // Content-hashed (immutable) media: cache-first, and that's it. No
@@ -115,9 +126,13 @@ self.addEventListener('fetch', (e) => {
             try {
                 const res = await fetch(req);
                 if (res && res.status === 200 && res.type === 'basic') {
-                    await cache.put(req, res.clone()).catch(() => {});
-                    // Drop every other hash of this same file — one version each.
-                    e.waitUntil(dropOtherVersions(cache, url));
+                    // NOT awaited: the page gets the bytes as they stream in while the
+                    // cache copy fills in parallel. Awaiting put() held the whole
+                    // response back until the LAST byte had landed — the page saw no
+                    // progress at all, and a slow download looked like a dead one.
+                    // put() still rejects rather than storing a truncated body.
+                    e.waitUntil(cache.put(req, res.clone())
+                        .then(() => dropOtherVersions(cache, url)).catch(() => {}));
                 }
                 return res;
             } catch (err) {

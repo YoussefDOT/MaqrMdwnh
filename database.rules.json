@@ -2,7 +2,8 @@
   "rules": {
     "users": {
       ".read": "auth !== null",
-      ".write": true
+      ".write": true,
+      ".indexOn": ["lobby"]
     },
     "lobbies": {
       ".read": "auth !== null",

@@ -174,7 +174,6 @@
     border: 1.5px solid rgba(255, 255, 255, .7); background: #1a1a1a;
 }
 .lib-pills .who .av.done > img { border-color: var(--teal); }
-.lib-pills .who.lead > .av,
 .lib-pills .who.solo > .av { width: var(--av, 38px); height: var(--av, 38px); }
 .lib-pills .who.pair > .av { width: var(--av, 32px); height: var(--av, 32px); }
 .lib-pills .who.pair > .av + .av { margin-inline-start: -9px; z-index: 1; }
@@ -393,47 +392,12 @@
 /* «بلا موعد» keeps the countdown's slot (a task may carry no `due` now) */
 .lib-pills .pill-cd.nodue .u { font-size: .58rem; opacity: .6; text-align: center; line-height: 1.25; }
 
-/* ══════════════════════════════════════════════════════════════════════════
-   THE CROWD PILL — three people or more (`.task.crowd`, `LIB_CROWD` in
-   game.js). MIRROR of the same block at the foot of the library's tasks.css.
-   One and two keep the classic single row above. Two thin rows: cover | words |
-   a time-left CHIP, then ONE foot line — labels right, faces + button left.
-   ══════════════════════════════════════════════════════════════════════════ */
+/* «تحت إشرافك», and THREE OR MORE people: one overlapping row of 28px faces,
+   four at most, then the black «+N». MIRROR of MdwnhLibrary/css/tasks.css —
+   there is ONE pill shape now; only the faces change with the head-count. */
 .lib-pills .task-tag.sup-tag { --tc: #fff; display: inline-flex; align-items: center; gap: 3px; color: #000; }
 .lib-pills .task-tag.sup-tag svg { width: 10px; height: 10px; }
-
-.lib-pills .task.crowd {
-    display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start;
-    gap: 2px 9px; padding: 7px 10px 6px;
-}
-.lib-pills .task.crowd .task-img { width: 76px; border-radius: 10px; }
-.lib-pills .task.crowd .task-emoji { width: 40px; height: 40px; border-radius: 12px; font-size: 1.25rem; }
-.lib-pills .task.crowd .task-img,
-.lib-pills .task.crowd .task-emoji { transition: transform .35s var(--pop); }
-.lib-pills .task.crowd:hover .task-img,
-.lib-pills .task.crowd:hover .task-emoji { transform: rotate(-3deg) scale(1.04); }
-.lib-pills .task.crowd .pill-main { gap: 1px; padding-top: 1px; }
-.lib-pills .task.crowd .task-title { line-height: 1.25; }
-.lib-pills .task.crowd .task-desc { font-size: .72rem; }
-.lib-pills .task.crowd .pill-quote {
-    white-space: normal; font-size: .68rem; opacity: .75; line-height: 1.4;
-    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
-}
-.lib-pills .task.crowd .pill-end { display: flex; align-items: center; }
-
-.lib-pills .task.crowd > .pill-foot {
-    grid-column: 1 / -1; flex-wrap: wrap; max-width: none;
-    margin-top: 1px; padding-top: 5px;
-    border-top: 1px solid color-mix(in srgb, var(--fg, #fff) 16%, transparent);
-}
-.lib-pills .task.crowd .task-tags { flex: 0 1 auto; flex-wrap: wrap; gap: 5px; min-width: 0; overflow: visible; }
-.lib-pills .task.crowd .task-tag { flex: 0 0 auto; }
-.lib-pills .pill-act { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; margin-inline-start: auto; }
-.lib-pills .task.crowd .pill-check { width: 28px; height: 28px; }
-.lib-pills .task.crowd .pill-check svg { width: 14px; height: 14px; }
-.lib-pills .task.crowd .pill-check.badge { height: 24px; font-size: .7rem; }
-
-.lib-pills .who.row { gap: 0; flex: 0 0 auto; --sz: 24px; }
+.lib-pills .who.row { gap: 0; flex: 0 0 auto; --sz: 28px; }
 .lib-pills .who.row .av { width: var(--sz); height: var(--sz); }
 .lib-pills .who.row .av > img { border-width: 2px; }
 .lib-pills .who.row .av:not(.done) > img { border-color: rgba(255, 255, 255, .85); }
@@ -446,77 +410,18 @@
 .lib-pills .who.row .av.more { position: relative; background: #000; color: #fff; border: 2px solid rgba(255, 255, 255, .85); }
 .lib-pills .who.row .av.more:hover { background: #000; }
 
-.lib-pills .task.crowd .pill-cd {
-    justify-content: center; min-width: 38px; padding: 3px 5px 2px; border-radius: 10px;
-    background: rgba(0, 0, 0, .34); color: #fff; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14);
-}
-.lib-pills .task.crowd .pill-cd .n { font-size: 1.1rem; }
-.lib-pills .task.crowd .pill-cd .u { font-size: .54rem; opacity: .85; line-height: 1.25; white-space: nowrap; }
-.lib-pills .task.crowd.urgent .pill-cd { background: var(--gold); color: #241a00; box-shadow: 0 4px 12px -4px rgba(243, 192, 43, .7); }
-.lib-pills .task.crowd .pill-cd.late {
-    flex-direction: column; background: var(--red); color: #fff; padding: 3px 5px 2px; border-radius: 10px;
-    font-size: inherit; min-width: 38px; box-shadow: 0 4px 12px -4px rgba(229, 75, 42, .8);
-}
-.lib-pills .task.crowd .pill-cd.nodue { background: rgba(0, 0, 0, .16); box-shadow: none; color: var(--fg, #fff); }
-.lib-pills .task.crowd.done .pill-cd { background: rgba(0, 0, 0, .2); color: var(--fg, #fff); box-shadow: none; }
-.lib-pills .subrow .task.crowd .task-img { width: 68px; }
-.lib-pills .subrow .task.crowd .task-emoji { width: 36px; height: 36px; }
-
-/* ── mirrors «THE PILL'S OWN CHROME» in MdwnhLibrary/css/tasks.css ─────────────
-   The قسم's doodle, white and huge at the physical left; the striped ring a
-   PARENT wears; the quieter subtask. maqr has no grip — ordering is done in the
-   library — but it READS the member's order, so the list is the same one. */
-.lib-pills .pill-deco {
-    position: absolute; z-index: -1; pointer-events: none;
-    inset-inline-end: -18px; top: 50%; height: 165%; width: auto; max-width: none;
-    transform: translateY(-50%) rotate(-14deg);
-    filter: brightness(0) invert(1); opacity: .16;
-    transition: transform .5s var(--pop), opacity .3s var(--ease);
-}
-.lib-pills .task:hover .pill-deco { transform: translateY(-50%) rotate(-4deg) scale(1.08); opacity: .22; }
-.lib-pills .task.done .pill-deco { opacity: .08; }
-.lib-pills .pill-ring {
-    position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: inherit;
-    padding: 3px;
-    background: repeating-linear-gradient(-45deg,
-        color-mix(in srgb, var(--fg, #fff) 78%, transparent) 0 5px, transparent 5px 10px);
-    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-    -webkit-mask-composite: xor;
-    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
-    opacity: .8;
-}
-.lib-pills .task.parent { box-shadow: 0 18px 32px -20px var(--c, #000), 0 6px 18px rgba(0, 0, 0, .55); }
-.lib-pills .subrow .task {
-    border-radius: 16px; padding-block: 7px;
-    box-shadow: 0 10px 20px -18px var(--c, #000), 0 3px 10px rgba(0, 0, 0, .4);
-}
-.lib-pills .subrow .task::before { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--fg, #fff) 26%, transparent); }
-.lib-pills .subrow .task .task-img { width: 54px; }
-.lib-pills .subrow .task .task-emoji { width: 36px; height: 36px; font-size: 1.1rem; }
-
 /* ══════════════════════════════════════════════════════════════════════════
    ترتيب المهام بالسحب — carried 1:1 from MdwnhLibrary/css/tasks.css
-   The whole start-edge strip is the handle (a finger needs more than six
-   dots), and `touch-action:none` is what stops a drag on it being read as a
-   scroll of the panel.
+   No grip: the WHOLE PILL is the handle — a long-press on a finger, press-and-
+   pull on a mouse. Nothing on a pill is selectable, so a drag never sweeps a
+   highlight and a long-press never raises the copy / save-image callout.
    ══════════════════════════════════════════════════════════════════════════ */
-.lib-pills .task.sortable { padding-inline-start: 24px; }
-.lib-pills .task.sortable .task-pts { inset-inline-start: 16px; }
-.lib-pills .pill-grip {
-    position: absolute; z-index: 2; inset-block: 0; inset-inline-start: 0; width: 24px;
-    display: grid; place-items: center;
-    color: var(--fg, #fff); opacity: .38; cursor: grab;
-    touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none;
-    transition: opacity .2s var(--ease);
-}
-.lib-pills .pill-grip svg { width: 8px; height: 13px; transition: transform .25s var(--pop); }
-.lib-pills .task:hover .pill-grip { opacity: .75; }
-.lib-pills .pill-grip:hover { opacity: 1; }
-.lib-pills .pill-grip:hover svg { transform: scale(1.2); }
-@media (hover: none) { .lib-pills .pill-grip { opacity: .55; } }
+.lib-pills .tunit, .lib-pills .task, .lib-pills .sub-head { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.lib-pills .task img { -webkit-user-drag: none; }
+.lib-pills .task.holding { transform: scale(.975); transition: transform .32s var(--ease); }
 
-/* `.tunit` is one top-level pill and its subtasks — what a top-level grip
-   carries. Its gap is the list's own, so a lone pill does not move. */
+/* `.tunit` is one top-level pill and its subtasks — what a held top-level
+   pill carries. Its gap is the list's own, so a lone pill does not move. */
 .lib-pills .tunit { display: flex; flex-direction: column; gap: 10px; position: relative; min-width: 0; }
 body.tdrag, body.tdrag * { cursor: grabbing !important; -webkit-user-select: none; user-select: none; }
 .lib-pills .drag-sib { transition: transform .23s var(--ease); will-change: transform; }
@@ -532,7 +437,6 @@ body.tdrag .lib-pills .task:hover { transform: none; }
     box-shadow: 0 26px 44px -18px rgba(0, 0, 0, .85), 0 0 0 2px color-mix(in srgb, var(--fg, #fff) 40%, transparent);
     transition: transform .25s var(--pop), box-shadow .25s var(--ease);
 }
-.lib-pills .dragging > .task .pill-grip { opacity: 1; }
 .lib-pills .dragging.landing { transition: transform .23s var(--ease); }
 .lib-pills .drag-still, .lib-pills .drag-still * { transition: none !important; }
 

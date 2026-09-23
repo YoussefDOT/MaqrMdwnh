@@ -30,7 +30,7 @@
     <!-- Jacquard 12 is only used by one reading-mode input — never block the boot on it. -->
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Jacquard+12&display=swap" media="print" onload="this.media='all'">
     <!-- The library task pills, mirrored 1:1 from MdwnhLibrary. See library-tasks.css. -->
-    <link rel="stylesheet" href="library-tasks.css?v=14">
+    <link rel="stylesheet" href="library-tasks.css?v=15">
     <!-- Baloo Bhaijaan 2 is the مدونة brand face — used inside #lib-panel and the
          حضور المقر card/panel (#chal-dock, #chal-modal), so it must never block the
          boot. If it never arrives both fall back to Rubik. -->
@@ -54,8 +54,47 @@
                      bar itself is decorative, hence aria-hidden above. -->
                 <div class="boot-msg" id="boot-msg" role="status" aria-live="polite"></div>
             </div>
+            <!-- Never a dead end: shown when loading has taken far too long, or when
+                 the game script itself failed to start (see the failsafe below). -->
+            <div class="boot-retry" id="boot-retry" hidden>
+                <p>يستغرق التحميل وقتًا أطول من المعتاد.</p>
+                <button type="button" id="boot-retry-btn">إعادة المحاولة</button>
+            </div>
         </div>
     </div>
+    <script>
+    // Boot failsafe — a CLASSIC script, so it runs even when game.js (a module)
+    // can't: a network failure on the script, a failed import, a crash while it
+    // evaluates. Without it the loader above just spins forever. game.js sets
+    // window.__maqrBooted once it has taken the boot screen over, and owns the
+    // retry button's visibility from then on.
+    (function () {
+        var KEY = 'mdwnh_boot_retry';
+        function show() {
+            if (window.__maqrBooted) return;
+            var el = document.getElementById('boot-retry');
+            if (el) el.hidden = false;
+        }
+        setTimeout(show, 20000);
+        window.addEventListener('error', function (e) {
+            var f = (e && e.filename) || '', m = (e && e.message) || '';
+            if (/game\.js|firebase/i.test(f) || /import|export|module/i.test(m)) setTimeout(show, 1200);
+        }, true);
+        window.__maqrRetryBoot = function () {
+            var n = 0;
+            try { n = +(sessionStorage.getItem(KEY) || 0); sessionStorage.setItem(KEY, String(n + 1)); } catch (_) {}
+            var go = function () { location.reload(); };
+            // A second try in a row also drops the service worker, in case a bad
+            // registration is what's in the way. Its media cache is kept.
+            if (n >= 1 && navigator.serviceWorker && navigator.serviceWorker.getRegistrations) {
+                navigator.serviceWorker.getRegistrations()
+                    .then(function (rs) { return Promise.all(rs.map(function (r) { return r.unregister(); })); })
+                    .then(go, go);
+            } else go();
+        };
+        document.getElementById('boot-retry-btn').addEventListener('click', function () { window.__maqrRetryBoot(); });
+    })();
+    </script>
 
     <!-- ═══ القائمة الرئيسية ═══ Discord-only. No gender chooser. -->
     <div id="menu-screen" class="screen">
@@ -107,8 +146,9 @@
                 </button>
             </div>
 
-            <!-- زر تثبيت التطبيق (PWA) — يخفيه السكربت في سفاري وداخل التطبيق المثبّت -->
-            <button id="pwa-install-btn" type="button">
+            <!-- زر تثبيت التطبيق (PWA) — مخفي من البداية، ولا يظهر إلا حيث يمكن التثبيت فعلًا
+                 (عند وصول حدث beforeinstallprompt) — فلا يظهر أبدًا داخل التطبيق المثبّت -->
+            <button id="pwa-install-btn" type="button" hidden>
                 <span class="pwa-icon-badge">
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                         <path d="M8 2v8M5 7l3 3 3-3"/>
@@ -158,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 342 · Updated 9/23 8:29 AM</div>
+    <div id="build-number" class="build-number">Build 343 · Updated 9/23 7:13 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -979,11 +1019,11 @@
     </div>
 
     <!-- تسجيل دخول من جهاز آخر -->
-    <div id="dup-session-overlay" class="modal-overlay" style="z-index:9999;">
+    <div id="dup-session-overlay" class="modal-overlay" style="z-index:100002;">
         <div class="modal-content" style="max-width:320px;padding:36px 32px;text-align:center;">
-            <h3 style="margin-bottom:12px;">تم فتح حسابك في مكان آخر</h3>
-            <p style="margin-bottom:24px;color:rgba(255,255,255,0.6);">تم تسجيل الدخول من جهاز أو تبويب آخر. هذه الجلسة أصبحت غير نشطة.</p>
-            <button class="btn-primary" onclick="window.location.reload()">إعادة تحميل</button>
+            <h3 style="margin-bottom:12px;">فُتح حسابك على جهاز آخر</h3>
+            <p style="margin-bottom:24px;color:rgba(255,255,255,0.6);">انتقلت جلستك إلى هناك كما هي، وتوقفت هذه الصفحة عن العمل. يمكنك إغلاقها، أو متابعة الجلسة هنا.</p>
+            <button class="btn-primary" onclick="window.location.reload()">المتابعة هنا</button>
         </div>
     </div>
 
@@ -1544,17 +1584,20 @@
          BG → Fireplace → member frames → Fire → Overlay (overlay always on top,
          same viewport-covering scale as BG). -->
     <div id="fireplace-overlay" class="fp-overlay" aria-hidden="true">
-        <!-- Everything that should breathe with the room lives inside .fp-shake; the
+        <!-- The three big images carry data-src, not src: 2.7 MB that used to download
+             during the boot, competing with the world. _fireEnsureFrames sets them when
+             the player walks up to the fireplace (with the flame frames).
+             Everything that should breathe with the room lives inside .fp-shake; the
              close button stays outside it so it never drifts under the cursor. -->
         <div class="fp-shake">
-            <img class="fp-bg" src="Art/Fireplace BG.png?v=2" alt="">
+            <img class="fp-bg" data-src="Art/Fireplace BG.png?v=2" alt="">
             <div class="fp-stage">
-                <img class="fp-body" src="Art/Fireplace.png" alt="المدفئة">
+                <img class="fp-body" data-src="Art/Fireplace.png" alt="المدفئة">
                 <!-- src is set by the frame loop (see _fireStartFlame) — the 29 frames
                      load lazily on the first open, never on the login path. -->
                 <img class="fp-fire" alt="" aria-hidden="true">
             </div>
-            <img class="fp-topcoat" src="Art/Fireplace Overlay.png" alt="">
+            <img class="fp-topcoat" data-src="Art/Fireplace Overlay.png" alt="">
         </div>
         <button id="fireplace-close" class="fp-close" aria-label="إغلاق">✕</button>
     </div>
@@ -2156,8 +2199,14 @@
         </div>
 
         <!-- البرمجيات -->
-        <script type="module" src="firebase-config.js"></script>
-        <script type="module" src="game.js?v=321"></script>
+        <!-- firebase-config.js is imported BY game.js — with a version, like game.js
+             itself. It used to be imported bare, so after a push that added an
+             export a returning visitor could get the new game.js with a cached old
+             firebase-config.js: the import failed and the boot screen hung forever.
+             The preload URL must match game.js's import byte for byte, or the
+             module (and Firebase) would be instantiated twice. Bump both together. -->
+        <link rel="modulepreload" href="firebase-config.js?v=3">
+        <script type="module" src="game.js?v=322"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
@@ -2182,22 +2231,46 @@
         var isAndroid = /android/i.test(ua);
         var isFirefox = /firefox/i.test(ua);
 
-        // The button only exists where it can actually DO something:
+        // The button starts HIDDEN in the markup and is only ever revealed where it
+        // can actually install something. It used to start visible and be removed by
+        // this script — which painted it for a beat inside the installed app, and
+        // left it there whenever the "am I installed?" check missed (an app opened
+        // in fullscreen/minimal-ui, a TWA, a window-controls-overlay window).
+        function isInstalled() {
+            var mm = window.matchMedia;
+            var modes = ['standalone', 'fullscreen', 'minimal-ui', 'window-controls-overlay'];
+            for (var i = 0; i < modes.length; i++) {
+                if (mm && mm('(display-mode: ' + modes[i] + ')').matches) return true;
+            }
+            return navigator.standalone === true || /^android-app:\/\//.test(document.referrer || '');
+        }
+        function kill() { if (btn && btn.parentNode) btn.remove(); btn = null; }
         //  • already installed  → nothing to install
         //  • Safari (mac + iOS) → no beforeinstallprompt; the owner asked for it gone
         //    rather than degrading into a "use the share menu" instruction card.
-        var installed = window.matchMedia('(display-mode: standalone)').matches
-                     || navigator.standalone === true;
-        if (installed || isSafari) { btn.remove(); return; }
+        if (isInstalled() || isSafari) { kill(); return; }
+        if (window.matchMedia) {
+            ['standalone', 'fullscreen', 'minimal-ui'].forEach(function (m) {
+                var q = window.matchMedia('(display-mode: ' + m + ')');
+                var on = function () { if (q.matches) kill(); };
+                if (q.addEventListener) q.addEventListener('change', on); else if (q.addListener) q.addListener(on);
+            });
+        }
+        window.addEventListener('appinstalled', kill);
 
         var deferredPrompt = null;
         var toastTimer     = null;
 
-        // Chrome / Edge / Android Chrome — capture the native install prompt when it fires
+        // Chromium (Chrome / Edge / Samsung / Android Chrome) fires this ONLY when the
+        // app is installable and NOT installed — the one reliable signal there is.
         window.addEventListener('beforeinstallprompt', function (e) {
             e.preventDefault();
             deferredPrompt = e;
+            if (btn && !isInstalled()) btn.hidden = false;
         });
+        // Firefox on Android never fires it but can install from its menu, so there
+        // the button stays as the instruction card it always was.
+        if (isAndroid && isFirefox) btn.hidden = false;
 
         btn.addEventListener('click', async function () {
             if (deferredPrompt) {
@@ -2205,7 +2278,7 @@
                 deferredPrompt = null;
                 dp.prompt();
                 var result = await dp.userChoice;
-                if (result.outcome === 'accepted') btn.remove();
+                if (result.outcome === 'accepted') kill();
             } else if (isIos) {
                 showToast('اضغط على زر المشاركة ثم اختر "أضف إلى الشاشة الرئيسية"');
             } else if (isAndroid) {
@@ -2218,7 +2291,7 @@
         });
 
         function showToast(msg) {
-            if (!toast) return;
+            if (!toast || !btn) return;
             var r = btn.getBoundingClientRect();
             toast.style.left = (r.left + r.width / 2) + 'px';
             toast.style.top  = Math.min(r.bottom + 12, window.innerHeight - 60) + 'px';
@@ -2229,7 +2302,7 @@
         }
 
         // Hide once the game starts (dispatched from game.js)
-        window.addEventListener('pwa:gameStarted', function () { btn.remove(); });
+        window.addEventListener('pwa:gameStarted', kill);
     })();
     </script>
 </body>

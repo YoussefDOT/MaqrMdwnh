@@ -52,6 +52,12 @@ python3 -m http.server 8080
 
 **Never push to git unless the user explicitly asks.** Always test on localhost first. **Always push directly to `main`** — never push to a separate branch (`git push origin HEAD:main`).
 
+**Two things ship separately from a push** (the owner runs them; the site works without
+either, it just doesn't get the saving yet): the database rules —
+`firebase deploy --only database` (e.g. the `users` `.indexOn: lobby` the players
+listener uses) — and the presence relay — `cd presence-server && npx wrangler deploy`
+(e.g. the `"ping"` auto-response).
+
 **Every push updates نشرة الأخبار.** `patch-notes.json` is the member-facing changelog shown by the
 menu's «نشرة الأخبار» button. Before pushing, add (or extend) TODAY's entry at the TOP of `days`
 — plain, spell-checked Arabic written for members, tagged `new` / `fix` / `better`. Never edit or
@@ -63,7 +69,7 @@ ghost) can see or use — the leader's panel, the crown button, `adminAllowed`, 
 all**. Members can't open it, and a line about a screen they will never see is noise. If a
 push contains only admin-panel work, it ships with `patch-notes.json` untouched.
 
-**Pre-commit hook**: besides the build number below, it regenerates `Hats/hats.json` from the PNGs in `Hats/` (see Character Customization), and `Stickers/sm/` + `Stickers/stickers.json` from the masters in `Stickers/` (see الملصقات).
+**Pre-commit hook**: besides the build number below, it regenerates `Hats/hats.json` from the PNGs in `Hats/` (see Character Customization), `Stickers/sm/` + `Stickers/stickers.json` from the masters in `Stickers/` (see الملصقات), **bakes the world** (`tools/bake_world.py` → `Art/Workspace/Baked_*` + `baked.json`, see **The World → The bake**) and then hashes everything in `Art/Workspace/` (incl. `.bin`) into `manifest.json`. `.git/hooks` is not versioned, so a copy lives at **`tools/pre-commit.sh`** — on a fresh clone: `cp tools/pre-commit.sh .git/hooks/pre-commit`. Change one, change both.
 
 **Build number**: A `#build-number` div sits below the `#siraj-test-link` button on the login screen showing **`Build N · Updated M/D H:MM AM/PM`** (e.g. `Build 244 · Updated 7/28 1:47 PM`) — the **date is part of the stamp**, so "when did this last ship" is answerable at a glance. The `.git/hooks/pre-commit` hook auto-increments the number and rewrites the date+time on every commit — **never hand-edit it**. Its `sed` pattern treats the `M/D ` part as optional so an older date-less stamp is upgraded in place rather than skipped. If the hook can't find the pattern at all, it logs a warning and exits cleanly. **If the stamp format ever changes, update the hook's `sed` pattern and this line together.**
 
@@ -76,7 +82,7 @@ literally — every rule here exists because skipping it produced a real bug.
 
 ### 1. Navigate by search, never by memory or line number
 
-`game.js` is ~24k lines in ONE file. Line numbers and even function names in this doc
+`game.js` is ~39k lines in ONE file. Line numbers and even function names in this doc
 drift as the code evolves. **Always locate code by grepping an identifier from this doc.
 If the identifier has zero hits, the code was renamed/inlined — search nearby concept
 keywords, trust the CODE over this doc, and fix the doc reference in the same commit.**
@@ -86,8 +92,11 @@ Grep anchors for the major systems (all verified to exist):
 
 | System | Grep for |
 |---|---|
-| World load / collision / cache | `loadWorldArt`, `worldCollision`, `worldCache`, `checkCollision` |
-| Movement + live sync | `handleMovement`, `ensurePresenceSocket`, `updatePlayerPosition`, `listenToPlayers` |
+| World load / collision / cache | `loadWorldArt`, `_loadBakedWorld`, `_bakedHeal`, `_streamFetch`, `_decodeBakedMasks`, `worldCollision`, `worldCache`, `checkCollision`, `tools/bake_world.py` |
+| Session ownership (one live tab per account) | `_own`, `_ownGate`, `_ownVerify`, `_ownDie`, `_ownArmPresence`, `_healOwnLaptopDoc` |
+| Boot robustness | `init` (deferred), `_bootArmRetry`, `__maqrBooted`, `#boot-retry`, `_withTimeout` |
+| Discord identity | `DISCORD_KNOWN_USER_KEY`, `_loadCachedDiscordUser`, `fetchDiscordUser`, `initDiscordOAuth` |
+| Movement + live sync | `handleMovement`, `ensurePresenceSocket`, `updatePlayerPosition`, `listenToPlayers`, `_onUserData`, `_playerGone`, `_askAlive` |
 | Away / paused-clock badges | `publishAwayState`, `localIsAway`, `AWAY_MIN_MS`, `freePaused` |
 | Pomodoro (solo) | `startPomodoroPhase`, `updatePomodoro` |
 | Shared pomo | `sendSpInvite`, `setupSpLiveListener` |
@@ -120,7 +129,7 @@ Grep anchors for the major systems (all verified to exist):
 | Frame governor / dynamic res | `PERF`, `_perfSkipFrame`, `_perfEndFrame`, `_perfSyncTier`, `window.__perf()` |
 | توفير الطاقة (thermal profile) | `powerSaveEnabled`, `perfWake`, `_perfScanBusy`, `_loopNext`, `_perfCalmInterval`, `dtAmbient`, `isWeakDevice`, `body.power-save` |
 | Off-screen culling | `_viewRect`, `_offView` |
-| Cached text/badge/avatar sprites | `_spritesOk`, `_pillSprite`, `_fillTextCached`, `_avatarComposite`, `_fxSprite` |
+| Cached text/badge/avatar sprites (shadows baked, every tier) | `_spritesOk`, `_sprLevel`, `_pillSprite`, `_fillTextCached`, `_avatarComposite`, `_fxSprite` |
 | Staggered logic tick | `SLOW_TASKS`, `runSlowTasks` |
 | Session attendance credit / keep-alive | `_dutySessTrack`, `_dutyFinishSession`, `_keepAliveSet` |
 
@@ -141,7 +150,8 @@ Grep anchors for the major systems (all verified to exist):
 - **Never rename a Firebase path or key** without an explicit migration plan — old
   clients and existing data still use it.
 - **Never hand-edit generated files**: `Hats/hats.json`, `Art/Workspace/manifest.json`,
-  `Stickers/stickers.json`, `Stickers/sm/`, the `#build-number` div. The pre-commit hook owns them.
+  `Art/Workspace/Baked_*` + `baked.json`, `Stickers/stickers.json`, `Stickers/sm/`, the
+  `#build-number` div. The pre-commit hook owns them (edit a world layer → the bake reruns).
 - **Match surrounding style** — comment density, naming, Arabic labels. All UI text is
   Arabic and spell-checked (see top of file).
 - **When a product decision is needed** (behaviour, wording, visuals not derivable from
@@ -157,13 +167,21 @@ Run all of these after editing, before telling the owner it's done:
    documented rule/bug could this violate? Scan it against **§6 Hard Invariants** below.
 3. **Bump `?v=N` on `game.js` in `index.html`** in every commit that touches `game.js`.
    Forgetting this ships stale code to returning visitors — it's the #1 silent failure.
+   Touched `firebase-config.js`? Bump ITS `?v=` in BOTH places — the `import` at the top
+   of `game.js` and the `<link rel="modulepreload">` in `index.html` — they must match
+   byte for byte (a mismatch loads Firebase twice; a missing bump can hang the boot).
 4. Touched UI? Check BOTH desktop and `body.is-mobile` CSS paths, and RTL layout.
 5. Touched anything on the login/spawn path? Re-read the **Loading Strategy** section
    and confirm you added no serial `await`, no eager media fetch, no work before spawn.
 6. New feature? Run the **Edge case scan** in "Adding a New Feature — Checklist".
 
-Do NOT launch a browser preview to click through features — the owner tests himself.
-`node --check`, one-off Node snippets, and reading the diff are the allowed checks.
+Don't click through features in a browser preview for the owner's benefit — the owner
+tests himself. `node --check`, one-off Node snippets, and reading the diff are the default
+checks. A local load check IS worth it for anything on the boot/world-load path, and so is
+measuring before a perf change: `python3 -m http.server 8080`, enter with «وضع التجربة»
+(a Siraj ghost — no Discord needed), and use the dev-only `window.__mq` handle
+(`gameState`, `PERF`, `worldCache`, `worldCollision`, `render`, `_own`; localhost/LAN only)
+to time `render()` — e.g. 100 calls then a 1×1 `getImageData` to flush the GPU.
 
 ### 5. Where does new state live? (decision tree)
 
@@ -245,6 +263,19 @@ Each one is a shipped bug (details in Common Bugs & the feature sections):
     world canvas must be seen by `_perfScanBusy` or call `perfWake()` — otherwise it
     plays at the calm 15/6 fps. Always schedule the loop through `_loopNext()`, never
     a bare `requestAnimationFrame(gameLoop)`. See **توفير الطاقة**.
+27. **`init()` never runs during module evaluation** (it is queued as a microtask). And
+    no top-level statement may call into code that reads a `let`/`const` declared
+    further down: it is in its temporal dead zone and throws. That ReferenceError is
+    what kept every phone on the loading screen for nine days (see Common Bugs).
+28. **Every Firebase write goes through the gate** (`update`/`set`/`remove`/
+    `runTransaction`/`onDisconnect` in game.js are wrappers — see ملكية الجلسة). Never
+    import the SDK's write functions directly, never write to `users/{uid}/activeSession`
+    outside `startGame`'s claim / `_ownVerify`, and never null it on disconnect.
+29. **Every network step on the boot path is bounded.** A `fetch`/`get` the menu or the
+    spawn waits on gets a timeout (`_withTimeout`, AbortController) and a fallback; the
+    world download is judged on stalls (`_streamFetch`), never a flat total timeout.
+30. **No live `shadowBlur` in per-player / per-frame draw code.** Bake it into a sprite
+    (`_spr` with `pad`, `_avatarComposite`) — live shadows were ~80% of a frame's GPU.
 
 ---
 
@@ -296,18 +327,24 @@ Art/trophies/                — the seven trophies + the display shelf plank, a
                                See رف الجوائز.
 Icon Elements/               — 7 decorative brush icons (masked + brand-tinted in the menu)
 Maqr logo.png                — the brand logo: menu + boot screen
-game.js        ~24000 lines — all game logic, classes, Firebase, rendering
-index.html      ~1600 lines — single page; all panels/overlays live here
-style.css       ~7700 lines — all styling; mobile rules under body.is-mobile
+game.js        ~39000 lines — all game logic, classes, Firebase, rendering
+index.html      ~2300 lines — single page; all panels/overlays live here (+ the boot failsafe
+                               and PWA-button classic scripts)
+style.css      ~12700 lines — all styling; mobile rules under body.is-mobile
+tools/bake_world.py          — bakes the world layers into Art/Workspace/Baked_* (run by the hook)
+tools/pre-commit.sh          — versioned copy of .git/hooks/pre-commit (install it on a fresh clone)
 patch-notes.json             — نشرة الأخبار: the member-facing changelog, newest day first (update every push)
 LemoPFP.jpg                  — ليمو's face in the @ picker / mention pills
-firebase-config.js           — exports { database, ref, onValue, update, get, onDisconnect, set }
+firebase-config.js           — the Firebase SDK re-exports (writes are wrapped by game.js's
+                               ownership gate). Imported as `firebase-config.js?v=N` — bump
+                               N in game.js AND index.html's modulepreload together
 sw.js                        — service worker: cache-first for Sound/Art/Fonts (see Loading strategy)
 Sound/                       — UI/minigame sound effects (.mp3)
 Sound/Focus Sounds/          — ambient focus audio files (.mp3)
 Art/                         — minigame art (race track, coffee, boss fight, siraj)
 Art/Workspace/               — THE WORLD: one combined scene split into stacked layers
-                               (Workspace_00NN_*.png, all 2210×3160). See "The World".
+                               (Workspace_00NN_*.png, all 2210×3160 — the SOURCES) and the
+                               Baked_* files the site actually loads (~1 MB). See "The World".
                                Plus the extension layers (Extension_*.webp, cropped) —
                                their full-canvas PNG masters sit in masters/ (gitignored,
                                and a subfolder so the manifest hook never hashes them).
@@ -345,24 +382,35 @@ before the game is playable.** The current model:
   still instant — `startSound` streams via a media element and hands off to the
   seamless buffer loop when it arrives. Never restore the old "download all 7 on init"
   behaviour (~21 MB + a huge decode on weak phones).
-- **World art layers** (`Art/Workspace/`, ~15 MB total — the 5 MB background + two
-  ~2 MB day overlays are the big ones): loaded in `loadAssets()`. `render()` guards
-  every layer on decode (`_drawWorldLayer` skips a not-yet-loaded `<img>`), so the
-  login screen never waits on them. As each layer decodes, `loadWorldArt()`'s pipeline
-  builds the alpha collision masks (into `worldCollision`) AND pre-composites the ~9
-  ground layers + 3 second-floor layers into **two cached canvases** (`worldCache`) —
-  so the per-frame cost is ~2 `drawImage`s, not ~14 (matters on the owner's phone).
-  Layers are then **closed** (`ImageBitmap.close()`), and the four that must stay
-  resident are **shrunk first** — see **The World → Perf notes**, which is the memory
-  budget every new layer has to answer to.
-  (The old standalone `buildWorldCollision()`/`buildWorldCache()` functions were
-  inlined into this pipeline — grep `worldCollision` / `worldCache`, not those names.)
+- **The world is BAKED** (`tools/bake_world.py`, run by the pre-commit hook): the 16
+  source layers (~12.5 MB of PNG) become `Baked_Ground.webp` (every ground layer
+  composited), `Baked_Second.webp` (the mezzanine, cropped to its painted bbox),
+  pre-cropped glow sheets, 1/3-size overlays and `Baked_Masks.bin` (the collision masks,
+  morphology already applied, run-length encoded) — **~1 MB total**, plus `baked.json`
+  (where each piece goes, byte sizes, source hashes). `_loadBakedWorld` downloads them at
+  page parse, decodes a handful of images, builds collision from the masks with no
+  raster/morphology work, and sets `_worldReady` as soon as the ESSENTIALS (ground,
+  mezzanine, masks) are in; glow sheets / overlays / the meeting room land whenever they
+  land. Details: **The World → The bake**. The old per-layer pipeline is kept as
+  `_loadWorldArtLegacy` — used only if `baked.json` is missing or the browser can't
+  decode WebP (iOS ≤ 13).
+- **Downloads are judged on SILENCE, never a flat timeout** (`_streamFetch`, 15 s without
+  a byte = abort + retry). The old flat 25 s timeout killed a 3.6 MB layer on any link
+  under ~150 KB/s — on every retry — which is how slow internet produced a world that
+  stayed black for good. Every piece retries **forever** with backoff (`_bakedHeal`),
+  waits out `offline`, and keeps its compressed bytes so a GPU context loss or a refused
+  decode is rebuilt with no network (`_bakedRebuildAll`, `_bakedHealthCheck`).
+- **Prop art waits for the world**: the minigame/book images (`_loadPropArt`) load on idle
+  AFTER `_worldReady`, and the fireplace overlay's three big images are `data-src` until
+  the player walks up to it (`_fireEnsureFrames`). ~3.4 MB used to compete with the world
+  during the boot.
 - **Race track** (`Art/RaceTrack Var1.png`, 6 MB + CPU-heavy pixel classification):
   `loadRaceTrackAsset()` is idempotent and lazy — kicked on idle after spawn and
   ensured by every race entry path. Never call it in `init()`.
 - **World art is content-hashed + cached forever.** `Art/Workspace/manifest.json`
-  (filename → short sha1, regenerated by the **pre-commit hook**) is fetched
-  `no-store` at the top of `loadWorldArt()`; every layer then loads as
+  (filename → short sha1 of every file in the folder incl. the `Baked_*` ones,
+  regenerated by the **pre-commit hook**) is fetched `no-store` (with `baked.json`, both
+  bounded by a timeout) at the top of `loadWorldArt()`; every piece then loads as
   `<file>?h=<hash>` (`_worldSrc`). The service worker treats a `?h=` URL as
   **immutable — pure cache-first, no revalidation** — so a returning visitor
   downloads **zero** bytes of art and the world is up as soon as the page parses.
@@ -373,12 +421,29 @@ before the game is playable.** The current model:
 - **The boot failsafe watches PROGRESS, not the clock** (`startGame`). The old flat
   15s timer fired mid-load on slow links and slid the loader away over a world that
   hadn't composited → the black/half-empty room (only a fresh tab escaped it). Now a
-  2s watchdog releases only after `BOOT_STALL_MS` (25s) with **no layer finishing**,
-  or a `BOOT_MAX_MS` (120s) hard ceiling. Don't turn it back into a fixed timeout.
+  2s watchdog releases only after `BOOT_STALL_MS` (25s) with **no byte / layer
+  arriving** (`_worldProgressAt`), or a `BOOT_MAX_MS` (120s) hard ceiling. Don't turn it
+  back into a fixed timeout.
+- **The loader is never a dead end.** Three layers: (1) a CLASSIC `<script>` right after
+  `#loading-screen` shows `#boot-retry` («إعادة المحاولة») after 20 s, or 1.2 s after an
+  error from game.js / an import — it runs even when the module never does; (2) once
+  game.js takes the loader over (`window.__maqrBooted`), `_bootArmRetry` offers the same
+  button after 20 s (instant phase) / 45 s (after the pill); (3) a second retry in a row
+  also unregisters the service worker. And every step before the menu is bounded:
+  Discord `fetchDiscordUser` 6 s, the lobby read 7 s (`LOBBY_READ_TIMEOUT_MS`), the
+  manifests 8 s; `init()` runs each subsystem under its own try/catch and
+  `initDiscordOAuth()` falls back to the menu on any throw. After the pill, the spawn
+  reads each `.catch` to null, a throw in the restore still spawns you
+  (`[restore] failed`), and «جارٍ الاتصال بالخادم…» toasts every 9 s while it waits.
 - **Service worker (`sw.js`)**: covers `Sound/ Art/ Fonts/` + image/audio/font
-  extensions; skips `.json`, Range requests (Safari audio streaming) and `_retry=`
-  URLs; everything else passes through (code is never served stale). Modes:
-  - **Content-hashed (`?h=`) media: cache-first, never revalidated** (see above).
+  extensions; skips `.json` and Range requests (Safari audio streaming); everything else
+  passes through (code is never served stale). Modes:
+  - **Content-hashed (`?h=`) media: cache-first, never revalidated** (see above). A miss
+    returns the network response **immediately** and fills the cache in `waitUntil` —
+    it used to `await cache.put()` first, which held the whole body back until the last
+    byte, so the page saw no progress at all.
+  - **`_retry=` URLs** are never answered from the cache, but a successful one is stored
+    under its canonical `?h=` URL (so a bad link doesn't re-download it every visit).
   - **Production, un-hashed media (Sound/, Fonts/, other Art/): stale-while-revalidate.**
     The cached copy is served instantly AND re-fetched in the background, so a
     replaced media file appears on the *next* reload by itself. `?v=` bumps /
@@ -460,13 +525,18 @@ world coordinate. The whole scene is drawn centred on the origin at
 
 ### Layer stack & draw order (`render()`)
 Painted bottom → top:
+0. The black clear + `drawBackgroundAtmosphere` — **only when the world does not cover
+   the screen** (`_worldCoversView`; the ground is opaque, so otherwise both were two or
+   three full-screen passes painted over in full, every frame).
 1. **`drawWorldGround()`** — background, walls, fireplace, sofas, library, sofa, ground
-   laptop desk, stairs, games table. (Served from the cached `worldCache.ground`
-   canvas; per-layer fallback until it builds.)
+   laptop desk, stairs, games table: ONE draw of `worldCache.ground` (the baked
+   `Baked_Ground.webp`, decoded once).
 2. ground-floor players + their timers (`drawPlayers(false, 1)` / `drawTimers(1)`)
 3. **`drawSecondFloor()`** — the mezzanine platform + its laptop desk + papers desk,
    drawn at `gameState.secondFloorVis` (the proximity-fade alpha). Served from
-   `worldCache.second`.
+   `worldCache.second`, which is CROPPED to the painted bbox and placed by
+   `worldCache.secondBox` (`_drawWorldLayerBox`) — 18% of the scene's area; the old
+   full-size cache was blended over the whole screen, 82% of it transparent.
 4. second-floor players + timers (`drawPlayers(false, 2)` / `drawTimers(2)`)
 5. **`drawDayOverlays()`** — `Day-Overlay-2` (normal blend) then `Day-Overlay`
    (**`globalCompositeOperation = 'overlay'`**, dropped on بطاطس). The multiply Night
@@ -476,8 +546,45 @@ Painted bottom → top:
    (`srcW/srcH`, kept through `_shrinkOverlay`), never stretched over the main scene.
 6. screen-space FX: focus mask, smooth wind, fog, sun rays, **cloud shadows**, vignette.
 
+`render()` sets `ctx.imageSmoothingQuality = 'medium'` (mipmapped sampling) for the whole
+world pass: zoomed out, plain bilinear shimmered and aliased — the "it looks cheap when I
+zoom out" report. Mips are built once per image and only used when shrinking.
+
+### The bake (`tools/bake_world.py` → `Art/Workspace/Baked_*`)
+The source layers never ship to the page any more (only to the legacy fallback). At
+commit time the hook runs the bake (it skips itself when `baked.json`'s source hashes —
+every layer, the script itself, LAPTOP_DEFS' lightBoxes — are unchanged):
+
+| file | what | ~KB |
+|---|---|---|
+| `Baked_Ground.webp` | the 11 ground layers composited in paint order (lossy q92, PSNR ~39 dB — identical to the eye) | 565 |
+| `Baked_Second.webp` | the mezzanine's 3 layers, cropped to their bbox (`box` in baked.json) | 122 |
+| `Baked_Lights1/2.png` | the glow sheets cropped to (painted px ∪ every LAPTOP_DEFS lightBox) + 4 px — `box` = srcOX/srcOY | 2–4 |
+| `Baked_Overlay2/Overlay.webp` | the day overlays at 1/3 size; `srcW/srcH` = authored size | 290 / 73 |
+| `Baked_Masks.bin` | `walls` (dilated 3), `furn` (eroded 3), `fire`, `stairs` (dilated 8), `desks` (eroded 3) — RLE, LEB128 runs | 13 |
+
+- **The masks are verified pixel-exact** against the old JS morphology (`_morph`) run on
+  the same thresholded input. The only difference from the in-browser build is the 2×
+  downscale (PIL box filter vs the browser's bilinear) — at most an edge pixel. Runtime
+  still ORs them and adds the ghost rects (`_buildCollisionFromMasks`), so moving a ghost
+  rect needs no re-bake. Thresholds and groups live in the script's `MASKS` — they
+  mirror `MASK_THRESHOLD` / the `mask:` tags on `WORLD_LAYERS`; change both together.
+- **Adding or re-ordering a world layer** means editing `GROUND`/`SECOND` in the bake
+  script (and `WORLD_LAYERS` for the legacy path). The meeting room's two WebPs and the
+  extra table's glow are not baked — they're already small and cropped.
+- **Texture resolution per tier** (`_bakedScale`): عالية 1.0, متوسطة 0.85, بطاطس 0.7
+  (was 0.62 / 0.50 — the mezzanine crop paid for it). Scaled with
+  `createImageBitmap(..., {resizeWidth, resizeQuality:'high'})` (CPU-backed, immune to a
+  GPU context loss), falling back to a canvas where that's ignored.
+- **Nothing is ever given up on**: `_bakedHeal` refetches and re-applies each piece until
+  it works; the essentials gate `_worldReady`; a cache canvas that comes back blank
+  (`contextrestored`, or `isContextLost()` in the 20 s `_bakedHealthCheck`) is rebuilt
+  from the kept bytes.
+
 ### Collision — alpha masks from the actual filled pixels
-The mask build (inside `loadWorldArt()`, results in `worldCollision`) rasterises the collidable layers into half-res `Uint8` bitmaps
+The masks now come pre-built from the bake (`Baked_Masks.bin`, see above); the legacy
+loader still builds them in the browser exactly as described here. Either way the result
+is half-res `Uint8` bitmaps
 (`MASK_W×MASK_H`) — collision follows the **real painted shape**, not a box, and empty
 pixels never collide. Two morphology passes tune it:
 - **Walls are DILATED** ~3 px (`_dilate`) so the thin room-divider can't be tunneled
@@ -566,6 +673,8 @@ reads **"انقر لفتح الأوراق"** (`drawDashboardPrompt`).
 - Wind particles are **soft round dots with a fading trail** (`drawWindParticles`). Off on بطاطس.
 
 ### Perf notes (owner is on a phone — keep it cheap; Safari was OOM-crashing)
+(Most of the history below is the LEGACY loader's; with the bake, the page never decodes
+a full-canvas source layer at all — the biggest thing it decodes is the ground itself.)
 `worldCache` collapses ~14 per-frame `drawImage`s into ~2, and **every source layer is
 closed the moment it's composited + masked** (`ImageBitmap.close()`) — keeping ~12 decoded
 2210×3160 images alive (~340 MB) is what crashed Safari. The overlay-blend layer and
@@ -667,8 +776,27 @@ Gotchas, all load-bearing:
   someone on the login spinner; past it the old path just runs.
 - Siraj ghosts don't go through this at all (`selectedLobby = 'male'`, hardcoded).
 
-### Login & auto-resume
-Discord OAuth session in localStorage. On load, `initDiscordOAuth()` validates the token and resolves the lobby. **Auto-resume**: `startGame` writes `localStorage[ACTIVE_SESSION_KEY] = userId` while in-game (cleared on explicit logout / menu logout); on load, if that flag matches the resolved user, re-enter the game directly — `startGame` then restores the pomodoro/free-mode session from Firebase. This is what makes an unintended reload (Android discarding a backgrounded tab) seamless. Siraj ghosts never set the flag (ephemeral).
+### Login — the identity outlives the Discord token
+Discord's implicit grant gives a **7-day token with no refresh token**. The old flow
+redirected an expired token back through Discord, which showed its "Authorize" screen
+again (and a *login* screen inside a PWA, whose cookies are its own) — the "it keeps
+forgetting me every few days" report. Now:
+- **`DISCORD_KNOWN_USER_KEY`** (`mdwnh_discord_user` = `{id, username, avatar}`) is written
+  on every successful fetch and on every load that resolves a user, and removed ONLY by
+  the menu's «تسجيل الخروج» (`_forgetKnownDiscordUser`). `_loadCachedDiscordUser` reads
+  the session record first, then this key.
+- `initDiscordOAuth`: no token + known user → carry on as them (no redirect, no fetch);
+  token revoked (401) → clear the token, keep the identity; network error / Discord
+  slow or blocked → the cached identity (the fetch is capped at 6 s). The token is only
+  ever used to refresh the name/avatar — nothing server-side checks it (Firebase is
+  anonymous auth), so this is the same trust the site always had in its own storage.
+- `_requestPersistentStorage()` (at `startGame`, never on Firefox — it prompts there) asks
+  the browser not to evict the site's storage. Safari's 7-day wipe of script storage for
+  sites you don't visit still applies in the Safari *browser*; an installed PWA is exempt.
+- The in-game «الخروج» (`doLogout`) is "leave the site", not "forget me" — the pill is
+  there on the next visit.
+- Auto-login on reload stays **disabled** on purpose (a gesture-less reload can't start
+  audio); the pill press is the gesture. `ACTIVE_SESSION_KEY` is still written but unused.
 
 ---
 
@@ -733,12 +861,16 @@ The four brand colours are `--brand-red/-yellow/-teal/-blue` in `:root`.
 - Google Fonts moved from a CSS `@import` (render-blocking + serialised behind
   style.css) to `<link>` + `preconnect` in `<head>`. **Don't put the @import back.**
 - `Maqr logo.png` is `<link rel="preload">`ed at high priority — it's the first pixel.
-- `loadAssets()` marks every world-art `<img>` **`fetchPriority='low'` +
-  `decoding='async'`** so ~15 MB of art can't starve the Discord/Firebase/font
-  requests that decide how fast the menu appears.
-- The PWA button is a **plain child of the menu card** now — the old version was
-  `position: fixed` and JS-repositioned under the panel. It's removed entirely on
-  Safari (no `beforeinstallprompt`) and when already installed.
+- The world is ~1 MB now (the bake) and every world fetch is `priority: 'low'`, so it
+  can't starve the Discord/Firebase/font requests that decide how fast the menu appears.
+- The PWA button is a **plain child of the menu card**, and it **starts `hidden` in the
+  markup**. It is revealed only by `beforeinstallprompt` (Chromium fires it only when the
+  app is installable and NOT installed) — or, on Firefox Android, as the instruction
+  card. It used to start visible and be removed by script, so it flashed inside the
+  installed app, and stayed whenever the "installed?" check missed (fullscreen /
+  minimal-ui / window-controls-overlay / a TWA — all now checked, plus `appinstalled`
+  and a `display-mode` change listener). `#pwa-install-btn[hidden]` needs its own
+  `display: none` rule: `display: inline-flex` beats the UA's `[hidden]`.
 
 ---
 
@@ -790,7 +922,7 @@ File-based sounds use `1.0` (full file level). `plane` (synthesized) uses `0.09`
 **Sounds preload AFTER spawn, never at page parse** (see Loading Strategy). Every new sound file must be:
 1. Added as `_lazyAudio('Sound/Filename.mp3')` in `gameState.sounds` (`preload='none'` at parse; `warmGameSounds()` upgrades it on idle after spawn — add it to the priority list there only if it can fire within seconds of spawning)
 2. Added to `FocusAudioEngine.buffers` with a `null` entry
-3. Loaded in `loadSoundEffects()` via `await loadBuffer(...)` (or deferred like the boss set)
+3. Added to the `rest` list in `loadSoundEffects()` (each file loads on its own, three at a time, after `_worldReady`, with retries — the old single sequential `try` lost every sound after the first failure). Only the entrance whoosh and `uiBlip` load before the world. Or deferred like the boss set.
 
 **Sounds must work in background tabs.** Use `focusAudioEngine.playEffect('key')` (Web Audio API) rather than `playSoundRobust(gameState.sounds.X)` (HTMLAudioElement) for any sound that must fire when the tab is not focused. HTMLAudioElement playback can be throttled/blocked in background tabs; Web Audio nodes play regardless.
 
@@ -1046,7 +1178,7 @@ landing on the same sofa made the room feel static), then `startSitAnimation`.
   bug (see Common Bugs). `abortReadingCamera()` hands the camera straight back and is
   called by both zoom handlers, so a user gesture always wins.
 
-### The book prop (`drawBookProp`, `Art/Book.png`)
+### The book prop (`drawBookProp`, `Art/Book_small.webp`)
 Slides out from **under** the seated reader to in front of them — **position only, no
 opacity change**: the player sprite itself is what hides it on the way out, which is why
 it's drawn **before the avatar** in `drawPlayers` (after the contact shadow). Direction
@@ -1055,8 +1187,9 @@ comes from the sofa spot's `dir`: the **upper** Books_Sofas face down (book slid
 player `_bookSlide` 0→1 toward "seated & reading", so it retracts the way it came on
 session end and works for **remote** readers too (`isReading` + `sitSeatId` are both
 synced). Scaled to `PLAYER_SIZE * 0.80` — slightly smaller than the player, so it stays
-hidden under them at slide start. `BOOK_SRC` crops to the painted region of the 2048²
-PNG (the book floats in the middle of a mostly-empty canvas).
+hidden under them at slide start. It ships as `Art/Book_small.webp` — `Art/Book.png` (a
+2048² canvas, 16 MB decoded) cropped to the book and capped at 384 px, so `BOOK_SRC` is now
+the whole image.
 
 ### Panels
 Black glass like the rest of the site (the old blue treatment is gone); the only colour
@@ -1077,6 +1210,7 @@ on it. Code lives at the end of `game.js`; markup is `#fireplace-overlay` in
 `index.html`; styles are the `المدفئة` block in `style.css`.
 
 ### The art stack (draw order is fixed)
+(The three big images carry `data-src` in index.html — 2.7 MB that used to download during the boot — and get their `src` from `_fireEnsureFrames` when the player walks up.)
 `Art/Fireplace BG.png` (1920×1080, `object-fit: cover` behind everything) → `.fp-stage`
 holding `Art/Fireplace.png` (1500×1920) → the 3 member frames → the animated flame
 (`Art/Fire/fire_NN.png`, **always on top** — see **The flame**). The stage is sized `width: min(100%, 100dvh*1500/1920)`
@@ -1934,10 +2068,50 @@ counters stay plain m:ss on purpose.
 
 **Focus mask**: `drawFocusMask()` renders a dark vignette around the active laptop. Alpha driven by `gameState.focusAlpha` (lerped 0→1 on work start).
 
+### ملكية الجلسة — one account, one live tab (`_own`, top of game.js)
+**The bug:** a member left a session running on the PC, opened the site on the phone,
+ended the session there — and came back to a PC still "in the session", stuck behind
+«تم فتح حسابك في مكان آخر»; reloading put them straight back in. The displaced tab had
+kept WRITING: its free-mode save re-created the laptop doc the phone had deleted, its
+reclaim stash was stamped abandoned when it finally closed (and reclaimed on reload), and
+a woken PC blindly re-wrote `activeSession` on focus and took the account back.
+
+**The rule: the NEWEST login owns the account, and an older tab never writes again.**
+- `users/{uid}/activeSession` = the newest login's token. `startGame` claims it
+  unconditionally (a pending local write, so an older server value can't read as a
+  takeover). It is **never nulled on disconnect** — it has to keep naming the last
+  device in, or a tab waking up after the phone came and went would find it empty.
+- **Every Firebase write in game.js goes through `_ownGate`**: `update`, `set`, `remove`,
+  `runTransaction` and `onDisconnect` are wrappers that shadow the SDK's names (the SDK's
+  own are imported as `_fbUpdate` etc.), so no call site changed. States:
+  - `owned` — straight through.
+  - `unverified` — the socket dropped (`.info/connected` false), the JS was frozen / the
+    machine slept (`_ownCheckGap`: > 90 s between ticks of a 5 s interval — checked
+    inside the gate too, so the FIRST write after a wake is caught), or the tab came
+    back after > 20 s hidden / from bfcache. Writes are QUEUED in order while
+    `_ownVerify` runs one `runTransaction` on the token with `applyLocally: false`
+    (keep it if it's ours or empty, abort if newer). Commit → flush the queue and
+    `_ownArmPresence()` (presence + seat handlers + `reassertActiveSessionAfterReconnect`).
+  - `dead` (`_ownDie`) — abort, or the `activeSession` listener seeing another token.
+    Held writes are dropped, every write from now on returns a never-settling promise,
+    every `onDisconnect` this tab armed (tracked in `_own.armed`) is cancelled — so
+    closing it later can't free the laptop the other device now uses or stamp its
+    stash — then `goOffline(database)`, the relay socket closes, audio/YT/PiP/the timer
+    worker stop, and `#dup-session-overlay` («فُتح حسابك على جهاز آخر» / «المتابعة هنا»,
+    z-index 100002 — above everything) is shown. «المتابعة هنا» reloads = a new newest
+    login, which takes the session back cleanly.
+- **The handoff itself is the ordinary restore**: the new device finds the laptop doc
+  claimed by this uid (live) or the stash with `abandonedAt` (the old socket died) and
+  restores it. `_healOwnLaptopDoc` (in `listenToPomodoro`) covers the one race left: the
+  old connection's server-side `onDisconnect` removing the laptop AFTER the new device
+  took it — 2.5 s later, still in session and still missing → `reassertActiveSessionAfterReconnect`.
+- Only real members are tracked (`_own.tracking`); the menu phase and Siraj ghosts are
+  never gated. Never write `activeSession` anywhere else, never null it (invariant 28).
+
 ### Disconnect / session reclaim (the ghost-laptop system)
 A laptop must **never** linger as a claimed-but-empty "ghost" (a timer floating over a laptop nobody is at, showing `هذا الجهاز تابع لـ …`). Two distinct causes, both fixed:
 
-1. **Presence lost on a network blip** (the perennial bug — "there IS a user, working, but a ghost for everyone else"). Firebase fires the registered `onDisconnect` ops server-side the moment the socket drops (e.g. flaky mobile data), setting `activeInGame=false`. The socket silently reconnects, but presence was only set **once** at login, so `activeInGame` stayed false forever → observers never add the avatar to `gameState.players`, yet the laptop doc still shows the timer. **Fix:** a `.info/connected` listener (in `startGame`) re-asserts `activeInGame=true` **and re-arms** `onDisconnect(activeRef).set(false)` on **every** (re)connect, then calls `reassertActiveSessionAfterReconnect()`.
+1. **Presence lost on a network blip** (the perennial bug — "there IS a user, working, but a ghost for everyone else"). Firebase fires the registered `onDisconnect` ops server-side the moment the socket drops (e.g. flaky mobile data), setting `activeInGame=false`. The socket silently reconnects, but presence was only set **once** at login, so `activeInGame` stayed false forever → observers never add the avatar to `gameState.players`, yet the laptop doc still shows the timer. **Fix:** on every (re)connect `_ownArmPresence()` re-asserts `activeInGame=true` **and re-arms** `onDisconnect(activeRef).set(false)`, then calls `reassertActiveSessionAfterReconnect()` — on the first connect directly, on every RE-connect only after `_ownVerify` has confirmed this tab still owns the account (see ملكية الجلسة).
 
 2. **User actually left** (closed tab / lost data for good). **Leaving the site does NOT end the session — only انهاء الجلسة does.** The laptop frees **immediately** for others (no ghost) and the player disappears, but the session is stashed for **12 hours** (`RECLAIM_WINDOW_MS`) and reclaimed on return. **الخروج behaves identically to a tab close** — it stashes rather than wipes, because it means "leave the site", not "end my session". Implemented with a unified per-session disconnect model (solo pomodoro **and** solo free mode; shared pomo is excluded — it has host-promotion):
 
@@ -2207,6 +2381,16 @@ badges, ambient motes, dust, clouds, second-floor fog, laptop lights.
 runs the same draw code with a different camera/zoom/canvas.
 
 ### 5. Cached text, badge and avatar sprites — `_spritesOk()` and friends
+**EVERY tier now, with the drop shadows BAKED IN.** Measured (desktop GPU, 6 players):
+of a whole عالية frame, ~80% was live `shadowBlur` on avatars and badges — 1.86 ms →
+0.51 ms per frame once baked, identical look. The reduced tiers, whose shadows used to be
+forced off to survive, now get them back for free. Sprites are baked at a LEVEL
+(`_sprLevel`: dpr × zoom rounded up to 1 / 1.5 / 2 / 3, part of every cache key) so they
+stay as sharp as the live draw; past ×3 (a hard zoom-in on a dense screen) and in the PiP
+pass the live path draws. `_spr` takes a `pad` for the baked shadow (`_sprDraw` offsets by
+it); `_avatarComposite` bakes the ring's blur-10 / 30% / +4 px shadow with `AV_SPR_PAD`.
+`_SPR_MAX` is 160 (a full lobby's names + badges across a zoom change).
+
 **The most expensive thing on this canvas is the thing nobody counts: TEXT.** Every
 `fillText` of an Arabic string re-runs bidi resolution, shaping and rasterisation —
 and `measureText` shapes the run too, so measuring is not the cheap half.
@@ -2222,11 +2406,9 @@ Rules that hold this together:
   is a long string that almost never changes; the timer row is short and changes
   every SECOND. Baked together, the long one would re-bake 60×/minute and churn a
   ~200 KB canvas each time — the cache would cost more than it saved.
-- **`_spritesOk()` is the single gate**: reduced tiers only, never the PiP pass (its
-  window runs at zoom 2.1–4.6), and never past `dpr × zoom > 2.2` — sprites are baked
-  at a fixed 2×, so past that the live path is both sharper and affordable (there is
-  far less on screen when you're zoomed in). It reads the cached `gameState._lowGfx`,
-  never the getter.
+- **`_spritesOk()` is the single gate**: every tier, never the PiP pass (its window
+  runs at zoom 2.1–4.6), and never past `_sprLevel()` 3 — there the live path is both
+  sharper and affordable (there is far less on screen when you're zoomed in).
 - **Every helper returns falsy on failure and the caller draws live**, so a cache
   miss can only cost a frame's work, never a missing badge.
 - **The caches are invalidated on `document.fonts` `loadingdone`** — a sprite baked
@@ -2316,12 +2498,27 @@ Rules that hold it together:
 - **Minigames are never calm** (`_perfCalmInterval` checks `race/coffee/laptopBoss.active`
   — their branches return before the scan).
 - `window.__perf()` shows `powerSave` and `paceMs` (the interval right now).
-- **Known remaining cost:** the radio. The 3 s WS proof-of-life ping and the 4 s/10 s
-  Firebase heartbeats keep a cellular modem out of its idle state; they carry presence
-  correctness and were not touched. The global `/users` `onValue` also materialises the
-  whole users tree on every change — a child-event rewrite is the next CPU lever.
+- **The radio, now handled** (it was listed here as the remaining cost): a cellular
+  modem stays in its high-power state for ~10 s after ANY packet ("tail energy"), so
+  small periodic traffic from every member kept every phone's radio on all session —
+  the same heat YouTube doesn't cause, because it downloads in bursts and goes quiet.
+  The 3 s idle position broadcast is gone (proof of life is asked for on demand —
+  `_askAlive`), the relay keep-alive is a 25 s `"ping"` the relay answers itself, the
+  Firebase heartbeats are 15 s / 30 s, and the players listener syncs only its own
+  lobby (see below). A quiet lobby now lets the radio sleep between heartbeats.
+- **The players listener is child events on a lobby query** (`listenToPlayers`:
+  `orderByChild('lobby') + equalTo(lobby)`, `onChildAdded/Changed/Removed`, one
+  `onlyOnce` value for `_playersSnapAt`). It used to be one `onValue('users')` that
+  rebuilt the ENTIRE users tree of both lobbies as JS objects on every change to any
+  member — several times a second on a phone. `database.rules.json` carries
+  `".indexOn": ["lobby"]` so the server filters; until those rules are deployed the SDK
+  filters client-side (works, logs a warning, no bandwidth saving). It waits for
+  `authReady` — a listener attached before the anonymous sign-in is silently cancelled.
 
 ### What is NOT done yet (the next lever, and why it wasn't taken)
+(Measured since: on Mali — the A32's GPU — an `overlay` blend uses framebuffer fetch and
+is not the monster it is on desktop drivers, and the frame is now small enough that the
+overlays run on متوسطة by default. The note below still stands for بطاطس devices.)
 `drawDayOverlays` draws **two full-world images every frame, one with
 `globalCompositeOperation = 'overlay'`** — a non-source-over blend needs the
 destination read back, which on many mobile drivers is the single most expensive op
@@ -2334,7 +2531,7 @@ restore its alpha with `destination-in`. Ask the owner before doing it.
 
 ## Graphics Tiers & Mobile Performance
 
-Stored in `localStorage[SETTINGS_GRAPHICS_KEY]` as `'high' | 'low' | 'potato'`, or **absent = device-auto** (`graphicsTier()` → weak phone GPU `'potato'` (`isWeakDevice`), mobile `'low'`, desktop `'high'`). The settings toggle cycles only the three explicit tiers (عالية → متوسطة → بطاطس) — there is **no `'auto'` value/button** (it confused users: on a phone "auto" already = low, so the press looked like a no-op). The loop caches `gameState._lowGfx/_potato/_disableIdleAnim/_hideNames` and re-reads localStorage only **once per second** (the settings toggles zero `gameState._settingsFlagsAt` so a change still applies next frame); hot draw code reads those flags (never call the helpers per-draw — they hit localStorage).
+Stored in `localStorage[SETTINGS_GRAPHICS_KEY]` as `'high' | 'low' | 'potato'`, or **absent = device-auto** (`graphicsTier()` → mobile `'low'` — **including weak phone GPUs** (`isWeakDevice`), which used to start on `'potato'` and now reach it only through the governor's `PERF.forcePotato` — desktop `'high'`). The settings toggle cycles only the three explicit tiers (عالية → متوسطة → بطاطس) — there is **no `'auto'` value/button** (it confused users: on a phone "auto" already = low, so the press looked like a no-op). The loop caches `gameState._lowGfx/_potato/_disableIdleAnim/_hideNames` and re-reads localStorage only **once per second** (the settings toggles zero `gameState._settingsFlagsAt` so a change still applies next frame); hot draw code reads those flags (never call the helpers per-draw — they hit localStorage).
 
 | Helper | Meaning |
 |---|---|
@@ -2342,7 +2539,7 @@ Stored in `localStorage[SETTINGS_GRAPHICS_KEY]` as `'high' | 'low' | 'potato'`, 
 | `isPotato()` (بطاطس) | most aggressive; **additionally** drops the atmosphere gradients. For very weak phones. |
 | `isLowGraphics()` | back-compat alias of `isReducedGraphics()`. |
 
-**Reduced (low + potato)** applies: DPR cap (`Math.min(dpr, 1.5)`, potato `1.25`) in `resizeCanvas`; **no `backdrop-filter`** on `body.is-mobile` (a blurred panel over the 60fps canvas re-rasterizes its backdrop *every frame* — the #1 mobile killer, and the "css rebuilding" users perceive); canvas shadows clamped to 0 via `installLowGfxShadowGuard(ctx)` (intercepts the `shadowBlur` setter — `ctx.shadowBlur` is a per-draw Gaussian blur used ~20×/frame); fewer wind particles; **static cached `drawFocusFog`** (the animated fog is 3 full-screen gradient fills rebuilt per frame — the heaviest in-session cost on phones); **half-resolution focus mask** (soft gradients — the upscale is invisible, the fill cost drops 4×); **no live `ctx.filter` on avatars** (pre-tinted copies via `_tintedAvatar` instead — live canvas filters force a slow path on mobile GPUs).
+**Reduced (low + potato)** applies: DPR cap (`Math.min(dpr, 2)`, potato `1.5`; under توفير الطاقة `1.75` / `1.25` — raised from 1.5/1.25 and 1.25/1.0 once the frame got cheap; dpr 1.0 was what made a phone look blocky, worst of all zoomed out) in `resizeCanvas`; **no `backdrop-filter`** on `body.is-mobile` (a blurred panel over the 60fps canvas re-rasterizes its backdrop *every frame* — the #1 mobile killer, and the "css rebuilding" users perceive); live canvas shadows clamped to 0 via `installLowGfxShadowGuard(ctx)` (intercepts the `shadowBlur` setter — `ctx.shadowBlur` is a per-draw Gaussian blur used ~20×/frame; the avatars' and badges' shadows now come BAKED in their sprites on every tier, so the guard only affects what is still drawn live); fewer wind particles; **static cached `drawFocusFog`** (the animated fog is 3 full-screen gradient fills rebuilt per frame — the heaviest in-session cost on phones); **half-resolution focus mask** (soft gradients — the upscale is invisible, the fill cost drops 4×); **no live `ctx.filter` on avatars** (pre-tinted copies via `_tintedAvatar` instead — live canvas filters force a slow path on mobile GPUs).
 
 **Potato-only** (gated on `gameState._potato`): `drawSunRays`, the parallax `drawBackgroundAtmosphere`, and ambient motes all fall back to cheap/no versions. So **low looks close to desktop** (gradients on) while keeping the compositing wins.
 
@@ -2451,12 +2648,12 @@ High-frequency walking used to write `x/y` to Firebase **every animation frame**
 ### Presence self-heal (`activeInGame`)
 `activeInGame` is the **only** thing that decides whether a remote player exists for observers: `listenToPlayers` adds a user to `gameState.players` only when it's `true`, so anyone in the map is genuinely in the website (there is no faded "in Discord VC" ghost any more — that integration is gone). A dropped socket (network blip, **PC sleep/wake**) fires `onDisconnect.set(false)` server-side, so a returning user would vanish for everyone until presence is restored. Presence is kept true while the page is open through **three** redundant paths — never rely on just one:
 1. `updatePlayerPosition()` writes `activeInGame: true` on **every** position write (move/stop/heartbeat/restore).
-2. A standalone **10s presence heartbeat** in the game loop (independent of any session — covers idle/walking users the 4s position heartbeat skips).
-3. `visibilitychange` / `window.focus` / `window.online` → `_resyncPresence()` re-asserts `activeInGame` + token and re-broadcasts position/task **immediately** on wake (don't make a woken PC wait for the heartbeat).
+2. A standalone **30s presence heartbeat** in the game loop (independent of any session — covers idle/walking users the 15s position heartbeat skips). Both were 10s / 4s: byte-identical writes that only kept a phone's radio awake.
+3. `visibilitychange` / `window.focus` / `window.online` → `_resyncPresence()` re-asserts `activeInGame` (NOT the session token — see ملكية الجلسة) and re-broadcasts position/task **immediately** on wake (don't make a woken PC wait for the heartbeat).
 
 All three bail if `gameState._dupSessionDetected` (another device took over — don't fight back).
 
-**Removal is grace-period'd (`PRESENCE_GRACE_MS`, 8s) — never immediate.** `activeInGame` going false does **not** mean someone left: Firebase fires their `onDisconnect` server-side the instant their socket blips, and their own `.info/connected` sets it back to true a moment later. Deleting on the spot is what made players **pop out and back in mid-session** for everyone else. The users listener now only stamps `_presenceLostAt`; `updatePresenceGrace()` (every frame, from `updateLeavingPlayers`) commits the exit only if they're still gone when it expires. **Any WebSocket packet cancels it** — the relay has no presence concept, so anything arriving is proof of life that outranks Firebase. The check has to be time-driven and not live in the listener: a player who drops and never returns produces no further Firebase events, so nothing would ever finish the removal. Reconnect timer/task recovery also needs the laptop doc re-written: `reassertActiveSessionAfterReconnect()` (fired by `.info/connected`) does that.
+**Removal is grace-period'd (`PRESENCE_GRACE_MS`, 8s) — never immediate.** `activeInGame` going false does **not** mean someone left: Firebase fires their `onDisconnect` server-side the instant their socket blips, and their own `.info/connected` sets it back to true a moment later. Deleting on the spot is what made players **pop out and back in mid-session** for everyone else. The users listener now only stamps `_presenceLostAt`; `updatePresenceGrace()` (every frame, from `updateLeavingPlayers`) commits the exit only if they're still gone when it expires. **A WebSocket packet from them defers it** — the relay has no presence concept, so anything arriving is proof of life that outranks Firebase. Nobody broadcasts proof of life unasked any more: the old 3 s idle position ping from every member (a packet every fraction of a second for everyone, all session — a radio that never slept) is gone. Instead, the moment Firebase says someone left, `_playerGone` asks them over the relay (`_askAlive` → `{…position, t:'alive?', q:uid}`, re-asked every `ALIVE_ASK_EVERY_MS` while they read as gone) and a present member answers with a forced position packet (`_answerAlive`, ≤ 1/s). The ask is a normal position packet, so an older client just reads it as the asker's position. The relay socket itself is kept open by a bare `"ping"` every `WS_KEEPALIVE_MS` (25 s) that the Durable Object answers `"pong"` via `setWebSocketAutoResponse` WITHOUT forwarding or waking (needs `npx wrangler deploy` of `presence-server/`; an older relay forwards it and every client ignores non-JSON). The check has to be time-driven and not live in the listener: a player who drops and never returns produces no further Firebase events, so nothing would ever finish the removal. Reconnect timer/task recovery also needs the laptop doc re-written: `reassertActiveSessionAfterReconnect()` (fired by `.info/connected`) does that.
 
 ### «بعيد» + the paused free clock — "are they in the site or not?"
 Presence answers "their tab is open", which is **not** the question a member is
@@ -3648,14 +3845,13 @@ the row with its pill. Orphans render as ordinary pills.
 `library-tasks.css` and `_libTaskPill()` are hand-copies of `MdwnhLibrary/css/tasks.css` and
 `taskPill()`. **Nothing automates the sync.** If the pill changes there, change it in both
 places here — the library's own `CLAUDE.md` carries the matching note.
-**In sync as of 2026-09-22 — TWO pill shapes, by head-count.** One or two people keep the
-CLASSIC single row (`_libWhoHtml` / `_libRestHtml`, face cluster beside the button). THREE
-OR MORE (`LIB_CROWD`) get the CROWD pill, `.task.crowd`: cover | one line under the title
-(the وصف, or the nudge wrapping to two) | a time-left CHIP (gold on the last day, red when
-late), then ONE foot line — tags with an overlay-blended ring on the right, and
-`.pill-act` on the left: `_libWhoRow` (24px faces, four then a black «+N», own face first)
-with the button beside them. «تحت إشرافك» marks a task in مهامي I also supervise, on both
-shapes. The crowd rules are a separate block at the foot of `library-tasks.css`.
+**In sync as of 2026-09-23 — ONE pill shape, whatever the head-count.** The crowd pill is
+gone (`LIB_CROWD`, `.task.crowd`, `.pill-act`). Every pill is one row: cover | words | the
+faces | the countdown — **always on the physical LEFT of the faces**, beside the button |
+the button. Only the faces change: one or two keep the portrait / level pair
+(`_libWhoHtml`); THREE OR MORE (`LIB_ROW`) are `_libWhoRow` — 28px faces in one
+overlapping row, four then a black «+N», own face first. «تحت إشرافك» marks a task in مهامي
+I also supervise.
 **The cover is fixed too**: a record with `pic` gets its bytes by ONE fetch of
 `library/taskimg/<id>` (`_libCover`, memoised in `_lib.covers` by id+pic); `t.img` still
 renders records from before the split. **An undated task** (`due` absent) prints «بلا موعد»,
@@ -3666,8 +3862,12 @@ deployment) and again, small, inside its tag pill; the tag states its own ink of
 `data-tag` (محتوى dark, the other three white) and the mark is drawn in that same ink, with
 no shadow on either. A PARENT wears a striped ring (`.pill-ring`); a subtask is smaller and
 flatter. The fold chip is labelled («٢ فرعية») and the fold SLIDES (`_libFoldRows`).
-**Every pill carries a GRIP** (`.pill-grip`, `_libStartDrag`) and the drag is the library's
-own, 1:1: a `.tunit` wraps each top-level pill with its subtasks (so a parent carries its
+**No grip — the WHOLE PILL is the handle** (`_libArmHold`, as of 2026-09-23): a finger holds
+still for `LIB_HOLD_MS` (a finger that moves first is scrolling the panel), a mouse lifts on
+press-and-pull. A non-passive document `touchmove` cancels the panel's scroll only while a
+drag is live, pills are `user-select:none` with no touch callout, and `_libDragEndAt`
+swallows the click a drag's release lands on the pill — or it would open the library tab.
+The drag itself is the library's own, 1:1: a `.tunit` wraps each top-level pill with its subtasks (so a parent carries its
 family and a subtask cannot leave it), the carried row follows the pointer on an
 un-transitioned transform while its neighbours slide on a transitioned one, and it is
 animated into the open gap before the DOM is reordered in one `.drag-still` frame. The
@@ -3929,6 +4129,13 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
 | Member saw «أتممت يومك», next morning the day read as a vacation | The card was judged on the local count; attendance was sent as fire-and-forget delta transactions, lost when the app closed right after (socket still reconnecting). The server never reached 3 h and a short day auto-spends a vacation | Attendance written as retryable TOTALS (`o/{loadId}`, `s/{sessId}`), kept until acked + replayed from localStorage next visit (`_dutyReplayPending`); «أحسنت!» only on acknowledged numbers. See **حضور المقر → Where a day's time comes from** |
 | Hard workers never complete their day on mobile | Attendance came from the per-tick open-time counter, which refuses suspended stretches; the session credit only landed at the very end | Inside a work phase the session's own clock is credited LIVE (`_dutySessTrack`) and locked in at the end with the confirmed value (`_dutyFinishSession`) |
 | Hats didn't jump with the avatar | `drawPlayerHats` got `rScale × _juiceScale` but not `_jumpScale`, and the jump barely moves the anchor | Pass `_jumpScale` + the squash; `player._hatKick` shoves the chain at launch and landing |
+| **Nobody on a phone can log in; the loading screen spins forever and no refresh helps** (Sep 14 → Sep 23) | `init()` was called synchronously during module evaluation. `setMobileClass → applyGraphicsBodyClass → graphicsTier()` called `isWeakDevice()` whenever `isMobile()` was true, and that read `_weakDeviceCache` — a `let` declared ~1500 lines BELOW the init call, still in its temporal dead zone → `ReferenceError`, init aborted, the loader stayed up. Only phones (or windows < 1024px) that had never picked a graphics tier hit it, so a desktop owner never saw it | `init()` is queued as a microtask (runs after the whole module evaluated); every init step is individually try/caught; a classic-script failsafe in index.html + `_bootArmRetry` offer «إعادة المحاولة». Invariant 27 |
+| A returning visitor's boot hangs for up to ~10 min after a push that added an export to `firebase-config.js` | `firebase-config.js` was imported without a version, so the HTTP cache could hand the new `game.js` an old copy missing the export → the import failed and the module never ran | Versioned import `./firebase-config.js?v=N` + a matching `<link rel="modulepreload">`; bump both together |
+| Displaced tab stuck behind «فتح حسابك في مكان آخر», and reloading it resurrected a session the other device had already ended | The displaced tab kept writing (free-mode saves re-created the laptop doc; its reclaim snapshot got stamped abandoned on close), and a woken tab blindly re-wrote `activeSession` on focus/reconnect, taking the account back | ملكية الجلسة: every write gated; ownership re-verified by transaction after any drop/sleep/background; a displaced tab cancels its own `onDisconnect`s and goes offline; `activeSession` never nulled |
+| Discord asks to authorise again every few days / "doesn't recognise me" | Implicit-grant tokens last 7 days; expiry redirected back through Discord (consent screen; a login screen inside a PWA) | The identity (`DISCORD_KNOWN_USER_KEY`) outlives the token; only the menu logout forgets it; no redirect on expiry |
+| World black / half-missing (walls but no floor), never fixing itself — worst on slow internet | 12.5 MB of layers under a FLAT 25 s fetch timeout: a 3.6 MB background on a < 150 KB/s link was aborted on every one of its retries, then abandoned; the SW also held each response until fully cached, so progress looked dead | The bake (~1 MB), stall-based streaming downloads, retry-forever healers, kept bytes + context-loss rebuilds, SW streams while caching |
+| Install button flashes (or stays) inside the installed PWA | The button started visible and was removed by script; the "installed?" check only knew `display-mode: standalone` | Starts `hidden`; revealed only by `beforeinstallprompt` (or Firefox Android) |
+| Phone hot even when nothing moves on screen | Besides rendering: every idle member broadcast a position every 3 s and Firebase heartbeats ran at 4 s/10 s, so the radio never slept; `/users` was rebuilt in full on every change | On-demand proof of life (`_askAlive`), 25 s relay keep-alive, 15/30 s heartbeats, lobby-scoped child listener |
 | Budget phone (Galaxy A32) gets hot enough to take the case off — Chrome and Firefox, with or without PiP | The page never let the GPU idle: the world redrew 30–60×/s even when nothing on screen changed (hours in a work session), the YouTube waveform ran its own 60 fps rAF with a forced layout + canvas realloc per frame, the world kept drawing under the PiP blackout (with a live backdrop blur over it), a primed hidden `<video>` kept playing a canvas stream forever, prayer rain stroked 110 paths/frame, and an infinite CSS pulse on the always-visible azkar button kept the compositor at 60 Hz. The governor only watched frame times, so a phone that *could* hold 60 was left at 60 | توفير الطاقة: 30 fps cap on touch devices from frame one, calm 15 / drowsy 6 fps when nothing moves (loop sleeps in a timer), DPR cap, `body.power-save` CSS off-switches, PiP/waveform/rain/worker fixes, weak GPUs default to بطاطس. See **مُنظّم الأداء → توفير الطاقة** |
 
 ---
@@ -4015,4 +4222,4 @@ drawFocusMask: uses physical mCanvas; player positions computed with * dpr
 
 ## Testing Policy
 
-**The owner does not want the browser preview tool used, period — for small fixes or big new features.** Implement carefully and read the code back over instead of clicking through it in a browser. The owner tests everything himself and would rather do that and report back than wait on a verification round. Exceptions: a quick static/logic sanity check (e.g. `node --check`, a one-off Node snippet, reading the diff) is fine, and it's also fine to actually launch the preview if the ask is specifically to confirm the website runs/loads at all (e.g. after a change that could break startup) — never per-feature click-through testing.
+**No per-feature click-through testing in the browser preview.** Implement carefully and read the code back over instead. The owner tests features himself and would rather do that and report back than wait on a verification round. Allowed: static/logic checks (`node --check`, a one-off Node snippet, reading the diff); a **load check** whenever a change touches startup, the boot/login path or the world load (serve locally, open the site at a phone width — `isMobile()` only trips under 1024px, which is how the boot crash in Common Bugs hid from a desktop — and enter with «وضع التجربة»); and **measuring** before/after a performance change with the dev-only `window.__mq` handle (see Operating Procedure §4). The console accumulates across navigations in the preview pane — judge only errors from the latest load.

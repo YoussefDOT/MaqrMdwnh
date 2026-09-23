@@ -1,6 +1,6 @@
 // Firebase configuration
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-import { getDatabase, ref, onValue, update, get, onDisconnect, set, remove, runTransaction, query, orderByKey, startAt, endAt } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+import { getDatabase, ref, onValue, update, get, onDisconnect, set, remove, runTransaction, query, orderByKey, startAt, endAt, orderByChild, equalTo, onChildAdded, onChildChanged, onChildRemoved, goOffline } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js";
 
 const firebaseConfig = {
@@ -39,4 +39,7 @@ const pointsDatabase = getDatabase(pointsApp);
 // `query`/`orderByKey`/`startAt`/`endAt` are here for BOUNDED reads — لوحة القائد asks
 // each member for a two-week slice of sessions by key range instead of the whole log;
 // `endAt` is what keeps that slice bounded when the leader looks at an OLDER week.
-export { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, runTransaction, query, orderByKey, startAt, endAt };
+// `orderByChild`/`equalTo` + the child events: the players listener syncs ONLY its
+// own lobby and hands over one member at a time instead of the whole users tree.
+// `goOffline`: a tab another device took over closes its socket for good.
+export { database, pointsDatabase, ref, onValue, update, get, onDisconnect, set, remove, runTransaction, query, orderByKey, startAt, endAt, orderByChild, equalTo, onChildAdded, onChildChanged, onChildRemoved, goOffline };
