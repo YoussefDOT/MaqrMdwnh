@@ -26737,6 +26737,12 @@ function renderReadingLeaderboard() {
 // default — the max size was halved (slider now caps at 0.9, sanitize at 1.0).
 const HAT_DEFAULT = { x: 0, y: 0, scale: 0.55, rot: 0, flip: false };
 const HAT_MAX = 5;                          // a player can wear up to 5 hats at once
+// Per-hat size boost on top of the player's own scale (applied at draw, so everyone
+// already wearing it grows too). Keyed by file name, NFC.
+const HAT_SIZE_MUL = { 'قبعة السراج.png': 1.6 };
+function _hatSizeMul(id) {
+    return HAT_SIZE_MUL[typeof id === 'string' ? id.normalize('NFC') : id] || 1;
+}
 const HAT_MANIFEST_URL = 'Hats/hats.json';
 
 // ── Colour helpers ────────────────────────────────────────────────────────────
@@ -27180,7 +27186,7 @@ function drawPlayerHats(player, anchorX, anchorY, rScale, alpha, sx = 1, sy = 1)
         const entry = ensureHatAsset(hat.id);
         if (!entry || !entry.ready) continue;
         const src = entry.canvas;
-        const w = PLAYER_SIZE * hat.scale * rScale;
+        const w = PLAYER_SIZE * hat.scale * _hatSizeMul(hat.id) * rScale;
         const h = w * (src.height / src.width);
         ctx.save();
         ctx.globalAlpha = alpha;
@@ -27418,7 +27424,7 @@ function _ccReflect() {
             const entry = ensureHatAsset(hat.id);
             if (!entry || !entry.ready) { if (entry && !entry.failed) awaiting = true; imgEl.classList.remove('cc-hat-on'); return; }
             if (imgEl.dataset.hatId !== hat.id) { imgEl.dataset.hatId = hat.id; imgEl.src = entry.url; }
-            const w = S * hat.scale;
+            const w = S * hat.scale * _hatSizeMul(hat.id);
             const h = w * (entry.canvas.height / entry.canvas.width);
             imgEl.style.width = w + 'px';
             imgEl.style.height = h + 'px';
