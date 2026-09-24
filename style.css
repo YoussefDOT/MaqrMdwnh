@@ -2418,11 +2418,47 @@ body.is-mobile .btn-discord { width: 100%; }
 }
 .stg-note[hidden] { display: none; }
 #settings-yt-status { color: var(--stg-ink-70-tx); }
-.stg-note-warn {
-    padding: 8px 12px;
-    border-radius: 12px;
-    background: rgba(244, 200, 44, 0.10);
-    color: #f7d65c;
+/* خطوات تفعيل الحساب في سفاري/فايرفوكس — كل النصوص بألوان صلبة (القاعدة ٣٣) */
+.stg-howto {
+    margin-top: 14px;
+    padding: 12px 14px 12px;
+    border-radius: 16px;
+    background: rgba(244, 200, 44, 0.08);
+    border: 1px solid rgba(244, 200, 44, 0.22);
+}
+.stg-howto[hidden] { display: none; }
+.stg-howto-head {
+    margin: 0 0 8px;
+    font-size: 0.78rem; font-weight: 700; line-height: 1.6;
+    color: #f2d36a;
+}
+.stg-howto-steps {
+    margin: 0; padding: 0;
+    list-style: none;
+    counter-reset: stg-step;
+    display: flex; flex-direction: column; gap: 7px;
+}
+.stg-howto-steps li {
+    counter-increment: stg-step;
+    display: flex; align-items: flex-start; gap: 9px;
+    font-size: 0.8rem; font-weight: 700; line-height: 1.6;
+    color: #e6e6e6;
+}
+.stg-howto-steps li::before {
+    content: counter(stg-step, arabic-indic);
+    flex: 0 0 auto;
+    width: 22px; height: 22px;
+    display: grid; place-items: center;
+    margin-top: 1px;
+    border-radius: 50%;
+    background: #F4C82C;
+    color: #161618;
+    font-size: 0.72rem; font-weight: 800; line-height: 1;
+}
+.stg-howto-foot {
+    margin: 9px 0 0;
+    font-size: 0.7rem; font-weight: 600; line-height: 1.55;
+    color: #8e8e8f;
 }
 
 /* ── الجوال: ملء الشاشة (حسب المقاس لا نوع الجهاز: هاتف، أو نافذة ضيقة أو قصيرة)، والتبويبات شريطٌ علوي يُمرَّر ───────────────────────── */

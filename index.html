@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 347 · Updated 9/24 1:50 PM</div>
+    <div id="build-number" class="build-number">Build 348 · Updated 9/24 4:29 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1072,7 +1072,13 @@
                             <span id="settings-yt-login-label">تسجيل الدخول إلى يوتيوب</span>
                         </button>
                         <p class="stg-note" id="settings-yt-status" hidden></p>
-                        <p class="stg-note stg-note-warn" id="settings-yt-warn" hidden>متصفحك يمنع يوتيوب من التعرّف على حسابك داخل المواقع الأخرى، فقد تبقى الإعلانات. الأفضل كروم أو إيدج.</p>
+                        <!-- سفاري (وكل متصفحات آبل) وفايرفوكس يحجبان حساب يوتيوب داخل المواقع الأخرى؛
+                             الخطوات تُكتب بحسب المتصفح في _ytHowtoReflect -->
+                        <div class="stg-howto" id="settings-yt-howto" hidden>
+                            <p class="stg-howto-head">متصفحك يمنع يوتيوب من التعرّف على حسابك داخل المواقع الأخرى، لذلك تبقى الإعلانات. لتفعيل حسابك هنا:</p>
+                            <ol class="stg-howto-steps" id="settings-yt-steps"></ol>
+                            <p class="stg-howto-foot">يخفّف هذا الخيار حماية المتصفح من التتبع، والقرار لك.</p>
+                        </div>
                         <p class="stg-note">لا نطّلع على حسابك ولا نحفظ منه شيئًا؛ الدخول يتم في صفحة جوجل نفسها.</p>
                     </div>
                 </section>
@@ -2356,7 +2362,7 @@
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
         <link rel="modulepreload" href="firebase-config.js?v=3">
-        <script type="module" src="game.js?v=325"></script>
+        <script type="module" src="game.js?v=326"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

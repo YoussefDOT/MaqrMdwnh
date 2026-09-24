@@ -1005,8 +1005,18 @@ which is the only way it picks the new cookies up.
   makes `win.closed` read true at once; a `closed` inside 1.5 s is treated as severed and
   the signal becomes the tab regaining focus / visibility instead.
 - **Safari/WebKit (every iOS browser, iPadOS) and Firefox block third-party cookies**,
-  so there the embed stays signed out whatever happens — `_ytAccountBlocked()` shows a
-  warning instead of promising. Chrome / Edge work.
+  so there the embed stays signed out, and **no code on this page can lift it**: the
+  Storage Access API has to be called from INSIDE YouTube's iframe, which YouTube never
+  does. The only switch is the member's own browser setting, so `_ytBrowserKind()`
+  (`ios-safari` / `ios-other` / `mac-safari` / `firefox` / '') picks the matching steps
+  from `YT_HOWTO` and `_ytHowtoReflect` shows them (`#settings-yt-howto`): Safari →
+  «منع التتبع عبر المواقع» off; other iOS browsers → iOS's per-app «السماح بالتتبع عبر
+  المواقع» on; Firefox → the shield → Enhanced Tracking Protection off for this site
+  only. It says plainly that this trades privacy. Chrome / Edge need nothing.
+- **On a phone the sign-in opens as a TAB**, and the member may come back before
+  finishing, so every return (focus / visible, throttled 3 s) rebuilds the embed for
+  5 minutes (`_ytLoginFinish(keepWatching)`); desktop ends the watch on the first
+  return after the popup closes.
 - The ad overlay carries a one-line hint pointing at this (`.yt-ad-hint`).
 
 ---

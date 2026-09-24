@@ -17981,19 +17981,68 @@ function _stgOnSeg(id, fn) {
 // www.youtube.com, so it carries that site's cookies — a member signed in to a
 // Premium account gets the embed without ads. We only open Google's own sign-in
 // page (we never see the account) and, once the member is back, reload the
-// embed so a fresh iframe picks the session up (`rebuildForAccount`). Browsers
-// that block third-party cookies (Safari/WebKit, Firefox) keep the embed signed
-// out whatever happens here — the section says so instead of promising.
+// embed so a fresh iframe picks the session up (`rebuildForAccount`).
+//
+// Safari — and so EVERY browser on iPhone/iPad, all WebKit — and Firefox block the
+// embed's youtube.com cookies (third-party cookies). Nothing on this page can lift
+// that: the only API for it (Storage Access) must be called from INSIDE YouTube's
+// own iframe, which YouTube doesn't do. The one real switch is the browser's own
+// setting, so the section shows the member exactly where it is for their browser
+// (`_ytBrowserKind` / `_ytHowtoReflect`) and says plainly that it trades privacy.
 const YT_LOGIN_URL = 'https://accounts.google.com/ServiceLogin?service=youtube&passive=true&continue='
     + encodeURIComponent('https://www.youtube.com/');
 const YT_LOGIN_KEY = 'mdwnh_yt_login_at';
 const _ytLogin = { watch: 0, done: null };
 
-function _ytAccountBlocked() {
+// 'ios-safari' | 'ios-other' | 'mac-safari' | 'firefox' | '' (nothing blocks it).
+// On iOS every browser is WebKit: Safari has the site-wide «منع التتبع عبر المواقع»,
+// the others get iOS's per-app «السماح بالتتبع عبر المواقع» switch instead.
+function _ytBrowserKind() {
     const ua = navigator.userAgent || '';
-    return _isSafariBrowser() || _isFirefoxBrowser()
-        || /iphone|ipad|ipod|crios|fxios|edgios/i.test(ua)
+    const ios = /iphone|ipad|ipod/i.test(ua)
         || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);   // iPadOS
+    if (ios) return /crios|fxios|edgios|opios|opt\//i.test(ua) ? 'ios-other' : 'ios-safari';
+    if (_isFirefoxBrowser()) return 'firefox';
+    if (_isSafariBrowser()) return 'mac-safari';
+    return '';
+}
+function _ytAccountBlocked() { return !!_ytBrowserKind(); }
+
+const YT_HOWTO = {
+    'ios-safari': [
+        'افتح تطبيق «الإعدادات» ثم Safari (في الإصدارات الحديثة: التطبيقات ← Safari).',
+        'أوقف خيار «منع التتبع عبر المواقع».',
+        'ارجع إلى هنا، وأعد تحميل الصفحة، ثم سجّل الدخول إلى يوتيوب.',
+    ],
+    'ios-other': [
+        'افتح تطبيق «الإعدادات» ثم اختر اسم متصفحك (كروم أو إيدج أو فايرفوكس).',
+        'فعّل خيار «السماح بالتتبع عبر المواقع».',
+        'ارجع إلى هنا، وأعد تحميل الصفحة، ثم سجّل الدخول إلى يوتيوب.',
+    ],
+    'mac-safari': [
+        'من قائمة Safari أعلى الشاشة افتح «الإعدادات» ثم تبويب «الخصوصية».',
+        'أزل العلامة عن خيار «منع التتبع عبر المواقع».',
+        'أعد تحميل هذه الصفحة، ثم سجّل الدخول إلى يوتيوب.',
+    ],
+    'firefox': [
+        'اضغط رمز الدرع بجوار شريط العنوان.',
+        'أوقف «الحماية المعززة من التتبع» لهذا الموقع فقط.',
+        'بعد أن تُعاد الصفحة، سجّل الدخول إلى يوتيوب.',
+    ],
+};
+
+function _ytHowtoReflect() {
+    const box = document.getElementById('settings-yt-howto');
+    const list = document.getElementById('settings-yt-steps');
+    if (!box || !list) return;
+    const steps = YT_HOWTO[_ytBrowserKind()];
+    box.hidden = !steps;
+    if (!steps || list.childElementCount) return;   // static text — built once
+    for (const t of steps) {
+        const li = document.createElement('li');
+        li.textContent = t;
+        list.appendChild(li);
+    }
 }
 
 function _ytLoginReflect() {
@@ -18001,8 +18050,7 @@ function _ytLoginReflect() {
     let at = 0;
     try { at = +localStorage.getItem(YT_LOGIN_KEY) || 0; } catch (_) {}
     if (label) label.textContent = at ? 'تبديل حساب يوتيوب' : 'تسجيل الدخول إلى يوتيوب';
-    const warn = document.getElementById('settings-yt-warn');
-    if (warn) warn.hidden = !_ytAccountBlocked();
+    _ytHowtoReflect();
 }
 
 function _ytLoginStatus(msg) {
@@ -18012,8 +18060,8 @@ function _ytLoginStatus(msg) {
     el.hidden = !msg;
 }
 
-function _ytLoginFinish() {
-    if (_ytLogin.done) _ytLogin.done();
+function _ytLoginFinish(keepWatching) {
+    if (!keepWatching && _ytLogin.done) _ytLogin.done();
     try { localStorage.setItem(YT_LOGIN_KEY, String(Date.now())); } catch (_) {}
     const yt = gameState.focusYTPlayer;
     if (yt && yt.rebuildForAccount) yt.rebuildForAccount().catch(() => {});
@@ -18035,23 +18083,35 @@ function _ytOpenLogin() {
         _ytLoginStatus('تعذّر فتح صفحة الدخول. اسمح للموقع بفتح النوافذ المنبثقة ثم أعد المحاولة.');
         return;
     }
-    _ytLoginStatus('أكمل الدخول في النافذة الجديدة ثم أغلقها، وسيُعاد تحميل المشغّل بحسابك.');
+    _ytLoginStatus(isTouchDevice()
+        ? 'أكمل الدخول في الصفحة الجديدة ثم ارجع إلى هنا، وسيُعاد تحميل المشغّل بحسابك.'
+        : 'أكمل الدخول في النافذة الجديدة ثم أغلقها، وسيُعاد تحميل المشغّل بحسابك.');
     // "The member is done" = the popup closed. Google's sign-in page may cut the
     // opener's link to it (COOP), which makes `closed` read true at once — then the
     // only honest signal left is the member coming back to this tab.
     const t0 = Date.now();
     let severed = false;
     const isClosed = () => { try { return win.closed; } catch (_) { return true; } };
+    // On a phone the "popup" is a TAB, and a member may come back to this one before
+    // the sign-in is finished — so every return rebuilds the embed (cheap, throttled)
+    // and only a popup we can SEE closed ends the watch.
+    let lastBack = 0;
     const onBack = () => {
-        if (document.hidden || Date.now() - t0 < 2500) return;
-        if (severed || isClosed()) _ytLoginFinish();
+        if (document.hidden || Date.now() - t0 < 2500 || Date.now() - lastBack < 3000) return;
+        if (severed || isClosed() || isTouchDevice()) {
+            lastBack = Date.now();
+            _ytLoginFinish(isTouchDevice());
+        }
     };
     _ytLogin.watch = setInterval(() => {
         if (!isClosed()) return;
         if (Date.now() - t0 < 1500) { severed = true; clearInterval(_ytLogin.watch); _ytLogin.watch = 0; return; }
         if (!severed) _ytLoginFinish();
     }, 700);
-    const giveUp = setTimeout(() => { if (_ytLogin.done) _ytLogin.done(); }, 15 * 60 * 1000);
+    // A phone keeps rebuilding on every return for a few minutes only — past that,
+    // an app switch mid-session must not reload the music.
+    const giveUp = setTimeout(() => { if (_ytLogin.done) _ytLogin.done(); },
+        (isTouchDevice() ? 5 : 15) * 60 * 1000);
     window.addEventListener('focus', onBack);
     document.addEventListener('visibilitychange', onBack);
     _ytLogin.done = () => {
