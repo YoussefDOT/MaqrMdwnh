@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 345 · Updated 9/24 8:26 AM</div>
+    <div id="build-number" class="build-number">Build 346 · Updated 9/24 8:36 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -831,11 +831,7 @@
                 <nav class="stg-tabs" role="tablist" aria-label="أقسام الإعدادات">
                     <button type="button" class="stg-tab is-active" role="tab" data-tab="gfx" data-accent="teal">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
-                        <span>الرسومات</span>
-                    </button>
-                    <button type="button" class="stg-tab" role="tab" data-tab="view" data-accent="yellow">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
-                        <span>العرض</span>
+                        <span>الرسومات والعرض</span>
                     </button>
                     <button type="button" class="stg-tab" role="tab" data-tab="work" data-accent="blue">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="6"/><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><circle cx="15.5" cy="13" r="1"/><circle cx="18" cy="10.5" r="1"/></svg>
@@ -856,8 +852,8 @@
                 <!-- ── الرسومات ─────────────────────────────────────────── -->
                 <section class="stg-sec is-active" data-sec="gfx" role="tabpanel">
                     <header class="stg-sec-head">
-                        <h2 class="stg-sec-title">الرسومات</h2>
-                        <p class="stg-sec-sub">اختر ما يناسب جهازك، وشاهد الفرق في المعاينة مباشرةً</p>
+                        <h2 class="stg-sec-title">الرسومات والعرض</h2>
+                        <p class="stg-sec-sub">اختر ما يناسب جهازك وما يظهر في المقر من حولك، وشاهد الفرق في المعاينة مباشرةً</p>
                     </header>
 
                     <div class="stg-item" data-accent="teal">
@@ -883,7 +879,7 @@
                     </div>
 
                     <div class="stg-item stg-item-custom" data-accent="yellow">
-                        <button type="button" class="stg-check-row" id="settings-custom-btn" role="checkbox" aria-checked="false">
+                        <button type="button" class="stg-check-row" id="settings-effects-custom" role="checkbox" aria-checked="false">
                             <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span>
                             <span class="stg-txt">
                                 <span class="stg-name">مخصّص</span>
@@ -940,15 +936,7 @@
                             <button type="button" role="radio" data-v="off">مغلق</button>
                         </div>
                     </div>
-                </section>
-
-                <!-- ── العرض ─────────────────────────────────────────────── -->
-                <section class="stg-sec" data-sec="view" role="tabpanel" hidden>
-                    <header class="stg-sec-head">
-                        <h2 class="stg-sec-title">العرض</h2>
-                        <p class="stg-sec-sub">ما يظهر في المقر من حولك</p>
-                    </header>
-                    <div class="stg-item" data-accent="yellow">
+                    <div class="stg-item" data-accent="red">
                         <div class="stg-item-top">
                             <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.42 0l8.58-8.58a1 1 0 0 0 0-1.42Z"/><circle cx="7" cy="7" r="1.5"/></svg></span>
                             <div class="stg-txt">
@@ -1183,7 +1171,7 @@
     <div id="dup-session-overlay" class="modal-overlay" style="z-index:100002;">
         <div class="modal-content" style="max-width:320px;padding:36px 32px;text-align:center;">
             <h3 style="margin-bottom:12px;">فُتح حسابك على جهاز آخر</h3>
-            <p style="margin-bottom:24px;color:rgba(255,255,255,0.6);">انتقلت جلستك إلى هناك كما هي، وتوقفت هذه الصفحة عن العمل. يمكنك إغلاقها، أو متابعة الجلسة هنا.</p>
+            <p style="margin-bottom:24px;color:#a1a1a2;">انتقلت جلستك إلى هناك كما هي، وتوقفت هذه الصفحة عن العمل. يمكنك إغلاقها، أو متابعة الجلسة هنا.</p>
             <button class="btn-primary" onclick="window.location.reload()">المتابعة هنا</button>
         </div>
     </div>
@@ -2274,8 +2262,8 @@
         <!-- وضع الاختبار المتقدم (سراج فقط) -->
         <div id="test-mode-modal" class="modal-overlay">
             <div class="modal-content test-mode-content">
-                <h3 style="color:rgba(255,152,50,0.9);font-size:17px;font-weight:800;margin-bottom:2px;letter-spacing:-0.01em;">وضع الاختبار ⚡</h3>
-                <p style="color:rgba(255,255,255,0.35);font-size:12px;margin-bottom:22px;">اضبط مدة الجلسة للاختبار السريع</p>
+                <h3 style="color:#e88b2f;font-size:17px;font-weight:800;margin-bottom:2px;letter-spacing:-0.01em;">وضع الاختبار ⚡</h3>
+                <p style="color:#666668;font-size:12px;margin-bottom:22px;">اضبط مدة الجلسة للاختبار السريع</p>
 
                 <div class="tm-row">
                     <span class="tm-label">العمل</span>
@@ -2307,11 +2295,11 @@
                 <div class="tm-divider"></div>
 
                 <div class="tm-row" style="flex-direction:column;align-items:flex-end;gap:8px;margin-bottom:0;">
-                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:rgba(255,255,255,0.65);font-size:13px;font-weight:600;">
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;color:#adadad;font-size:13px;font-weight:600;">
                         تجربة الصلاة 🕌
                         <input type="checkbox" id="test-prayer-check" style="width:15px;height:15px;accent-color:#3bb9ab;cursor:pointer;flex-shrink:0;">
                     </label>
-                    <span style="font-size:11px;color:rgba(255,255,255,0.25);">يُشغّل الأذان بعد ٥ ثوانٍ من البداية</span>
+                    <span style="font-size:11px;color:#4f4f50;">يُشغّل الأذان بعد ٥ ثوانٍ من البداية</span>
                     <div id="test-prayer-picker" style="display:none;width:100%;">
                         <select id="test-prayer-select" style="background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:white;font-family:inherit;font-size:13px;padding:8px 12px;width:100%;cursor:pointer;outline:none;">
                             <option value="Fajr">الفَجْر 🌅</option>
@@ -2325,7 +2313,7 @@
 
                 <div class="modal-actions" style="margin-top:22px;gap:8px;">
                     <button id="test-mode-confirm" class="btn-primary" style="flex:1;font-size:14px;padding:12px 8px;">ابدأ بومودورو</button>
-                    <button id="test-mode-free" class="btn-secondary" style="flex:0 0 auto;padding:12px 14px;border-color:rgba(59,185,171,0.35);color:rgba(59,185,171,0.85);font-size:14px;">🌿 وضع حر</button>
+                    <button id="test-mode-free" class="btn-secondary" style="flex:0 0 auto;padding:12px 14px;border-color:rgba(59,185,171,0.35);color:#35a095;font-size:14px;">🌿 وضع حر</button>
                     <button id="test-mode-cancel" class="btn-secondary" style="flex:0 0 auto;padding:12px 14px;font-size:14px;">إلغاء</button>
                 </div>
             </div>
@@ -2368,7 +2356,7 @@
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
         <link rel="modulepreload" href="firebase-config.js?v=3">
-        <script type="module" src="game.js?v=324"></script>
+        <script type="module" src="game.js?v=325"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

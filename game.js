@@ -15693,7 +15693,7 @@ function drawCoopBadge(ctx, cx, topY, members, timeStr, timerColor) {
         ctx.beginPath();
         ctx.rect(avX + avR + padX, panelY + i * (rowH + gapRows), maxTW, rowH);
         ctx.clip();
-        ctx.fillStyle = 'rgba(255,255,255,0.82)';
+        ctx.fillStyle = '#d5d5d5';
         ctx.font = 'bold 11px Rubik';
         ctx.textAlign = 'right';
         ctx.textBaseline = 'middle';
@@ -16648,21 +16648,21 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #07070a;
   line-height: 1; letter-spacing: 0.5px; text-shadow: 0 2px 16px rgba(0,0,0,0.7);
   font-variant-numeric: tabular-nums; }
 #pip-task { font-size: clamp(11px, 3.6vw, 15px); font-weight: 500;
-  color: rgba(255,255,255,0.55); direction: rtl; max-width: 100%;
+  color: #959596; direction: rtl; max-width: 100%;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   text-shadow: 0 1px 6px rgba(0,0,0,0.6); }
 /* Next prayer + live countdown — sits under the task, subtle so it never competes with the timer */
 #pip-prayer { display: none; align-items: center; gap: 6px; margin-top: 5px;
   font-size: clamp(10px, 3.2vw, 13px); font-weight: 600; direction: rtl;
-  color: rgba(59,185,171,0.92); text-shadow: 0 1px 6px rgba(0,0,0,0.6); }
+  color: #38ac9f; text-shadow: 0 1px 6px rgba(0,0,0,0.6); }
 #pip-prayer.show { display: flex; }
 #pip-prayer .pip-pr-dot { width: 5px; height: 5px; border-radius: 50%; background: rgba(59,185,171,0.7); flex: 0 0 auto; }
-#pip-prayer .pip-pr-cd { color: rgba(255,255,255,0.6); font-variant-numeric: tabular-nums; }
+#pip-prayer .pip-pr-cd { color: #a1a1a2; font-variant-numeric: tabular-nums; }
 #pip-close { position: absolute; bottom: 14px; left: 14px; z-index: 5; display: flex;
   align-items: center; gap: 7px; padding: 9px 15px; border-radius: 50px;
   cursor: pointer; background: rgba(18,18,18,0.68);
   -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
-  border: 1px solid rgba(255,255,255,0.09); color: rgba(255,255,255,0.85);
+  border: 1px solid rgba(255,255,255,0.09); color: #dcdcdc;
   font-family: inherit; font-size: 13px; font-weight: 600;
   box-shadow: 0 4px 24px rgba(0,0,0,0.3); transition: transform .25s cubic-bezier(0.34,1.56,0.64,1), background .2s, color .2s; }
 #pip-close:hover { background: rgba(225,53,46,0.55); border-color: rgba(225,53,46,0.4); color: #fff; transform: scale(1.04); }
@@ -16683,22 +16683,22 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #07070a;
 #pip-sounds::-webkit-scrollbar { display: none; }
 .pip-chip { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%;
   border: 1px solid rgba(255,255,255,0.08); background: rgba(255,255,255,0.05);
-  color: rgba(255,255,255,0.55); font-size: 13px; line-height: 1; cursor: pointer;
+  color: #959596; font-size: 13px; line-height: 1; cursor: pointer;
   display: flex; align-items: center; justify-content: center; padding: 0;
   opacity: 0.38;
   transition: background .18s, color .18s, transform .15s, opacity .18s; }
 .pip-chip:hover { background: rgba(255,255,255,0.12); opacity: 0.6; }
 .pip-chip:active { transform: scale(0.9); }
-.pip-chip.active { background: rgba(59,185,171,0.24); border-color: rgba(59,185,171,0.4); color: rgba(120,230,215,0.95); opacity: 1; }
+.pip-chip.active { background: rgba(59,185,171,0.24); border-color: rgba(59,185,171,0.4); color: #73dccd; opacity: 1; }
 .pip-chip svg { width: 14px; height: 14px; flex-shrink: 0; }
-.pip-chip.pip-chip-more { font-size: 15px; color: rgba(255,255,255,0.6); }
+.pip-chip.pip-chip-more { font-size: 15px; color: #a1a1a2; }
 #pip-yt { display: flex; align-items: center; gap: 4px; padding: 5px 6px;
   border-radius: 50px; background: rgba(18,18,18,0.62);
   -webkit-backdrop-filter: blur(20px) saturate(1.6); backdrop-filter: blur(20px) saturate(1.6);
   border: 1px solid rgba(255,255,255,0.08); box-shadow: 0 4px 20px rgba(0,0,0,0.3); flex: 0 0 auto; }
 .pip-yt-btn { width: 28px; height: 28px; border-radius: 50%; border: none; padding: 0; cursor: pointer;
   display: flex; align-items: center; justify-content: center;
-  background: rgba(255,255,255,0.07); color: rgba(255,255,255,0.8); transition: background .18s, transform .15s; }
+  background: rgba(255,255,255,0.07); color: #d0d0d0; transition: background .18s, transform .15s; }
 .pip-yt-btn:hover { background: rgba(255,255,255,0.14); }
 .pip-yt-btn:active { transform: scale(0.9); }
 .pip-yt-btn svg { width: 14px; height: 14px; }
@@ -16712,21 +16712,21 @@ html, body { width: 100%; height: 100%; overflow: hidden; background: #07070a;
 .pip-pop.show { display: flex; }
 #pip-snd-pop { right: 12px; }
 #pip-yt-pop { right: 12px; }
-.pip-pop-title { font-size: 12px; font-weight: 700; color: rgba(255,255,255,0.7); margin-bottom: 2px; }
+.pip-pop-title { font-size: 12px; font-weight: 700; color: #b8b8b9; margin-bottom: 2px; }
 .pip-slider-row { display: flex; flex-direction: column; gap: 4px; }
 .pip-slider-row .lbl { display: flex; justify-content: space-between; align-items: center;
   font-size: 11px; font-weight: 600; }
 .pip-slider-row { opacity: 0.38; transition: opacity .18s; }
 .pip-slider-row.snd-on { opacity: 1; }
-.pip-slider-row .lbl .nm { color: rgba(255,255,255,0.6); }
-.pip-slider-row .lbl .nm.on { color: rgba(120,230,215,0.95); }
+.pip-slider-row .lbl .nm { color: #a1a1a2; }
+.pip-slider-row .lbl .nm.on { color: #73dccd; }
 .pip-pop input[type=range] { width: 100%; height: 4px; cursor: pointer; accent-color: rgba(59,185,171,0.9); }
 .pip-pop input[type=text] { width: 100%; padding: 8px 10px; border-radius: 9px; direction: ltr;
   background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); color: #fff;
   font-family: inherit; font-size: 12px; }
-.pip-pop input[type=text]::placeholder { color: rgba(255,255,255,0.3); }
+.pip-pop input[type=text]::placeholder { color: #5a5a5c; }
 .pip-pop .pip-pop-btn { padding: 8px 10px; border-radius: 9px; border: none; cursor: pointer;
-  background: rgba(59,185,171,0.22); color: rgba(120,230,215,0.95); font-family: inherit; font-size: 12px; font-weight: 700; }
+  background: rgba(59,185,171,0.22); color: #73dccd; font-family: inherit; font-size: 12px; font-weight: 700; }
 .pip-pop .pip-pop-btn:hover { background: rgba(59,185,171,0.32); }
 
 /* Prayer screen drawn on canvas; hide DOM chrome while it's showing (window mode) */
@@ -16879,7 +16879,7 @@ function _pipDrawCanvasChrome(ctx, W, H) {
     if (t.label) {
         ctx.textAlign = 'right';
         ctx.direction = 'rtl';
-        ctx.fillStyle = 'rgba(255,255,255,0.62)';
+        ctx.fillStyle = '#a6a6a7';
         ctx.font = `500 ${Math.round(H * 0.033)}px Rubik, -apple-system, system-ui, sans-serif`;
         ctx.fillText(t.label, W - pad, pad + tSize + Math.round(H * 0.012));
     }
@@ -16918,7 +16918,7 @@ function _pipDrawPrayer(ctx, W, H) {
     ctx.fillText(name ? `وقت صلاة ${name}` : 'حان وقت الصلاة', W / 2, H * 0.56);
 
     // Subtitle
-    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillStyle = '#a1a1a2';
     ctx.font = `500 ${Math.round(H * 0.036)}px Rubik, -apple-system, system-ui, sans-serif`;
     ctx.fillText('حان وقت الصلاة — الله أكبر', W / 2, H * 0.645);
     ctx.restore();
@@ -18068,7 +18068,7 @@ function setupSettingsUI() {
     const panel       = document.getElementById('settings-panel');
     const closeBtn    = document.getElementById('settings-panel-close');
     const scrim       = document.getElementById('stg-scrim');
-    const customBtn   = document.getElementById('settings-custom-btn');
+    const customBtn   = document.getElementById('settings-effects-custom');
     const tierTag     = document.getElementById('stg-preview-tier');
     const tabsEl      = panel && panel.querySelector('.stg-tabs');
     const mainEl      = panel && panel.querySelector('.stg-main');
@@ -20662,7 +20662,7 @@ function drawCoopGroupLabels() {
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        ctx.fillStyle = 'rgba(255,255,255,0.90)';
+        ctx.fillStyle = '#e8e8e8';
         ctx.fillText(text, cx, labelY);
         ctx.restore();
     }
@@ -24496,7 +24496,7 @@ function drawBossResultsPanel(ctx, W, H, outcome) {
     ctx.textBaseline = 'middle';
     ctx.fillText(outcome === 'win' ? 'انتصرت!' : 'هزمت!', W / 2, py + 60);
     ctx.font = 'bold 18px Rubik';
-    ctx.fillStyle = 'rgba(255,255,255,0.7)';
+    ctx.fillStyle = '#b8b8b9';
     ctx.fillText(outcome === 'win' ? 'لقد قضيت على الحاسوب' : 'حاول مرة أخرى', W / 2, py + 110);
 
     // Return button
@@ -35612,7 +35612,7 @@ function _chatDrawContent(ctx, L, h) {
             if (it.pill) _chatDrawPill(ctx, it, cx, y, L.rtl);
             else {
                 ctx.font = CHAT_FONT;
-                ctx.fillStyle = 'rgba(255,255,255,0.95)';
+                ctx.fillStyle = '#f3f3f3';
                 ctx.fillText(it.t, cx, y);
             }
             x += L.rtl ? -it.w : it.w;
@@ -36251,7 +36251,7 @@ function _stkDrawContent(ctx, b, w, h) {
         ctx.font = CHAT_FONT;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillStyle = 'rgba(255,255,255,0.7)';
+        ctx.fillStyle = '#b8b8b9';
         ctx.fillText(b.stk.slice(0, 14), 0, -h / 2);
     }
 }
