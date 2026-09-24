@@ -1472,11 +1472,7 @@ class FocusAudioEngine {
         // CPU/network during the critical startup window — a big cause of first-load
         // jank on budget phones (cold cache). Defer to browser idle time instead;
         // ensureBossSounds() also force-loads them the moment a boss fight begins.
-        if (window.requestIdleCallback) {
-            requestIdleCallback(() => this.ensureBossSounds(), { timeout: 6000 });
-        } else {
-            setTimeout(() => this.ensureBossSounds(), 2500);
-        }
+        whenCalm(() => this.ensureBossSounds());
     }
 
     // ── رف الجوائز ──────────────────────────────────────────────────────────────
@@ -3137,8 +3133,7 @@ function warmGameSounds() {
     const warmRest = () => {
         for (const key of Object.keys(gameState.sounds)) if (!NEVER_WARM.has(key)) warm(key);
     };
-    if (window.requestIdleCallback) requestIdleCallback(warmRest, { timeout: 8000 });
-    else setTimeout(warmRest, 3500);
+    whenCalm(warmRest);   // never mid-entrance — see whenCalm
 }
 
 // Constants
@@ -4020,26 +4015,91 @@ function getRaceCarDrawState(userId, car) {
 function loadRaceTrackAsset() {
     // Idempotent + lazy: the track PNG is ~6 MB and its pixel classification is
     // CPU-heavy, so it must never load during page boot (it used to be a huge
-    // chunk of the slow first paint). startGame() kicks it off on idle after
-    // spawn; the race-entry paths also call this as a belt-and-braces ensure.
+    // chunk of the slow first paint). startGame() kicks it off once the scene is
+    // calm after spawn; the race-entry paths also call this as a belt-and-braces
+    // ensure.
+    //
+    // The classification runs in a WORKER. On the main thread it was a 2048×2054
+    // getImageData (a 16 MB GPU→CPU readback) plus a million-cell scan and flood
+    // fill — hundreds of milliseconds on a phone, landing whenever the download
+    // happened to finish, which for a returning visitor (served from cache) was
+    // right in the middle of the entrance drop. The image the race DRAWS is
+    // decoded with img.decode(), also off the main thread. A browser without
+    // OffscreenCanvas falls back to the old path, run only once the scene is calm.
     if (gameState.race._trackLoadStarted) return;
     gameState.race._trackLoadStarted = true;
+    const fail = (e) => {
+        gameState.race._trackLoadStarted = false;   // allow a retry on next ensure
+        console.error('Failed to load race track image:', RACE_TRACK_SRC, e || '');
+    };
     const img = new Image();
+    try { img.decoding = 'async'; } catch (_) {}
+    const imgReady = new Promise((res, rej) => {
+        img.onload = () => res();
+        img.onerror = () => rej(new Error('image'));
+    }).then(() => (img.decode
+        // decode() is held back in a hidden tab until it's shown again — never let
+        // that stall the track; a late decode just happens on first draw instead.
+        ? Promise.race([img.decode().catch(() => {}), new Promise(r => setTimeout(r, 4000))])
+        : null));
     img.src = RACE_TRACK_SRC;
-    img.onload = () => {
-        const width = img.naturalWidth;
-        const height = img.naturalHeight;
+
+    const main = () => calmTurn().then(() => {
+        const width = img.naturalWidth, height = img.naturalHeight;
         const canvas = document.createElement('canvas');
         canvas.width = width;
         canvas.height = height;
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         ctx.drawImage(img, 0, 0);
-        gameState.race.track = buildRaceTrackFromImageData(ctx.getImageData(0, 0, width, height).data, width, height, img);
-    };
-    img.onerror = () => {
-        gameState.race._trackLoadStarted = false;   // allow a retry on next ensure
-        console.error('Failed to load race track image:', RACE_TRACK_SRC);
-    };
+        return _raceTrackZones(ctx.getImageData(0, 0, width, height).data, width, height);
+    });
+
+    Promise.all([imgReady, _raceTrackZonesInWorker().catch(() => null)])
+        .then(([, z]) => z || main())
+        .then(z => _raceTrackAssemble(z, img.naturalWidth, img.naturalHeight, img))
+        .catch(fail);
+}
+
+// The pure half of the classification, shipped to the worker as source text
+// (Function.toString) so the two can never drift apart.
+function _raceTrackZonesInWorker() {
+    if (typeof Worker === 'undefined' || typeof OffscreenCanvas === 'undefined'
+        || typeof createImageBitmap === 'undefined') return Promise.reject(new Error('no worker'));
+    const consts = { RACE_TRACK_GRID, RACE_ZONE_OFF, RACE_ZONE_SLOW, RACE_ZONE_FAST,
+                     RACE_ZONE_FINISH, RACE_CELL_BARRIER };
+    const src = Object.entries(consts).map(([k, v]) => `const ${k} = ${JSON.stringify(v)};`).join('\n')
+        + '\n' + [classifyRacePixel, sampleImageCell, isCheckeredPixel, findFinishLineCells, _raceTrackZones]
+            .map(f => f.toString()).join('\n')
+        + `
+self.onmessage = async (e) => {
+    try {
+        const r = await fetch(e.data);
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const bmp = await createImageBitmap(await r.blob());
+        const w = bmp.width, h = bmp.height;
+        const g = new OffscreenCanvas(w, h).getContext('2d', { willReadFrequently: true });
+        g.drawImage(bmp, 0, 0);
+        bmp.close();
+        const out = _raceTrackZones(g.getImageData(0, 0, w, h).data, w, h);
+        out.w = w; out.h = h;
+        self.postMessage({ ok: true, out }, [out.zones.buffer]);
+    } catch (err) { self.postMessage({ ok: false, err: String(err) }); }
+};`;
+    return new Promise((resolve, reject) => {
+        let url = null, wk = null;
+        const done = () => { try { wk && wk.terminate(); } catch (_) {} if (url) URL.revokeObjectURL(url); };
+        try {
+            url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+            wk = new Worker(url);
+        } catch (e) { done(); reject(e); return; }
+        const t = setTimeout(() => { done(); reject(new Error('timeout')); }, 60000);
+        wk.onmessage = (e) => {
+            clearTimeout(t); done();
+            if (e.data && e.data.ok) resolve(e.data.out); else reject(new Error(e.data && e.data.err));
+        };
+        wk.onerror = (e) => { clearTimeout(t); done(); reject(e); };
+        wk.postMessage(new URL(RACE_TRACK_SRC, location.href).href);
+    });
 }
 
 function isRaceTrackReady() {
@@ -4114,7 +4174,8 @@ function findFinishLineCells(data, width, height, gridSize, gridW, gridH, raw) {
     return cells;
 }
 
-function buildRaceTrackFromImageData(data, width, height, image) {
+// Pure (no globals but the RACE_* constants) — it also runs inside the worker.
+function _raceTrackZones(data, width, height) {
     const gridSize = RACE_TRACK_GRID;
     const gridW = Math.ceil(width / gridSize);
     const gridH = Math.ceil(height / gridSize);
@@ -4182,14 +4243,19 @@ function buildRaceTrackFromImageData(data, width, height, image) {
         else zones[i] = RACE_ZONE_OFF;
     }
 
-    let finishPx = 0;
-    let finishPy = 0;
-    finishSeeds.forEach(({ px, py }) => {
-        finishPx += px;
-        finishPy += py;
-    });
-    const finishCenterX = finishPx / finishSeeds.length;
-    const finishCenterY = finishPy / finishSeeds.length;
+    // Only the centre crosses back to the page: the seed list can be tens of
+    // thousands of cells, and structured-cloning it would hand the main thread a
+    // chunk of the very work the worker exists to take away.
+    let fcx = 0, fcy = 0;
+    for (const c of finishSeeds) { fcx += c.px; fcy += c.py; }
+    return { gridW, gridH, zones, fcx: fcx / finishSeeds.length, fcy: fcy / finishSeeds.length };
+}
+
+function _raceTrackAssemble(z, width, height, image) {
+    const { gridW, gridH, zones } = z;
+    const gridSize = RACE_TRACK_GRID;
+    const finishCenterX = z.fcx;
+    const finishCenterY = z.fcy;
     // Default start angle: point left (so cars face left at spawn)
     const startAngle = Math.PI;
     // Place the spawn point a fixed offset along the start angle so cars spawn on the road
@@ -5114,8 +5180,7 @@ function loadAssets() {
     // were the old break-room zone signs; they no longer exist — three 404s a load.)
     const later = () => {
         if (!_worldReady) { setTimeout(later, 1500); return; }
-        const go = () => _loadPropArt();
-        if (window.requestIdleCallback) requestIdleCallback(go, { timeout: 8000 }); else setTimeout(go, 2000);
+        whenCalm(() => _loadPropArt());
     };
     setTimeout(later, 1500);
 }
@@ -5124,6 +5189,9 @@ function _loadPropArt() {
     if (_loadPropArt.done) return;
     _loadPropArt.done = true;
     gameState.assets.book.src = 'Art/Book_small.webp';
+    // Drawn in the world (under every reader) — decode it off-thread now rather than
+    // synchronously inside the first drawImage.
+    try { gameState.assets.book.decode().catch(() => {}); } catch (_) {}
     gameState.assets.coffeeMug.src      = 'Art/Hands.png';
     gameState.assets.coffeeHandsFg.src  = 'Art/Hands Foreground.png';
     gameState.assets.coffeeSugar.src    = 'Art/fig.png';
@@ -7244,10 +7312,9 @@ function startGame(userData) {
         warmGameSounds();
         // Hats are tiny, but the manifest read is a network hop — keep it off the
         // spawn path. Nothing waits on it: a hat draws the moment its asset lands.
-        loadHatManifest().then(_prefetchHats).catch(() => {});
+        whenCalm(() => loadHatManifest().then(_prefetchHats).catch(() => {}));
         // Stickers: the manifest + every sticker's bytes, on idle (never the login path).
-        if (window.requestIdleCallback) requestIdleCallback(() => loadStickers(), { timeout: 8000 });
-        else setTimeout(loadStickers, 3000);
+        whenCalm(() => loadStickers());
         // Lemo: listens to the lobby's lemo doc and kicks his sheets. Nothing waits
         // on it — he simply isn't drawn until the doc and a sheet land.
         startLemo();
@@ -7255,13 +7322,7 @@ function startGame(userData) {
         // its full-image getImageData/classification is a big main-thread spike
         // right around the intro, wasted while entry is off. The race-entry paths
         // still call loadRaceTrackAsset() themselves, so nothing breaks on re-enable.
-        if (MINIGAMES_ENABLED) {
-            if (window.requestIdleCallback) {
-                requestIdleCallback(() => loadRaceTrackAsset(), { timeout: 15000 });
-            } else {
-                setTimeout(loadRaceTrackAsset, 6000);
-            }
-        }
+        if (MINIGAMES_ENABLED) whenCalm(() => loadRaceTrackAsset());
     }).catch((err) => {
         // A throw halfway through the restore must not leave the member without a
         // body: put them on a normal spawn and let the entrance play.
@@ -7532,6 +7593,17 @@ function _reallyBeginEntrance(inSession) {
         el,
     });
     gameState.zoom = _entrance.zoomStart;
+    // The black lifts as a CSS transition, not a per-frame opacity write: a
+    // transition runs on the compositor, so the reveal stays smooth even through a
+    // frame the main thread spends elsewhere — and it no longer costs a style
+    // write + recalc every frame of the drop. cubic-bezier(.33,1,.68,1) is
+    // easeOutCubic, the curve the JS fade used.
+    if (el) {
+        el.style.willChange = 'opacity';
+        el.style.transition = `opacity ${ENTRY.fadeMs}ms cubic-bezier(0.33, 1, 0.68, 1)`;
+        void el.offsetWidth;          // commit opacity 1 as the transition's start
+        el.style.opacity = '0';
+    }
     _playEntranceSound();
 }
 
@@ -7550,12 +7622,9 @@ function updateEntrance(now) {
         e.camSnapped = true;
     }
 
-    // Black overlay fade-out.
-    if (e.el) {
-        const f = Math.min(1, t / ENTRY.fadeMs);
-        e.el.style.opacity = String(1 - easeOutCubic(f));
-        if (f >= 1) { try { e.el.remove(); } catch (_) {} e.el = null; }
-    }
+    // Black overlay fade-out — a CSS transition started in _reallyBeginEntrance;
+    // here it only has to be removed once it's done.
+    if (e.el && t >= ENTRY.fadeMs + 50) { try { e.el.remove(); } catch (_) {} e.el = null; }
 
     // Camera zoom-in (fast start, slow end).
     const _zs = e.zoomStart != null ? e.zoomStart : ENTRY.zoomStart;
@@ -7831,7 +7900,10 @@ const PERF = {
     busyUntil: 0,
     effIv: 0, prevEffIv: 0,
     noDrowsy: false,
+    quietFrom: 0,       // no verdicts before this (a cinematic just played)
+    resPending: false,  // a resolution step waiting for the start of a frame
 };
+const PERF_SETTLE_MS = 1500;
 const PERF_RES_STEPS = [1, 0.85, 0.72];
 const PERF_CHECK_MS  = 1000;
 // Without slack a 33.33ms target misses the 33.3ms vsync by a hair and waits for
@@ -7874,6 +7946,14 @@ function _perfSetInterval(iv) {
 function _perfSetRes(r) {
     if (PERF.res === r) return;
     PERF.res = r;
+    // Applied at the START of the next frame (_perfApplyRes), never here: this is
+    // called from _perfEndFrame, i.e. right AFTER a frame was drawn, and a canvas
+    // reallocated at that point is presented wiped — a black frame.
+    PERF.resPending = true;
+}
+function _perfApplyRes() {
+    if (!PERF.resPending) return;
+    PERF.resPending = false;
     _lastCanvasBW = _lastCanvasBH = -1;   // force resizeCanvas past its no-op guard
     resizeCanvas();
 }
@@ -7897,6 +7977,14 @@ function _perfBeginFrame(ts) {
     // A hidden/throttled tab produces enormous deltas that say nothing about the
     // GPU. Never let one steer the governor.
     if (d > 200 || document.hidden) return;
+    // Nor a cinematic (the entrance, a kidnap, the lock-in cascade) or the second
+    // and a half after one: that is exactly when the downloads, decodes and DOM
+    // reveals of a transition land, so a phone that is fine the rest of the time
+    // reads as failing — and the governor then shed resolution (a canvas
+    // reallocation, i.e. a hitch) in the middle of the very moment it misjudged.
+    // A transition's cost is not evidence about the device's steady state.
+    if (sceneBusy()) PERF.quietFrom = ts + PERF_SETTLE_MS;
+    if (ts < PERF.quietFrom) { PERF.samples = 0; return; }
     // Neither does a frame the calm throttle spaced out on purpose — 15fps by
     // design would read as "can't hold 30" and shed resolution for nothing.
     if (PERF.effIv !== PERF.interval || PERF.prevEffIv !== PERF.interval) return;
@@ -7911,6 +7999,7 @@ function _perfEndFrame(startedAt) {
     if (w < 200) PERF.work += (w - PERF.work) * 0.08;
 
     const ts = PERF.lastRender;
+    if (ts < PERF.quietFrom) { PERF.checkAt = ts; return; }   // see _perfBeginFrame
     if (ts - PERF.checkAt < PERF_CHECK_MS) return;      // decide about once a second
     PERF.checkAt = ts;
     if (PERF.samples < 20) return;                       // not enough evidence yet
@@ -8042,6 +8131,105 @@ function perfWake(ms) {
         if (!_loopRaf) _loopRaf = requestAnimationFrame(_loopTick);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  اللحظات المرئية — cinematics, background work and staged reveals
+// ═══════════════════════════════════════════════════════════════════════════════
+// The two moments members called laggy — the entrance drop and the lock-in at the
+// end of the kidnap — were not slow to DRAW (a whole world frame is well under a
+// millisecond of JS on a desktop). They were slow because everything else chose
+// the same instant: every "load on idle after spawn" task (the race track's 16 MB
+// pixel read, the library's 1.2 MB JSON, stickers, hats, trophies, sounds) fires
+// in the idle gaps of a 30 fps cap, i.e. DURING the entrance; and the lock-in
+// flipped a dozen panels, forced a layout, started audio and wrote Firebase all
+// inside one frame. Games solve this the same way everywhere: nothing heavy is
+// streamed in while a cinematic plays, and a big UI change is spread over frames.
+
+// True while the member is watching something move that a hitch would ruin.
+function sceneBusy() {
+    const gs = gameState;
+    return !!(!_boot.gateOpen
+        || (JUICE_ENTRANCE && (_entrance.active || _entrance.pending))
+        || gs.anim.active || gs.sitAnim.active
+        || performance.now() < _stage.until);
+}
+
+// ── Background work: one task at a time, only while nothing cinematic plays ──
+// Replaces the scattered `requestIdleCallback(fn, {timeout})` kicks. rIC alone is
+// not enough: its timeout fires mid-animation, idle gaps exist in abundance at a
+// 30 fps cap, and eight tasks all "idle" together are one long stall. Here a task
+// waits until the scene has been calm for BG_CALM_MS, runs alone, and the next
+// one waits BG_GAP_MS behind it. BG_MAX_WAIT_MS is the ceiling — a member who
+// never stops moving still gets everything eventually.
+const BG_CALM_MS = 900, BG_GAP_MS = 350, BG_MAX_WAIT_MS = 30000;
+const _bg = { q: [], timer: 0, calmSince: 0 };
+function whenCalm(fn) {
+    _bg.q.push({ fn, at: performance.now() });
+    _bgArm(120);
+}
+function _bgArm(ms) {
+    if (_bg.timer || !_bg.q.length) return;
+    _bg.timer = setTimeout(_bgTry, ms);
+}
+function _bgTry() {
+    _bg.timer = 0;
+    if (!_bg.q.length) return;
+    const now = performance.now();
+    if (sceneBusy()) _bg.calmSince = 0;
+    else if (!_bg.calmSince) _bg.calmSince = now;
+    const head = _bg.q[0];
+    const calm = _bg.calmSince && now - _bg.calmSince >= BG_CALM_MS;
+    if (!calm && !document.hidden && now - head.at < BG_MAX_WAIT_MS) { _bgArm(200); return; }
+    _bg.q.shift();
+    const run = () => {
+        let r;
+        try { r = head.fn(); } catch (e) { console.warn('[bg]', e); }
+        // An async task (a fetch, a decode) holds the queue until it settles, so two
+        // downloads' completions can't land in the same frame either.
+        Promise.resolve(r).catch(() => {}).finally(() => _bgArm(BG_GAP_MS));
+    };
+    // Still ask the browser for a real idle slot — a calm scene can have a busy frame.
+    if (window.requestIdleCallback && !document.hidden) requestIdleCallback(run, { timeout: 1500 });
+    else run();
+}
+// The promise form, for a continuation that must not land mid-cinematic (a big
+// JSON parse after its download). Deliberately NOT through the queue: a queued
+// task awaiting it would wait on itself.
+function calmTurn() {
+    return new Promise(res => {
+        const t0 = performance.now();
+        let since = 0;
+        const poll = () => {
+            const now = performance.now();
+            if (sceneBusy()) since = 0; else if (!since) since = now;
+            if (document.hidden || (since && now - since >= 400) || now - t0 > BG_MAX_WAIT_MS) res();
+            else setTimeout(poll, 150);
+        };
+        poll();
+    });
+}
+
+// ── Staged reveals: one step per rendered frame ──────────────────────────────
+// A burst of DOM changes costs one style + layout + raster pass for all of them
+// together, on a single frame. Staged, each frame pays for one slice and the
+// cascade reads as choreography instead of a hitch. The watchdog drains whatever
+// is left if frames stop (a hidden tab), so no step can be lost.
+const _stage = { q: [], until: 0, dog: 0 };
+function stageFrames(steps) {
+    if (document.hidden) { for (const f of steps) { try { f(); } catch (e) { console.error(e); } } return; }
+    for (const f of steps) _stage.q.push(f);
+    _stage.until = performance.now() + 900;
+    perfWake(1500);
+    clearTimeout(_stage.dog);
+    _stage.dog = setTimeout(_stageDrain, 900);
+}
+function _stageStep() {
+    const f = _stage.q.shift();
+    if (!f) return;
+    try { f(); } catch (e) { console.error('[stage]', e); }
+    if (!_stage.q.length) clearTimeout(_stage.dog);
+}
+function _stageDrain() { while (_stage.q.length) _stageStep(); }
 
 // Passive, capture-phase, and nothing but a timestamp — these fire on every touch
 // move, so they must never cost more than that.
@@ -8186,11 +8374,39 @@ function resizeCanvas() {
     // causes jank. Only resize when the backing-store size actually changed.
     if (bw === _lastCanvasBW && bh === _lastCanvasBH) return;
     _lastCanvasBW = bw; _lastCanvasBH = bh;
+    const cv = gameState.canvas;
+    // Setting a canvas's width WIPES it to transparent — i.e. black over this
+    // page — and nothing redraws it until the next rendered frame. That gap is the
+    // one-frame black flash on phones: the governor sheds resolution AFTER a
+    // frame is drawn (_perfEndFrame), the URL bar collapsing fires a resize from a
+    // timer, and under توفير الطاقة the next frame can be 60–160 ms away. So the
+    // old picture is carried across the reallocation (a GPU blit, the same cost as
+    // one sprite) and the loop is woken to paint a real frame on the next vsync.
+    // A 1×1 canvas (memory release) or a hidden tab has nothing worth keeping.
+    let snap = null;
+    if (!document.hidden && cv.width > 16 && cv.height > 16) {
+        try {
+            snap = document.createElement('canvas');
+            snap.width = cv.width; snap.height = cv.height;
+            snap.getContext('2d').drawImage(cv, 0, 0);
+        } catch (_) { snap = null; }
+    }
     gameState.dpr = dpr;
-    gameState.canvas.width  = bw;
-    gameState.canvas.height = bh;
-    gameState.canvas.style.width  = w + 'px';
-    gameState.canvas.style.height = h + 'px';
+    cv.width  = bw;
+    cv.height = bh;
+    cv.style.width  = w + 'px';
+    cv.style.height = h + 'px';
+    if (snap) {
+        try {
+            const c = gameState.ctx || cv.getContext('2d');
+            c.save();
+            c.setTransform(1, 0, 0, 1, 0, 0);
+            c.drawImage(snap, 0, 0, bw, bh);
+            c.restore();
+        } catch (_) {}
+        snap.width = snap.height = 0;   // free the copy now, not at the next GC
+    }
+    perfWake();
 }
 
 function applyViewportLayout() {
@@ -8846,9 +9062,23 @@ function setMobileFocusMode(active) {
     gameState.azkar._lastButtonRefresh = 0;
     updateAzkarButton();
     /* عمود اليسار ينزلق خارج الشاشة، فيرجع زرّ إنهاء الجلسة إلى مكانه (والعكس).
-       الاستدعاء الثاني بعد انتهاء الانزلاق لأن المواضع تُقاس بعد الحركة. */
-    _hudPositionDock();
-    setTimeout(_hudPositionDock, 520);
+       المواضع تُقاس الآن من الصندوق لا من الرسم المنزاح (_hudLayoutRect)، فلا
+       حاجة لقياس ثانٍ بعد الانزلاق — ذلك القياس المتأخر هو ما كان يقفز ببطاقة
+       حضور المقر في آخر الجلسة. والقياس يُؤجَّل إلى الإطار التالي بدل أن يُجبر
+       المتصفح على حساب التخطيط وسط تبديل الأصناف. */
+    _hudScheduleDock();
+}
+
+// One HUD re-measure per frame, however many callers ask. Reading a rect in the
+// middle of a burst of class toggles forces a synchronous style + layout pass
+// that the very next toggle throws away — at the lock-in moment that was a whole
+// document recalc on the frame that could least afford it. A hidden tab never
+// runs rAF, so it falls back to a timer there (nothing is visible to place).
+let _hudDockRaf = 0;
+function _hudScheduleDock() {
+    if (_hudDockRaf) return;
+    const run = () => { _hudDockRaf = 0; _hudPositionDock(); };
+    _hudDockRaf = document.hidden ? setTimeout(run, 0) : requestAnimationFrame(run);
 }
 
 /** Show or hide the race d-pad, and toggle joystick visibility */
@@ -10175,6 +10405,16 @@ function startPomodoroPhase(phase) {
         gameState.pomodoro.endTime = Date.now() + duration * 60000;
     }
 
+    // Called from the kidnap's lock-in, the visible changes and the network
+    // writes below are queued to play out over the next frames (see updateAnimation).
+    // Every other caller runs them inline, exactly as before.
+    const _stg = (phase === 'work') ? gameState._lockInSteps : null;
+    const _ui  = fn => { if (_stg) _stg.ui.push(fn);  else fn(); };
+    const _net = fn => { if (_stg) _stg.net.push(fn); else fn(); };
+    const _stillWork = () => !_stg || (gameState.pomodoro.active && gameState.pomodoro.phase === 'work');
+
+    _net(() => {
+    if (!_stillWork()) return;   // ended in the ~150 ms before this ran — don't resurrect the doc
     if (gameState.pomodoro.laptopId !== null) {
         const updates = {};
         const pomoData = {
@@ -10201,6 +10441,7 @@ function startPomodoroPhase(phase) {
         // phase/endTime (no-op for Siraj and shared-pomo via internal guards).
         trackSessionForReclaim();
     }
+    });
 
     // Prayer panel: compact during break (only show next prayer), full during work
     const _pp = document.getElementById('prayer-panel');
@@ -10223,7 +10464,9 @@ function startPomodoroPhase(phase) {
         }
         setMobileFocusMode(false);
     } else if (phase === 'work') {
-        setMobileFocusMode(true);
+        _ui(() => { if (_stillWork()) setMobileFocusMode(true); });
+        _ui(() => {
+        if (!_stillWork()) return;
         const panel = document.getElementById('focus-sounds-panel');
         if (panel) {
             panel.classList.add('active');
@@ -10232,7 +10475,10 @@ function startPomodoroPhase(phase) {
         }
         const taskPanel = document.getElementById('current-task-panel');
         if (taskPanel) taskPanel.classList.add('active');
+        });
 
+        _ui(() => {
+        if (!_stillWork()) return;
         if (gameState.focusAudioEngine) {
             gameState.focusAudioEngine.fadeToMaster(1.0, 2.0);
             staggerStartActiveSounds(gameState.focusAudioEngine);
@@ -10260,14 +10506,21 @@ function startPomodoroPhase(phase) {
                 }
             }
         }
+        });
     }
     // Wire solo-to-shared upgrade listener whenever a fresh solo pomo starts
-    if (phase === 'work' && gameState.sharedPomo.phase === 'idle' && !gameState.sharedPomo.unsubSoloUpgrade) {
-        setupSoloUpgradeListener();
-    }
-    const player = gameState.players[gameState.userId];
-    if (player) {
-        updatePlayerPosition(player.x, player.y);
+    _net(() => {
+        if (!_stillWork()) return;
+        if (phase === 'work' && gameState.sharedPomo.phase === 'idle' && !gameState.sharedPomo.unsubSoloUpgrade) {
+            setupSoloUpgradeListener();
+        }
+    });
+    // Staged: the lock-in writes the seat position itself as its last step.
+    if (!_stg) {
+        const player = gameState.players[gameState.userId];
+        if (player) {
+            updatePlayerPosition(player.x, player.y);
+        }
     }
 }
 
@@ -11470,15 +11723,22 @@ function updateAnimation() {
     // Heavy dust during the entire kidnap animation sequence
     spawnDust(player.x, player.y, Math.ceil(3 * gameState.dtFactor), true);
 
+    // The drag runs on REAL elapsed time. dtFactor is clamped at 2 (one 30 fps
+    // frame), so on a capped phone every frame that ran long slowed the drag down
+    // on top of dropping — the hitch read as the animation itself stuttering into
+    // slow motion. Real time keeps its length fixed; the ceiling (4 = ~67 ms) only
+    // stops a returning tab from finishing it in one jump.
+    const kdt = Math.min(gameState.dtAmbient ?? gameState.dtFactor, 4);
+
     if (gameState.anim.phase === 'reach') {
-        gameState.anim.progress += 0.08 * gameState.dtFactor;
+        gameState.anim.progress += 0.08 * kdt;
         if (gameState.anim.progress >= 1) {
             gameState.anim.phase = 'align';
             gameState.anim.progress = 0;
             gameState.anim.startPos = { x: player.x, y: player.y };
         }
     } else if (gameState.anim.phase === 'align') {
-        gameState.anim.progress += 0.025 * gameState.dtFactor;
+        gameState.anim.progress += 0.025 * kdt;
         const t = easeOutBack(Math.min(1, gameState.anim.progress));
 
         // Slide to the approach point (offset from the seat opposite the drag dir),
@@ -11495,7 +11755,7 @@ function updateAnimation() {
             if (gameState.anim.toFloor !== undefined) forcePlayerFloor(player, gameState.anim.toFloor);
         }
     } else if (gameState.anim.phase === 'pull') {
-        gameState.anim.progress += 0.045 * gameState.dtFactor;
+        gameState.anim.progress += 0.045 * kdt;
         const t = easeOutBack(Math.pow(Math.min(1, gameState.anim.progress), 2.5));
 
         // Final drag into the seat along `dir` (both axes so `down` still pulls down
@@ -11507,9 +11767,6 @@ function updateAnimation() {
             gameState.anim.active = false;
             gameState.anim.phase = 'none';
             gameState.isLockedIn = true;
-            // Final authoritative Firebase write at the seat (the per-frame sync
-            // below is throttled now — this pins the exact resting position).
-            updatePlayerPosition(player.x, player.y);
 
             // Reset coop offsets to center so the grid spread animates outward smoothly
             if (gameState.sharedPomo.phase === 'active') {
@@ -11519,13 +11776,35 @@ function updateAnimation() {
                 }
             }
 
-            if (gameState.pomodoro.active && gameState.pomodoro.phase === 'wait') {
-                startPomodoroPhase('work');
-            } else if (gameState.freeMode.active && gameState.freeMode.phase === 'idle') {
-                _startFreeModeWork();
-            } else if (gameState.pomodoro.active && gameState.pomodoro.phase === 'work' && gameState.focusYTPlayer && gameState.focusYTPlayer.videoId) {
-                gameState.focusYTPlayer.resume();
+            // THE LOCK-IN. The state flips on this frame; everything the member SEES
+            // arrive (the HUD sliding off, the panels, the drawer) and everything
+            // they don't (audio start-up, the Firebase writes and the local listener
+            // callbacks those fire synchronously) used to land on this one frame too,
+            // which is why the very end of the kidnap hitched. The phase functions
+            // queue those parts here and they play out one per frame — the panels
+            // arrive as a cascade, the network writes go last, ~150 ms later.
+            gameState._lockInSteps = { ui: [], net: [] };
+            try {
+                if (gameState.pomodoro.active && gameState.pomodoro.phase === 'wait') {
+                    startPomodoroPhase('work');
+                } else if (gameState.freeMode.active && gameState.freeMode.phase === 'idle') {
+                    _startFreeModeWork();
+                } else if (gameState.pomodoro.active && gameState.pomodoro.phase === 'work' && gameState.focusYTPlayer && gameState.focusYTPlayer.videoId) {
+                    gameState.focusYTPlayer.resume();
+                }
+            } finally {
+                const st = gameState._lockInSteps;
+                gameState._lockInSteps = null;
+                // Final authoritative Firebase write at the seat (the per-frame sync
+                // below is throttled — this pins the exact resting position).
+                st.net.push(() => {
+                    const me = gameState.players[gameState.userId];
+                    if (me) updatePlayerPosition(me.x, me.y);
+                });
+                stageFrames([...st.ui, ...st.net]);
             }
+            // The staged seat write replaces this frame's throttled one below.
+            gameState.anim._lastFbSync = Date.now();
         }
     }
 
@@ -11774,6 +12053,9 @@ function gameLoop(timestamp) {
     const _frameStart = performance.now();
 
     gameState._frameT = timestamp;   // the remote-player replay's clock (see _netFrameNow)
+    _perfApplyRes();                 // a pending resolution step lands BEFORE this frame draws
+    _sprUpdateLevel(timestamp);      // sprite density for this frame + the bake ration
+    _stageStep();                    // one slice of a staged reveal (the lock-in cascade)
     if (!gameState.lastTime) gameState.lastTime = timestamp;
     let deltaTime = timestamp - gameState.lastTime;
     gameState.lastTime = timestamp;
@@ -14408,18 +14690,40 @@ function drawDustParticles(floorFilter) {
     if (!gameState._particlesOn) return;
     const ctx = gameState.ctx;
     const v = _viewRect();
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    gameState.dustParticles.forEach(p => {
-        if (floorFilter && (p.floor || 1) !== floorFilter) return;
-        if (_offView(v, p.x, p.y, p.size + 4)) return;
+    const list = gameState.dustParticles;
+    if (!list.length) return;
+    // Batched: the kidnap alone keeps ~100 specks alive, and one path + one fill
+    // each was ~100 separate draw calls a frame on the moment that can least
+    // afford them. Alpha is quantised into DUST_BANDS levels — one path, one fill
+    // per level. A 1/8 step on a speck that is 40% white and a few px wide is
+    // invisible; a hundred fills are not.
+    const DUST_BANDS = 8;
+    const bands = _dustBands || (_dustBands = Array.from({ length: DUST_BANDS }, () => []));
+    for (const b of bands) b.length = 0;
+    for (const p of list) {
+        if (floorFilter && (p.floor || 1) !== floorFilter) continue;
+        if (_offView(v, p.x, p.y, p.size + 4)) continue;
         // Dust kicked up in the meeting room fades with the room.
-        ctx.globalAlpha = Math.max(0, p.life) * (p.x >= MEET_X0 ? _meet.vis : 1);
+        const a = Math.max(0, p.life) * (p.x >= MEET_X0 ? _meet.vis : 1);
+        const k = Math.min(DUST_BANDS, Math.round(a * DUST_BANDS));
+        if (k > 0) bands[k - 1].push(p);
+    }
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+    for (let k = 0; k < DUST_BANDS; k++) {
+        const b = bands[k];
+        if (!b.length) continue;
+        ctx.globalAlpha = (k + 1) / DUST_BANDS;
         ctx.beginPath();
-        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        for (const p of b) {
+            ctx.moveTo(p.x + p.size, p.y);
+            ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        }
         ctx.fill();
-    });
+        b.length = 0;   // don't hold particle refs past the frame
+    }
     ctx.globalAlpha = 1.0;
 }
+let _dustBands = null;
 
 function drawKidnapLine() {
     const ctx = gameState.ctx;
@@ -14958,9 +15262,40 @@ function getLaptopBadgePosition(laptop) {
 const _SPR_MAX = 160;    // LRU entries: names + badges for a full lobby, several zoom levels
 const _sprCache = new Map();
 
-function _sprLevel() {
-    const d = (gameState.dpr || 1) * (gameState.zoom || 1);
+function _sprLevelFor(d) {
     return d <= 1.05 ? 1 : d <= 1.55 ? 1.5 : d <= 2.1 ? 2 : d <= 3.1 ? 3 : 0;
+}
+// The level is decided ONCE per frame (_sprUpdateLevel), with hysteresis, instead
+// of being read raw off the live zoom. Raw, every zoom tween that crossed a level
+// boundary re-baked every name, badge and avatar on screen in the frame it
+// crossed — the entrance's 0.8 → 1 zoom does exactly that on a dpr-1.75 phone,
+// so the drop paid for a full re-bake mid-fall, and a pinch paid it at every
+// step. Now: during the entrance the level is taken from where the zoom is GOING
+// (the sprites baked under the boot screen are already right), a sharper level
+// is adopted after 200 ms of wanting it, a softer one after 1.5 s (a sharper
+// sprite drawn a little smaller costs nothing visible).
+const _sprLv = { cur: 0, want: 0, since: 0 };
+let _sprBakeBudget = Infinity;
+const SPR_BAKES_PER_FRAME = 3;
+function _sprUpdateLevel(now) {
+    const z = (JUICE_ENTRANCE && _entrance.active) ? _entrance.targetZoom : gameState.zoom;
+    const want = _sprLevelFor((gameState.dpr || 1) * (z || 1));
+    if (!_sprLv.cur) _sprLv.cur = want || 3;
+    if (want !== _sprLv.want) { _sprLv.want = want; _sprLv.since = now; }
+    if (want !== _sprLv.cur) {
+        const rank = l => (l === 0 ? 4 : l);
+        if (now - _sprLv.since >= (rank(want) > rank(_sprLv.cur) ? 200 : 1500)) _sprLv.cur = want;
+    }
+    // Bakes are also rationed per frame. A miss past the ration draws the same
+    // sprite from another level (or live) and bakes on a later frame — a font
+    // landing or a crowd arriving is spread over a few frames, not one.
+    _sprBakeBudget = SPR_BAKES_PER_FRAME;
+}
+function _sprLevel() {
+    // The PiP pass swaps in its own zoom/dpr; it never uses sprites, but answer
+    // for its context rather than the main one.
+    if (gameState._pipPass || !_sprLv.cur) return _sprLevelFor((gameState.dpr || 1) * (gameState.zoom || 1));
+    return _sprLv.cur;
 }
 function _spritesOk() {
     if (gameState._pipPass) return false;
@@ -14971,9 +15306,21 @@ function _spritesOk() {
 // px. `pad` is room around w×h for a baked shadow; paint() draws at (0,0)..(w,h).
 function _spr(key, build) {
     const lvl = _sprLevel() || 3;
+    const base = key;
     key = lvl + '|' + key;
     let e = _sprCache.get(key);
     if (e) { _sprCache.delete(key); _sprCache.set(key, e); return e; }   // LRU touch
+    if (_sprBakeBudget <= 0) {
+        // Out of bakes this frame: the same picture at another density is a fine
+        // stand-in for a frame or two; nothing at all means the caller draws live.
+        for (const l of [2, 3, 1.5, 1]) {
+            if (l === lvl) continue;
+            const alt = _sprCache.get(l + '|' + base);
+            if (alt) return alt;
+        }
+        return null;
+    }
+    _sprBakeBudget--;
     let spec;
     try { spec = build(); } catch (_) { return null; }
     if (!spec || !(spec.w > 0) || !(spec.h > 0)) return null;
@@ -15741,8 +16088,13 @@ const AV_SPR_PAD = 16;
 function _avatarComposite(player, img, ringColor, gray, isCurrentUser) {
     const hasImg = img && img !== 'failed';
     const lvl = _sprLevel() || 3;
-    const key = `${lvl}|${ringColor}|${gray ? 1 : 0}|${hasImg ? (img.src || 'i') : 'n'}|${hasImg ? '' : (player.username || '?').charAt(0)}|${isCurrentUser ? 1 : 0}`;
+    const look = `${ringColor}|${gray ? 1 : 0}|${hasImg ? (img.src || 'i') : 'n'}|${hasImg ? '' : (player.username || '?').charAt(0)}|${isCurrentUser ? 1 : 0}`;
+    const key = `${lvl}|${look}`;
     if (player._avSprKey === key && player._avSpr) return player._avSpr;
+    // Out of bakes this frame (see _sprUpdateLevel): the same look at the old
+    // density is kept for now; a player never baked at all is drawn live.
+    if (_sprBakeBudget <= 0) return (player._avSpr && player._avSprLook === look) ? player._avSpr : null;
+    _sprBakeBudget--;
     try {
         const R = AV_SPR_R, P = AV_SPR_PAD, S = Math.ceil((R + P) * 2 * lvl);
         const c = document.createElement('canvas');
@@ -15782,6 +16134,7 @@ function _avatarComposite(player, img, ringColor, gray, isCurrentUser) {
         g.restore();
         player._avSpr = c;
         player._avSprKey = key;
+        player._avSprLook = look;
         return c;
     } catch (_) {
         player._avSpr = null; player._avSprKey = null;
@@ -19055,17 +19408,28 @@ function _startFreeModeWork() {
     document.getElementById('free-mode-panel')?.classList.remove('hidden');
     document.getElementById('pomodoro-large-timer')?.classList.add('hidden');
     document.getElementById('pomodoro-small-timer')?.classList.add('hidden');
-    document.getElementById('focus-sounds-panel')?.classList.add('active');
-    document.getElementById('current-task-panel')?.classList.add('active');
-    setMobileFocusMode(true);
-    updatePomoLeaveBtn();
 
-    // Always restore master volume when entering work — fixes case where masterGain
-    // was left at 0 from prayer overlay or previous session teardown
-    if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(1.0, 0.8);
+    // From the kidnap's lock-in the rest plays out one step per frame (see
+    // updateAnimation); from anywhere else (a restore, a break ending) inline.
+    const stg = gameState._lockInSteps;
+    const ui = f => { if (stg) stg.ui.push(f); else f(); };
+    const still = () => !stg || (fm.active && fm.phase === 'work');
+    ui(() => { if (still()) setMobileFocusMode(true); });
+    ui(() => {
+        if (!still()) return;
+        document.getElementById('focus-sounds-panel')?.classList.add('active');
+        document.getElementById('current-task-panel')?.classList.add('active');
+        updatePomoLeaveBtn();
+    });
+    ui(() => {
+        if (!still()) return;
+        // Always restore master volume when entering work — fixes case where masterGain
+        // was left at 0 from prayer overlay or previous session teardown
+        if (gameState.focusAudioEngine) gameState.focusAudioEngine.fadeToMaster(1.0, 0.8);
 
-    // Fade in and resume YouTube player (was faded out on break start)
-    if (gameState.focusYTPlayer?.videoId) gameState.focusYTPlayer.fadeInAndResume(1500);
+        // Fade in and resume YouTube player (was faded out on break start)
+        if (gameState.focusYTPlayer?.videoId) gameState.focusYTPlayer.fadeInAndResume(1500);
+    });
 }
 
 // `docThrottled` is passed ONLY by the periodic 15s heartbeat: the laptop doc
@@ -27730,9 +28094,7 @@ function ensureHatAsset(id) {
 function _prefetchHats(list) {
     const ids = (list || []).slice();
     if (!ids.length) return;
-    const idle = window.requestIdleCallback
-        ? (fn) => requestIdleCallback(fn, { timeout: 6000 })
-        : (fn) => setTimeout(fn, 1500);
+    const idle = whenCalm;
     const next = () => {
         const batch = ids.splice(0, 4);
         if (!batch.length) return;
@@ -29391,7 +29753,16 @@ function ensureLemoSheet(name) {
     img.decoding = 'async';
     try { img.fetchPriority = 'low'; } catch (_) {}
     img.src = 'Art/Lemo/Sheets/' + name + '.webp';
-    _lemo.sheets[name] = { img };
+    const entry = { img, ready: false };
+    _lemo.sheets[name] = entry;
+    // Not drawable until DECODED. `complete` only means the bytes arrived; the
+    // first drawImage of an undecoded 1368×4394 sheet decodes it synchronously on
+    // the main thread — a stall right at spawn, i.e. mid-entrance. decode() does
+    // it off-thread. A browser without it (or a failed decode) falls back to the
+    // old "loaded is enough" rule.
+    const ok = () => { entry.ready = true; };
+    if (img.decode) img.decode().then(ok, () => { img.addEventListener('load', ok, { once: true }); if (img.complete) ok(); });
+    else entry.ready = true;
 }
 
 // Drawable, or null. Never blocks: a missing sheet just skips a frame of drawing.
@@ -29399,7 +29770,7 @@ function _lemoSheet(name) {
     const s = _lemo.sheets[name];
     if (!s) { ensureLemoSheet(name); return null; }
     const img = s.img;
-    return (img && img.complete && img.naturalWidth) ? img : null;
+    return (s.ready && img && img.complete && img.naturalWidth) ? img : null;
 }
 
 // Sleeping + WakeUp are ~15 MB of decoded frames he has no use for while he's up —
@@ -29660,9 +30031,7 @@ function startLemo() {
     // reduced tiers it loads on first actual Play instead (drawLemo stands him in
     // Idle until it lands — the timeline can't wait on a sheet).
     if (!isReducedGraphics()) {
-        const warmPlay = () => ensureLemoSheet('Play');
-        if (window.requestIdleCallback) requestIdleCallback(warmPlay, { timeout: 20000 });
-        else setTimeout(warmPlay, 12000);
+        whenCalm(() => ensureLemoSheet('Play'));
     }
 }
 
@@ -31058,7 +31427,15 @@ function _libEnsureTasks(force) {
     const ord = _lib.me && _lib.me.slug
         ? libGet(`${LIB_ROOT}/torder/${_lib.me.slug}`).catch(() => undefined)
         : Promise.resolve(undefined);
-    _lib.loading = Promise.all([libGet(`${LIB_ROOT}/tasks`), ord])
+    /* The tree is ~1.2 MB of JSON and parsing it is a main-thread stall on a
+       phone. A background fetch parses only once the scene is calm (never under a
+       kidnap or the entrance); a fetch the member is waiting on parses at once. */
+    const urgent = !!(force || _lib.open);
+    const tree = fetch(`${LIB_DB}/${LIB_ROOT}/tasks.json`)
+        .then(r => { if (!r.ok) throw new Error('LIB ' + r.status); return r.text(); })
+        .then(t => (urgent || _lib.open) ? t : calmTurn().then(() => t))
+        .then(t => JSON.parse(t));
+    _lib.loading = Promise.all([tree, ord])
         .then(([data, o]) => {
             if (o !== undefined) _lib.torder = (o && typeof o === 'object') ? o : {};
             _lib.tasks = (data && typeof data === 'object') ? data : {};
@@ -31116,13 +31493,36 @@ function _hudSetLeaveTop(top) {
     lw.style.top = (top == null) ? '' : Math.round(top) + 'px';
 }
 
+/* The box an element OCCUPIES, not where its transform happens to be drawing it
+   this frame. Focus mode slides the card off with `translateY(-140%)`, so its
+   getBoundingClientRect() mid-slide is somewhere up above the screen — and the
+   حضور المقر card placed off that rect slid down to the wrong spot, then SNAPPED
+   under the card when the late re-measure caught up (the end-of-session bug).
+   Every HUD transform is a pure translate (the `:active` press is a scale around
+   the centre, which moves no edge that matters here), so subtracting the current
+   matrix's translation gives the laid-out box at any point of any transition. */
+function _hudLayoutRect(el) {
+    const r = el.getBoundingClientRect();
+    let tx = 0, ty = 0;
+    try {
+        const t = getComputedStyle(el).transform;
+        if (t && t !== 'none') {
+            const m = new DOMMatrixReadOnly(t);
+            tx = m.m41; ty = m.m42;
+        }
+    } catch (_) { /* no DOMMatrix — fall back to the drawn rect, as before */ }
+    const top = r.top - ty, left = r.left - tx;
+    return { top, left, width: r.width, height: r.height,
+             bottom: top + r.height, right: left + r.width };
+}
+
 // حضور المقر: دائمًا تحت بطاقة المستخدم في العمود الأيمن.
 function _hudPositionChal(anchor, card) {
     const chal = document.getElementById('chal-dock');
     if (!chal || chal.hidden) return anchor.bottom;
     chal.style.top = Math.round(anchor.bottom + HUD_GAP) + 'px';
     chal.style.right = Math.round(window.innerWidth - (card || anchor).right) + 'px';
-    return chal.offsetHeight > 0 ? chal.getBoundingClientRect().bottom : anchor.bottom;
+    return chal.offsetHeight > 0 ? _hudLayoutRect(chal).bottom : anchor.bottom;
 }
 
 function _hudPositionDock() {
@@ -31130,7 +31530,7 @@ function _hudPositionDock() {
     const tools = document.getElementById('hud-tools');
     const dock  = document.getElementById('azkar-dock');
     if (!card) return;
-    const r = card.getBoundingClientRect();
+    const r = _hudLayoutRect(card);
     if (!r.width) return;                 // not laid out yet (still on the menu)
 
     /* ── الجوال: عمودان بدل عمود واحد ──────────────────────────────────────
@@ -31191,7 +31591,7 @@ function _hudPositionDock() {
        on mobile the user card carries `will-change: transform`, which makes it
        the containing block for any fixed descendant. */
     const base = _hudPositionChal(
-        (below && tools) ? tools.getBoundingClientRect() : r, r);
+        (below && tools) ? _hudLayoutRect(tools) : r, r);
     // The azkar dock collapses to nothing when its button is hidden; it hangs
     // off whatever is above it and pushes nothing but the tasks panel down.
     if (dock) {
@@ -31470,9 +31870,7 @@ function setupLibraryPanel() {
         /* One task fetch per session, on idle after spawn — never on the login
            path. It is what makes the red dot honest before the panel is ever
            opened; after that only an explicit refresh or a stale open refetches. */
-        const kick = () => _libEnsureTasks(false).then(() => { _libPaintDot(); if (_lib.open) _libRender(true); });
-        if (window.requestIdleCallback) requestIdleCallback(kick, { timeout: 8000 });
-        else setTimeout(kick, 4000);
+        whenCalm(() => _libEnsureTasks(false).then(() => { _libPaintDot(); if (_lib.open) _libRender(true); }));
     });
 }
 
@@ -36740,16 +37138,14 @@ function setupTrophyUI() {
         });
     }).catch(() => { _tro.ready = true; });
 
-    if (window.requestIdleCallback) requestIdleCallback(load, { timeout: 8000 });
-    else setTimeout(load, 3000);
+    whenCalm(load);
 
     /* Warm the art and the ceremony audio on idle rather than waiting for someone to
        walk over — ~190 KB of webp and ~650 KB of mp3 is nothing next to the world,
        and on the first open the trophies were visibly popping in one by one. Still
        nowhere near the login path; _troEnsureAssets is idempotent, so the proximity
        call is now just a backstop for a session where idle never fired. */
-    if (window.requestIdleCallback) requestIdleCallback(_troEnsureAssets, { timeout: 12000 });
-    else setTimeout(_troEnsureAssets, 6000);
+    whenCalm(_troEnsureAssets);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -39242,8 +39638,7 @@ function setupMeetingUI() {
     try { _JUICE_IN_ANIMS.add('meetSeatIn'); } catch (_) {}
 
     // Warm the real table's art on idle after spawn — ~5 KB, never on the login path.
-    if (window.requestIdleCallback) requestIdleCallback(_meetEnsureArt, { timeout: 15000 });
-    else setTimeout(_meetEnsureArt, 8000);
+    whenCalm(_meetEnsureArt);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -39357,8 +39752,7 @@ function _memRestore() {
     // asked for, so a race entry isn't met with the retry message. On idle, never
     // on the critical path — the same warm `startGame` does after spawn.
     if (MINIGAMES_ENABLED && gameState.race && !gameState.race._trackLoadStarted) {
-        if (window.requestIdleCallback) requestIdleCallback(() => loadRaceTrackAsset(), { timeout: 15000 });
-        else setTimeout(loadRaceTrackAsset, 4000);
+        whenCalm(() => loadRaceTrackAsset());
     }
 }
 
