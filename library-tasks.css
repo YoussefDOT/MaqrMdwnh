@@ -410,6 +410,38 @@
 .lib-pills .who.row .av.more { position: relative; background: #000; color: #fff; border: 2px solid rgba(255, 255, 255, .85); }
 .lib-pills .who.row .av.more:hover { background: #000; }
 
+/* ── mirrors «THE PILL'S OWN CHROME» in MdwnhLibrary/css/tasks.css ─────────────
+   The قسم's doodle, white and huge at the physical left; the striped ring a
+   PARENT wears; the quieter subtask. Lost once in a sweep (Sep 23) — without it
+   the doodle drew at its natural size and filled the whole pill. */
+.lib-pills .pill-deco {
+    position: absolute; z-index: -1; pointer-events: none;
+    inset-inline-end: -18px; top: 50%; height: 165%; width: auto; max-width: none;
+    transform: translateY(-50%) rotate(-14deg);
+    filter: brightness(0) invert(1); opacity: .16;
+    transition: transform .5s var(--pop), opacity .3s var(--ease);
+}
+.lib-pills .task:hover .pill-deco { transform: translateY(-50%) rotate(-4deg) scale(1.08); opacity: .22; }
+.lib-pills .task.done .pill-deco { opacity: .08; }
+.lib-pills .pill-ring {
+    position: absolute; inset: 0; z-index: 1; pointer-events: none; border-radius: inherit;
+    padding: 3px;
+    background: repeating-linear-gradient(-45deg,
+        color-mix(in srgb, var(--fg, #fff) 78%, transparent) 0 5px, transparent 5px 10px);
+    -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+    opacity: .8;
+}
+.lib-pills .task.parent { box-shadow: 0 18px 32px -20px var(--c, #000), 0 6px 18px rgba(0, 0, 0, .55); }
+.lib-pills .subrow .task {
+    border-radius: 16px; padding-block: 7px;
+    box-shadow: 0 10px 20px -18px var(--c, #000), 0 3px 10px rgba(0, 0, 0, .4);
+}
+.lib-pills .subrow .task::before { box-shadow: inset 0 0 0 1.5px color-mix(in srgb, var(--fg, #fff) 26%, transparent); }
+.lib-pills .subrow .task .task-img { width: 54px; }
+.lib-pills .subrow .task .task-emoji { width: 36px; height: 36px; font-size: 1.1rem; }
+
 /* ══════════════════════════════════════════════════════════════════════════
    ترتيب المهام بالسحب — carried 1:1 from MdwnhLibrary/css/tasks.css
    No grip: the WHOLE PILL is the handle — a long-press on a finger, press-and-
