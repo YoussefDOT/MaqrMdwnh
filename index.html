@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 344 · Updated 9/24 5:53 AM</div>
+    <div id="build-number" class="build-number">Build 345 · Updated 9/24 8:26 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -811,122 +811,283 @@
     <!-- زر مغادرة اللعبة — يظهر فقط أثناء الألعاب الصغيرة، في نفس موضع انهاء الجلسة -->
     <button id="minigame-leave-btn" class="minigame-leave-btn" type="button" style="display:none">مغادرة اللعبة</button>
 
-    <!-- لوحة الإعدادات — تحفظ على الجهاز فقط (localStorage) -->
-    <div id="settings-panel" class="settings-panel hidden">
-        <div class="settings-panel-header">
-            <span class="settings-panel-title">الإعدادات</span>
-            <button id="settings-panel-close" class="settings-panel-close" type="button" aria-label="إغلاق">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+    <!-- لوحة الإعدادات — لوحة كاملة: تبويبات جانبية (شريط علوي على الجوال)، وكل خيار
+         «حبّة» واحدة طويلة تنزلق داخلها حبّة أصغر إلى المختار. تُحفظ على الجهاز
+         (localStorage) إلا صلاة الجماعة فتتبع الحساب. -->
+    <div id="settings-panel" class="settings-panel hidden" role="dialog" aria-modal="true" aria-label="الإعدادات">
+        <div class="stg-scrim" id="stg-scrim"></div>
+        <div class="stg-card">
+            <button id="settings-panel-close" class="stg-close" type="button" aria-label="إغلاق">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
-        </div>
-        <div class="settings-rows">
-            <div class="settings-category">
-                <div class="settings-category-title">العرض والأداء</div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">جودة الرسومات</span>
-                        <span class="settings-row-sub">عالية ← متوسطة ← بطاطس. بطاطس للأجهزة الضعيفة جدًا</span>
+            <aside class="stg-nav">
+                <div class="stg-brand">
+                    <span class="stg-brand-mark" aria-hidden="true"></span>
+                    <div class="stg-brand-txt">
+                        <span class="stg-brand-title">الإعدادات</span>
+                        <span class="stg-brand-sub">تُحفظ على هذا الجهاز</span>
                     </div>
-                    <button id="settings-graphics-btn" class="settings-toggle-btn" type="button" data-value="low">
-                        <span id="settings-graphics-label">متوسطة</span>
-                    </button>
                 </div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">توفير الطاقة</span>
-                        <span class="settings-row-sub">يخفّض معدّل الإطارات حين تسكن الشاشة ليبقى الجهاز باردًا. تلقائي = مفعّل على الجوال</span>
+                <nav class="stg-tabs" role="tablist" aria-label="أقسام الإعدادات">
+                    <button type="button" class="stg-tab is-active" role="tab" data-tab="gfx" data-accent="teal">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
+                        <span>الرسومات</span>
+                    </button>
+                    <button type="button" class="stg-tab" role="tab" data-tab="view" data-accent="yellow">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
+                        <span>العرض</span>
+                    </button>
+                    <button type="button" class="stg-tab" role="tab" data-tab="work" data-accent="blue">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="6"/><line x1="6" y1="12" x2="10" y2="12"/><line x1="8" y1="10" x2="8" y2="14"/><circle cx="15.5" cy="13" r="1"/><circle cx="18" cy="10.5" r="1"/></svg>
+                        <span>التحكم والعمل</span>
+                    </button>
+                    <button type="button" class="stg-tab" role="tab" data-tab="azkar" data-accent="teal">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+                        <span>الأذكار والصلاة</span>
+                    </button>
+                    <button type="button" class="stg-tab" role="tab" data-tab="yt" data-accent="red">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="4"/><path d="m10 9 5 3-5 3z"/></svg>
+                        <span>يوتيوب</span>
+                    </button>
+                </nav>
+            </aside>
+
+            <div class="stg-main">
+                <!-- ── الرسومات ─────────────────────────────────────────── -->
+                <section class="stg-sec is-active" data-sec="gfx" role="tabpanel">
+                    <header class="stg-sec-head">
+                        <h2 class="stg-sec-title">الرسومات</h2>
+                        <p class="stg-sec-sub">اختر ما يناسب جهازك، وشاهد الفرق في المعاينة مباشرةً</p>
+                    </header>
+
+                    <div class="stg-item" data-accent="teal">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 14l4-4"/><path d="M3.34 19a10 10 0 1 1 17.32 0"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">جودة الرسومات</span>
+                                <span class="stg-desc">بطاطس للأجهزة الضعيفة جدًا</span>
+                            </div>
+                        </div>
+                        <div class="stg-seg" id="settings-graphics-seg" role="radiogroup" aria-label="جودة الرسومات" style="--n:3">
+                            <span class="stg-seg-thumb" aria-hidden="true"></span>
+                            <button type="button" role="radio" data-v="high">عالية</button>
+                            <button type="button" role="radio" data-v="low">متوسطة</button>
+                            <button type="button" role="radio" data-v="potato">بطاطس</button>
+                        </div>
+                        <!-- معاينة حيّة: تُرسم عند فتح الإعدادات وعند تغيير خيار رسومي فقط -->
+                        <div class="stg-preview" id="stg-preview">
+                            <canvas id="stg-preview-canvas" class="stg-preview-canvas" aria-hidden="true"></canvas>
+                            <span class="stg-preview-tag"><span class="stg-preview-dot" aria-hidden="true"></span>معاينة حيّة</span>
+                            <span class="stg-preview-tier" id="stg-preview-tier">متوسطة</span>
+                        </div>
                     </div>
-                    <button id="settings-power-btn" class="settings-toggle-btn" type="button" data-value="auto">
-                        <span id="settings-power-label">تلقائي</span>
-                    </button>
-                </div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">أسماء اللاعبين</span>
-                        <span class="settings-row-sub">إظهار الأسماء فوق الأفاتار</span>
+
+                    <div class="stg-item stg-item-custom" data-accent="yellow">
+                        <button type="button" class="stg-check-row" id="settings-custom-btn" role="checkbox" aria-checked="false">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg></span>
+                            <span class="stg-txt">
+                                <span class="stg-name">مخصّص</span>
+                                <span class="stg-desc">تحكّم يدويًا بالجسيمات والطبقات الجوية بدل أن تتبع جودة الرسومات</span>
+                            </span>
+                            <span class="stg-check" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+                        </button>
+                        <div class="stg-reveal" id="settings-custom-reveal">
+                            <div class="stg-reveal-in">
+                                <div class="stg-sub">
+                                    <div class="stg-item-top">
+                                        <span class="stg-ico stg-ico-sm" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 16l.7 1.8 1.8.7-1.8.7L19 21l-.7-1.8-1.8-.7 1.8-.7z"/></svg></span>
+                                        <div class="stg-txt">
+                                            <span class="stg-name">الجسيمات</span>
+                                            <span class="stg-desc">الغبار والرياح المتطايرة</span>
+                                        </div>
+                                    </div>
+                                    <div class="stg-seg" id="settings-particles-seg" role="radiogroup" aria-label="الجسيمات" style="--n:2">
+                                        <span class="stg-seg-thumb" aria-hidden="true"></span>
+                                        <button type="button" role="radio" data-v="on">مفعّلة</button>
+                                        <button type="button" role="radio" data-v="off">مغلقة</button>
+                                    </div>
+                                </div>
+                                <div class="stg-sub">
+                                    <div class="stg-item-top">
+                                        <span class="stg-ico stg-ico-sm" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg></span>
+                                        <div class="stg-txt">
+                                            <span class="stg-name">الطبقات الجوية</span>
+                                            <span class="stg-desc">الإضاءة والضباب والغيوم</span>
+                                        </div>
+                                    </div>
+                                    <div class="stg-seg" id="settings-overlays-seg" role="radiogroup" aria-label="الطبقات الجوية" style="--n:2">
+                                        <span class="stg-seg-thumb" aria-hidden="true"></span>
+                                        <button type="button" role="radio" data-v="on">مفعّلة</button>
+                                        <button type="button" role="radio" data-v="off">مغلقة</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
-                    <button id="settings-names-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="show">
-                        <span id="settings-names-label">ظاهرة</span>
-                    </button>
-                </div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">الجسيمات</span>
-                        <span class="settings-row-sub">الغبار والرياح المتطايرة. يتجاوز إعداد جودة الرسومات</span>
+
+                    <div class="stg-item" data-accent="blue">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="16" height="10" rx="2"/><line x1="22" y1="11" x2="22" y2="13"/><line x1="6" y1="10" x2="6" y2="14"/><line x1="10" y1="10" x2="10" y2="14"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">توفير الطاقة</span>
+                                <span class="stg-desc">يخفّض معدّل الإطارات حين تسكن الشاشة ليبقى الجهاز باردًا. تلقائي = مفعّل على الجوال</span>
+                            </div>
+                        </div>
+                        <div class="stg-seg" id="settings-power-seg" role="radiogroup" aria-label="توفير الطاقة" style="--n:3">
+                            <span class="stg-seg-thumb" aria-hidden="true"></span>
+                            <button type="button" role="radio" data-v="auto">تلقائي</button>
+                            <button type="button" role="radio" data-v="on">مفعّل</button>
+                            <button type="button" role="radio" data-v="off">مغلق</button>
+                        </div>
                     </div>
-                    <button id="settings-particles-btn" class="settings-toggle-btn" type="button" data-value="auto">
-                        <span id="settings-particles-label">تلقائي</span>
-                    </button>
-                </div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">الطبقات الجوية</span>
-                        <span class="settings-row-sub">الإضاءة والضباب والغيوم. يتجاوز إعداد جودة الرسومات</span>
+                </section>
+
+                <!-- ── العرض ─────────────────────────────────────────────── -->
+                <section class="stg-sec" data-sec="view" role="tabpanel" hidden>
+                    <header class="stg-sec-head">
+                        <h2 class="stg-sec-title">العرض</h2>
+                        <p class="stg-sec-sub">ما يظهر في المقر من حولك</p>
+                    </header>
+                    <div class="stg-item" data-accent="yellow">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2H2v10l9.29 9.29a1 1 0 0 0 1.42 0l8.58-8.58a1 1 0 0 0 0-1.42Z"/><circle cx="7" cy="7" r="1.5"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">أسماء اللاعبين</span>
+                                <span class="stg-desc">إظهار الأسماء فوق الشخصيات</span>
+                            </div>
+                        </div>
+                        <div class="stg-seg" id="settings-names-seg" role="radiogroup" aria-label="أسماء اللاعبين" style="--n:2">
+                            <span class="stg-seg-thumb" aria-hidden="true"></span>
+                            <button type="button" role="radio" data-v="show">ظاهرة</button>
+                            <button type="button" role="radio" data-v="hide">مخفية</button>
+                        </div>
                     </div>
-                    <button id="settings-overlays-btn" class="settings-toggle-btn" type="button" data-value="auto">
-                        <span id="settings-overlays-label">تلقائي</span>
-                    </button>
-                </div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">ليمو</span>
-                        <span class="settings-row-sub">الروبوت المتجوّل في غرفة الاستراحة</span>
+                    <div class="stg-item" data-accent="teal">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="8" width="16" height="12" rx="3"/><path d="M12 8V5"/><circle cx="12" cy="3.5" r="1.2"/><circle cx="9" cy="14" r="1"/><circle cx="15" cy="14" r="1"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">ليمو</span>
+                                <span class="stg-desc">الروبوت المتجوّل في غرفة الاستراحة</span>
+                            </div>
+                        </div>
+                        <div class="stg-seg" id="settings-lemo-seg" role="radiogroup" aria-label="ليمو" style="--n:2">
+                            <span class="stg-seg-thumb" aria-hidden="true"></span>
+                            <button type="button" role="radio" data-v="show">ظاهر</button>
+                            <button type="button" role="radio" data-v="hide">مخفي</button>
+                        </div>
                     </div>
-                    <button id="settings-lemo-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="show">
-                        <span id="settings-lemo-label">ظاهر</span>
-                    </button>
-                </div>
-            </div>
-            <div class="settings-category">
-                <div class="settings-category-title">التحكم والعمل</div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">عصا التحكم</span>
-                        <span class="settings-row-sub">إظهار أو إخفاء عصا التحكم على الشاشة</span>
+                </section>
+
+                <!-- ── التحكم والعمل ─────────────────────────────────────── -->
+                <section class="stg-sec" data-sec="work" role="tabpanel" hidden>
+                    <header class="stg-sec-head">
+                        <h2 class="stg-sec-title">التحكم والعمل</h2>
+                        <p class="stg-sec-sub">الحركة وجلسات العمل</p>
+                    </header>
+                    <div class="stg-item" data-accent="blue">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7" r="3.2"/><path d="M12 10.2V16"/><rect x="5" y="16" width="14" height="5" rx="2.5"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">عصا التحكم</span>
+                                <span class="stg-desc">إظهار أو إخفاء عصا التحكم على الشاشة</span>
+                            </div>
+                        </div>
+                        <div class="stg-seg" id="settings-joystick-seg" role="radiogroup" aria-label="عصا التحكم" style="--n:2">
+                            <span class="stg-seg-thumb" aria-hidden="true"></span>
+                            <button type="button" role="radio" data-v="on">ظاهرة</button>
+                            <button type="button" role="radio" data-v="off">مخفية</button>
+                        </div>
                     </div>
-                    <button id="settings-joystick-btn" class="settings-toggle-btn" type="button" data-value="on">
-                        <span id="settings-joystick-label">ظاهرة</span>
-                    </button>
-                </div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">حركة الجلوس أثناء العمل</span>
-                        <span class="settings-row-sub">إيقاف حركة شخصيتك أثناء العمل إذا كانت تشتت انتباهك</span>
+                    <div class="stg-item" data-accent="yellow">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 20 9 4 6 12 2 12"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">حركة الجلوس أثناء العمل</span>
+                                <span class="stg-desc">أوقفها إن كانت تشتّت انتباهك</span>
+                            </div>
+                        </div>
+                        <div class="stg-seg" id="settings-idle-seg" role="radiogroup" aria-label="حركة الجلوس أثناء العمل" style="--n:2">
+                            <span class="stg-seg-thumb" aria-hidden="true"></span>
+                            <button type="button" role="radio" data-v="on">مفعّلة</button>
+                            <button type="button" role="radio" data-v="off">مغلقة</button>
+                        </div>
                     </div>
-                    <button id="settings-idle-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="on">
-                        <span id="settings-idle-label">مفعّلة</span>
-                    </button>
-                </div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">تأكيد مدة الجلسة الحرة</span>
-                        <span class="settings-row-sub">سؤالك «هل عملت هذه المدة فعلًا؟» قبل حفظ جلسة حرة طويلة</span>
+                    <div class="stg-item" data-accent="red">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">تأكيد مدة الجلسة الحرة</span>
+                                <span class="stg-desc">سؤالك «هل عملت هذه المدة فعلًا؟» قبل حفظ جلسة حرة طويلة</span>
+                            </div>
+                        </div>
+                        <div class="stg-seg" id="settings-longfree-seg" role="radiogroup" aria-label="تأكيد مدة الجلسة الحرة" style="--n:3">
+                            <span class="stg-seg-thumb" aria-hidden="true"></span>
+                            <button type="button" role="radio" data-v="off">مغلق</button>
+                            <button type="button" role="radio" data-v="30">بعد ٣٠ دقيقة</button>
+                            <button type="button" role="radio" data-v="always">دائمًا</button>
+                        </div>
                     </div>
-                    <button id="settings-longfree-btn" class="settings-toggle-btn settings-toggle-on" type="button" data-value="30">
-                        <span id="settings-longfree-label">بعد ٣٠ دقيقة</span>
-                    </button>
-                </div>
-            </div>
-            <div class="settings-category">
-                <div class="settings-category-title">الأذكار والصلاة</div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">ترتيب الأذكار عشوائي</span>
-                        <span class="settings-row-sub">ترتيب أذكار الصباح والمساء عشوائيًا لتقرأها بتمعّن</span>
+                </section>
+
+                <!-- ── الأذكار والصلاة ───────────────────────────────────── -->
+                <section class="stg-sec" data-sec="azkar" role="tabpanel" hidden>
+                    <header class="stg-sec-head">
+                        <h2 class="stg-sec-title">الأذكار والصلاة</h2>
+                        <p class="stg-sec-sub">تفضيلات الأذكار وتنبيهات الصلاة</p>
+                    </header>
+                    <div class="stg-item" data-accent="teal">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">ترتيب الأذكار عشوائي</span>
+                                <span class="stg-desc">ترتيب أذكار الصباح والمساء عشوائيًا لتقرأها بتمعّن</span>
+                            </div>
+                        </div>
+                        <div class="stg-seg" id="settings-azkar-random-seg" role="radiogroup" aria-label="ترتيب الأذكار عشوائي" style="--n:2">
+                            <span class="stg-seg-thumb" aria-hidden="true"></span>
+                            <button type="button" role="radio" data-v="on">مفعّل</button>
+                            <button type="button" role="radio" data-v="off">مغلق</button>
+                        </div>
                     </div>
-                    <button id="settings-azkar-random-btn" class="settings-toggle-btn" type="button" data-value="off">
-                        <span id="settings-azkar-random-label">مغلق</span>
-                    </button>
-                </div>
-                <div class="settings-row">
-                    <div class="settings-row-label">
-                        <span class="settings-row-name">صلاة الجماعة</span>
-                        <span class="settings-row-sub">تأخير تنبيه الصلاة ٥ دقائق لمن يصلّي في المسجد</span>
+                    <div class="stg-item" data-accent="blue">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">صلاة الجماعة</span>
+                                <span class="stg-desc">تأخير تنبيه الصلاة ٥ دقائق لمن يصلّي في المسجد</span>
+                            </div>
+                        </div>
+                        <div class="stg-seg" id="settings-prayer-delay-seg" role="radiogroup" aria-label="صلاة الجماعة" style="--n:2">
+                            <span class="stg-seg-thumb" aria-hidden="true"></span>
+                            <button type="button" role="radio" data-v="on">مفعّل</button>
+                            <button type="button" role="radio" data-v="off">مغلق</button>
+                        </div>
                     </div>
-                    <button id="settings-prayer-delay-btn" class="settings-toggle-btn" type="button" data-value="off">
-                        <span id="settings-prayer-delay-label">مغلق</span>
-                    </button>
-                </div>
+                </section>
+
+                <!-- ── يوتيوب ────────────────────────────────────────────── -->
+                <section class="stg-sec" data-sec="yt" role="tabpanel" hidden>
+                    <header class="stg-sec-head">
+                        <h2 class="stg-sec-title">يوتيوب</h2>
+                        <p class="stg-sec-sub">حسابك في مشغّل يوتيوب</p>
+                    </header>
+                    <div class="stg-item" data-accent="red">
+                        <div class="stg-item-top">
+                            <span class="stg-ico" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="10" r="3"/><path d="M7 20.66V19a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v1.66"/></svg></span>
+                            <div class="stg-txt">
+                                <span class="stg-name">حساب يوتيوب بريميوم</span>
+                                <span class="stg-desc">سجّل دخولك إلى يوتيوب، فإن كان اشتراكك بريميوم اختفت الإعلانات من المشغّل</span>
+                            </div>
+                        </div>
+                        <button type="button" class="stg-action" id="settings-yt-login-btn">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+                            <span id="settings-yt-login-label">تسجيل الدخول إلى يوتيوب</span>
+                        </button>
+                        <p class="stg-note" id="settings-yt-status" hidden></p>
+                        <p class="stg-note stg-note-warn" id="settings-yt-warn" hidden>متصفحك يمنع يوتيوب من التعرّف على حسابك داخل المواقع الأخرى، فقد تبقى الإعلانات. الأفضل كروم أو إيدج.</p>
+                        <p class="stg-note">لا نطّلع على حسابك ولا نحفظ منه شيئًا؛ الدخول يتم في صفحة جوجل نفسها.</p>
+                    </div>
+                </section>
             </div>
         </div>
     </div>
@@ -1425,6 +1586,7 @@
                 <div id="yt-ad-overlay" class="yt-ad-overlay">
                     <div class="yt-ad-spinner"></div>
                     <span class="yt-ad-label">انتظر.. إعلان</span>
+                    <span class="yt-ad-hint">لديك اشتراك بريميوم؟ سجّل دخولك إلى يوتيوب من الإعدادات</span>
                 </div>
                 <!-- يظهر فوق مشغل اليوتيوب أثناء قراءة الأذكار -->
                 <div id="yt-azkar-overlay" class="yt-azkar-overlay">
@@ -2206,7 +2368,7 @@
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
         <link rel="modulepreload" href="firebase-config.js?v=3">
-        <script type="module" src="game.js?v=323"></script>
+        <script type="module" src="game.js?v=324"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

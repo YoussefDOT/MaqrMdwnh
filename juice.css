@@ -51,7 +51,7 @@ button:not(.focus-sounds-panel):active,
 .opt-btn:active,
 .btn-primary:active,
 .btn-secondary:active,
-.settings-toggle-btn:active,
+.stg-seg button:active,
 .mode-select-back-btn:active,
 .pomodoro-back-btn:active,
 .fbp-confirm:active,
@@ -133,11 +133,10 @@ button:not(.focus-sounds-panel):active,
 .modal-overlay.juice-closing .pomodoro-content > .logo-container { animation-delay: 0.11s; }
 
 /* ════════════════════════ SETTINGS PANEL ════════════════════════════════
-   Sequencing now lives in style.css (`settingsRowIn`, category-aware delays) so
-   it stays correct with the grouped category layout. That animation name is
-   registered in _JUICE_IN_ANIMS, so each row/heading still triggers the cascade
-   blip. Don't re-add a `juiceRowIn` rule here — it double-animates and fights the
-   category-aware delays. */
+   The full panel's entrance lives in style.css (`stgItemIn`, delays assigned in
+   DOM order by JS). That animation name is registered in _JUICE_IN_ANIMS, so each
+   item still triggers the cascade blip. Don't add a `juiceRowIn` rule here — it
+   double-animates and fights the JS-assigned delays. */
 
 /* ════════════════════════ FREE-MODE PANEL (children only) ───────────────
    Root keeps its translateX(-50%) centering — animate its contents instead. */
@@ -163,9 +162,6 @@ button:not(.focus-sounds-panel):active,
     .modal-overlay.juice-closing .modal-content,
     .modal-overlay.juice-closing .pomodoro-content > *,
     .modal-overlay.juice-closing .mode-select-cards .mode-card,
-    .settings-panel:not(.hidden) .settings-panel-header,
-    .settings-panel:not(.hidden) .settings-category-title,
-    .settings-panel:not(.hidden) .settings-row,
     .free-mode-panel:not(.hidden) > * {
         animation: none !important;
     }

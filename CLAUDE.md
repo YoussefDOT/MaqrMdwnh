@@ -122,7 +122,7 @@ Grep anchors for the major systems (all verified to exist):
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds` |
-| Settings | `setupSettingsUI` |
+| Settings (full panel, pills, live preview) | `setupSettingsUI`, `_stg`, `_stgSeg`, `_stgShowTab`, `_stgPreviewKick` |
 | Success card | `setupSuccessCardUI` |
 | UI cascade blips | `setupJuiceUi` |
 | Background memory release | `_memReleaseIdle`, `_memRestore`, `MEM_IDLE_MS` |
@@ -982,6 +982,24 @@ YouTube embeds cannot remove ads. Instead, `FocusYouTubePlayer` detects pre-roll
 | `_poll()` | 500ms interval: update time display, waveform, ad detection |
 | `_setAdMode(isAd)` | Mute/unmute + show/hide ad overlay |
 | `loadFromProfile(profile)` | Restore saved URL+timestamp+loop from Firebase on login |
+| `rebuildForAccount()` | Destroy the embed and reload the same video at the same second (playing/paused as it was) — how a new YouTube sign-in reaches the player |
+
+### Premium sign-in (الإعدادات → يوتيوب) — `_ytOpenLogin`
+There is **no API** for YouTube Premium in an embed, and none is needed: the IFrame
+player is served from **www.youtube.com** (never switch it to `youtube-nocookie.com` —
+that drops the account), so it carries that site's cookies, and a signed-in Premium
+account plays without ads. The button opens **Google's own sign-in page**
+(`YT_LOGIN_URL`, a popup, a new tab if popups are blocked) — the site never sees the
+account and stores nothing but `mdwnh_yt_login_at` (the button then reads «تبديل حساب
+يوتيوب»). When the member is back, `rebuildForAccount()` gives the embed a fresh iframe,
+which is the only way it picks the new cookies up.
+- **"Back" = the popup closed.** Google's page can sever the opener link (COOP), which
+  makes `win.closed` read true at once; a `closed` inside 1.5 s is treated as severed and
+  the signal becomes the tab regaining focus / visibility instead.
+- **Safari/WebKit (every iOS browser, iPadOS) and Firefox block third-party cookies**,
+  so there the embed stays signed out whatever happens — `_ytAccountBlocked()` shows a
+  warning instead of promising. Chrome / Edge work.
+- The ad overlay carries a one-line hint pointing at this (`.yt-ad-hint`).
 
 ---
 
@@ -2626,27 +2644,36 @@ Never animate `filter: blur()` or `transform: scale()`/`background-position` on 
 
 ## Settings Panel (`setupSettingsUI`, `#settings-panel`)
 
-Opens **under the gear button**, which now lives in `#hud-tools` to the left of the user card — so the panel's `top`/`right` are **written by `_hudPositionSettings()` from that box** at open time, overriding the CSS fallbacks (`top:130px; right:18px` desktop, `right:10px; top:110px` mobile). See **The HUD stack**. Each row is a binary toggle button reflected via a `_reflect*()` helper and persisted in localStorage. Rows are grouped into **categories** (`.settings-category` + `.settings-category-title` header): العرض والأداء / التحكم والعمل / الأذكار والصلاة. Keys & defaults:
+A **full panel** (z-index 9300 — below prayer/azkar), opened from the gear in `#hud-tools`. Desktop: a centred card with **side tabs** (الرسومات / العرض / التحكم والعمل / الأذكار والصلاة / يوتيوب) and ONE section showing at a time — no long scroller. Phones, and any window narrower than 760px or shorter than 520px (a media query, not `body.is-mobile`): full screen, the tabs a horizontal scrolling strip across the top. Dark glass, styled after the حضور المقر card: Baloo Bhaijaan 2, an accent stripe on each item's inline-start edge (`data-accent` → `--acc`/`--acc-ink`/`--acc-soft`), a faint brush mark (`--ico-3`) in each item's corner, an icon chip per row. Grep anchors: `_stg`, `_stgSeg`, `_stgShowTab`, `_stgPreviewKick`, `_ytOpenLogin`.
+
+- **Every choice is ONE long pill** (`.stg-seg`, `style="--n:N"`) with a smaller white pill (`.stg-seg-thumb`) that slides to the selected option. Its position is **pure CSS**: equal columns, thumb width `(100% − 8px)/--n`, `translateX(--i × −100%)` (the panel is RTL, so option 0 is on the right). `_stgSeg(id, value)` only writes `--i`, `.is-on` and `aria-checked` — **nothing is measured**, so it works even while its section is hidden. `_stgOnSeg(id, fn)` wires the click. The old «press it again and again» cycling buttons are gone.
+- **الجسيمات / الطبقات الجوية live behind a «مخصّص» checkbox** (`#settings-custom-btn`, `role=checkbox`). Unticked = both keys absent = follow the tier (the old تلقائي). Ticking it **pins what is showing right now** (writes both keys with the resolved values) and reveals two on/off pills (`.stg-reveal`, a `0fr ↔ 1fr` grid-rows transition). Unticking removes both keys. The storage and `particlesEnabled()` / `overlaysEnabled()` are unchanged.
+- **The live preview** (`#stg-preview-canvas`, under جودة الرسومات) draws the world around the player through `renderPiPInto(ctx, cv, dpr, view)` (the PiP context swap, draw-only), at `STG_PV_ZOOM`, with the per-tier DPR caps of `resizeCanvas` (`_stgPreviewDpr`) and its own `installLowGfxShadowGuard`. **It is not a loop**: `_stgPreviewKick(ms)` runs a bounded `setTimeout` burst (~24 fps) — `STG_PV_OPEN_MS` when the panel / graphics tab opens, `STG_PV_CHANGE_MS` after a graphics / مخصّص / power change — and stops by itself, on close, on another tab, or when hidden. Its size is read once on open / tab show / resize (`_stgPreviewMeasure`), never per frame. The backing store is freed on close (`_stgPreviewFree`).
+- **The main world pass STOPS while the panel is up** (`_stg.canvasOff` in `_worldCanvasHidden`, every platform, 380 ms after open — after the fade-in). The panel is opaque over it, so settings costs *less* than the game, never more. Closing clears it FIRST (+ `perfWake`) so the fade-out reveals a live world. No `backdrop-filter` anywhere in the panel.
+- `settingsIsOpen()` joins the standard guard list (window `keydown`, wheel-zoom, `handleMovement`, `_chatMustClose`). Opening stops a walk in its tracks (like `openChatBox`). Escape, ✕ and the scrim close it.
+- **يوتيوب → حساب يوتيوب بريميوم**: see **YouTube Focus Player → Premium sign-in**.
+
+Keys & defaults:
 
 | Key | Default | Effect |
 |---|---|---|
-| `SETTINGS_GRAPHICS_KEY` | device-auto | عالية → منخفضة → بطاطس (see Graphics Tiers) |
+| `SETTINGS_GRAPHICS_KEY` | device-auto | one pill: عالية / متوسطة / بطاطس (see Graphics Tiers) |
 | `SETTINGS_NAMES_KEY` | show | hide player names above avatars |
 | `SETTINGS_JOYSTICK_KEY` | auto | show/hide the on-screen joystick |
 | `SETTINGS_NOIDLE_KEY` | off (`getDisableIdleAnim()`) | when **on**, freeze the local avatar's animation while working |
 | `SETTINGS_AZKAR_RANDOM_KEY` | off (`getRandomizeAzkar()`) | when **on**, shuffle morning/evening azkar order each open |
 | `SETTINGS_LEMO_KEY` | show (`getHideLemo()`) | ليمو — hide the robot entirely (freezes him; see **Lemo**) |
-| `SETTINGS_PARTICLES_KEY` | absent = follow tier | الجسيمات — tri-state **تلقائي → مفعّلة → مغلقة**. **Overrides the graphics tier** (see Graphics Tiers → Effect overrides) |
-| `SETTINGS_OVERLAYS_KEY` | absent = follow tier | الطبقات الجوية — tri-state, same override semantics |
+| `SETTINGS_PARTICLES_KEY` | absent = follow tier | الجسيمات — absent / `on` / `off`. The UI shows it only under **مخصّص** (ticked = either key present). **Overrides the graphics tier** (see Graphics Tiers → Effect overrides) |
+| `SETTINGS_OVERLAYS_KEY` | absent = follow tier | الطبقات الجوية — same, under the same مخصّص box |
 | `SETTINGS_POWER_KEY` | absent = auto (on for touch devices) | توفير الطاقة — tri-state تلقائي → مفعّل → مغلق. 30 fps cap, calm 15 / drowsy 6 fps, DPR cap, `body.power-save`. See **مُنظّم الأداء → توفير الطاقة** |
 | `SETTINGS_LONGFREE_KEY` | absent = بعد ٣٠ دقيقة | تأكيد مدة الجلسة الحرة — tri-state **مغلق → بعد ٣٠ دقيقة → دائمًا** (`getLongFreeMode()`). Gates the free-mode idle-confirm via `shouldAskLongFreeConfirm()`; the user's `off` beats even the Siraj always-ask |
 | `SETTINGS_PRAYER_DELAY_KEY` | off (`getPrayerJamaahDelay()`) | "صلاة الجماعة" — when **on**, adds **+5 min** to every prayer time (`prayerJamaahExtraMin()`, applied in `computeNextPrayer`/`updatePrayerPanelDOM`). **Per-USER, not per-device**: source of truth is Firebase `users/{uid}/prayerJamaahDelay`, read on login and **mirrored into localStorage** so the getter stays a cheap sync read; the toggle writes both. |
 
 ### Open / close animation
-Open removes `.hidden` (the `settingsPanelIn` keyframe pops it in). Close is **animated, not a snap**: `closeSettingsPanel()` adds `.settings-panel-closing` (runs `settingsPanelOut`), then `.hidden` after ~230 ms. All three close paths (close button, gear re-press, outside-click) go through it. **Closing makes no sound** (see below).
+Open removes `.hidden` (scrim `stgFadeIn`, card `stgCardIn`, both `backwards` over an opaque base). Close is **animated, not a snap**: `closeSettingsPanel()` adds `.settings-panel-closing` (`stgFadeOut` / `stgCardOut`), then `.hidden` after ~260 ms. Every close path (✕, gear, scrim, Escape, `_closeSettingsPanel` from other modules) goes through it. **Closing makes no sound** (see below).
 
 ### Sequenced rows + the cascade blip (sound)
-`@keyframes settingsRowIn` lives in **style.css** (scoped `.settings-panel:not(.hidden):not(.settings-panel-closing) …` so it replays on every open). It fades **and** slides, but the fade lives **entirely inside the keyframes** with **`animation-fill-mode: backwards`** — the rows' own base style stays `opacity: 1`. In Firefox the sequence could fail to trigger at all, and an `opacity: 0` **base** then left the entire panel blank (same failure the pomodoro `.setting-group` rows had); with `backwards`, a skipped animation falls back to the visible base. **Never re-add an `opacity: 0` base, and never use `both`** (it pins the 100% keyframe forever). Same treatment on `settingGroupIn` and `readingRowIn`. The **`animation-delay`s are assigned in JS**: `_settingsSequenceRows()` indexes `.settings-category-title, .settings-row` in DOM order on every open. They used to be a hardcoded nth-child list in CSS that only covered the **first two rows of each category** — every row added after that inherited the base rule with **no delay** and popped in instantly, ahead of the cascade. **Don't move the delays back into CSS**: the next row added would silently break the sequence again. Do **not** re-add the old `juiceRowIn` settings rule in juice.css either — it double-animates and fights the stagger.
+`@keyframes stgItemIn` lives in **style.css** (`.stg-sec:not([hidden]) .stg-sec-head, .stg-item`) — it replays on every open AND every tab switch, because a section going from `hidden` to shown restarts its animations. It fades **and** slides, but the fade lives **entirely inside the keyframes** with **`animation-fill-mode: backwards`** — the items' own base style stays `opacity: 1`. In Firefox a sequence could fail to trigger at all, and an `opacity: 0` **base** then left the entire panel blank (the old rows hit exactly that); with `backwards`, a skipped animation falls back to the visible base. **Never re-add an `opacity: 0` base, and never use `both`**. Same treatment on `settingGroupIn` and `readingRowIn`. The **`animation-delay`s are assigned in JS**: `_stgSequence()` indexes the section's head + items in DOM order on every show — **don't move the delays into CSS** (a hardcoded nth-child list silently misses every item added later). `stgItemIn` is in `_JUICE_IN_ANIMS`, and `_stgShowTab` calls `_uiSeqReset()`, so each section's cascade blips deep → high. Do **not** add a `juiceRowIn` settings rule in juice.css — it double-animates and fights the stagger.
 
 ### Avatar working animation (`drawPlayers`, the `suppressWorkAnim` block)
 Two independent suppressions, both gated on `localInWorkPhase()` (pomodoro **or** free-mode work):
@@ -2663,9 +2690,9 @@ Two independent suppressions, both gated on `localInWorkPhase()` (pomodoro **or*
 When a panel's elements animate in **one-by-one** (a staggered/sequenced entrance), the matching sound is a **pitch sweep**: the **first** element to appear plays the **deepest (heaviest) pitch**, and each following element steps **up** in pitch, so the **last** element to appear is the **highest**. The starting pitch is **randomised per cascade** (so two opens never sound identical). This is the house style for sequenced UI — match it for any new sequenced panel that should be audible.
 
 **How it's wired (don't reinvent it):**
-- A single capture-phase `animationstart` listener (in `setupJuiceUi`) fires one blip per element **as it pops in**. It only reacts to animation **names** in the `_JUICE_IN_ANIMS` set (`juicePop`, `juiceContainerPop`, `juiceRowIn`, `settingsRowIn`). The pitch comes from `_uiSeqRate()`: a gap >240 ms (or an explicit `_uiSeqReset()`) starts a **fresh** sweep (`idx=0`, `base = 0.78 + random*0.16`); each blip within the window does `idx++` and returns `base + min(idx,12)*0.055` (rising). `_playUiBlip(rate)` plays `uiBlip` through the focus engine (`playPitched`).
-- **Sound is opt-in by animation name, not automatic.** Sequenced elements are silent unless their keyframe name is in `_JUICE_IN_ANIMS`. To give a NEW sequenced panel the cascade: name its row keyframe and **add that name to `_JUICE_IN_ANIMS`** (that's all settings needed — `settingsRowIn`). To keep a sequenced panel **silent**, just don't register its animation name (and `_JUICE_SILENT_SEL` force-mutes specific elements even if they use a sounded name).
-- **Start each panel's sweep fresh:** call `_uiSeqReset()` when the panel opens (e.g. `openSettingsPanel`) so its first row is reliably the deepest, regardless of any recent blip.
+- A single capture-phase `animationstart` listener (in `setupJuiceUi`) fires one blip per element **as it pops in**. It only reacts to animation **names** in the `_JUICE_IN_ANIMS` set (`juicePop`, `juiceContainerPop`, `juiceRowIn`, `settingsRowIn`, `stgItemIn`). The pitch comes from `_uiSeqRate()`: a gap >240 ms (or an explicit `_uiSeqReset()`) starts a **fresh** sweep (`idx=0`, `base = 0.78 + random*0.16`); each blip within the window does `idx++` and returns `base + min(idx,12)*0.055` (rising). `_playUiBlip(rate)` plays `uiBlip` through the focus engine (`playPitched`).
+- **Sound is opt-in by animation name, not automatic.** Sequenced elements are silent unless their keyframe name is in `_JUICE_IN_ANIMS`. To give a NEW sequenced panel the cascade: name its row keyframe and **add that name to `_JUICE_IN_ANIMS`** (that's all settings needed — `stgItemIn`). To keep a sequenced panel **silent**, just don't register its animation name (and `_JUICE_SILENT_SEL` force-mutes specific elements even if they use a sounded name).
+- **Start each panel's sweep fresh:** call `_uiSeqReset()` when the panel opens (e.g. `_stgShowTab`) so its first row is reliably the deepest, regardless of any recent blip.
 - **Closing must be silent.** Pop-**out**/close keyframes (`settingsPanelOut`, `juicePopOut`, …) are **not** in `_JUICE_IN_ANIMS`, so a close never blips. Never add a close/out animation name to that set.
 
 ---
@@ -2872,7 +2899,7 @@ Five separate fixed elements, stacked, and **none of them is inside another**:
 | `#lib-panel` | the tasks panel, under the whole stack |
 
 **They're placed by JS, not CSS** (`_hudPositionDock`, `_hudStackBottom`,
-`_hudPositionSettings`, `_libPositionPanel`). No CSS rule can read a sibling's box, and
+`_libPositionPanel`). No CSS rule can read a sibling's box, and
 the card's width changes with the name and with the points chip arriving — so one function
 measures the card and hangs the rest off it. Re-run by a **`ResizeObserver` on the card**
 (which also fires the first time it gets a size, i.e. when the game screen appears),
@@ -2895,8 +2922,6 @@ Four things follow and are all load-bearing:
   (twice: once now, once after the 0.45 s slide).
 - **`setMinigameHideUI` hides `#hud-tools`** — the minigame's own leave button lives exactly
   where the tools box now sits.
-- **`_hudPositionSettings` follows the gear to the left** (writes `left`, clears `right` —
-  the mobile CSS fallback would otherwise pull the panel back to the other edge).
 
 - **Measure the BOX, never the drawn rect** (`_hudLayoutRect`): focus mode slides the
   card with `translateY(-140%)`, and a rect read mid-slide is somewhere above the screen.
@@ -2908,9 +2933,6 @@ Four things follow and are all load-bearing:
   name on a narrow phone pushes the card wide enough for that to happen. The duty card
   and the azkar dock move down with it. `offsetParent` is null for a `position: fixed` element, so "is the
   pill on screen" is a **width test on its rect**, not an offsetParent test.
-- **The settings panel follows its gear** (`_hudPositionSettings`, called from
-  `openSettingsPanel`) instead of staying pinned to the corner the gear used to be in. It
-  can only be measured once open — a hidden panel is `display: none` and measures zero.
 - **The azkar button itself is unchanged.** Its enter/exit animation collapses its OWN
   `max-height`/`margin`/`padding`, so it animates identically on the dock as it did inside
   the card. `.azkar-dock` is `pointer-events: none` with `> * { auto }` so the empty dock

@@ -823,6 +823,14 @@ body {
     color: rgba(255,255,255,0.60);
     direction: rtl;
 }
+/* تذكير لأصحاب بريميوم: الدخول إلى يوتيوب من الإعدادات يُخفي الإعلانات */
+.yt-ad-hint {
+    max-width: 88%;
+    font-size: 10.5px; font-weight: 500; line-height: 1.5;
+    color: rgba(255,255,255,0.38);
+    text-align: center;
+    direction: rtl;
+}
 
 /* ── Sound loading indicator (buffer not yet ready) ── */
 .sound-item.sound-loading .sound-toggle-btn {
@@ -2045,157 +2053,432 @@ body.is-mobile .btn-discord { width: 100%; }
 .settings-btn:active { transform: scale(0.90); }
 .settings-btn.active { color: rgba(255,255,255,0.85); }
 
-/* Settings panel */
+/* ═══════════════════════════════════════════════════════════════════════════
+   الإعدادات — لوحة كاملة (مستوحاة من بطاقة حضور المقر، بالوضع الداكن)
+   • تبويبات جانبية على الحاسوب، شريط علوي يُمرَّر أفقيًا على الجوال — قسم واحد
+     ظاهر في كل مرة، فلا قائمة طويلة تُمرَّر.
+   • كل خيار «حبّة» واحدة طويلة، وحبّة أصغر تنزلق إلى المختار: موضعها
+     `--i` × عرضها — CSS خالص، لا قياس ولا JS في الحركة.
+   • لا backdrop-filter إطلاقًا: الستارة معتمة، والعالم تحتها يتوقف رسمه بعد
+     ظهور اللوحة (`_stg.canvasOff`). المعاينة الحيّة وحدها ترسم، وعلى دفعات.
+   • المداخل: التلاشي داخل الـ keyframes و`backwards` مع أساس معتم (القاعدة ٢٠).
+   • لا letter-spacing على نص عربي.
+   ═══════════════════════════════════════════════════════════════════════════ */
 .settings-panel {
+    --stg-ink:    rgba(255, 255, 255, 0.92);
+    --stg-ink-70: rgba(255, 255, 255, 0.70);
+    --stg-ink-55: rgba(255, 255, 255, 0.52);
+    --stg-ink-40: rgba(255, 255, 255, 0.38);
+    --stg-ink-12: rgba(255, 255, 255, 0.12);
+    --stg-ink-06: rgba(255, 255, 255, 0.06);
+    --stg-line:   rgba(255, 255, 255, 0.08);
+    --stg-pop:  cubic-bezier(0.34, 1.56, 0.64, 1);
+    --stg-ease: cubic-bezier(0.22, 1, 0.36, 1);
     position: fixed;
-    top: 130px; right: 18px;
-    z-index: 6000;
-    width: 270px;
-    max-height: calc(100vh - 150px);
-    display: flex; flex-direction: column;
-    background: rgba(18,18,18,0.92);
-    -webkit-backdrop-filter: blur(24px) saturate(1.6);
-    backdrop-filter: blur(24px) saturate(1.6);
-    border: 1px solid rgba(255,255,255,0.09);
-    border-radius: 18px;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.50);
-    overflow: hidden;
-    animation: settingsPanelIn 0.28s cubic-bezier(0.34,1.56,0.64,1);
+    inset: 0;
+    z-index: 9300;            /* فوق الواجهة، تحت الصلاة/الأذكار (10000) */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    direction: rtl;
+    color: var(--stg-ink);
+    font-family: 'Baloo Bhaijaan 2', 'Rubik', system-ui, sans-serif;
 }
 .settings-panel.hidden { display: none; }
-@keyframes settingsPanelIn {
-    from { opacity: 0; transform: scale(0.93) translateY(-8px); }
-    to   { opacity: 1; transform: scale(1) translateY(0); }
+.settings-panel [data-accent="teal"]   { --acc: #3BB9AB; --acc-ink: #62d6c8; --acc-soft: rgba(59, 185, 171, 0.16); }
+.settings-panel [data-accent="yellow"] { --acc: #F4C82C; --acc-ink: #f7d65c; --acc-soft: rgba(244, 200, 44, 0.15); }
+.settings-panel [data-accent="red"]    { --acc: #F04D39; --acc-ink: #ff7d6b; --acc-soft: rgba(240, 77, 57, 0.16); }
+.settings-panel [data-accent="blue"]   { --acc: #2f8fd6; --acc-ink: #8ecbff; --acc-soft: rgba(47, 143, 214, 0.18); }
+
+.stg-scrim {
+    position: absolute; inset: 0;
+    background: rgba(4, 4, 7, 0.72);
+    animation: stgFadeIn 0.28s ease backwards;
 }
-/* Disappearing animation (overrides the base entrance while closing) */
-.settings-panel.settings-panel-closing {
-    animation: settingsPanelOut 0.22s cubic-bezier(0.4,0,1,1) forwards;
-    pointer-events: none;
+@keyframes stgFadeIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes stgFadeOut { from { opacity: 1; } to { opacity: 0; } }
+
+.stg-card {
+    position: relative;
+    width: min(900px, calc(100vw - 48px));
+    height: min(640px, calc(100dvh - 48px));
+    display: grid;
+    grid-template-columns: 236px minmax(0, 1fr);   /* RTL: التبويبات يمينًا */
+    background: #141416;
+    border: 1px solid var(--stg-line);
+    border-radius: 28px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+    overflow: hidden;
+    animation: stgCardIn 0.42s var(--stg-pop) backwards;
 }
-@keyframes settingsPanelOut {
-    from { opacity: 1; transform: scale(1) translateY(0); }
-    to   { opacity: 0; transform: scale(0.93) translateY(-8px); }
+@keyframes stgCardIn {
+    from { opacity: 0; transform: translateY(14px) scale(0.96); }
+    to   { opacity: 1; transform: none; }
 }
-/* Sequential entrance for each category heading + row (replays on every open).
-   The rows fade AND slide, but the fade lives entirely inside the keyframes —
-   the element's own base style is `opacity: 1`, and the pre-delay hide comes from
-   `animation-fill-mode: backwards`. That's the whole trick: an `opacity: 0` BASE
-   that relied on the keyframe to reveal it meant that if the animation never ran
-   (Firefox skipped the sequence entirely — same failure as the pomodoro
-   .setting-group rows) the whole settings panel rendered EMPTY. With `backwards`,
-   a stalled animation falls back to the base style and just costs the flourish,
-   never the content.
-   `backwards`, NOT `both`: `both` pins the 100% keyframe forever, and an animated
-   property beats a transitioned one — which is what kills hover/close effects
-   elsewhere in this file. */
-@keyframes settingsRowIn {
-    from { opacity: 0; transform: translateY(9px); }
-    to   { opacity: 1; transform: translateY(0); }
+@keyframes stgCardOut {
+    from { opacity: 1; transform: none; }
+    to   { opacity: 0; transform: translateY(10px) scale(0.97); }
 }
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-category-title,
-.settings-panel:not(.hidden):not(.settings-panel-closing) .settings-row {
-    animation: settingsRowIn 0.4s cubic-bezier(0.22,1,0.36,1) backwards;
-}
-/* The stagger itself is assigned in JS (_settingsSequenceRows), in DOM order.
-   It used to be a hardcoded nth-child list here, but it only ever covered the
-   first two rows of each category — every row added after that inherited the
-   rule above with NO delay and popped in instantly, ahead of the cascade. JS
-   indexes whatever is actually in the panel, so new rows/categories stay
-   sequenced with nothing to update here. */
-.settings-panel-header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 16px 12px;
-    border-bottom: 1px solid rgba(255,255,255,0.07);
-}
-.settings-panel-title {
-    font-size: 0.82rem; font-weight: 700;
-    color: rgba(255,255,255,0.70);
-    letter-spacing: 0.03em;
-    direction: rtl;
-}
-.settings-panel-close {
-    width: 26px; height: 26px;
+.settings-panel.settings-panel-closing { pointer-events: none; }
+.settings-panel.settings-panel-closing .stg-scrim { animation: stgFadeOut 0.24s ease forwards; }
+.settings-panel.settings-panel-closing .stg-card  { animation: stgCardOut 0.24s cubic-bezier(0.4, 0, 1, 1) forwards; }
+
+.stg-close {
+    position: absolute;
+    top: 16px; inset-inline-end: 16px;
+    z-index: 3;
+    width: 36px; height: 36px; padding: 0;
     display: grid; place-items: center;
-    border-radius: 50%;
-    background: rgba(255,255,255,0.06);
-    border: none; cursor: pointer;
-    color: rgba(255,255,255,0.50);
-    transition: background 0.15s, color 0.15s;
-}
-.settings-panel-close svg { width: 13px; height: 13px; }
-.settings-panel-close:hover { background: rgba(255,255,255,0.12); color: #fff; }
-.settings-panel-header { flex: 0 0 auto; }
-.settings-rows {
-    padding: 6px 0 10px;
-    flex: 1 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-}
-/* Category groups with header labels */
-.settings-category { padding: 2px 0; }
-.settings-category:not(:last-child) { border-bottom: 1px solid rgba(255,255,255,0.07); }
-.settings-category-title {
-    font-size: 0.66rem; font-weight: 700;
-    color: rgba(255,255,255,0.34);
-    letter-spacing: 0.04em;
-    padding: 12px 16px 4px;
-    direction: rtl;
-}
-.settings-row {
-    display: flex; align-items: center; justify-content: space-between;
-    gap: 12px; padding: 10px 16px;
-    direction: rtl;
-}
-.settings-category .settings-row:not(:last-child) { border-bottom: 1px solid rgba(255,255,255,0.05); }
-.settings-row-label { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-.settings-row-name {
-    font-size: 0.82rem; font-weight: 600;
-    color: rgba(255,255,255,0.85);
-}
-.settings-row-sub {
-    font-size: 0.70rem; font-weight: 400;
-    color: rgba(255,255,255,0.38);
-    direction: rtl;
-}
-.settings-toggle-btn {
-    flex: 0 0 auto;
-    padding: 5px 12px;
-    border-radius: 50px;
-    background: rgba(255,255,255,0.08);
-    border: 1px solid rgba(255,255,255,0.12);
-    color: rgba(255,255,255,0.55);
-    font-size: 0.74rem; font-weight: 700;
-    font-family: inherit;
+    border: 0; border-radius: 50%;
+    background: var(--stg-ink-06);
+    color: var(--stg-ink-70);
     cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.18s, color 0.18s, border-color 0.18s;
     -webkit-tap-highlight-color: transparent;
+    transition: background 0.18s, color 0.18s, transform 0.22s var(--stg-pop);
 }
-.settings-toggle-btn:hover { background: rgba(255,255,255,0.14); color: rgba(255,255,255,0.85); }
-.settings-toggle-btn:active { transform: scale(0.95); }
-.settings-toggle-btn.settings-toggle-on {
-    background: rgba(59,185,171,0.22);
-    border-color: rgba(59,185,171,0.40);
-    color: rgba(59,185,171,0.90);
+.stg-close svg { width: 15px; height: 15px; }
+.stg-close:hover { background: var(--stg-ink-12); color: #fff; }
+.stg-close:active { transform: scale(0.88); }
+
+/* ── التبويبات ───────────────────────────────────────────────────────────── */
+.stg-nav {
+    display: flex; flex-direction: column; gap: 18px;
+    min-height: 0;
+    padding: 22px 14px;
+    background: rgba(255, 255, 255, 0.025);
+    border-inline-end: 1px solid var(--stg-line);
 }
-.settings-toggle-btn.settings-toggle-low {
-    background: rgba(255,160,50,0.18);
-    border-color: rgba(255,160,50,0.35);
-    color: rgba(255,180,80,0.90);
+.stg-brand { display: flex; align-items: center; gap: 10px; padding: 0 6px; }
+.stg-brand-mark {
+    flex: 0 0 auto;
+    width: 32px; height: 32px;
+    background: var(--brand-yellow);
+    -webkit-mask: var(--ico-0) center / contain no-repeat;
+    mask: var(--ico-0) center / contain no-repeat;
+}
+.stg-brand-txt { display: flex; flex-direction: column; min-width: 0; }
+.stg-brand-title { font-size: 1.2rem; font-weight: 800; line-height: 1.3; }
+.stg-brand-sub   { font-size: 0.7rem; font-weight: 600; line-height: 1.4; color: var(--stg-ink-40); }
+
+.stg-tabs { display: flex; flex-direction: column; gap: 4px; }
+.stg-tab {
+    position: relative;
+    display: flex; align-items: center; gap: 11px;
+    width: 100%;
+    padding: 10px 12px;
+    border: 0; border-radius: 14px;
+    background: none;
+    color: var(--stg-ink-55);
+    font: inherit; font-size: 0.9rem; font-weight: 700;
+    text-align: start;
+    cursor: pointer;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+    transition: background 0.2s, color 0.2s, transform 0.22s var(--stg-pop);
+}
+.stg-tab svg {
+    flex: 0 0 auto;
+    width: 30px; height: 30px; padding: 6px;
+    border-radius: 10px;
+    background: var(--stg-ink-06);
+    transition: background 0.2s, color 0.2s;
+}
+@media (hover: hover) and (pointer: fine) {
+    .stg-tab:hover { background: var(--stg-ink-06); color: var(--stg-ink); }
+}
+.stg-tab:active { transform: scale(0.97); }
+.stg-tab.is-active { background: var(--stg-ink-06); color: var(--stg-ink); }
+.stg-tab.is-active svg { background: var(--acc); color: #141416; }
+/* شريط الحافة كبطاقة حضور المقر — يحمل لون القسم */
+.stg-tab::before {
+    content: "";
+    position: absolute; inset-block: 9px; inset-inline-start: 0;
+    width: 4px; border-radius: 0 4px 4px 0;
+    background: var(--acc);
+    opacity: 0;
+    transform: scaleY(0.4);
+    transition: opacity 0.2s, transform 0.3s var(--stg-pop);
+}
+.stg-tab.is-active::before { opacity: 1; transform: none; }
+.stg-tab:focus-visible, .stg-seg button:focus-visible, .stg-check-row:focus-visible,
+.stg-action:focus-visible, .stg-close:focus-visible {
+    outline: 2px solid var(--brand-blue); outline-offset: 2px;
 }
 
-/* Mobile: settings panel opens below the user card (top-right) */
-body.is-mobile .settings-panel {
-    top: auto;
-    bottom: auto;
-    /* صندوق الأدوات صار على اليسار على الجوال، واللوحة تتبعه — و`_hudPositionSettings`
-       يكتب `left` الحقيقي عند الفتح؛ هذه قيمة مبدئية فقط. */
-    right: auto;
-    left: 10px;
-    top: 110px;
-    max-height: calc(100dvh - 130px);
-    width: min(270px, calc(100vw - 20px));
+/* ── المحتوى ─────────────────────────────────────────────────────────────── */
+.stg-main {
+    min-width: 0; min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 26px 28px 30px;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+.stg-sec[hidden] { display: none; }
+.stg-sec-head { margin: 0 0 18px; padding-inline-end: 44px; }
+.stg-sec-title { margin: 0; font-size: 1.45rem; font-weight: 800; line-height: 1.35; }
+.stg-sec-sub   { margin: 2px 0 0; font-size: 0.8rem; font-weight: 600; line-height: 1.5; color: var(--stg-ink-55); }
+
+/* الأساس معتم، والتلاشي داخل المفاتيح فقط + backwards (القاعدة ٢٠) */
+@keyframes stgItemIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to   { opacity: 1; transform: none; }
+}
+.stg-sec:not([hidden]) .stg-sec-head,
+.stg-sec:not([hidden]) .stg-item {
+    animation: stgItemIn 0.42s var(--stg-ease) backwards;
+}
+
+.stg-item {
+    position: relative;
+    margin-bottom: 12px;
+    padding: 15px 16px 15px 16px;
+    padding-inline-start: 20px;
+    border-radius: 22px;
+    background: rgba(255, 255, 255, 0.035);
+    border: 1px solid var(--stg-line);
+    overflow: hidden;
+}
+.stg-item::before {
+    content: "";
+    position: absolute; inset-block: 0; inset-inline-start: 0;
+    width: 5px;
+    background: var(--acc);
+}
+/* رمز فرشاة خافت في الزاوية — ثابت لا متحرّك */
+.stg-item::after {
+    content: "";
+    position: absolute; bottom: -20px; inset-inline-end: -16px;
+    width: 84px; height: 84px;
+    background: var(--acc);
+    opacity: 0.07;
+    -webkit-mask: var(--ico-3) center / contain no-repeat;
+    mask: var(--ico-3) center / contain no-repeat;
+    pointer-events: none;
+}
+.stg-item > * { position: relative; z-index: 1; }
+.stg-item-top { display: flex; align-items: center; gap: 12px; }
+.stg-ico {
+    flex: 0 0 auto;
+    width: 40px; height: 40px;
+    display: grid; place-items: center;
+    border-radius: 13px;
+    background: var(--acc-soft);
+    color: var(--acc-ink);
+}
+.stg-ico svg { width: 20px; height: 20px; }
+.stg-ico-sm { width: 32px; height: 32px; border-radius: 10px; }
+.stg-ico-sm svg { width: 16px; height: 16px; }
+.stg-txt { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; text-align: start; }
+.stg-name { font-size: 0.98rem; font-weight: 800; line-height: 1.4; color: var(--stg-ink); }
+.stg-desc { font-size: 0.75rem; font-weight: 600; line-height: 1.55; color: var(--stg-ink-55); }
+
+/* ── الحبّة: خيار واحد طويل، وحبّة أصغر تنزلق إلى المختار ──────────────────── */
+.stg-seg {
+    --i: 0;
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(var(--n, 2), minmax(0, 1fr));
+    margin-top: 13px;
+    padding: 4px;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.38);
+    border: 1px solid var(--stg-line);
+}
+.stg-seg-thumb {
+    position: absolute;
+    top: 4px; bottom: 4px; right: 4px;          /* اللوحة RTL: الخيار الأول يمينًا */
+    width: calc((100% - 8px) / var(--n, 2));
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.35), 0 0 0 2px var(--acc-soft);
+    transform: translateX(calc(var(--i) * -100%));
+    transition: transform 0.42s cubic-bezier(0.34, 1.3, 0.64, 1);
+    pointer-events: none;
+}
+.stg-seg button {
+    position: relative; z-index: 1;
+    min-width: 0;
+    padding: 9px 6px;
+    border: 0; border-radius: 999px;
+    background: none;
+    color: var(--stg-ink-55);
+    font: inherit; font-size: 0.84rem; font-weight: 800; line-height: 1.3;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: color 0.25s ease;
+}
+@media (hover: hover) and (pointer: fine) {
+    .stg-seg button:not(.is-on):hover { color: var(--stg-ink); }
+}
+.stg-seg button.is-on { color: #161618; }
+
+/* ── المعاينة الحيّة ─────────────────────────────────────────────────────── */
+.stg-preview {
+    position: relative;
+    margin-top: 12px;
+    height: clamp(150px, 27vh, 230px);
+    border-radius: 16px;
+    overflow: hidden;
+    background: #0b0b0d;
+    border: 1px solid var(--stg-line);
+}
+.stg-preview-canvas { display: block; width: 100%; height: 100%; }
+.stg-preview-tag,
+.stg-preview-tier {
+    position: absolute;
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 3px 11px;
+    border-radius: 999px;
+    background: rgba(10, 10, 12, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    font-size: 0.7rem; font-weight: 800; line-height: 1.6;
+    color: rgba(255, 255, 255, 0.86);
+    pointer-events: none;
+}
+.stg-preview-tag  { top: 10px; inset-inline-start: 10px; }
+.stg-preview-tier { bottom: 10px; inset-inline-end: 10px; color: #161618; background: var(--acc); border-color: transparent; }
+.stg-preview-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--brand-red); }
+
+/* ── مخصّص ──────────────────────────────────────────────────────────────── */
+.stg-check-row {
+    display: flex; align-items: center; gap: 12px;
+    width: 100%; padding: 0;
+    border: 0; background: none;
+    color: inherit; font: inherit;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+}
+.stg-check {
+    flex: 0 0 auto;
+    width: 28px; height: 28px;
+    display: grid; place-items: center;
+    border-radius: 9px;
+    border: 2px solid var(--stg-ink-40);
+    color: #161618;
+    transition: background 0.2s, border-color 0.2s, transform 0.25s var(--stg-pop);
+}
+.stg-check svg {
+    width: 16px; height: 16px;
+    opacity: 0; transform: scale(0.4);
+    transition: opacity 0.18s, transform 0.3s var(--stg-pop);
+}
+.stg-check-row:active .stg-check { transform: scale(0.9); }
+.stg-check-row[aria-checked="true"] .stg-check { background: var(--acc); border-color: var(--acc); }
+.stg-check-row[aria-checked="true"] .stg-check svg { opacity: 1; transform: none; }
+/* يتفتّح بسلاسة: الانتقال بين 0fr و1fr يحرّك ارتفاعًا تلقائيًا بلا قياس */
+.stg-reveal {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    visibility: hidden;
+    transition: grid-template-rows 0.38s var(--stg-ease), opacity 0.28s ease, visibility 0s linear 0.38s;
+}
+.stg-item.is-open .stg-reveal {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    visibility: visible;
+    transition: grid-template-rows 0.38s var(--stg-ease), opacity 0.3s ease 0.06s, visibility 0s;
+}
+.stg-reveal-in { overflow: hidden; min-height: 0; }
+.stg-sub {
+    margin-top: 12px;
+    padding: 12px 14px;
+    border-radius: 16px;
+    background: rgba(0, 0, 0, 0.24);
+    border: 1px solid var(--stg-line);
+}
+.stg-sub .stg-name { font-size: 0.9rem; }
+.stg-sub .stg-seg { margin-top: 10px; }
+
+/* ── يوتيوب ─────────────────────────────────────────────────────────────── */
+.stg-action {
+    display: inline-flex; align-items: center; gap: 9px;
+    margin-top: 14px;
+    padding: 11px 20px;
+    border: 0; border-radius: 999px;
+    background: var(--brand-red);
+    color: #fff;
+    font: inherit; font-size: 0.9rem; font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 6px 20px rgba(240, 77, 57, 0.28);
+    -webkit-tap-highlight-color: transparent;
+    transition: transform 0.24s var(--stg-pop), box-shadow 0.2s;
+}
+.stg-action svg { width: 18px; height: 18px; }
+@media (hover: hover) and (pointer: fine) {
+    .stg-action:hover { transform: translateY(-2px); box-shadow: 0 10px 26px rgba(240, 77, 57, 0.36); }
+}
+.stg-action:active { transform: scale(0.96); }
+.stg-note {
+    margin: 10px 0 0;
+    font-size: 0.74rem; font-weight: 600; line-height: 1.6;
+    color: var(--stg-ink-40);
+}
+.stg-note[hidden] { display: none; }
+#settings-yt-status { color: var(--stg-ink-70); }
+.stg-note-warn {
+    padding: 8px 12px;
+    border-radius: 12px;
+    background: rgba(244, 200, 44, 0.10);
+    color: #f7d65c;
+}
+
+/* ── الجوال: ملء الشاشة (حسب المقاس لا نوع الجهاز: هاتف، أو نافذة ضيقة أو قصيرة)، والتبويبات شريطٌ علوي يُمرَّر ───────────────────────── */
+@media (max-width: 760px), (max-height: 520px) {
+    .stg-card {
+        width: 100vw;
+        height: 100dvh;
+        border-radius: 0;
+        border: 0;
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: auto minmax(0, 1fr);
+    }
+    .stg-close { top: calc(12px + env(safe-area-inset-top, 0px)); inset-inline-end: 12px; }
+    .stg-nav {
+        gap: 12px;
+        padding: calc(14px + env(safe-area-inset-top, 0px)) 0 0;
+        border-inline-end: 0;
+        border-bottom: 1px solid var(--stg-line);
+    }
+    .stg-brand { padding: 0 16px; padding-inline-end: 60px; }
+    .stg-brand-mark { width: 28px; height: 28px; }
+    .stg-tabs {
+        flex-direction: row;
+        gap: 6px;
+        padding: 0 12px 12px;
+        overflow-x: auto;
+        overscroll-behavior-x: contain;
+        scrollbar-width: none;
+        -webkit-overflow-scrolling: touch;
+    }
+    .stg-tabs::-webkit-scrollbar { display: none; }
+    .stg-tab {
+        flex: 0 0 auto;
+        width: auto;
+        gap: 7px;
+        padding: 6px 12px 6px 14px;
+        border-radius: 999px;
+        font-size: 0.82rem;
+        background: var(--stg-ink-06);
+    }
+    .stg-tab svg { width: 24px; height: 24px; padding: 4px; border-radius: 50%; }
+    .stg-tab::before { display: none; }
+    .stg-tab.is-active { background: var(--acc-soft); color: #fff; }
+    .stg-main { padding: 18px 14px calc(26px + env(safe-area-inset-bottom, 0px)); }
+    .stg-sec-head { padding-inline-end: 0; }
+    .stg-sec-title { font-size: 1.25rem; }
+    .stg-item { padding: 13px 13px 13px 13px; padding-inline-start: 17px; border-radius: 20px; }
+    .stg-seg button { font-size: 0.8rem; padding: 9px 4px; }
+}
+
+/* توفير الطاقة / الحركة المخفّضة: بلا انزلاق مرن ولا مداخل */
+@media (prefers-reduced-motion: reduce) {
+    .stg-scrim, .stg-card,
+    .stg-sec:not([hidden]) .stg-sec-head,
+    .stg-sec:not([hidden]) .stg-item { animation: none !important; }
+    .stg-seg-thumb { transition: none; }
 }
 
 /* Minigame leave button — same position as انهاء الجلسة but only during minigames */
@@ -4214,7 +4497,6 @@ body.is-mobile .yt-focus-block,        body.reduced-gfx .yt-focus-block,
 body.is-mobile .prayer-panel,          body.reduced-gfx .prayer-panel,
 body.is-mobile .user-card,             body.reduced-gfx .user-card,
 body.is-mobile .hud,                   body.reduced-gfx .hud,
-body.is-mobile .settings-panel,        body.reduced-gfx .settings-panel,
 body.is-mobile .sp-gather,             body.reduced-gfx .sp-gather,
 body.is-mobile .sp-guest-wait,         body.reduced-gfx .sp-guest-wait,
 body.is-mobile .sp-join-panel,         body.reduced-gfx .sp-join-panel,
@@ -4239,7 +4521,6 @@ body.is-mobile .current-task-panel,    body.reduced-gfx .current-task-panel,
 body.is-mobile .yt-focus-block,        body.reduced-gfx .yt-focus-block,
 body.is-mobile .prayer-panel,          body.reduced-gfx .prayer-panel,
 body.is-mobile .user-card,             body.reduced-gfx .user-card,
-body.is-mobile .settings-panel,        body.reduced-gfx .settings-panel,
 body.is-mobile .modal-content,         body.reduced-gfx .modal-content {
     background-color: rgba(14,14,18,0.97);
 }

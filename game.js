@@ -2284,6 +2284,29 @@ class FocusYouTubePlayer {
         }
     }
 
+    // A YouTube sign-in (الإعدادات → يوتيوب) happens in another window, and the
+    // embed only reads youtube.com's cookies when its iframe LOADS — so a signed-in
+    // Premium account reaches the player only through a fresh iframe. Tear it down
+    // and reload the same video at the same second, playing or paused as it was.
+    async rebuildForAccount() {
+        const url = this.url, had = !!(this.player && this.videoId && url);
+        let sec = this._lastKnownSec || 0, playing = false;
+        if (had) {
+            try { sec = this.player.getCurrentTime() || sec; } catch (e) {}
+            try { playing = this.player.getPlayerState() === 1; } catch (e) {}
+        }
+        this._cancelRevive();
+        this._stopPoll();
+        this._stopWaveAnim();
+        this._setAdMode(false);
+        try { if (this.player) this.player.destroy(); } catch (e) {}
+        this.player = null;
+        this.ready = false;
+        const container = document.getElementById('yt-iframe-container');
+        if (container) container.innerHTML = '';
+        if (had) await this.loadUrl(url, Math.floor(sec), false, !playing);
+    }
+
     // ── Playback self-heal ────────────────────────────────────────────────
     // `playVideo()` is a postMessage into the embed. When the embed is in a
     // dead state — a cued video whose start was blocked, an error that was
@@ -7751,7 +7774,7 @@ const JUICE_UI = true;
 // Only POP-IN animations of the in-game juiced panels trigger the cascade blip.
 // (Login/lobby elements do NOT blip on appear — they blip on button press, see
 // the pointerdown handler in setupJuiceUi.)
-const _JUICE_IN_ANIMS = new Set(['juicePop', 'juiceContainerPop', 'juiceRowIn', 'settingsRowIn']);
+const _JUICE_IN_ANIMS = new Set(['juicePop', 'juiceContainerPop', 'juiceRowIn', 'settingsRowIn', 'stgItemIn']);
 // Elements whose pop-in should stay silent (visual animation still plays).
 const _JUICE_SILENT_SEL = '.free-mode-panel, .success-content';
 
@@ -8500,7 +8523,7 @@ function setupControls() {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
         if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || readingEndCardOpen()
-            || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen()) return;
+            || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || settingsIsOpen()) return;
         // مسافة = قفزة. Space belongs to whatever is FOCUSED first, though: a field
         // being typed into, or a button/link it activates (the settings rows, the
         // meeting seat, the trophy slots are all focusable). Only a press that reaches
@@ -8529,7 +8552,7 @@ function setupControls() {
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
         // Disable scroll zoom while the dashboard / customization / fireplace / tasks panel is open
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || meetingIsOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || meetingIsOpen() || settingsIsOpen()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -11335,7 +11358,7 @@ function handleMovement() {
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
     // minigame overlays, locked-in sessions, kidnap anim, prayer, sitting, reading.
     if ((JUICE_ENTRANCE && _entrance.active)
-        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || isMinigameOverlayOpen()
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || isMinigameOverlayOpen() || settingsIsOpen()
         || gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)
         || readingEndCardOpen()) {
@@ -12273,7 +12296,7 @@ function gameLoop(timestamp) {
 
 // True when nothing drawn into the world canvas can be seen — skip the whole pass.
 function _worldCanvasHidden() {
-    return gameState.azkar.active || troCeremonyIsRunning() || _meet.canvasOff || _pipCoversWorld() ||
+    return gameState.azkar.active || troCeremonyIsRunning() || _meet.canvasOff || _stg.canvasOff || _pipCoversWorld() ||
         (gameState._isMobile && (gameState.prayer.isOverlayActive
             || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen() || _lib.canvasOff));
 }
@@ -17846,126 +17869,248 @@ function getHideNames() {
 // closeSettingsPanel itself is a closure over the panel's elements.
 let _closeSettingsPanel = null;
 
-function setupSettingsUI() {
-    const settingsBtn   = document.getElementById('settings-btn');
-    const panel         = document.getElementById('settings-panel');
-    const closeBtn      = document.getElementById('settings-panel-close');
-    const graphicsBtn   = document.getElementById('settings-graphics-btn');
-    const graphicsLabel = document.getElementById('settings-graphics-label');
-    const namesBtn      = document.getElementById('settings-names-btn');
-    const namesLabel    = document.getElementById('settings-names-label');
-    const particlesBtn  = document.getElementById('settings-particles-btn');
-    const particlesLabel= document.getElementById('settings-particles-label');
-    const overlaysBtn   = document.getElementById('settings-overlays-btn');
-    const overlaysLabel = document.getElementById('settings-overlays-label');
-    const powerBtn      = document.getElementById('settings-power-btn');
-    const powerLabel    = document.getElementById('settings-power-label');
-    const lemoBtn       = document.getElementById('settings-lemo-btn');
-    const lemoLabel     = document.getElementById('settings-lemo-label');
-    const joystickBtn   = document.getElementById('settings-joystick-btn');
-    const joystickLabel = document.getElementById('settings-joystick-label');
-    const idleBtn       = document.getElementById('settings-idle-btn');
-    const idleLabel     = document.getElementById('settings-idle-label');
-    const longFreeBtn   = document.getElementById('settings-longfree-btn');
-    const longFreeLabel = document.getElementById('settings-longfree-label');
-    const azkarRandBtn  = document.getElementById('settings-azkar-random-btn');
-    const azkarRandLabel= document.getElementById('settings-azkar-random-label');
-    const prayerDelayBtn   = document.getElementById('settings-prayer-delay-btn');
-    const prayerDelayLabel = document.getElementById('settings-prayer-delay-label');
-    if (!settingsBtn || !panel) return;
+// ── الإعدادات: a full panel ─────────────────────────────────────────────────
+// Tabs down the side (a scrolling strip across the top on a phone), one section
+// at a time, and every choice a single long pill with a smaller pill that slides
+// to the selected option (`--i` × its own width — pure CSS, nothing measured).
+//
+// The live preview under جودة الرسومات renders the world around the player into
+// its own small canvas through the PiP context swap (draw-only — nothing
+// advances). It is NOT a loop: it draws a short burst when the panel opens and
+// when a graphics option changes, then stops (`_stgPreviewKick`). While the panel
+// is up and faded in, the main world pass stops on every platform
+// (`_stg.canvasOff` in `_worldCanvasHidden`) — the panel is opaque over it, so the
+// only world anyone can see is the preview's. The panel therefore costs LESS than
+// the game underneath it, never more.
+const STG_PV_FRAME_MS = 42;      // ~24 fps during a burst
+const STG_PV_OPEN_MS  = 450;     // burst on open / on showing the graphics tab
+const STG_PV_CHANGE_MS = 1100;   // burst after a graphics change (fades settle)
+const STG_PV_ZOOM = 0.85;        // a little further out than the world's own view
+const STG_ITEM_STAGGER_MS = 55;
+const _stg = {
+    open: false, canvasOff: false, offTimer: 0, tab: 'gfx',
+    pv: null, pvCtx: null, pvW: 0, pvH: 0, pvDrawn: false, pvTimer: 0, burstUntil: 0,
+};
+function settingsIsOpen() { return _stg.open; }
 
-    function _reflectJoystick() {
-        if (!joystickBtn) return;
-        const shown = joystickShouldShow();   // resolves auto for display
-        joystickBtn.dataset.value = shown ? 'on' : 'off';
-        joystickBtn.classList.toggle('settings-toggle-on', shown);
-        joystickBtn.classList.toggle('settings-toggle-low', !shown);
-        if (joystickLabel) joystickLabel.textContent = shown ? 'ظاهرة' : 'مغلقة';
+// The preview's backing store follows the same per-tier DPR caps as resizeCanvas,
+// so choosing بطاطس really shows the softer picture it will get.
+function _stgPreviewDpr() {
+    let dpr = window.devicePixelRatio || 1;
+    if (isReducedGraphics()) dpr = Math.min(dpr, isPotato() ? 1.5 : 2);
+    if (PERF.powerSave) dpr = Math.min(dpr, isPotato() ? 1.25 : 1.75);
+    if (PERF.res !== 1) dpr = Math.max(0.5, dpr * PERF.res);
+    return Math.min(dpr, 2);
+}
+
+// One layout read, only on open / tab show / resize — never per preview frame.
+function _stgPreviewMeasure() {
+    const cv = _stg.pv;
+    if (!cv) return false;
+    const w = cv.clientWidth, h = cv.clientHeight;
+    const changed = w !== _stg.pvW || h !== _stg.pvH;
+    _stg.pvW = w; _stg.pvH = h;
+    return changed;
+}
+
+function _stgPreviewRender() {
+    const cv = _stg.pv, ctx = _stg.pvCtx;
+    if (!cv || !ctx || !_stg.pvW || !_stg.pvH) return;
+    const me = gameState.players && gameState.players[gameState.userId];
+    if (!me) return;
+    const dpr = _stgPreviewDpr();
+    const bw = Math.max(1, Math.round(_stg.pvW * dpr)), bh = Math.max(1, Math.round(_stg.pvH * dpr));
+    if (cv.width !== bw || cv.height !== bh) { cv.width = bw; cv.height = bh; }
+    const { x, y } = getPlayerRenderPos(me);
+    // Nudged down a hair so the name over the head sits inside the frame too.
+    renderPiPInto(ctx, cv, dpr, { zoom: STG_PV_ZOOM, x: -x, y: -(y - 14) });
+    _stg.pvDrawn = true;
+}
+
+// A bounded burst on a timer — never a requestAnimationFrame loop of its own
+// (invariant 26). It stops by itself, and the moment the panel closes, the tab
+// changes or the page is hidden.
+function _stgPreviewKick(ms) {
+    _stg.burstUntil = Math.max(_stg.burstUntil, performance.now() + ms);
+    if (_stg.pvTimer) return;
+    const tick = () => {
+        _stg.pvTimer = 0;
+        if (!_stg.open || _stg.tab !== 'gfx' || document.hidden) return;
+        _stgPreviewRender();
+        if (performance.now() < _stg.burstUntil) _stg.pvTimer = setTimeout(tick, STG_PV_FRAME_MS);
+    };
+    _stg.pvTimer = setTimeout(tick, 0);
+}
+
+// Hand the preview's pixels back the moment it can't be seen.
+function _stgPreviewFree() {
+    clearTimeout(_stg.pvTimer);
+    _stg.pvTimer = 0;
+    _stg.burstUntil = 0;
+    _stg.pvDrawn = false;
+    if (_stg.pv && _stg.pv.width) { _stg.pv.width = 0; _stg.pv.height = 0; }
+}
+
+// Reflect a value onto a pill control: which option is selected, where the
+// thumb sits (`--i`), and the radio state for screen readers.
+function _stgSeg(id, value) {
+    const seg = document.getElementById(id);
+    if (!seg) return;
+    let idx = 0;
+    seg.querySelectorAll('button[data-v]').forEach((b, k) => {
+        const on = b.dataset.v === value;
+        b.classList.toggle('is-on', on);
+        b.setAttribute('aria-checked', on ? 'true' : 'false');
+        if (on) idx = k;
+    });
+    seg.style.setProperty('--i', idx);
+    seg.dataset.value = value;
+}
+function _stgOnSeg(id, fn) {
+    const seg = document.getElementById(id);
+    if (!seg) return;
+    seg.addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-v]');
+        if (!b || !seg.contains(b) || b.dataset.v === seg.dataset.value) return;
+        fn(b.dataset.v);
+    });
+}
+
+// ── يوتيوب: signing in for Premium ─────────────────────────────────────────
+// There is no API for this and none is needed: the embed is served from
+// www.youtube.com, so it carries that site's cookies — a member signed in to a
+// Premium account gets the embed without ads. We only open Google's own sign-in
+// page (we never see the account) and, once the member is back, reload the
+// embed so a fresh iframe picks the session up (`rebuildForAccount`). Browsers
+// that block third-party cookies (Safari/WebKit, Firefox) keep the embed signed
+// out whatever happens here — the section says so instead of promising.
+const YT_LOGIN_URL = 'https://accounts.google.com/ServiceLogin?service=youtube&passive=true&continue='
+    + encodeURIComponent('https://www.youtube.com/');
+const YT_LOGIN_KEY = 'mdwnh_yt_login_at';
+const _ytLogin = { watch: 0, done: null };
+
+function _ytAccountBlocked() {
+    const ua = navigator.userAgent || '';
+    return _isSafariBrowser() || _isFirefoxBrowser()
+        || /iphone|ipad|ipod|crios|fxios|edgios/i.test(ua)
+        || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);   // iPadOS
+}
+
+function _ytLoginReflect() {
+    const label = document.getElementById('settings-yt-login-label');
+    let at = 0;
+    try { at = +localStorage.getItem(YT_LOGIN_KEY) || 0; } catch (_) {}
+    if (label) label.textContent = at ? 'تبديل حساب يوتيوب' : 'تسجيل الدخول إلى يوتيوب';
+    const warn = document.getElementById('settings-yt-warn');
+    if (warn) warn.hidden = !_ytAccountBlocked();
+}
+
+function _ytLoginStatus(msg) {
+    const el = document.getElementById('settings-yt-status');
+    if (!el) return;
+    el.textContent = msg || '';
+    el.hidden = !msg;
+}
+
+function _ytLoginFinish() {
+    if (_ytLogin.done) _ytLogin.done();
+    try { localStorage.setItem(YT_LOGIN_KEY, String(Date.now())); } catch (_) {}
+    const yt = gameState.focusYTPlayer;
+    if (yt && yt.rebuildForAccount) yt.rebuildForAccount().catch(() => {});
+    _ytLoginStatus('تم. أُعيد تحميل المشغّل بحسابك؛ إن كان اشتراكك بريميوم فلن تظهر الإعلانات.');
+    _ytLoginReflect();
+}
+
+function _ytOpenLogin() {
+    if (_ytLogin.done) _ytLogin.done();
+    let win = null;
+    try {
+        const w = 480, h = 640;
+        const left = Math.max(0, Math.round((screen.width - w) / 2));
+        const top = Math.max(0, Math.round((screen.height - h) / 2));
+        win = window.open(YT_LOGIN_URL, 'mdwnh-yt-login', `popup=yes,width=${w},height=${h},left=${left},top=${top}`);
+    } catch (_) {}
+    if (!win) { try { win = window.open(YT_LOGIN_URL, '_blank'); } catch (_) {} }
+    if (!win) {
+        _ytLoginStatus('تعذّر فتح صفحة الدخول. اسمح للموقع بفتح النوافذ المنبثقة ثم أعد المحاولة.');
+        return;
     }
+    _ytLoginStatus('أكمل الدخول في النافذة الجديدة ثم أغلقها، وسيُعاد تحميل المشغّل بحسابك.');
+    // "The member is done" = the popup closed. Google's sign-in page may cut the
+    // opener's link to it (COOP), which makes `closed` read true at once — then the
+    // only honest signal left is the member coming back to this tab.
+    const t0 = Date.now();
+    let severed = false;
+    const isClosed = () => { try { return win.closed; } catch (_) { return true; } };
+    const onBack = () => {
+        if (document.hidden || Date.now() - t0 < 2500) return;
+        if (severed || isClosed()) _ytLoginFinish();
+    };
+    _ytLogin.watch = setInterval(() => {
+        if (!isClosed()) return;
+        if (Date.now() - t0 < 1500) { severed = true; clearInterval(_ytLogin.watch); _ytLogin.watch = 0; return; }
+        if (!severed) _ytLoginFinish();
+    }, 700);
+    const giveUp = setTimeout(() => { if (_ytLogin.done) _ytLogin.done(); }, 15 * 60 * 1000);
+    window.addEventListener('focus', onBack);
+    document.addEventListener('visibilitychange', onBack);
+    _ytLogin.done = () => {
+        _ytLogin.done = null;
+        clearInterval(_ytLogin.watch); _ytLogin.watch = 0;
+        clearTimeout(giveUp);
+        window.removeEventListener('focus', onBack);
+        document.removeEventListener('visibilitychange', onBack);
+    };
+}
+
+function setupSettingsUI() {
+    const settingsBtn = document.getElementById('settings-btn');
+    const panel       = document.getElementById('settings-panel');
+    const closeBtn    = document.getElementById('settings-panel-close');
+    const scrim       = document.getElementById('stg-scrim');
+    const customBtn   = document.getElementById('settings-custom-btn');
+    const tierTag     = document.getElementById('stg-preview-tier');
+    const tabsEl      = panel && panel.querySelector('.stg-tabs');
+    const mainEl      = panel && panel.querySelector('.stg-main');
+    if (!settingsBtn || !panel) return;
+    const tabs = Array.from(panel.querySelectorAll('.stg-tab'));
+    const secs = Array.from(panel.querySelectorAll('.stg-sec'));
+
+    _stg.pv = document.getElementById('stg-preview-canvas');
+    _stg.pvCtx = _stg.pv ? _stg.pv.getContext('2d') : null;
+    if (_stg.pvCtx) installLowGfxShadowGuard(_stg.pvCtx);   // reduced tiers lose live shadows here too
+
+    const TIER_LABELS = { high: 'عالية', low: 'متوسطة', potato: 'بطاطس' };
 
     function _reflectGraphics() {
         const tier = graphicsTier();           // always concrete (device default until chosen)
-        graphicsBtn.dataset.value = tier;
-        graphicsBtn.classList.toggle('settings-toggle-on',  tier === 'high');
-        graphicsBtn.classList.toggle('settings-toggle-low', tier === 'potato');
-        const labels = { high: 'عالية', low: 'متوسطة', potato: 'بطاطس' };
-        graphicsLabel.textContent = labels[tier];
+        _stgSeg('settings-graphics-seg', tier);
+        if (tierTag) tierTag.textContent = TIER_LABELS[tier];
         _applyGraphicsSetting();
     }
 
-    function _reflectLemo() {
-        if (!lemoBtn) return;
-        const hide = getHideLemo();
-        lemoBtn.dataset.value = hide ? 'hide' : 'show';
-        lemoBtn.classList.toggle('settings-toggle-on', !hide);
-        lemoBtn.classList.toggle('settings-toggle-low', hide);
-        if (lemoLabel) lemoLabel.textContent = hide ? 'مخفي' : 'ظاهر';
+    // مخصّص = the member has pinned الجسيمات / الطبقات الجوية themselves. Unticked,
+    // both follow the graphics tier (the old «تلقائي»); ticked, both are theirs.
+    function _isCustomEffects() {
+        return getParticlesMode() !== 'auto' || getOverlaysMode() !== 'auto';
     }
-
-    function _reflectNames() {
-        const hide = getHideNames();
-        namesBtn.dataset.value = hide ? 'hide' : 'show';
-        namesBtn.classList.toggle('settings-toggle-on', !hide);
-        namesLabel.textContent = hide ? 'مخفية' : 'ظاهرة';
+    function _reflectCustom() {
+        const on = _isCustomEffects();
+        if (customBtn) {
+            customBtn.setAttribute('aria-checked', on ? 'true' : 'false');
+            customBtn.closest('.stg-item')?.classList.toggle('is-open', on);
+        }
+        _stgSeg('settings-particles-seg', particlesEnabled() ? 'on' : 'off');
+        _stgSeg('settings-overlays-seg',  overlaysEnabled()  ? 'on' : 'off');
     }
-
-    // Particles / overlays are TRI-state (تلقائي → مفعّلة → مغلقة) because "auto"
-    // is a real, distinct choice here: it's the only one that tracks the graphics
-    // tier. The explicit states are the whole point — they override that tier.
-    function _reflectEffect(btn, label, mode, resolved) {
-        if (!btn) return;
-        btn.dataset.value = mode;
-        btn.classList.toggle('settings-toggle-on',  mode === 'on'  || (mode === 'auto' && resolved));
-        btn.classList.toggle('settings-toggle-low', mode === 'off');
-        label.textContent = mode === 'auto' ? 'تلقائي' : (mode === 'on' ? 'مفعّلة' : 'مغلقة');
-    }
-    function _reflectParticles() { _reflectEffect(particlesBtn, particlesLabel, getParticlesMode(), particlesEnabled()); }
-    function _reflectOverlays()  { _reflectEffect(overlaysBtn,  overlaysLabel,  getOverlaysMode(),  overlaysEnabled()); }
-    // توفير الطاقة: same tri-state shape, masculine labels (the noun is مذكّر).
-    function _reflectPower() {
-        if (!powerBtn) return;
-        const mode = getPowerSaveMode();
-        powerBtn.dataset.value = mode;
-        powerBtn.classList.toggle('settings-toggle-on',  mode === 'on' || (mode === 'auto' && powerSaveEnabled()));
-        powerBtn.classList.toggle('settings-toggle-low', mode === 'off');
-        powerLabel.textContent = mode === 'auto' ? 'تلقائي' : (mode === 'on' ? 'مفعّل' : 'مغلق');
-    }
-
-    function _reflectIdle() {
-        if (!idleBtn) return;
-        // "حركة الجلوس مفعّلة" = idle animation ON (default). Disabled = OFF.
-        const disabled = getDisableIdleAnim();
-        idleBtn.dataset.value = disabled ? 'off' : 'on';
-        idleBtn.classList.toggle('settings-toggle-on', !disabled);
-        idleLabel.textContent = disabled ? 'مغلقة' : 'مفعّلة';
-    }
-
-    // TRI-state like الجسيمات: مغلق → بعد ٣٠ دقيقة → دائمًا. "بعد ٣٠ دقيقة" is the
-    // default and reads as ON, since the confirm is a safety net, not a nag.
-    function _reflectLongFree() {
-        if (!longFreeBtn) return;
-        const mode = getLongFreeMode();
-        longFreeBtn.dataset.value = mode;
-        longFreeBtn.classList.toggle('settings-toggle-on',  mode !== 'off');
-        longFreeBtn.classList.toggle('settings-toggle-low', mode === 'off');
-        longFreeLabel.textContent = mode === 'off' ? 'مغلق' : (mode === 'always' ? 'دائمًا' : 'بعد ٣٠ دقيقة');
-    }
-
-    function _reflectAzkarRandom() {
-        if (!azkarRandBtn) return;
-        const on = getRandomizeAzkar();
-        azkarRandBtn.dataset.value = on ? 'on' : 'off';
-        azkarRandBtn.classList.toggle('settings-toggle-on', on);
-        azkarRandLabel.textContent = on ? 'مفعّل' : 'مغلق';
-    }
-
-    function _reflectPrayerDelay() {
-        if (!prayerDelayBtn) return;
-        const on = getPrayerJamaahDelay();
-        prayerDelayBtn.dataset.value = on ? 'on' : 'off';
-        prayerDelayBtn.classList.toggle('settings-toggle-on', on);
-        prayerDelayLabel.textContent = on ? 'مفعّل' : 'مغلق';
-    }
+    function _reflectPower()       { _stgSeg('settings-power-seg', getPowerSaveMode()); }
+    function _reflectNames()       { _stgSeg('settings-names-seg', getHideNames() ? 'hide' : 'show'); }
+    function _reflectLemo()        { _stgSeg('settings-lemo-seg', getHideLemo() ? 'hide' : 'show'); }
+    function _reflectJoystick()    { _stgSeg('settings-joystick-seg', joystickShouldShow() ? 'on' : 'off'); }
+    function _reflectIdle()        { _stgSeg('settings-idle-seg', getDisableIdleAnim() ? 'off' : 'on'); }
+    function _reflectLongFree()    { _stgSeg('settings-longfree-seg', getLongFreeMode()); }
+    function _reflectAzkarRandom() { _stgSeg('settings-azkar-random-seg', getRandomizeAzkar() ? 'on' : 'off'); }
+    function _reflectPrayerDelay() { _stgSeg('settings-prayer-delay-seg', getPrayerJamaahDelay() ? 'on' : 'off'); }
 
     function _applyGraphicsSetting() {
         // Bokeh (live backdrop-filter blur): hide on reduced tiers (low + potato).
@@ -17982,155 +18127,220 @@ function setupSettingsUI() {
         applyGraphicsBodyClass();   // toggle reduced-gfx/potato-gfx body classes for the CSS wins
         resizeCanvas();
     }
-
-    // Cycles the explicit tiers: عالية → متوسطة → بطاطس. Operates on the resolved tier
-    // (device default until first chosen) so a press always visibly changes something.
-    graphicsBtn.addEventListener('click', () => {
-        const cycle = { high: 'low', low: 'potato', potato: 'high' };
-        const next = cycle[graphicsTier()] || 'low';
-        localStorage.setItem(SETTINGS_GRAPHICS_KEY, next);
-        _reflectGraphics();
-        _reflectParticles();   // both may be on تلقائي → their resolved state just moved
-        _reflectOverlays();
-    });
-
-    // تلقائي → مفعّلة → مغلقة → تلقائي. Removing the key returns to tier-follow.
-    function _cycleEffect(key, current) {
-        const next = { auto: 'on', on: 'off', off: 'auto' }[current];
-        if (next === 'auto') localStorage.removeItem(key);
-        else                 localStorage.setItem(key, next);
+    function _refreshEffectFlags() {
         gameState._particlesOn = particlesEnabled();
         gameState._overlaysOn  = overlaysEnabled();
         gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
     }
-    if (particlesBtn) {
-        particlesBtn.addEventListener('click', () => {
-            _cycleEffect(SETTINGS_PARTICLES_KEY, getParticlesMode());
-            _reflectParticles();
-        });
-    }
-    if (powerBtn) {
-        powerBtn.addEventListener('click', () => {
-            const next = { auto: 'on', on: 'off', off: 'auto' }[getPowerSaveMode()];
-            try {
-                if (next === 'auto') localStorage.removeItem(SETTINGS_POWER_KEY);
-                else                 localStorage.setItem(SETTINGS_POWER_KEY, next);
-            } catch (_) {}
-            _perfSyncTier();   // applies the cap, the DPR cap and the body class now
-            gameState._settingsFlagsAt = 0;
-            _reflectPower();
-        });
-    }
-    if (overlaysBtn) {
-        overlaysBtn.addEventListener('click', () => {
-            _cycleEffect(SETTINGS_OVERLAYS_KEY, getOverlaysMode());
-            _reflectOverlays();
-        });
-    }
 
-    namesBtn.addEventListener('click', () => {
-        const next = getHideNames() ? '0' : '1';
-        localStorage.setItem(SETTINGS_NAMES_KEY, next);
+    _stgOnSeg('settings-graphics-seg', (v) => {
+        if (!TIER_LABELS[v]) return;
+        localStorage.setItem(SETTINGS_GRAPHICS_KEY, v);
+        _reflectGraphics();
+        _reflectCustom();   // unticked, both effects follow the tier — their state just moved
+        _stgPreviewKick(STG_PV_CHANGE_MS);
+    });
+
+    if (customBtn) {
+        customBtn.addEventListener('click', () => {
+            if (_isCustomEffects()) {
+                // Back to following the tier.
+                localStorage.removeItem(SETTINGS_PARTICLES_KEY);
+                localStorage.removeItem(SETTINGS_OVERLAYS_KEY);
+            } else {
+                // Pin what's showing right now, so ticking the box changes nothing
+                // on screen until the member flips one of the two.
+                localStorage.setItem(SETTINGS_PARTICLES_KEY, particlesEnabled() ? 'on' : 'off');
+                localStorage.setItem(SETTINGS_OVERLAYS_KEY,  overlaysEnabled()  ? 'on' : 'off');
+            }
+            _refreshEffectFlags();
+            _reflectCustom();
+            _stgPreviewKick(STG_PV_CHANGE_MS);
+        });
+    }
+    _stgOnSeg('settings-particles-seg', (v) => {
+        if (!_isCustomEffects()) return;
+        localStorage.setItem(SETTINGS_PARTICLES_KEY, v === 'on' ? 'on' : 'off');
+        _refreshEffectFlags();
+        _reflectCustom();
+        _stgPreviewKick(STG_PV_CHANGE_MS);
+    });
+    _stgOnSeg('settings-overlays-seg', (v) => {
+        if (!_isCustomEffects()) return;
+        localStorage.setItem(SETTINGS_OVERLAYS_KEY, v === 'on' ? 'on' : 'off');
+        _refreshEffectFlags();
+        _reflectCustom();
+        _stgPreviewKick(STG_PV_CHANGE_MS);
+    });
+
+    _stgOnSeg('settings-power-seg', (v) => {
+        try {
+            if (v === 'auto') localStorage.removeItem(SETTINGS_POWER_KEY);
+            else              localStorage.setItem(SETTINGS_POWER_KEY, v === 'on' ? 'on' : 'off');
+        } catch (_) {}
+        _perfSyncTier();   // applies the cap, the DPR cap and the body class now
+        gameState._settingsFlagsAt = 0;
+        _reflectPower();
+        _stgPreviewKick(STG_PV_CHANGE_MS);   // the DPR cap shows in the preview
+    });
+
+    _stgOnSeg('settings-names-seg', (v) => {
+        localStorage.setItem(SETTINGS_NAMES_KEY, v === 'hide' ? '1' : '0');
         gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
         _reflectNames();
     });
+    _stgOnSeg('settings-lemo-seg', (v) => {
+        localStorage.setItem(SETTINGS_LEMO_KEY, v === 'hide' ? '1' : '0');
+        gameState._settingsFlagsAt = 0;
+        _reflectLemo();
+    });
+    _stgOnSeg('settings-joystick-seg', (v) => {
+        setJoystickMode(v === 'on' ? 'on' : 'off');
+        _reflectJoystick();
+    });
+    _stgOnSeg('settings-idle-seg', (v) => {
+        // "حركة الجلوس مفعّلة" = idle animation ON (default). Disabled = OFF.
+        localStorage.setItem(SETTINGS_NOIDLE_KEY, v === 'off' ? '1' : '0');
+        gameState._settingsFlagsAt = 0;
+        _reflectIdle();
+    });
+    _stgOnSeg('settings-longfree-seg', (v) => {
+        // مغلق / بعد ٣٠ دقيقة / دائمًا. Removing the key restores the default.
+        if (v === '30') localStorage.removeItem(SETTINGS_LONGFREE_KEY);
+        else if (v === 'off' || v === 'always') localStorage.setItem(SETTINGS_LONGFREE_KEY, v);
+        _reflectLongFree();
+    });
+    _stgOnSeg('settings-azkar-random-seg', (v) => {
+        localStorage.setItem(SETTINGS_AZKAR_RANDOM_KEY, v === 'on' ? '1' : '0');
+        _reflectAzkarRandom();
+    });
+    _stgOnSeg('settings-prayer-delay-seg', (v) => {
+        const on = v === 'on';
+        // Per-USER preference (follows the account across devices) → store in Firebase;
+        // mirror to localStorage so getPrayerJamaahDelay() stays a cheap sync read.
+        if (on) localStorage.setItem(SETTINGS_PRAYER_DELAY_KEY, '1');
+        else    localStorage.removeItem(SETTINGS_PRAYER_DELAY_KEY);
+        if (gameState.userId) {
+            update(ref(database), { [`users/${gameState.userId}/prayerJamaahDelay`]: on }).catch(() => {});
+        }
+        _reflectPrayerDelay();
+        // Recompute prayer times immediately so the panel + next-prayer reflect the shift
+        if (gameState.prayer && gameState.prayer.times) {
+            computeNextPrayer();
+            updatePrayerPanelDOM();
+        }
+    });
 
-    if (lemoBtn) {
-        lemoBtn.addEventListener('click', () => {
-            localStorage.setItem(SETTINGS_LEMO_KEY, getHideLemo() ? '0' : '1');
-            gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
-            _reflectLemo();
-        });
-    }
+    document.getElementById('settings-yt-login-btn')?.addEventListener('click', _ytOpenLogin);
 
-    if (joystickBtn) {
-        joystickBtn.addEventListener('click', () => {
-            // Binary toggle: flip the resolved visible state.
-            setJoystickMode(joystickShouldShow() ? 'off' : 'on');
-            _reflectJoystick();
-        });
+    // ── Tabs ──────────────────────────────────────────────────────────────
+    // The entrance stagger is assigned in DOM order on every show (the old panel
+    // learnt that a hardcoded nth-child list silently misses every row added later).
+    function _stgSequence(sec) {
+        sec.querySelectorAll('.stg-sec-head, .stg-item')
+           .forEach((el, i) => { el.style.animationDelay = (i * STG_ITEM_STAGGER_MS) + 'ms'; });
     }
-
-    if (idleBtn) {
-        idleBtn.addEventListener('click', () => {
-            const next = getDisableIdleAnim() ? '0' : '1';
-            localStorage.setItem(SETTINGS_NOIDLE_KEY, next);
-            gameState._settingsFlagsAt = 0;   // apply on the next frame (flags are cached)
-            _reflectIdle();
+    function _stgShowTab(tab) {
+        if (!secs.some(s => s.dataset.sec === tab)) tab = 'gfx';
+        const changed = tab !== _stg.tab;
+        _stg.tab = tab;
+        let activeTab = null;
+        tabs.forEach(t => {
+            const on = t.dataset.tab === tab;
+            t.classList.toggle('is-active', on);
+            t.setAttribute('aria-selected', on ? 'true' : 'false');
+            if (on) activeTab = t;
         });
-    }
-
-    if (longFreeBtn) {
-        longFreeBtn.addEventListener('click', () => {
-            // مغلق → بعد ٣٠ دقيقة → دائمًا. Removing the key restores the default.
-            const next = { off: '30', '30': 'always', always: 'off' }[getLongFreeMode()];
-            if (next === '30') localStorage.removeItem(SETTINGS_LONGFREE_KEY);
-            else               localStorage.setItem(SETTINGS_LONGFREE_KEY, next);
-            _reflectLongFree();
+        secs.forEach(s => {
+            const on = s.dataset.sec === tab;
+            if (on) _stgSequence(s);   // before it shows, so the delays are live
+            s.hidden = !on;
+            s.classList.toggle('is-active', on);
         });
+        _uiSeqReset();   // each section's cascade starts deep, like a fresh open
+        if (mainEl && changed) mainEl.scrollTop = 0;
+        // Keep the chosen tab in view on the phone's scrolling strip. Scrolled by a
+        // relative delta, never scrollIntoView (invariant 11) — and relative so
+        // RTL's per-browser scrollLeft sign never matters.
+        if (tabsEl && activeTab && tabsEl.scrollWidth > tabsEl.clientWidth + 2) {
+            const sr = tabsEl.getBoundingClientRect(), tr = activeTab.getBoundingClientRect();
+            const delta = (tr.left + tr.width / 2) - (sr.left + sr.width / 2);
+            if (Math.abs(delta) > 4) tabsEl.scrollBy({ left: delta, behavior: 'smooth' });
+        }
+        if (tab === 'gfx') {
+            const resized = _stgPreviewMeasure();
+            if (resized || !_stg.pvDrawn) _stgPreviewKick(STG_PV_OPEN_MS);
+        }
     }
-
-    if (azkarRandBtn) {
-        azkarRandBtn.addEventListener('click', () => {
-            const next = getRandomizeAzkar() ? '0' : '1';
-            localStorage.setItem(SETTINGS_AZKAR_RANDOM_KEY, next);
-            _reflectAzkarRandom();
-        });
-    }
-
-    if (prayerDelayBtn) {
-        prayerDelayBtn.addEventListener('click', () => {
-            const on = !getPrayerJamaahDelay();
-            // Per-USER preference (follows the account across devices) → store in Firebase;
-            // mirror to localStorage so getPrayerJamaahDelay() stays a cheap sync read.
-            if (on) localStorage.setItem(SETTINGS_PRAYER_DELAY_KEY, '1');
-            else    localStorage.removeItem(SETTINGS_PRAYER_DELAY_KEY);
-            if (gameState.userId) {
-                update(ref(database), { [`users/${gameState.userId}/prayerJamaahDelay`]: on }).catch(() => {});
-            }
-            _reflectPrayerDelay();
-            // Recompute prayer times immediately so the panel + next-prayer reflect the shift
-            if (gameState.prayer && gameState.prayer.times) {
-                computeNextPrayer();
-                updatePrayerPanelDOM();
-            }
-        });
-    }
+    tabs.forEach(t => t.addEventListener('click', () => {
+        if (t.dataset.tab !== _stg.tab) _stgShowTab(t.dataset.tab);
+    }));
 
     // Open/close with a disappearing animation (close adds a transient class, then hides
     // after the animation finishes — no more snapping out of existence).
     let _settingsCloseTimer = null;
-    // Stagger the entrance in DOM order. This lived in style.css as a hardcoded
-    // nth-child list, but it only covered the first two rows of each category —
-    // every row added after that animated at 0s and popped in ahead of the
-    // cascade. Indexing the real children keeps any new row/category sequenced.
-    const SETTINGS_ROW_STAGGER_MS = 50;
-    function _settingsSequenceRows() {
-        panel.querySelectorAll('.settings-category-title, .settings-row')
-             .forEach((el, i) => { el.style.animationDelay = (i * SETTINGS_ROW_STAGGER_MS) + 'ms'; });
+
+    function _reflectAll() {
+        _reflectGraphics();
+        _reflectCustom();
+        _reflectPower();
+        _reflectNames();
+        _reflectLemo();
+        _reflectJoystick();
+        _reflectIdle();
+        _reflectLongFree();
+        _reflectAzkarRandom();
+        _reflectPrayerDelay();
+        _ytLoginReflect();
     }
 
     function openSettingsPanel() {
         clearTimeout(_settingsCloseTimer);
         panel.classList.remove('settings-panel-closing');
-        _settingsSequenceRows();          // before .hidden comes off, so the delays are live
+        _stg.open = true;
+        // The tier can move on its own (the governor's auto-بطاطس), so re-read it.
+        // Cheap: no layout, only class/attribute writes.
+        _reflectCustom();
+        _stgSeg('settings-graphics-seg', graphicsTier());
+        if (tierTag) tierTag.textContent = TIER_LABELS[graphicsTier()];
+        _reflectJoystick();
+        _ytLoginReflect();
         panel.classList.remove('hidden');
         settingsBtn.classList.add('active');
-        // The gear left the user card for its own box, so the panel follows it
-        // rather than staying pinned to the corner the gear used to sit in.
-        // Measured here, where the panel is finally laid out and has a width.
-        _hudPositionSettings();
-        _uiSeqReset();   // start the row cascade's pitch sweep fresh (deep → high)
+        // Stop a walk in its tracks: handleMovement returns before the branch that
+        // clears isMoving while the panel is up (same as openChatBox).
+        const me = gameState.players[gameState.userId];
+        gameState.keys = {};
+        if (me) {
+            me._vx = 0; me._vy = 0;
+            if (me.isMoving) {
+                me.isMoving = false;
+                me.isSprinting = false;
+                sendPositionWS(me.x, me.y, true);
+                updatePlayerPosition(me.x, me.y);
+            }
+        }
+        _stg.pvW = 0; _stg.pvH = 0;   // re-measured by _stgShowTab now that it's laid out
+        _stgShowTab(_stg.tab);
+        // The world under the opaque panel stops drawing once the fade-in is over.
+        clearTimeout(_stg.offTimer);
+        _stg.offTimer = setTimeout(() => { if (_stg.open) _stg.canvasOff = true; }, 380);
     }
     function closeSettingsPanel() {
         if (panel.classList.contains('hidden') || panel.classList.contains('settings-panel-closing')) return;
+        _stg.open = false;
+        // Drawing resumes FIRST, so the fade-out reveals a live world.
+        clearTimeout(_stg.offTimer);
+        _stg.canvasOff = false;
+        perfWake(600);
         panel.classList.add('settings-panel-closing');
         settingsBtn.classList.remove('active');
         clearTimeout(_settingsCloseTimer);
         _settingsCloseTimer = setTimeout(() => {
             panel.classList.add('hidden');
             panel.classList.remove('settings-panel-closing');
-        }, 230);
+            _stgPreviewFree();
+        }, 260);
     }
 
     _closeSettingsPanel = closeSettingsPanel;
@@ -18141,28 +18351,22 @@ function setupSettingsUI() {
         else closeSettingsPanel();
     });
 
-    closeBtn.addEventListener('click', () => { closeSettingsPanel(); });
-
-    document.addEventListener('click', (e) => {
-        if (!panel.classList.contains('hidden') &&
-            !panel.classList.contains('settings-panel-closing') &&
-            !panel.contains(e.target) &&
-            e.target !== settingsBtn) {
-            closeSettingsPanel();
-        }
+    closeBtn?.addEventListener('click', () => { closeSettingsPanel(); });
+    scrim?.addEventListener('click', () => { closeSettingsPanel(); });
+    window.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && _stg.open) { e.preventDefault(); closeSettingsPanel(); }
+    });
+    // A resize while open re-measures the preview (a rotation changes its box).
+    let _rzT = 0;
+    window.addEventListener('resize', () => {
+        if (!_stg.open) return;
+        clearTimeout(_rzT);
+        _rzT = setTimeout(() => {
+            if (_stg.open && _stg.tab === 'gfx' && _stgPreviewMeasure()) _stgPreviewKick(0);
+        }, 200);
     });
 
-    _reflectGraphics();
-    _reflectNames();
-    _reflectParticles();
-    _reflectOverlays();
-    _reflectPower();
-    _reflectLemo();
-    _reflectJoystick();
-    _reflectIdle();
-    _reflectLongFree();
-    _reflectAzkarRandom();
-    _reflectPrayerDelay();
+    _reflectAll();
 }
 
 // ── Init ──────────────────────────────────────────────────────────────────────
@@ -31601,38 +31805,6 @@ function _hudPositionDock() {
     }
 }
 
-/* Hangs the settings panel off the tools box instead of the screen corner the
-   gear used to occupy. Called from `openSettingsPanel`, where the panel is
-   finally laid out and can be measured — a hidden panel is `display:none` and
-   measures zero, so its width cannot be read any earlier. */
-function _hudPositionSettings() {
-    const panel = document.getElementById('settings-panel');
-    const tools = document.getElementById('hud-tools');
-    if (!panel || !tools) return;
-    const t = tools.getBoundingClientRect();
-    if (!t.width) return;
-    const w = panel.getBoundingClientRect().width || 270;
-    /* على الجوال صندوق الأدوات على اليسار، فاللوحة تُحاذيه يسارًا (وتُمسح
-       `right` وإلا غلبت قاعدة الـ CSS وشدّتها إلى الحافة الأخرى). */
-    if (isMobile()) {
-        const left = Math.min(Math.max(10, t.left),
-                              Math.max(10, window.innerWidth - w - 10));
-        panel.style.top = Math.round(t.bottom + HUD_GAP) + 'px';
-        panel.style.left = Math.round(left) + 'px';
-        panel.style.right = 'auto';
-        return;
-    }
-    panel.style.left = '';
-    // Right-aligned with the tools box, then pulled back on so a narrow screen
-    // can't push its far edge off the side.
-    const right = Math.min(
-        Math.max(10, window.innerWidth - t.right),
-        Math.max(10, window.innerWidth - w - 10)
-    );
-    panel.style.top = Math.round(t.bottom + HUD_GAP) + 'px';
-    panel.style.right = Math.round(right) + 'px';
-}
-
 // The bottom of whatever the HUD stack currently reaches down to. The azkar dock
 // collapses to nothing when the button is hidden, so it only counts when it has
 // real height — otherwise the panel would sit 10px lower for no reason.
@@ -35122,7 +35294,7 @@ function chatCanOpen() {
 function _chatMustClose() {
     return gameState.azkar.active || gameState.prayer.isOverlayActive
         || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen()
-        || libPanelIsOpen() || chalModalIsOpen() || readingEndCardOpen()
+        || libPanelIsOpen() || chalModalIsOpen() || readingEndCardOpen() || settingsIsOpen()
         || isMinigameOverlayOpen()
         || gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active
         || gameState.anim.active
