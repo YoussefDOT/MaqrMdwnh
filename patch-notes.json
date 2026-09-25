@@ -2,6 +2,16 @@
   "_readme": "نشرة الأخبار — newest day FIRST. One entry per day; add a new day at the top on every push, never edit or remove old days. tag: new | fix | better.",
   "days": [
     {
+      "date": "2026-09-25",
+      "title": "إصلاح في حضور المقر",
+      "items": [
+        {
+          "tag": "fix",
+          "text": "إذا نسيت جلسة العمل تعمل ثم صحّحت مدتها عند إنهائها، لم تعد تظهر لك رسالة «أتممت يومك» ما دام يومك لم يكتمل فعلًا."
+        }
+      ]
+    },
+    {
       "date": "2026-09-24",
       "title": "إعدادات جديدة كليًا، وحركة أنعم على الجوال",
       "items": [

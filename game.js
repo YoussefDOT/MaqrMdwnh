@@ -32821,9 +32821,18 @@ function updateWorkChallenge() {
         if (_chalPayDue(now)) {
             if (_chalPayScreenOk()) _chalOpenModal('pay');
         } else if (_duty.pendingWin && _chalScreenIsClear()) {
-            // The celebration waits for a clear screen: no session, no overlay, no end card.
-            _duty.pendingWin = false;
-            _chalOpenModal('win');
+            /* The celebration waits for a clear screen: no session, no overlay, no end
+               card — so the day is judged AGAIN here. A session left running credits
+               its hours live; cutting it down at «هل عملت …فعلًا؟» takes them back,
+               and the win that was queued mid-session must not survive that. */
+            const key = _duty.dayKey, r = _dutyTodayRec();
+            if (r.vac || r.ms < DUTY.goalMs) {
+                _duty.pendingWin = false;
+                delete _duty.celebrated[key];   // reaching three hours for real still celebrates
+            } else if (!_dutyHasPending(key)) {
+                _duty.pendingWin = false;
+                _chalOpenModal('win');
+            }
         }
     }
 
