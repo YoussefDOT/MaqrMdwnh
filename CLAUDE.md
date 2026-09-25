@@ -107,7 +107,7 @@ Grep anchors for the major systems (all verified to exist):
 | Lemo | `updateLemo` |
 | Minigames | `joinOrCreateMinigameLobby`, `listenToRace`, `gamesUnlocked` |
 | PiP | `openPiPMode`, `renderPiPInto` |
-| Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession` |
+| Dashboard | `setupDashboardUI`, `openDashboard`, `dashSaveSession`, `_fAway`, `freeAwaySuggestion` |
 | Character custom / hats | `openCharCustom`, `loadHatManifest` |
 | Library tasks panel | `setupLibraryPanel`, `_libTaskPill`, `_libEnsureTasks` |
 | Daily duty (حضور المقر — was تحدي المثابرة) | `DUTY`, `updateWorkChallenge`, `_dutyTick`, `_dutySessTrack`, `_dutyFinishSession`, `_dutyBank`, `_dutyReplayPending`, `_dutySetVacation`, `_dutyFixApply`, `_chalPayDue`, `_chalClaim` |
@@ -2870,6 +2870,7 @@ Firebase keys can't contain `. # $ / [ ]` → task names used as map keys go thr
 - **Work time is accurate** (excludes breaks): pomodoro uses `pomoWorkedMsNow()` (accumulated via `pomodoro._workStartMs/_workedMs`, stamped in `startPomodoroPhase`); free mode uses `freeWorkedMsNow()` (the engine's `totalWorkMs`).
 - **Pomodoro**: saved on **natural completion** (success card still shows) AND on **premature "انهاء الجلسة"** (`exitPomoNow`, no end card — unchanged) — both subject to the floor.
 - **Free mode**: saved in `endFreeMode`. `shouldAskLongFreeConfirm(elapsedMs)` decides whether to intercept the leave with `openFreeLongConfirmModal()` ("هل عملت لمدة x فعلًا؟") — driven by the **تأكيد مدة الجلسة الحرة** setting (`SETTINGS_LONGFREE_KEY`): `off` never asks, `always` always asks, default asks past **30 min** (`DASH_LONG_FREE_MS`). This is the safety valve for the away-time credit above: a closed tab keeps banking real clock time, and the confirm is the only place the user can correct it, which is why the threshold dropped from 2h to 30min — hour/minute steppers + **save-as-shown** or **discard**; `_dashFreeHandled` stops `endFreeMode` from double-saving.
+- **وقت الغياب — the forgotten-session trim** (`_fAway`, `_fAwayTick`, `freeAwaySuggestion`, `freeAwayAskIdle`, `FAWAY_*`): while the free clock runs, a 5 s timer records stretches nobody was there — `'stop'` = a tick gap over `FAWAY_GAP_MS` (3 min: laptop slept, phone froze the tab; a throttled background tab still ticks ~1/min) or, across a reload, the gap since the last tick saved in localStorage (`mdwnh_free_away`); `'idle'` = Chrome/Edge's `IdleDetector` (no input for `FAWAY_IDLE_MS` 20 min, or the screen locked), permission asked from the «جلسة حرة» press (`requestPermission` needs the gesture, never re-prompts). Stretches ≥ `FAWAY_MIN_MS` (10 min) make `shouldAskLongFreeConfirm` ask even under 30 min (the setting's `off` still wins), and the confirm opens on the TRIMMED time with the stretches listed (`#dash-lf-away`) and one press (`#dash-lf-away-undo`) to put the full time back. **Suggestion only — never auto-trim**, the owner's call. Zero Firebase. Pomodoro isn't covered (its cycles end on their own).
 - **Minigame high scores** (`dashRecordGameOnce`, once per session via an in-memory guard): race + laptop-boss = best **lowest** finishTime; coffee = best **highest** score.
 
 ### Entry point (second-floor papers desk)

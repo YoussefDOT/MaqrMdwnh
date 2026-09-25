@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 349 · Updated 9/25 12:40 PM</div>
+    <div id="build-number" class="build-number">Build 350 · Updated 9/25 12:46 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1429,6 +1429,11 @@
         <div id="dash-longfree-modal" class="modal-overlay dash-lf-overlay">
             <div class="modal-content dash-lf-card">
                 <h2 id="dash-lf-question" class="dash-lf-q">هل عملت لمدة كذا فعلًا؟</h2>
+                <div id="dash-lf-away" class="dash-lf-away" hidden>
+                    <div class="dash-lf-away-head">حذفنا من المدة وقتًا ابتعدت فيه عن جهازك:</div>
+                    <ul id="dash-lf-away-list" class="dash-lf-away-list"></ul>
+                    <button id="dash-lf-away-undo" class="dash-lf-away-undo" type="button">أعد الوقت المحذوف</button>
+                </div>
                 <div class="dash-lf-pickers">
                     <div class="dash-lf-box">
                         <button class="dash-lf-arrow" id="dash-lf-h-up" aria-label="زيادة الساعات">▲</button>
@@ -2362,7 +2367,7 @@
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
         <link rel="modulepreload" href="firebase-config.js?v=3">
-        <script type="module" src="game.js?v=327"></script>
+        <script type="module" src="game.js?v=328"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

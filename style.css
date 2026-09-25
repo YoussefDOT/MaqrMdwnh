@@ -6425,6 +6425,19 @@ body.is-mobile .pip-fb-close { width: 36px; height: 36px; }
     color: #dc8283; font-size: 15px; font-weight: 600; padding: 8px; font-family: inherit;
 }
 .dash-lf-discard:hover { text-decoration: underline; }
+/* وقت الغياب — the stretches the confirm already trimmed. Solid text colours (invariant 33). */
+.dash-lf-away {
+    margin: -8px 0 20px; padding: 12px 14px; border-radius: 16px; text-align: right;
+    background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.08);
+}
+.dash-lf-away[hidden] { display: none; }
+.dash-lf-away-head { font-size: 13px; font-weight: 700; color: #e3c27f; margin-bottom: 6px; }
+.dash-lf-away-list { list-style: none; margin: 0; padding: 0; font-size: 13px; line-height: 1.7; color: #b8b8b9; }
+.dash-lf-away-undo {
+    margin-top: 8px; padding: 4px 0; background: transparent; border: none; cursor: pointer;
+    font-family: inherit; font-size: 13px; font-weight: 600; color: #8fc9d3; text-decoration: underline;
+    text-underline-offset: 3px;
+}
 
 /* Mobile perf: the game loop keeps rendering behind the overlay, so never run a
    per-frame backdrop-filter over the live canvas — drop the blur and hide the

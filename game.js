@@ -6973,6 +6973,7 @@ function startGame(userData) {
     setupSettingsUI();
     setupCharCustomUI();
     setupDashboardUI();
+    _fAwaySetup();
     setupSuccessCardUI();
     setupFireplaceUI();
     setupTrophyUI();
@@ -10171,6 +10172,7 @@ function setupModeSelectUI() {
 
     document.getElementById('mode-select-free')?.addEventListener('click', () => {
         if (modeSelectGhostClick()) return;
+        freeAwayAskIdle();   // needs this press — Chrome/Edge only, asked once (وقت الغياب)
         juiceCloseThenOpen(modal, () => startFreeMode(null, false));
     });
 }
@@ -20353,8 +20355,9 @@ function setupPomoLeaveBtn() {
             // keeps accumulating) isn't logged as real work. Threshold + on/off is the
             // user's "تأكيد مدة الجلسة الحرة" setting — see shouldAskLongFreeConfirm.
             const elapsedMs = freeWorkedMsNow();
-            if (shouldAskLongFreeConfirm(elapsedMs)) {
-                openFreeLongConfirmModal(elapsedMs);   // owns save + endFreeMode
+            const away = freeAwaySuggestion(elapsedMs);   // وقت الغياب — pre-trims the confirm
+            if (shouldAskLongFreeConfirm(elapsedMs, away.total)) {
+                openFreeLongConfirmModal(elapsedMs, away);   // owns save + endFreeMode
             } else {
                 endFreeMode();
             }
@@ -24729,25 +24732,59 @@ function dashRecordGameOnce(game, sessionKey, value) {
 // The user's setting wins over everything, INCLUDING the Siraj always-ask —
 // otherwise 'off' couldn't be tested from a test ghost, which is the only
 // account that can reach the dashboard.
-function shouldAskLongFreeConfirm(elapsedMs) {
+function shouldAskLongFreeConfirm(elapsedMs, awayMs) {
     const mode = getLongFreeMode();
     if (mode === 'off')    return false;
     if (mode === 'always') return true;
-    return gameState.isSirajGhost || elapsedMs > DASH_LONG_FREE_MS;
+    // A stretch the member was away for is always worth one question (وقت الغياب).
+    return gameState.isSirajGhost || elapsedMs > DASH_LONG_FREE_MS || awayMs > 0;
 }
 
 // ── Free-mode idle-protection confirm modal (threshold: DASH_LONG_FREE_MS) ──
-function openFreeLongConfirmModal(elapsedMs) {
+function openFreeLongConfirmModal(elapsedMs, away) {
     const modal = document.getElementById('dash-longfree-modal');
     if (!modal) { endFreeMode(); return; }   // safety: never trap the user
-    let h = Math.floor(elapsedMs / 3600000);
-    let m = Math.round((elapsedMs % 3600000) / 60000);
-    if (m === 60) { h++; m = 0; }
+    let h = 0, m = 0;
+    const setMs = (ms) => {
+        h = Math.floor(ms / 3600000);
+        m = Math.round((ms % 3600000) / 60000);
+        if (m === 60) { h++; m = 0; }
+    };
     const hBox = document.getElementById('dash-lf-hours');
     const mBox = document.getElementById('dash-lf-mins');
     const qEl  = document.getElementById('dash-lf-question');
     const sync = () => { hBox.textContent = h; mBox.textContent = String(m).padStart(2, '0');
         qEl.textContent = `هل عملت لمدة ${formatDurationArabic(h * 60 + m)} فعلًا؟`; };
+    /* وقت الغياب: open on the TRIMMED time and say why, with one press to put the
+       full time back (and one to trim it again). A suggestion, never a verdict. */
+    const awayMs = away && away.total > 0 ? away.total : 0;
+    const awayBox = document.getElementById('dash-lf-away');
+    const awayList = document.getElementById('dash-lf-away-list');
+    const awayBtn = document.getElementById('dash-lf-away-undo');
+    let trimmed = awayMs > 0;
+    const syncAwayBtn = () => {
+        if (!awayBtn) return;
+        awayBtn.textContent = trimmed
+            ? `أعد الوقت المحذوف (${formatDurationArabic(Math.round(awayMs / 60000))})`
+            : 'احذف وقت الغياب مرة أخرى';
+    };
+    if (awayBox) awayBox.hidden = !awayMs;
+    if (awayMs && awayList) {
+        awayList.textContent = '';
+        for (const x of away.list.slice(-3)) {
+            const li = document.createElement('li');
+            li.textContent = `من ${_fAwayClock(x.s)} إلى ${_fAwayClock(x.e)} — ${FAWAY_LABEL[x.k] || FAWAY_LABEL.mix}`;
+            awayList.appendChild(li);
+        }
+    }
+    setMs(trimmed ? elapsedMs - awayMs : elapsedMs);
+    syncAwayBtn();
+    modal._toggleAway = () => {
+        if (!awayMs) return;
+        trimmed = !trimmed;
+        setMs(trimmed ? elapsedMs - awayMs : elapsedMs);
+        sync(); syncAwayBtn();
+    };
     sync();
     modal._adj = (which, delta) => {
         if (which === 'h') h = Math.max(0, Math.min(23, h + delta));
@@ -24778,6 +24815,163 @@ function openFreeLongConfirmModal(elapsedMs) {
     };
     modal.classList.add('active');
 }
+
+/* ── وقت الغياب — the time a forgotten free session ran with nobody there ──────
+   A free session left running through a nap used to bank the whole nap as work,
+   and the only defence was the member remembering to fix it at «هل عملت …فعلًا؟».
+   Now the site notices the stretches itself and that confirm opens already
+   trimmed — a SUGGESTION: one press puts the full time back. Nothing is cut
+   without the member seeing it. Two signals, both only while the clock runs:
+
+   • 'stop' — the site wasn't running at all: the laptop slept, the phone locked
+     and froze the tab, the tab was closed and the session reclaimed. Seen as a
+     gap between ticks of a 5 s timer (a throttled background tab still ticks
+     ~1/min, far under FAWAY_GAP_MS), and across a reload via localStorage.
+   • 'idle' — Chrome/Edge only (IdleDetector, asked once when a free session
+     starts): no input anywhere on the device for FAWAY_IDLE_MS, or the screen
+     locked. Safari and Firefox have no such API; they get 'stop' alone.
+
+   Stretches under FAWAY_MIN_MS are ignored — that is a coffee, not a nap.
+   Local only: nothing is written anywhere but this device's localStorage. */
+const FAWAY_TICK_MS = 5000;
+const FAWAY_GAP_MS  = 3 * 60000;
+const FAWAY_MIN_MS  = 10 * 60000;
+const FAWAY_IDLE_MS = 20 * 60000;
+const FAWAY_JOIN_MS = 30000;          // two stretches this close read as one
+const FAWAY_KEY     = 'mdwnh_free_away';
+const _fAway = { id: '', lastTick: 0, running: false, runFrom: 0, list: [], idle: false, locked: false, det: null, saveAt: 0, setup: false };
+
+function _fAwayRunning() {
+    const fm = gameState.freeMode;
+    return !!(fm.active && fm.phase === 'work' && fm.workStartTime > 0);
+}
+function _fAwaySave(force) {
+    const now = Date.now();
+    if (!force && now - _fAway.saveAt < 20000) return;
+    _fAway.saveAt = now;
+    try {
+        if (!_fAway.id) { localStorage.removeItem(FAWAY_KEY); return; }
+        localStorage.setItem(FAWAY_KEY, JSON.stringify({ u: gameState.userId, id: _fAway.id,
+            t: _fAway.lastTick, r: _fAway.running, l: _fAway.list }));
+    } catch (_) {}
+}
+function _fAwayLoad(id, now) {
+    _fAway.id = id; _fAway.list = []; _fAway.lastTick = 0; _fAway.running = false; _fAway.runFrom = 0;
+    try {
+        const v = JSON.parse(localStorage.getItem(FAWAY_KEY) || 'null');
+        if (v && v.u === gameState.userId && v.id === id) {
+            _fAway.list = Array.isArray(v.l) ? v.l.filter(x => x && x.e > x.s).slice(-40) : [];
+            // The page went away with the clock running (closed, killed, reloaded):
+            // the restore credits that stretch as work, so it is a 'stop' candidate.
+            if (v.r && v.t && now - v.t > FAWAY_GAP_MS && now > v.t) _fAwayAdd(v.t, now, 'stop');
+        }
+    } catch (_) {}
+    _fAwaySave(true);
+}
+function _fAwayAdd(s, e, k) {
+    if (!(e > s)) return;
+    const l = _fAway.list, last = l[l.length - 1];
+    if (last && s <= last.e + FAWAY_JOIN_MS && e >= last.s) {
+        last.s = Math.min(last.s, s);
+        last.e = Math.max(last.e, e);
+        if (last.k !== k) last.k = 'mix';
+    } else {
+        l.push({ s, e, k });
+        if (l.length > 40) l.shift();
+    }
+}
+function _fAwayTick() {
+    const fm = gameState.freeMode;
+    const id = fm.active && fm._createdAt ? 'f' + Math.round(fm._createdAt) : '';
+    const now = Date.now();
+    if (id !== _fAway.id) {
+        if (!id) { _fAway.id = ''; _fAway.list = []; _fAway.lastTick = 0; _fAway.running = false; _fAwaySave(true); return; }
+        _fAwayLoad(id, now);
+    }
+    const run = _fAwayRunning();
+    const gap = _fAway.lastTick ? now - _fAway.lastTick : 0;
+    let changed = false;
+    if (run && _fAway.running && gap > 0) {
+        if (gap > FAWAY_GAP_MS) { _fAwayAdd(_fAway.lastTick, now, 'stop'); changed = true; }
+        else if (_fAway.idle || _fAway.locked) { _fAwayAdd(_fAway.lastTick, now, 'idle'); changed = true; }
+    }
+    if (run && !_fAway.running) _fAway.runFrom = now;
+    _fAway.running = run;
+    _fAway.lastTick = now;
+    _fAwaySave(changed);
+}
+function _fAwayOnIdle() {
+    const d = _fAway.det;
+    if (!d) return;
+    _fAwayTick();                        // close the old state out to now first
+    const wasIdle = _fAway.idle;
+    _fAway.idle   = d.userState === 'idle';
+    _fAway.locked = d.screenState === 'locked';
+    // The detector says "idle" only after FAWAY_IDLE_MS without input — that
+    // whole stretch was already idle.
+    if (_fAway.idle && !wasIdle && _fAway.running) {
+        const now = Date.now();
+        _fAwayAdd(Math.max(now - FAWAY_IDLE_MS, _fAway.runFrom || now), now, 'idle');
+        _fAwaySave(true);
+    }
+}
+async function _fAwayStartDetector() {
+    if (_fAway.det || typeof window.IdleDetector !== 'function') return;
+    try {
+        const det = new window.IdleDetector();
+        det.addEventListener('change', _fAwayOnIdle);
+        await det.start({ threshold: FAWAY_IDLE_MS });
+        _fAway.det = det;
+        _fAwayOnIdle();
+    } catch (_) { /* permission gone, or not allowed here — the 'stop' signal still works */ }
+}
+// Called from the free-mode button press: requestPermission needs that gesture.
+// It never re-prompts — granted resolves at once, a denial is remembered by Chrome.
+function freeAwayAskIdle() {
+    if (_fAway.det || typeof window.IdleDetector !== 'function' || !window.IdleDetector.requestPermission) return;
+    try {
+        window.IdleDetector.requestPermission()
+            .then(st => { if (st === 'granted') _fAwayStartDetector(); })
+            .catch(() => {});
+    } catch (_) {}
+}
+function _fAwaySetup() {
+    if (_fAway.setup) return;
+    _fAway.setup = true;
+    setInterval(_fAwayTick, FAWAY_TICK_MS);
+    const kick = () => _fAwayTick();
+    document.addEventListener('visibilitychange', kick);
+    document.addEventListener('resume', kick);
+    window.addEventListener('pageshow', kick);
+    window.addEventListener('focus', kick);
+    window.addEventListener('pagehide', () => { _fAwayTick(); _fAwaySave(true); });
+    // Already granted on an earlier visit → start listening without asking again.
+    try {
+        if (typeof window.IdleDetector === 'function' && navigator.permissions && navigator.permissions.query) {
+            navigator.permissions.query({ name: 'idle-detection' })
+                .then(p => { if (p.state === 'granted') _fAwayStartDetector(); })
+                .catch(() => {});
+        }
+    } catch (_) {}
+}
+// The stretches worth suggesting, and their total (never more than the session).
+function freeAwaySuggestion(elapsedMs) {
+    _fAwayTick();
+    const list = _fAway.list.filter(x => x.e - x.s >= FAWAY_MIN_MS).map(x => ({ s: x.s, e: x.e, k: x.k }));
+    let total = 0;
+    for (const x of list) total += x.e - x.s;
+    return { list, total: Math.max(0, Math.min(total, elapsedMs || 0)) };
+}
+function _fAwayClock(ms) {
+    const d = new Date(ms);
+    const h = d.getHours(), m = d.getMinutes();
+    return `${(h % 12) || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'ص' : 'م'}`;
+}
+const FAWAY_LABEL = {
+    stop: 'كان جهازك نائمًا أو المقر مغلقًا',
+    idle: 'لم تستخدم جهازك',
+    mix:  'ابتعدت عن جهازك',
+};
 
 // ── World entry-circle drawing + prompt ─────────────────────────────────────
 function drawDashboardZone() {
@@ -25618,6 +25812,7 @@ function setupDashboardUI() {
     document.getElementById('dash-lf-m-down')?.addEventListener('click', () => lf._adj && lf._adj('m', -1));
     document.getElementById('dash-lf-confirm')?.addEventListener('click', () => lf._confirm && lf._confirm());
     document.getElementById('dash-lf-discard')?.addEventListener('click', () => lf._discard && lf._discard());
+    document.getElementById('dash-lf-away-undo')?.addEventListener('click', () => lf._toggleAway && lf._toggleAway());
 
     // Methlama font fallback notice (spec): if the OTFs can't load we silently fall
     // back to Rubik via the CSS stack — log a clear, actionable explanation.
