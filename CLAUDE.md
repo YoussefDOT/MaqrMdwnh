@@ -121,7 +121,7 @@ Grep anchors for the major systems (all verified to exist):
 | نداء ليمو | `LEMO_UID`, `lemoSummon`, `_lemoCallPose`, `_lemoCallSpots`, `lemoIsAsleep`, `lemoIsBusy` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
-| Audio | `FocusAudioEngine`, `warmGameSounds` |
+| Audio | `FocusAudioEngine`, `warmGameSounds`, `_seamlessLoop`, `_mp3CutBytes`, `_glideParam`, `_warmGames`, `playSoundRobust` |
 | Settings (full panel, pills, live preview) | `setupSettingsUI`, `_stg`, `_stgSeg`, `_stgShowTab`, `_stgPreviewKick` |
 | Success card | `setupSuccessCardUI` |
 | UI cascade blips | `setupJuiceUi` |
@@ -217,7 +217,9 @@ Each one is a shipped bug (details in Common Bugs & the feature sections):
    Use a CSS class (`.unlocked` / `.is-disabled` / `.cc-unlocked`).
 2. **Never `!important` on `transform`** — silently beats JS inline drag/animation styles.
 3. **Never `new Audio(src)` at module scope, never `preload='auto'` at parse.** New SFX
-   go through `_lazyAudio` + the 4-step pattern in Focus Audio Engine.
+   go through `_lazyAudio` + the 4-step pattern in Focus Audio Engine. **Everything
+   plays through the ONE Web Audio graph** — the `<audio>` copy is a fallback only
+   (see **One audio graph** in Focus Audio Engine).
 4. **Never per-frame / per-second Firebase writes.** High-frequency = WebSocket relay.
 5. **`serverNow()` for any multiplayer timing**, never `Date.now()` across clients.
 6. **All lobby-scoped paths through `lobbyPath()`** — gender lobbies never share data.
@@ -301,6 +303,14 @@ Each one is a shipped bug (details in Common Bugs & the feature sections):
     A translucent token that is also used for text gets a solid twin `--x-tx` beside it
     (`--stg-ink-55-tx`, `--cd-ink-55-tx`…) and text uses the twin. To fade text, put
     `opacity` on the element (composited once) — never alpha in the colour.
+34. **No always-armed non-passive `touchstart`/`touchmove` on `window`/`document`.** It
+    makes every touch on the page blocking (the browser waits on the main thread before
+    any scroll). Listen on the element the touch starts on, or arm page-wide only for
+    the duration of the gesture/mode (`_bossTouchArm`).
+35. **The main thread is never in the path of a sustained sound.** Loops are native
+    (`_seamlessLoop` + `loop = true`), never a `setTimeout` scheduler; a phone never
+    streams through `MediaElementAudioSourceNode`; one-shots go through the Web Audio
+    buffers (`playSoundRobust` routes there). See **Focus Audio Engine → Why it crackled**.
 
 ---
 
@@ -397,16 +407,19 @@ before the game is playable.** The current model:
   `gameState.sounds` audio elements are created via `_lazyAudio()` with
   `preload='none'` — they must NOT fetch at parse (45 parallel MP3 fetches used to
   crush the login screen). **Never add a `new Audio(src)` at module scope or set
-  `preload='auto'` outside `warmGameSounds()`.**
-- **After spawn** (`startGame` restore): `warmGameSounds()` preloads the core in-game
-  SFX immediately (kidnap/timers/prayer/invites) and everything else on
-  `requestIdleCallback`. New SFX just need the standard 4-step pattern — the warm-up
-  loops over all of `gameState.sounds` automatically.
+  `preload='auto'` outside `_warmAudioEl()`.**
+- **After spawn** the SFX that have a Web Audio buffer are decoded by
+  `loadSoundEffects` (after the world AND after `calmTurn()`; one at a time on a phone)
+  and PLAYED through it. The `<audio>` copies are fallbacks and are **not warmed** —
+  warming them re-downloaded every file 3–4× (measured: 154 requests / ~14 MB of audio
+  in the first seconds after spawn; now ~30 / ~4 MB). Only the sounds with no buffer
+  (the minigame set) are warmed: on desktop on calm, on a phone at the games table
+  (`_warmGames`, which also loads the race track, the boss sounds and the minigame art).
 - **Ambient focus sounds are lazy** (`ensureFocusBuffer(key)`): a buffer downloads +
-  decodes only when that sound is active (restored mix) or first toggled. Toggling is
-  still instant — `startSound` streams via a media element and hands off to the
-  seamless buffer loop when it arrives. Never restore the old "download all 7 on init"
-  behaviour (~21 MB + a huge decode on weak phones).
+  decodes only when that sound is active (restored mix) or first toggled. Desktop
+  streams via a media element meanwhile and hands off to the loop; **a phone waits for
+  the buffer** (the item pulses) — see Focus Audio Engine. Never restore the old
+  "download all 7 on init" behaviour (~21 MB + a huge decode on weak phones).
 - **The world is BAKED** (`tools/bake_world.py`, run by the pre-commit hook): the 16
   source layers (~12.5 MB of PNG) become `Baked_Ground.webp` (every ground layer
   composited), `Baked_Second.webp` (the mezzanine, cropped to its painted bbox),
@@ -430,8 +443,9 @@ before the game is playable.** The current model:
   the player walks up to it (`_fireEnsureFrames`). ~3.4 MB used to compete with the world
   during the boot.
 - **Race track** (`Art/RaceTrack Var1.png`, 6 MB + CPU-heavy pixel classification):
-  `loadRaceTrackAsset()` is idempotent and lazy — kicked by `whenCalm` after spawn and
-  ensured by every race entry path. Never call it in `init()`. The classification (a
+  `loadRaceTrackAsset()` is idempotent and lazy — kicked by `whenCalm` after spawn on
+  desktop, on walking up to the games table on a phone (`_warmGames`), and ensured by
+  every race entry path. Never call it in `init()`. The classification (a
   16 MB `getImageData` + a million-cell scan + flood fill) runs in a **worker**
   (`_raceTrackZonesInWorker`, built from the SAME functions via `Function.toString`, so it
   can't drift); the drawn image is `decode()`d off-thread (capped at 4 s — `decode()` is
@@ -514,6 +528,7 @@ decoded art it could not possibly be drawing.
 | race track 2048×2054 + its classified copy | 17 | `loadRaceTrackAsset()` — re-warmed on idle by `_memRestore`, and both race-entry paths already ensure it |
 | Lemo's sheets | 10–24 | `_lemoSheet()` per frame (asleep: `_lemoPose` re-ensures Sleeping/WakeUp) |
 | `gameState.maskCanvas` | ≤3 | `drawFocusMask`'s own null + size checks |
+| switched-off ambient buffers | ≤25 each | `ensureFocusBuffer` on the next toggle |
 | the visible canvas's backing store | ~3 | `resizeCanvas()` in `_memRestore` |
 
 **Nothing here is a new load path** — every rebuild is a lazy path that already existed
@@ -700,8 +715,10 @@ reads **"انقر لفتح الأوراق"** (`drawDashboardPrompt`).
   player is on floor 2** (fades in/out, no snap; loops).
 - **Fireplace ambience** (`updateFireplaceAmbient` → `FocusAudioEngine.setFireplaceVolume`):
   `Sound/Fireplace sound.mp3` fades in as the local player nears the fireplace (`FIRE_X/Y`,
-  floor 1 only). The buffer is made **seamless once** (`_makeSeamless` crossfades its tail
-  into its head) so `loop = true` gives a perfect click-free loop. Web-Audio, so it keeps
+  floor 1 only). The buffer is made **seamless once** (`_seamlessLoop` crossfades its tail
+  into its head) so `loop = true` gives a perfect click-free loop. `setFireplaceVolume` runs
+  every frame, so it only issues a `setTargetAtTime` when the target really moved — it used
+  to cancel + re-anchor on the stale `gain.value` + re-ramp each frame (a zipper crackle). Web-Audio, so it keeps
   playing in a background tab.
 - Wind particles are **soft round dots with a fading trail** (`drawWindParticles`). Off on بطاطس.
 
@@ -943,19 +960,51 @@ Android reports **stale** `innerWidth/innerHeight` for up to ~1s after rotating,
 
 1. `init()` creates `AudioContext` + `masterGain`, then calls `loadFocusSoundBuffers()` async.
 2. `loadFocusSoundBuffers()` only prefetches buffers for sounds already **active**; everything else loads on demand via `ensureFocusBuffer(key)` (fetch → `decodeAudioData` → `this.focusBuffers[key]`). See **Loading Strategy**.
-3. `startSound(name)` for file-based sounds: buffer ready → seamless crossfade loop; buffer missing → **streams instantly** through a media element, then `_handoffToBuffer` crossfades to the loop when the decode lands.
+3. `startSound(name)` for file-based sounds: buffer ready → a native `loop = true` source of the baked seamless buffer; buffer missing → desktop **streams instantly** through a media element, then `_handoffToBuffer` crossfades to the loop when the decode lands; a phone waits (see below).
 4. Gain chain: `source → gainNode (sound.volume * baseVolumeScale) → masterGain (overallVolume) → destination`.
 5. `saveToFirebase()` writes `dashboards/{uid}/profile/focusMix` with active/volume per sound + overall volume (private data — deliberately NOT under the live-listened `/users` node).
 6. `applyState()` reads it back on login (from the profile get in `startGame`) and restores UI + state, prefetching buffers for the active sounds.
+
+### Why it crackled on real phones — and the rules that fixed it (Sept 26 2026)
+Only on **real** phone hardware (never desktop, never an emulator): short holes of
+silence while a focus sound played, and crackle. Emulators run on a desktop CPU; a real
+phone misses audio deadlines. Every rule below is load-bearing:
+- **`latencyHint: 'playback'` on touch devices** (`init`). The default `'interactive'`
+  asks Android for the FAST low-latency path (Oboe LowLatency — a few ms per callback),
+  which underruns on a busy/throttled phone: a missed callback = a hole of silence, the
+  edges of it = the crackle. `'playback'` = Oboe PowerSaving: big buffers, fewer wake-ups
+  (less heat), ~0.1 s on UI cues. Desktop keeps the default.
+- **Loops are NATIVE** (`_seamlessLoop` bakes an equal-power tail→head crossfade once,
+  then `src.loop = true`). The old `_scheduleCrossfadeLoop` queued overlapping segments
+  from a 300 ms `setTimeout` 1.5 s ahead — the main thread was IN the audio path, and any
+  stall past the look-ahead played silence. **Never put a main-thread scheduler back in
+  the path of a sustained sound.**
+- **A phone decodes only the first `FOCUS_LOOP_MAX_S` (60 s)** of an ambient file
+  (`_mp3CutBytes` reads the first frame header / Xing count and cuts the MP3 at a byte
+  offset; any failure → the whole file). PCM is ~0.38 MB per second at 48 kHz stereo —
+  Rain.mp3 (207 s) was ~80 MB decoded and seconds of decode CPU next to the audio thread.
+  `_memReleaseIdle` also drops the buffers of switched-off sounds.
+- **A phone never streams through `MediaElementAudioSourceNode`** — it outputs silence
+  whenever the media pipeline underflows or reconfigures. It waits for the buffer
+  (streaming only if the download fails, `_focusBufFailed`).
+- **One audio graph.** `playSoundRobust` plays the Web Audio buffer when there is one; the
+  `<audio>` element is only a fallback (a looping element — the applause — stays an
+  element). Starting an HTMLAudioElement spins up a media player and, on iOS, can
+  re-negotiate the audio session under the playing focus sounds.
+- **Param changes glide** (`_glideParam`: hold, then `setTargetAtTime`). A bare
+  `setValueAtTime` on a volume slider is a step per pixel of drag — a crackle.
+- **The athan's BYTES are kept, not its PCM** (`gameState.prayer._athanBytes`, fetched on
+  calm, decoded from a copy at the prayer). It used to decode ~26 MB of PCM two seconds
+  after spawn, i.e. mid-entrance, and hold it all session.
 
 ### baseVolumeScale
 File-based sounds use `1.0` (full file level). `plane` (synthesized) uses `0.09` (synthesized noise is much louder raw).
 
 ### Sound preloading and background-tab rules
 **Sounds preload AFTER spawn, never at page parse** (see Loading Strategy). Every new sound file must be:
-1. Added as `_lazyAudio('Sound/Filename.mp3')` in `gameState.sounds` (`preload='none'` at parse; `warmGameSounds()` upgrades it on idle after spawn — add it to the priority list there only if it can fire within seconds of spawning)
+1. Added as `_lazyAudio('Sound/Filename.mp3')` in `gameState.sounds` (`preload='none'` at parse — the fallback copy; it is NOT warmed when step 2 exists, see Loading Strategy)
 2. Added to `FocusAudioEngine.buffers` with a `null` entry
-3. Added to the `rest` list in `loadSoundEffects()` (each file loads on its own, three at a time, after `_worldReady`, with retries — the old single sequential `try` lost every sound after the first failure). Only the entrance whoosh and `uiBlip` load before the world. Or deferred like the boss set.
+3. Added to the `rest` list in `loadSoundEffects()` (each file loads on its own, three at a time — one on a phone — after `_worldReady` and `calmTurn()`, with retries — the old single sequential `try` lost every sound after the first failure). Only the entrance whoosh and `uiBlip` load before the world. Or deferred like the boss set.
 
 **Sounds must work in background tabs.** Use `focusAudioEngine.playEffect('key')` (Web Audio API) rather than `playSoundRobust(gameState.sounds.X)` (HTMLAudioElement) for any sound that must fire when the tab is not focused. HTMLAudioElement playback can be throttled/blocked in background tabs; Web Audio nodes play regardless.
 
@@ -1473,7 +1522,9 @@ missing sheet just skips a frame of drawing. **Sleeping + WakeUp are freed the m
 he's up** (`_lemoReleaseSleepSheets` — ~19 MB of decoded frames; same reason the world
 frees its layers). He can go back to bed now, so they're **dropped, not tombstoned** —
 `_lemoPose` re-kicks them only while he's asleep. Play is the heaviest sheet and a rare
-detour, so it warms on idle, not at spawn (desktop only).
+detour, so it warms on idle, not at spawn (desktop only). **Idle + Walk (~20 MB) warm on
+calm, never at spawn — and a phone skips them while he sleeps** (the wake segment
+ensures them; WakeUp lasts long enough for them to land).
 
 ### Gotchas
 - `drawLemo` is called from **both** `render()` and `renderPiPInto` — `updateLemo` runs
@@ -1743,6 +1794,8 @@ Code is the `الملصقات` block right after `setupChatUI` (wired from it vi
   commits them NFC; an NFD manifest 404s in production and breaks the search.
 - Preloaded on idle after spawn (`loadStickers` — the bytes; an undrawn `<img>` isn't
   decoded), dropped in `_memReleaseIdle` (`_stkRelease`), re-warmed by `_memRestore`.
+  **A phone warms only the first 16 of `_stkSorted()`** — 147 requests at once was a
+  burst of its own; the rest load lazily through `_stkImg`.
 
 ### «يكتب الآن» — the typing bubble, and the melt
 
@@ -2894,7 +2947,7 @@ called.)
 - **Interaction (swipe-aware)**: one consolidated `click` handler on the overlay (NOT `mousedown` — that fired on touch swipes and self-closed the panel); a horizontal touch swipe toggles the side and sets `_dashSuppressClickUntil` to swallow the trailing synthetic click (fixes the mobile "can't swap / exits by itself"). Scrim click closes; clicking a peeping paper swaps to it.
 - **Avatar widget**: `#dash-avatar` — the user's avatar in a square "taped-on" paper cutout (`.dash-avatar-tape`, tape strip + rotation) with a warm yellow tint (`sepia` filter + `multiply` overlay). Falls back to the username initial.
 - **Input lock**: while the overlay is open (`dashboardIsOpen()`), the window `keydown` handler and `handleMovement` both bail, so typing (W/A/S/D, arrows) never bleeds into player movement.
-- **Paper sounds** (`dashSound(name)` → `focusAudioEngine.playEffect`, Web Audio so it works in a background tab): `paperIntro` on open, `paperExit` on close, `paperSwipe` on the side swap (`dashSetSide`), `paperDaysSwap` on a day swap (`dashAnimateDayChange`), `paperTaskComplete` on completing a to-do. All preloaded via the standard 4-step pattern (`gameState.sounds` + `FocusAudioEngine.buffers` + `loadSoundEffects` + `.preload='auto'`).
+- **Paper sounds** (`dashSound(name)` → `focusAudioEngine.playEffect`, Web Audio so it works in a background tab): `paperIntro` on open, `paperExit` on close, `paperSwipe` on the side swap (`dashSetSide`), `paperDaysSwap` on a day swap (`dashAnimateDayChange`), `paperTaskComplete` on completing a to-do. All loaded via the standard pattern (`gameState.sounds` fallback + `FocusAudioEngine.buffers` + `loadSoundEffects`).
 - **Mobile perf**: the game loop keeps rendering behind the overlay, so on `body.is-mobile` the overlay drops `backdrop-filter` and hides `#game-canvas` while open (`body.dash-active`) — same rule as azkar.
 
 ### Mock data / testing
@@ -3474,9 +3527,10 @@ fade** (111 s master gitignored). All of it — images and the two sounds — st
 `Sound/player_Fall.mp3` is re-encoded 242k → 128k (masters gitignored). All of it — images
 and the three sounds — warms on **idle after spawn**, with the walk-up call
 (`_troEnsureAssets`) left as a backstop: proximity alone was late enough that the
-trophies visibly popped in on the first open. Never on the login path, and
-`warmGameSounds` has an explicit `NEVER_WARM` set so the HTMLAudio copies of the
-ceremony sounds are not downloaded a second time for everyone.
+trophies visibly popped in on the first open. **A phone warms only the art on idle**
+(`_troEnsureAssets(false)`); the sounds (~12 MB of PCM) wait for the walk-up. Never on
+the login path, and `_NO_WARM_SOUNDS` keeps the HTMLAudio copies of the ceremony sounds
+from being downloaded a second time.
 
 ### The world layer is the only CROPPED one
 `Workspace_0013b_Trophy_Shelf.png` is 428×71, not the full 2210×3160, so `WORLD_LAYERS`
@@ -4025,7 +4079,8 @@ its long side (the biggest a hat is ever drawn: scale 1 × floor 2 × zoom 2 × 
 336px). Emoji hats are Apple Color Emoji rendered at its native 160px strike. **Name
 new hats without hamza/madda letters** (أ إ آ ئ ؤ) — macOS hands those filenames out
 decomposed (NFD) and the id would stop matching the committed file. After spawn,
-`_prefetchHats` warms every hat's **bytes** on idle (never decodes — invariant 25).
+`_prefetchHats` warms every hat's **bytes** on idle (never decodes — invariant 25) —
+**desktop only**; a phone loads a worn hat when it is drawn, the picker on open.
 
 **The preview's hat unit is the avatar PICTURE, not the ring** (`_ccUnit`): in the
 world a unit is `PLAYER_SIZE` (70, the picture) inside a 78px ring, so the panel's
@@ -4247,6 +4302,9 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
 | Entrance drop and the kidnap's final lock-in lag on phones, nothing else does | Every "idle after spawn" task (race-track 16 MB pixel read, 1.2 MB library JSON, stickers, hats, sounds) fired in the idle gaps DURING the entrance; the lock-in flipped a dozen panels, forced a layout, started audio and wrote Firebase in one frame; the entrance zoom re-baked every sprite mid-drop; the governor judged (and resized the canvas) during both | `whenCalm` / `calmTurn`, race track in a worker, staged lock-in (`stageFrames`), sprite-level hysteresis + bake ration, governor ignores cinematics. See **اللحظات المرئية** |
 | Phone flashes black for one frame now and then | Setting the canvas `width` wipes it; the governor shed resolution right AFTER a frame was drawn, and the URL bar collapsing resized from a timer — the wiped canvas was presented until the next frame (up to 160 ms under توفير الطاقة) | `resizeCanvas` blits the old picture across the realloc + `perfWake()`; resolution steps apply at frame start (`_perfApplyRes`) |
 | End of a session on mobile: حضور المقر slides to the wrong place, then snaps down under the user card | Its `top` was computed from the card's drawn rect while the card was still mid-slide (`translateY(-140%)`), then corrected by a 520 ms re-measure | `_hudLayoutRect` measures the box without the transform; the late re-measure is gone |
+| Focus sounds crackle and drop out for a few ms on REAL phones (never desktop, never an emulator) | Default `latencyHint` = Android's low-latency FAST path, which underruns under load; the seamless loop was driven by a main-thread `setTimeout` scheduler (a stall = a hole); a phone streamed through `MediaElementAudioSourceNode` (silence on underflow); every cue started an HTMLAudio element beside the Web Audio graph; volume/fireplace params stepped (zipper) | `latencyHint: 'playback'` on touch, native `loop` on a baked seamless buffer, no streaming on a phone, one audio graph (`playSoundRobust` → buffers), gliding params. See **Focus Audio Engine → Why it crackled** |
+| Phone laggy for the first minute after entering, then fine | Everything "after spawn" landed at once: every SFX downloaded 3–4× (HTMLAudio preload + Web Audio fetch, ~14 MB), 24 decodes three at a time mid-entrance, the athan decoded to 26 MB PCM at +2 s, boss/trophy sound decodes, the 6 MB race track + its scan, minigame art, 147 stickers, 36 hats, Lemo's sheets while asleep | Fallback `<audio>` not warmed; decodes after `calmTurn()`, serial on a phone; athan kept as bytes; games assets on walking up to the games table (`_warmGames`); stickers/hats/Lemo trimmed on phones |
+| Panels scroll late/heavy on a phone | Always-on non-passive `touchmove`/`touchstart` listeners on `window`/`document` (joystick, drawer, boss pad, tasks drag) made every touch on the page blocking — the browser waits for the game's main thread before it may scroll | Listeners on the element the touch starts on; the boss pad's page-wide ones armed only while the pad is up; the tasks drag's scoped to `#lib-panel` |
 | Budget phone (Galaxy A32) gets hot enough to take the case off — Chrome and Firefox, with or without PiP | The page never let the GPU idle: the world redrew 30–60×/s even when nothing on screen changed (hours in a work session), the YouTube waveform ran its own 60 fps rAF with a forced layout + canvas realloc per frame, the world kept drawing under the PiP blackout (with a live backdrop blur over it), a primed hidden `<video>` kept playing a canvas stream forever, prayer rain stroked 110 paths/frame, and an infinite CSS pulse on the always-visible azkar button kept the compositor at 60 Hz. The governor only watched frame times, so a phone that *could* hold 60 was left at 60 | توفير الطاقة: 30 fps cap on touch devices from frame one, calm 15 / drowsy 6 fps when nothing moves (loop sleeps in a timer), DPR cap, `body.power-save` CSS off-switches, PiP/waveform/rain/worker fixes, weak GPUs default to بطاطس. See **مُنظّم الأداء → توفير الطاقة** |
 
 ---

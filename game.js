@@ -1266,6 +1266,59 @@ async function initDiscordOAuth() {
 }
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Ambient loops on a phone are decoded from the first this-many seconds of their file
+// (see ensureFocusBuffer). Desktop decodes the whole file.
+const FOCUS_LOOP_MAX_S = 60;
+
+// Move an AudioParam to `v` without a step. A bare setValueAtTime jumps the gain
+// between two samples — a click — and a volume slider fires one per pixel of drag,
+// which is a crackle. Hold whatever is playing right now, then glide.
+function _glideParam(ctx, param, v, tc = 0.03) {
+    try {
+        const t = ctx.currentTime;
+        if (param.cancelAndHoldAtTime) param.cancelAndHoldAtTime(t);
+        else { param.cancelScheduledValues(t); param.setValueAtTime(param.value, t); }
+        param.setTargetAtTime(v, t, tc);
+    } catch (_) { try { param.value = v; } catch (__) {} }
+}
+
+// The byte offset at which an MP3 holds about `sec` seconds of audio, or null to keep
+// it whole (not an MP3 we can read, or already short). Reads the first frame header:
+// its bitrate for a CBR file, or the Xing/Info frame count for a VBR one.
+function _mp3CutBytes(ab, sec) {
+    try {
+        const u = new Uint8Array(ab);
+        let o = 0;
+        if (u.length > 10 && u[0] === 0x49 && u[1] === 0x44 && u[2] === 0x33) {   // "ID3"
+            o = 10 + (((u[6] & 0x7f) << 21) | ((u[7] & 0x7f) << 14) | ((u[8] & 0x7f) << 7) | (u[9] & 0x7f));
+            if (u[5] & 0x10) o += 10;
+        }
+        const lim = Math.min(u.length - 4, o + 65536);
+        while (o < lim && !(u[o] === 0xFF && (u[o + 1] & 0xE0) === 0xE0)) o++;
+        if (o >= lim) return null;
+        const ver = (u[o + 1] >> 3) & 3;          // 3 MPEG-1, 2 MPEG-2, 0 MPEG-2.5
+        const layer = (u[o + 1] >> 1) & 3;        // 1 = Layer III
+        if (layer !== 1 || ver === 1) return null;
+        const brIdx = u[o + 2] >> 4, srIdx = (u[o + 2] >> 2) & 3, mono = (u[o + 3] >> 6) === 3;
+        if (brIdx === 0 || brIdx === 15 || srIdx === 3) return null;
+        const m1 = ver === 3;
+        const BR = m1 ? [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+                      : [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+        const SR = m1 ? [44100, 48000, 32000] : ver === 2 ? [22050, 24000, 16000] : [11025, 12000, 8000];
+        let bps = BR[brIdx] * 125;                // bytes per second, CBR
+        const x = o + 4 + (m1 ? (mono ? 17 : 32) : (mono ? 9 : 17));
+        const tag = String.fromCharCode(u[x], u[x + 1], u[x + 2], u[x + 3]);
+        if ((tag === 'Xing' || tag === 'Info') && (u[x + 7] & 1)) {
+            const frames = ((u[x + 8] << 24) | (u[x + 9] << 16) | (u[x + 10] << 8) | u[x + 11]) >>> 0;
+            const dur = frames * (m1 ? 1152 : 576) / SR[srIdx];
+            if (dur > 0) bps = (u.length - o) / dur;
+        }
+        if (!(bps > 0)) return null;
+        const cut = o + Math.ceil((sec + 2) * bps);   // +2 s: the loop's crossfade eats the tail
+        return cut < u.length * 0.85 ? cut : null;
+    } catch (_) { return null; }
+}
+
 class FocusAudioEngine {
     constructor() {
         this.ctx = null;
@@ -1376,7 +1429,19 @@ class FocusAudioEngine {
 
     init() {
         if (this.ctx) return;
-        this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+        // Touch devices get a BIG output buffer (latencyHint 'playback'). The default
+        // ('interactive') asks Android for its low-latency FAST path — a few ms of
+        // audio per callback — and a budget phone that is also compositing the world,
+        // thermally throttled, or GC-ing misses those callbacks: a dropped callback is
+        // a few ms of hard SILENCE (the "it skips a frame with no audio"), and the
+        // jump in and out of it is the crackle. 'playback' maps to Oboe's power-saving
+        // mode: tens of ms of headroom per callback, far fewer wake-ups (less heat),
+        // at the cost of ~0.1 s latency on UI cues — inaudible for ambience, barely
+        // noticeable on a blip. Desktop keeps the default. A browser that rejects the
+        // option (very old Safari) just gets the default.
+        const AC = window.AudioContext || window.webkitAudioContext;
+        try { this.ctx = isTouchDevice() ? new AC({ latencyHint: 'playback' }) : new AC(); }
+        catch (_) { this.ctx = new AC(); }
         this.sampleRate = this.ctx.sampleRate;
         this.masterGain = this.ctx.createGain();
         this.masterGain.gain.setValueAtTime(1.0 * this.overallVolume, this.ctx.currentTime);
@@ -1458,6 +1523,10 @@ class FocusAudioEngine {
             for (let i = 0; i < 200 && !_worldReady; i++) await new Promise(r => setTimeout(r, 250));
         };
         await waitWorld();
+        // …and after the entrance: on a phone, decodes are CPU on the same few cores
+        // the audio thread and the compositor need, and the drop is the moment a
+        // hitch shows most.
+        await calmTurn();
         const loadOne = async ([key, url]) => {
             for (let attempt = 0; attempt < 3 && !this.buffers[key]; attempt++) {
                 try { this.buffers[key] = await loadBuffer(url); }
@@ -1466,13 +1535,16 @@ class FocusAudioEngine {
         };
         let next = 0;
         const worker = async () => { while (next < rest.length) await loadOne(rest[next++]); };
-        await Promise.all([worker(), worker(), worker()]);
+        // One at a time on a phone (a decode running beside the audio thread is how a
+        // playing focus sound crackles); three on a desktop.
+        await Promise.all(isTouchDevice() ? [worker()] : [worker(), worker(), worker()]);
         // Boss-fight sounds (15 files) are only used inside the boss minigame, which
         // most players never open. Decoding them all on audio-init competes for
         // CPU/network during the critical startup window — a big cause of first-load
         // jank on budget phones (cold cache). Defer to browser idle time instead;
         // ensureBossSounds() also force-loads them the moment a boss fight begins.
-        whenCalm(() => this.ensureBossSounds());
+        // A phone waits for the walk-up to the games table (_warmGames).
+        if (!isTouchDevice()) whenCalm(() => this.ensureBossSounds());
     }
 
     // ── رف الجوائز ──────────────────────────────────────────────────────────────
@@ -1584,21 +1656,41 @@ class FocusAudioEngine {
     }
 
     // Fetch + decode one ambient sound's buffer on demand. Safe to call repeatedly.
+    // What lands in focusBuffers is already a SEAMLESS loop (_seamlessLoop), played
+    // with the source's native `loop` — see startSound for why that matters.
     ensureFocusBuffer(key) {
         if (!this.focusFiles[key] || this.focusBuffers[key] || !this.ctx) return;
         this._focusBufLoading = this._focusBufLoading || {};
+        this._focusBufFailed = this._focusBufFailed || {};
         if (this._focusBufLoading[key]) return;
         this._focusBufLoading[key] = true;
         (async () => {
             try {
                 const response = await fetch(this.focusFiles[key]);
+                if (!response.ok) throw new Error('HTTP ' + response.status);
                 const arrayBuffer = await response.arrayBuffer();
-                this.focusBuffers[key] = await this.ctx.decodeAudioData(arrayBuffer);
+                // Phones decode only the first FOCUS_LOOP_MAX_S of the file. A decoded
+                // buffer is raw float PCM: Rain.mp3 (207 s) is ~80 MB of it at 48 kHz
+                // stereo, and decoding it all is seconds of CPU on the exact cores the
+                // audio thread and the world render need — a crackle and a laggy first
+                // minute, for variety nobody hears in rain. 60 s of rain, ocean or noise
+                // loops invisibly. Cutting the MP3 at a byte offset is safe (frames are
+                // self-contained; the decoder drops the partial tail). Any failure →
+                // the whole file, exactly as before.
+                let decoded = null;
+                const cut = isTouchDevice() ? _mp3CutBytes(arrayBuffer, FOCUS_LOOP_MAX_S) : null;
+                if (cut) {
+                    try { decoded = await this.ctx.decodeAudioData(arrayBuffer.slice(0, cut)); }
+                    catch (_) { decoded = null; }
+                }
+                if (!decoded) decoded = await this.ctx.decodeAudioData(arrayBuffer);
+                await calmTurn();   // the one-off crossfade bake waits out a cinematic
+                this.focusBuffers[key] = this._seamlessLoop(decoded);
                 // Remove loading indicator now that this sound is buffered
                 const el = document.querySelector(`.sound-item[data-sound="${key}"]`);
                 if (el) el.classList.remove('sound-loading');
                 // If the user toggled this sound on while it was still loading, switch
-                // over to the seamless crossfade loop now that the buffer has arrived.
+                // over to the seamless loop now that the buffer has arrived.
                 const sound = this.sounds[key];
                 if (sound?.active && this.ctx?.state === 'running') {
                     if (sound.nodes?.mediaEl) {
@@ -1609,64 +1701,73 @@ class FocusAudioEngine {
                 }
             } catch(e) {
                 console.log(`Failed to load focus sound [${key}]:`, e);
+                // A phone waits for the buffer instead of streaming (see startSound);
+                // if the buffer can't be had, streaming is the only way left.
+                this._focusBufFailed[key] = true;
+                const sound = this.sounds[key];
+                if (sound?.active && !sound.nodes && this.ctx?.state === 'running') this.startSound(key);
             } finally {
                 this._focusBufLoading[key] = false;
             }
         })();
     }
 
-    // Schedule a gap-free, cross-dissolving loop of `buf` into `gainNode`.
-    // Instead of a hard loopStart/loopEnd jump (which can click), successive
-    // copies of the buffer overlap by a short crossfade so the seam is inaudible.
-    // Returns a loop-state handle; set `.stopped = true` and clear `.timer` to end it.
-    _scheduleCrossfadeLoop(name, buf, gainNode) {
-        const ctx = this.ctx;
-        const XF = Math.max(0.15, Math.min(0.8, buf.duration * 0.18)); // crossfade seconds
-        const period = Math.max(0.2, buf.duration - XF);               // spacing between starts
-        const loop = { stopped: false, timer: null, sources: [], nextTime: ctx.currentTime + 0.03 };
-
-        const startSegment = (when) => {
-            const src = ctx.createBufferSource();
-            src.buffer = buf;
-            const seg = ctx.createGain();
-            src.connect(seg);
-            seg.connect(gainNode);
-            // cross-dissolve envelope: fade in → hold → fade out (overlaps neighbours)
-            seg.gain.setValueAtTime(0.0001, when);
-            seg.gain.linearRampToValueAtTime(1, when + XF);
-            seg.gain.setValueAtTime(1, when + period);
-            seg.gain.linearRampToValueAtTime(0.0001, when + buf.duration);
-            try { src.start(when); } catch(e) { try { seg.disconnect(); } catch(_){} return; }
-            try { src.stop(when + buf.duration + 0.05); } catch(e) {}
-            const entry = { src, seg };
-            loop.sources.push(entry);
-            src.onended = () => {
-                try { src.disconnect(); } catch(e) {}
-                try { seg.disconnect(); } catch(e) {}
-                const i = loop.sources.indexOf(entry);
-                if (i >= 0) loop.sources.splice(i, 1);
-            };
-        };
-
-        // A look-ahead scheduler keeps ~1.5s of segments queued. The tab stays
-        // "audible" while a sound plays, so its timers aren't throttled in the
-        // background — the look-ahead is just a safety margin.
-        const scheduler = () => {
-            if (loop.stopped) return;
-            const horizon = ctx.currentTime + 1.5;
-            while (loop.nextTime < horizon) {
-                startSegment(loop.nextTime);
-                loop.nextTime += period;
+    // Bake a buffer whose END flows straight into its START, so the source's native
+    // `loop = true` repeats it with no seam. The tail is folded into the head with an
+    // EQUAL-POWER crossfade (sin/cos): these are noise-like recordings, and the linear
+    // fade the old scheduler used dips ~3 dB mid-seam.
+    //
+    // It replaces a main-thread look-ahead scheduler (a setTimeout every 300 ms queuing
+    // overlapping segments 1.5 s ahead). That design put the MAIN thread in the audio
+    // path: any stall longer than the look-ahead — a big decode, a GC, a phone that
+    // throttled the tab — ran the queue dry and played a hole of silence. A native loop
+    // lives entirely on the audio thread; nothing the page does can gap it. It is also
+    // one node per sound instead of a new source + gain every few seconds.
+    _seamlessLoop(buf) {
+        const xf = Math.max(0.15, Math.min(1.2, buf.duration * 0.12));
+        const cross = Math.min(Math.floor(buf.sampleRate * xf), Math.floor(buf.length / 3));
+        const len = buf.length - cross;
+        if (len <= cross || cross < 2) return buf;
+        let out;
+        try { out = this.ctx.createBuffer(buf.numberOfChannels, len, buf.sampleRate); }
+        catch (_) { return buf; }
+        for (let ch = 0; ch < buf.numberOfChannels; ch++) {
+            const src = buf.getChannelData(ch);
+            const dst = out.getChannelData(ch);
+            dst.set(src.subarray(0, len));
+            // dst[len-1] = src[len-1] wraps to dst[0] = src[len]: continuous. From
+            // there the head fades up while the rest of the tail fades out.
+            for (let i = 0; i < cross; i++) {
+                const a = (i / cross) * (Math.PI / 2);
+                dst[i] = src[i] * Math.sin(a) + src[len + i] * Math.cos(a);
             }
-            loop.timer = setTimeout(scheduler, 300);
-        };
-        scheduler();
-        return loop;
+        }
+        return out;
+    }
+
+    // A looping source of `buf` into `dest`, fading in over `fadeSec` (0 = none).
+    _startLoopSource(buf, dest, fadeSec) {
+        const src = this.ctx.createBufferSource();
+        src.buffer = buf;
+        src.loop = true;
+        let fade = null;
+        if (fadeSec > 0) {
+            fade = this.ctx.createGain();
+            const t = this.ctx.currentTime;
+            fade.gain.setValueAtTime(0.0001, t);
+            fade.gain.linearRampToValueAtTime(1, t + fadeSec);
+            src.connect(fade);
+            fade.connect(dest);
+        } else {
+            src.connect(dest);
+        }
+        src.start();
+        return { src, fade };
     }
 
     // Crossfade from the streaming media element to the seamless buffer loop once
-    // the buffer has finished decoding. The loop's first segment fades in while the
-    // media element fades out, so the listener hears no transition.
+    // the buffer has finished decoding. The loop fades in while the media element
+    // fades out, so the listener hears no transition.
     _handoffToBuffer(name) {
         const sound = this.sounds[name];
         const buf = this.focusBuffers[name];
@@ -1674,7 +1775,9 @@ class FocusAudioEngine {
         const gainNode = sound.nodes.gainNode;
         const { mediaEl, mediaGain, mediaSource } = sound.nodes;
 
-        sound.nodes.loopState = this._scheduleCrossfadeLoop(name, buf, gainNode);
+        const { src, fade } = this._startLoopSource(buf, gainNode, 0.8);
+        sound.nodes.source = src;
+        sound.nodes.secondaryNodes = [fade];
         sound.nodes.mediaEl = null;
         sound.nodes.mediaGain = null;
         sound.nodes.mediaSource = null;
@@ -1699,15 +1802,6 @@ class FocusAudioEngine {
         if (!sound.nodes) return;
         const n = sound.nodes;
         sound.nodes = null;
-        if (n.loopState) {
-            n.loopState.stopped = true;
-            if (n.loopState.timer) clearTimeout(n.loopState.timer);
-            n.loopState.sources.forEach(({ src, seg }) => {
-                try { src.stop(); } catch(e) {}
-                try { src.disconnect(); } catch(e) {}
-                try { seg.disconnect(); } catch(e) {}
-            });
-        }
         try { n.source?.stop(); } catch(e) {}
         try { n.source?.disconnect(); } catch(e) {}
         n.secondaryNodes?.forEach(x => { try { x.stop(); } catch(e) {} try { x.disconnect(); } catch(e) {} });
@@ -1782,25 +1876,8 @@ class FocusAudioEngine {
 
     // ── Fireplace proximity ambience ────────────────────────────────────────────
     // A looping fire crackle whose volume fades in as the LOCAL player nears the
-    // fireplace. The buffer is made SEAMLESS once (its tail is crossfaded into its
-    // head) so `loop = true` gives a perfect, click-free loop with a crossfade.
-    _makeSeamless(buf, crossSec = 0.5) {
-        const cross = Math.min(Math.floor(buf.sampleRate * crossSec), Math.floor(buf.length / 3));
-        const newLen = buf.length - cross;
-        if (newLen <= cross) return buf;
-        const out = this.ctx.createBuffer(buf.numberOfChannels, newLen, buf.sampleRate);
-        for (let ch = 0; ch < buf.numberOfChannels; ch++) {
-            const src = buf.getChannelData(ch);
-            const dst = out.getChannelData(ch);
-            for (let i = 0; i < newLen; i++) dst[i] = src[i];
-            // blend the dropped tail (src[newLen..]) into the head so the seam is smooth
-            for (let i = 0; i < cross; i++) {
-                const w = i / cross;                 // 0→1
-                dst[i] = dst[i] * w + src[newLen + i] * (1 - w);
-            }
-        }
-        return out;
-    }
+    // fireplace. The buffer is made SEAMLESS once (_seamlessLoop) so `loop = true`
+    // gives a perfect, click-free loop.
     ensureFireplace() {
         if (this._fireStarted || !this.ctx) return;
         this._fireStarted = true;   // guard so we only build/start once
@@ -1808,7 +1885,7 @@ class FocusAudioEngine {
             .then(r => r.arrayBuffer())
             .then(ab => this.ctx.decodeAudioData(ab))
             .then(buf => {
-                const seamless = this._makeSeamless(buf, 0.6);
+                const seamless = this._seamlessLoop(buf);
                 const src = this.ctx.createBufferSource();
                 src.buffer = seamless;
                 src.loop = true;
@@ -1827,14 +1904,21 @@ class FocusAudioEngine {
             .catch(() => { this._fireStarted = false; });
     }
     // vol 0..1 — smooth ramp (fade in/out). Kicks off the loop on first use.
+    // Called EVERY FRAME, so it only touches the param when the target really moved.
+    // It used to cancel + re-anchor + re-ramp 30–60 times a second, re-anchoring on
+    // `gain.value` — which is the value as of the last rendered block, i.e. up to a
+    // whole output buffer stale — so every frame nudged the gain back a step: a
+    // zipper you could hear as crackle while walking near the fire.
     setFireplaceVolume(vol) {
         if (!this.ctx || this.ctx.state !== 'running') return;
         if (!this._fireGain) { if (vol > 0.001) this.ensureFireplace(); return; }
-        const t = this.ctx.currentTime;
-        const g = this._fireGain.gain;
-        g.cancelScheduledValues(t);
-        g.setValueAtTime(Math.max(0.0001, g.value), t);
-        g.linearRampToValueAtTime(Math.max(0.0001, vol), t + 0.25);
+        const v = Math.max(0.0001, vol);
+        const last = this._fireLastVol;
+        if (last !== undefined && Math.abs(v - last) < 0.004 && (v > 0.0001 || last === v)) return;
+        this._fireLastVol = v;
+        // setTargetAtTime starts from wherever the gain IS at that instant, so a
+        // new target never jumps — no cancel, no stale re-anchor.
+        this._fireGain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.09);
     }
 
     createWhiteNoiseNode() {
@@ -1893,9 +1977,19 @@ class FocusAudioEngine {
             this.ensureFocusBuffer(name);
             const buf = this.focusBuffers?.[name];
             if (buf) {
-                // Buffer ready → start the seamless cross-dissolving loop immediately.
-                const loopState = this._scheduleCrossfadeLoop(name, buf, gainNode);
-                sound.nodes = { gainNode, loopState, secondaryNodes: [] };
+                // Buffer ready → the baked seamless loop, looped natively on the
+                // audio thread (no main-thread scheduling — see _seamlessLoop).
+                const { src } = this._startLoopSource(buf, gainNode, 0);
+                sound.nodes = { source: src, gainNode, secondaryNodes: [] };
+            } else if (isTouchDevice() && !this._focusBufFailed?.[name]) {
+                // Phones WAIT for the buffer (the item pulses «loading») instead of
+                // streaming. The stream runs a media element through a
+                // MediaElementAudioSourceNode, which outputs silence whenever the
+                // media pipeline underflows or is mid-reconfigure — on a busy phone,
+                // gaps. ensureFocusBuffer starts the sound the moment it lands (or
+                // streams after all if the download fails).
+                gainNode.disconnect();
+                return;
             } else {
                 // Buffer still downloading → stream instantly via a media element so
                 // the sound starts now, then hand off to the buffer loop when ready.
@@ -1914,7 +2008,7 @@ class FocusAudioEngine {
                     gainNode.disconnect();
                     return;
                 }
-                sound.nodes = { gainNode, loopState: null, mediaEl, mediaSource, mediaGain, secondaryNodes: [] };
+                sound.nodes = { gainNode, mediaEl, mediaSource, mediaGain, secondaryNodes: [] };
             }
         } else if (name === 'plane') {
             source = this.createBrownNoiseNode();
@@ -1966,12 +2060,6 @@ class FocusAudioEngine {
         const n = sound.nodes;
         sound.nodes = null; // immediately clear so startSound can restart without blocking
 
-        // Stop scheduling new loop segments right away; existing ones ring out under the fade.
-        if (n.loopState) {
-            n.loopState.stopped = true;
-            if (n.loopState.timer) clearTimeout(n.loopState.timer);
-        }
-
         const gainNode = n.gainNode;
         try {
             gainNode.gain.cancelScheduledValues(this.ctx.currentTime);
@@ -1982,11 +2070,6 @@ class FocusAudioEngine {
         }
 
         setTimeout(() => {
-            n.loopState?.sources.forEach(({ src, seg }) => {
-                try { src.stop(); } catch(e) {}
-                try { src.disconnect(); } catch(e) {}
-                try { seg.disconnect(); } catch(e) {}
-            });
             try { n.source?.stop(); } catch(e) {}
             try { n.source?.disconnect(); } catch(e) {}
             n.secondaryNodes?.forEach(x => { try { x.stop(); } catch(e) {} try { x.disconnect(); } catch(e) {} });
@@ -2002,7 +2085,7 @@ class FocusAudioEngine {
         sound.volume = parseFloat(val);
         if (sound.nodes) {
             const scaledVol = sound.volume * this.baseVolumeScale[name];
-            sound.nodes.gainNode.gain.setValueAtTime(scaledVol, this.ctx.currentTime);
+            _glideParam(this.ctx, sound.nodes.gainNode.gain, scaledVol);
         }
         // During azkar there's no work phase keeping master up — make the slider audible.
         if (gameState.azkar && gameState.azkar.active) this._applyMasterForAzkar();
@@ -2015,7 +2098,7 @@ class FocusAudioEngine {
             || (gameState.azkar && gameState.azkar.active)
             || sofaFocusActive();
         if (this.masterGain && inWorkPhase) {
-            this.masterGain.gain.setValueAtTime(this.overallVolume, this.ctx.currentTime);
+            _glideParam(this.ctx, this.masterGain.gain, this.overallVolume);
         }
         this.saveToFirebase();
     }
@@ -3129,34 +3212,47 @@ const gameState = {
     },
 };
 
-// Staged sound warm-up — called from startGame(), NOT at page parse.
-// Core in-game sounds load immediately on spawn (they can fire within seconds:
-// kidnap/timers/prayer). Everything else (boss fight, papers, minigames) waits
-// for browser idle time so it never competes with the entrance, avatars, or
-// Firebase on a cold load. Every sound still ends up fully preloaded — just
-// after the game is playable instead of before the login screen exists.
+// Sound warm-up — called from startGame(), NOT at page parse.
+//
+// gameState.sounds are HTMLAudio FALLBACKS now. Every sound that has a Web Audio
+// buffer (FocusAudioEngine.buffers — kidnap, timers, sofa, jump, mentions, papers…)
+// is decoded by loadSoundEffects and PLAYED through it (playSoundRobust routes
+// there). Warming the <audio> copies too downloaded every one of those files a
+// second, third, fourth time (a media element preloads with several range
+// requests) — measured: 154 requests, ~14 MB of audio in the first seconds after
+// spawn — and on Android each preloaded element is a live media player of its own.
+// So only the sounds with NO buffer are warmed: the minigame set. The adhan has its
+// own Web Audio fetch at prayer time; the trophy set loads with the shelf.
+const _NO_WARM_SOUNDS = new Set(['trophyCollect', 'spotlight', 'playerFall', 'prayerCall']);
+function _warmAudioEl(key) {
+    const a = gameState.sounds[key];
+    if (!a || a.preload === 'auto') return;
+    try { a.preload = 'auto'; a.load(); } catch (_) {}
+}
+function _warmMinigameSounds() {
+    const fe = gameState.focusAudioEngine;
+    for (const key of Object.keys(gameState.sounds)) {
+        if (_NO_WARM_SOUNDS.has(key)) continue;
+        if (fe && key in fe.buffers) continue;           // played through Web Audio
+        _warmAudioEl(key);
+    }
+}
 function warmGameSounds() {
     if (warmGameSounds._done) return;
     warmGameSounds._done = true;
-    const warm = (key) => {
-        const a = gameState.sounds[key];
-        if (!a) return;
-        try { a.preload = 'auto'; a.load(); } catch (_) {}
-    };
-    // Priority 1 — needed moments after spawn.
-    ['kidnap', 'timeBreak', 'timeReturn', 'yipee', 'breakAdded', 'prayerCall',
-     'minigameReady', 'inviteSent', 'inviteAccepted', 'sofaSit', 'sofaStand',
-     'mentionPing', 'mentionAlarm', 'jumpStart', 'jumpLand'].forEach(warm);
-    // Priority 2 — everything else, on idle (minigames + dashboard papers live
-    // behind explicit user actions, so a few seconds of delay is invisible).
-    // The trophy pair is half a megabyte and only ever plays inside the award
-    // ceremony, which the Web Audio path (ensureTrophySounds) already covers on
-    // walking up to the shelf — warming them here would download it for everyone.
-    const NEVER_WARM = new Set(['trophyCollect', 'spotlight', 'playerFall']);
-    const warmRest = () => {
-        for (const key of Object.keys(gameState.sounds)) if (!NEVER_WARM.has(key)) warm(key);
-    };
-    whenCalm(warmRest);   // never mid-entrance — see whenCalm
+    // A phone warms them on walking up to the games table instead (_warmGames).
+    if (!isTouchDevice()) whenCalm(_warmMinigameSounds);   // never mid-entrance — see whenCalm
+}
+// Everything a game needs, the first time the player walks up to the games table.
+function _warmGames() {
+    if (_warmGames._done) return;
+    _warmGames._done = true;
+    whenCalm(() => {
+        _loadGameArt();
+        _warmMinigameSounds();
+        try { gameState.focusAudioEngine?.ensureBossSounds?.(); } catch (_) {}
+        if (MINIGAMES_ENABLED) loadRaceTrackAsset();
+    });
 }
 
 // Constants
@@ -5215,6 +5311,13 @@ function _loadPropArt() {
     // Drawn in the world (under every reader) — decode it off-thread now rather than
     // synchronously inside the first drawImage.
     try { gameState.assets.book.decode().catch(() => {}); } catch (_) {}
+    // The minigame art (~2 MB) waits for the games table on a phone (_warmGames).
+    if (isTouchDevice()) return;
+    _loadGameArt();
+}
+function _loadGameArt() {
+    if (_loadGameArt.done) return;
+    _loadGameArt.done = true;
     gameState.assets.coffeeMug.src      = 'Art/Hands.png';
     gameState.assets.coffeeHandsFg.src  = 'Art/Hands Foreground.png';
     gameState.assets.coffeeSugar.src    = 'Art/fig.png';
@@ -6424,6 +6527,9 @@ function joinOrCreateMinigameLobby(type) {
     if (alreadyIn) return;
     const player = gameState.players[gameState.userId];
     if (!player) return;
+    _warmGames();
+    _loadGameArt();
+    if (MINIGAMES_ENABLED && type === 'race') loadRaceTrackAsset();
     playSoundRobust(gameState.sounds.minigameReady);
 
     const openEntry = Object.entries(st.activeSessions || {}).find(([, s]) => s.phase === 'lobby');
@@ -6501,6 +6607,9 @@ function openBossConfirm() {
     if (!gamesPlayAllowed()) return;
     const alreadyIn = Object.values(gameState.laptopBoss.activeSessions || {}).some(s => s?.participants?.[gameState.userId]);
     if (alreadyIn || gameState.laptopBoss.active || gameState.laptopBoss.teleportAnim) return;
+    _warmGames();
+    _loadGameArt();
+    gameState.focusAudioEngine?.ensureBossSounds?.();
     document.getElementById('boss-confirm-modal')?.classList.add('active');
 }
 
@@ -6675,12 +6784,16 @@ async function spawnSirajGhost() {
         const i = new Image();
         i.onload = () => {
             try {
+                // 128 px is more than an avatar is ever drawn at. At the art's full
+                // size this data URL was ~137 KB, written into users/{uid} — i.e.
+                // streamed to every online member each time someone tested.
+                const k = Math.min(1, 128 / Math.max(i.naturalWidth, i.naturalHeight));
                 const offscreen = document.createElement('canvas');
-                offscreen.width = i.naturalWidth;
-                offscreen.height = i.naturalHeight;
+                offscreen.width = Math.max(1, Math.round(i.naturalWidth * k));
+                offscreen.height = Math.max(1, Math.round(i.naturalHeight * k));
                 const octx = offscreen.getContext('2d');
                 octx.filter = `hue-rotate(${hue}deg)`;
-                octx.drawImage(i, 0, 0);
+                octx.drawImage(i, 0, 0, offscreen.width, offscreen.height);
                 resolve(offscreen.toDataURL('image/png'));
             } catch (_) { resolve('Art/siraj.png'); }
         };
@@ -6730,8 +6843,28 @@ function setupBossConfirmUI() {
     });
 }
 
+// Which gameState.sounds key an <audio> element is (built once).
+let _soundKeyOf = null;
 function playSoundRobust(audioElement) {
     if (!audioElement) return;
+    // One audio graph for everything. If this sound's Web Audio buffer is decoded,
+    // play THAT — the element is only a fallback. Starting an HTMLAudioElement spins
+    // up a media player and, on iOS, re-negotiates the audio session under the Web
+    // Audio graph that is playing the focus sounds: a hiccup in them on every cue.
+    // A looping element (the minigame applause) stays an element — its callers loop
+    // and fade the element itself.
+    try {
+        const fe = gameState.focusAudioEngine;
+        if (fe && fe.ctx && !audioElement.loop) {
+            if (!_soundKeyOf) {
+                _soundKeyOf = new Map();
+                for (const [k, el] of Object.entries(gameState.sounds)) _soundKeyOf.set(el, k);
+            }
+            const key = _soundKeyOf.get(audioElement);
+            if (key && fe.buffers[key]
+                && fe.playHandled(key, audioElement.playbackRate || 1, 0.8 * (audioElement.volume ?? 1))) return;
+        }
+    } catch (_) {}
     try {
         audioElement.pause();
         audioElement.currentTime = 0;
@@ -7346,7 +7479,11 @@ function startGame(userData) {
         // its full-image getImageData/classification is a big main-thread spike
         // right around the intro, wasted while entry is off. The race-entry paths
         // still call loadRaceTrackAsset() themselves, so nothing breaks on re-enable.
-        if (MINIGAMES_ENABLED) whenCalm(() => loadRaceTrackAsset());
+        // Phones skip it: a 6 MB download + a 2048² decode + a worker scan, plus
+        // the minigame sounds, for a game most sessions never open — during exactly
+        // the first minute that already felt heavy. They load on walking up to the
+        // games table instead (_warmGames).
+        if (MINIGAMES_ENABLED && !isTouchDevice()) whenCalm(() => loadRaceTrackAsset());
     }).catch((err) => {
         // A throw halfway through the restore must not leave the member without a
         // body: put them on a normal spawn and let the entrance play.
@@ -9156,7 +9293,12 @@ function initMobileControls() {
             joyWasSprinting = false;
         }, { passive: false });
 
-        window.addEventListener('touchmove', (e) => {
+        // On the joystick itself, never on window: a touch belongs to the element it
+        // STARTED on for its whole life, so its moves reach here anyway — and a
+        // non-passive touchmove on window makes EVERY touch on the page "blocking":
+        // the browser must wait for the game's main thread (mid-frame on a phone)
+        // before it may scroll anything, so every panel scrolled late and heavy.
+        joystickEl.addEventListener('touchmove', (e) => {
             if (joyTouchId === null) return;
             let touch = null;
             for (const t of e.changedTouches) {
@@ -9448,7 +9590,8 @@ function initMobileControls() {
             drawer.style.transition = 'none';
         }, { passive: false });
 
-        window.addEventListener('touchmove', (e) => {
+        // On the handle, not window — see the joystick's touchmove.
+        handle.addEventListener('touchmove', (e) => {
             if (!isDraggingDrawer) return;
             e.preventDefault();
             const y = e.touches[0].clientY;
@@ -9544,11 +9687,15 @@ function initMobileControls() {
         }
     };
 
-    window.addEventListener('touchstart',  bossSyncTouches, { passive: false });
-    window.addEventListener('touchmove',   bossSyncTouches, { passive: false });
-    window.addEventListener('touchend',    bossSyncTouches, { passive: false });
-    window.addEventListener('touchcancel', bossSyncTouches, { passive: false });
+    // Page-wide (a thumb slides between buttons), but ONLY while the pad is up:
+    // armed permanently, these made every touch on the page blocking — the browser
+    // waits on the main thread before any scroll — for a minigame few ever open.
+    _bossTouchArm = (on) => {
+        const f = on ? window.addEventListener : window.removeEventListener;
+        for (const t of ['touchstart', 'touchmove', 'touchend', 'touchcancel']) f.call(window, t, bossSyncTouches, { passive: false });
+    };
 }
+let _bossTouchArm = null, _bossTouchOn = false;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -11596,12 +11743,16 @@ function updateInteractions() {
             { type: 'coffee', x: GAME_COFFEE_ZONE.x, y: GAME_COFFEE_ZONE.y },
             { type: 'boss',   x: GAME_BOSS_ZONE.x,   y: GAME_BOSS_ZONE.y },
         ];
-        let best = null, bestDist = GAME_ZONE_SELECT_R;
+        let best = null, bestDist = GAME_ZONE_SELECT_R, near = false;
         for (const z of zones) {
             const d = Math.hypot(player.x - z.x, player.y - z.y);
+            if (d < GAME_ZONE_SELECT_R * 2.5) near = true;
             if (d < bestDist) { bestDist = d; best = z; }
         }
         if (best) gameState.activeGameZone = { ...best, locked: !gamesUnlocked() };
+        // Walking up to the table is the honest signal a game is coming — a phone
+        // loads everything the games need HERE, not at every spawn (see _warmGames).
+        if (near) _warmGames();
     }
 
     // Minigame zone scans — 3 × Object.values().filter per frame during breaks,
@@ -21019,18 +21170,18 @@ function maybeRequestNotificationPermission() {
 function initPrayerSystem() {
     if (gameState.isSirajGhost) gameState.prayer.prayerLockMs = 5000; // 5 s for Siraj
 
-    // Preload athan buffer so it's ready for background playback
-    const _preloadAthan = () => {
-        if (!gameState.focusAudioEngine?.ctx) return;
-        const ctx = gameState.focusAudioEngine.ctx;
+    // Preload the athan's BYTES (1.6 MB) so it can play in a background tab with no
+    // network — but NOT its decoded PCM. Decoded, the 67 s athan is ~26 MB of float
+    // audio held for the whole session, and it used to be decoded two seconds after
+    // spawn, i.e. in the middle of the entrance on a phone. It is decoded at the
+    // prayer instead (a fraction of a second, well inside the 6.5 s before the overlay).
+    whenCalm(() => {
+        if (gameState.prayer._athanBytes) return;
         fetch('Sound/Prayer_CallToPrayer.mp3')
-            .then(r => r.arrayBuffer())
-            .then(buf => ctx.decodeAudioData(buf))
-            .then(decoded => { gameState.prayer._athanBuffer = decoded; })
+            .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+            .then(ab => { gameState.prayer._athanBytes = ab; })
             .catch(() => {});
-    };
-    // Delay slightly to let AudioContext initialize first
-    setTimeout(_preloadAthan, 2000);
+    });
 
     // Request notification permission once, shortly after entering the game (still
     // close to the entry click gesture). Doing it here — rather than at the athan
@@ -21439,13 +21590,16 @@ function triggerPrayerOverlay(prayerKey, arabicName) {
             gameState.prayer._webAudioAthanSource = src;
             gameState.prayer._webAudioAthanGain = g;
         };
-        if (gameState.prayer._athanBuffer) {
-            playBuffer(gameState.prayer._athanBuffer);
-        } else {
-            fetch('Sound/Prayer_CallToPrayer.mp3')
-                .then(r => r.arrayBuffer())
-                .then(buf => ctx.decodeAudioData(buf))
-                .then(decoded => { gameState.prayer._athanBuffer = decoded; playBuffer(decoded); })
+        {
+            // decodeAudioData detaches what it is given — decode a COPY so the kept
+            // bytes serve the next prayer too. The PCM is not kept (see initPrayerSystem).
+            const bytes = gameState.prayer._athanBytes
+                ? Promise.resolve(gameState.prayer._athanBytes)
+                : fetch('Sound/Prayer_CallToPrayer.mp3').then(r => r.arrayBuffer())
+                    .then(ab => { gameState.prayer._athanBytes = ab; return ab; });
+            bytes
+                .then(ab => ctx.decodeAudioData(ab.slice(0)))
+                .then(decoded => playBuffer(decoded))
                 .catch(() => {
                     // Fallback to HTML Audio
                     try { gameState.sounds.prayerCall.currentTime = 0; gameState.sounds.prayerCall.play().catch(() => {}); } catch(e) {}
@@ -23384,6 +23538,7 @@ function showMobileBossButtons(show) {
     const dpad = document.getElementById('mobile-boss-btns');
     const joystick = document.getElementById('mobile-joystick');
     if (dpad) dpad.classList.toggle('hidden', !show);
+    if (_bossTouchArm && _bossTouchOn !== !!show) { _bossTouchOn = !!show; _bossTouchArm(_bossTouchOn); }
     if (joystick && isMobile()) joystick.style.display = show ? 'none' : '';
     if (!show) {
         gameState.laptopBossButtons.left = false;
@@ -28551,6 +28706,10 @@ function ensureHatAsset(id) {
 // per hat, and holding the whole set for the session would be ~15 MB for hats
 // nobody is wearing (invariant 25). ensureHatAsset still decodes on first draw.
 function _prefetchHats(list) {
+    // A phone doesn't pre-download the whole catalogue (~3 MB) at spawn: a hat
+    // someone is wearing loads when it is drawn, and the picker loads its own
+    // previews when opened.
+    if (isTouchDevice()) return;
     const ids = (list || []).slice();
     if (!ids.length) return;
     const idle = whenCalm;
@@ -30448,6 +30607,8 @@ function _lemoPose(t) {
     _lemo.idleFrame = frameAt('Idle', true);
     if (s.kind === 'wake') {
         _lemo.state = 'waking'; _lemo.anim = 'WakeUp'; _lemo.frame = frameAt('WakeUp', false);
+        ensureLemoSheet('Idle');    // up next — a phone doesn't hold them while he sleeps
+        ensureLemoSheet('Walk');
         return;
     }
     if (!_lemo.sleepFreed) { _lemo.sleepFreed = true; _lemoReleaseSleepSheets(); }
@@ -30467,8 +30628,14 @@ function _lemoPose(t) {
 function startLemo() {
     if (_lemo.started) return;
     _lemo.started = true;
-    ensureLemoSheet('Idle');
-    ensureLemoSheet('Walk');
+    // Idle + Walk are ~20 MB decoded. They wait for calm (never mid-entrance), and a
+    // phone skips them while he sleeps — _lemoSheet pulls them the moment a pose
+    // needs one, and WakeUp alone lasts long enough for Idle to land.
+    whenCalm(() => {
+        if (isTouchDevice() && (!_lemo.doc || _lemo.doc.s !== 'awake')) return;
+        ensureLemoSheet('Idle');
+        ensureLemoSheet('Walk');
+    });
     // His face in the @ picker and on a mention pill (canvas + DOM). Tiny, after spawn.
     try {
         const pfp = new Image();
@@ -31187,7 +31354,10 @@ function _libKidsChip(t, opts) {
 let _libDrag = null, _libHold = null, _libDragEndAt = 0;
 const LIB_EDGE = 64, LIB_SLIDE_MS = 230, LIB_HOLD_MS = 320, LIB_SLOP = 8;
 
-document.addEventListener('touchmove', (e) => { if (_libDrag && e.cancelable) e.preventDefault(); }, { passive: false });
+// Scoped to the tasks panel (the only place a pill can be dragged). On `document`
+// it made every touch on the whole page blocking — see the joystick's touchmove.
+(document.getElementById('lib-panel') || document)
+    .addEventListener('touchmove', (e) => { if (_libDrag && e.cancelable) e.preventDefault(); }, { passive: false });
 document.addEventListener('contextmenu', (e) => { if (_libDrag || _libHold) e.preventDefault(); }, true);
 
 function _libScrollerOf(el) {
@@ -36279,7 +36449,14 @@ function loadStickers() {
         .catch(() => { _stk.loading = null; return []; });
     return _stk.loading;
 }
-function _stkPreloadAll() { for (const n of _stk.list) _stkImg(n); }
+// A phone warms only the first 16 of the picker's order (recently used first) —
+// 147 image requests + load events landing at once was a burst of its own right
+// after spawn, and again on every return from the background (_memRestore). The
+// rest load as the picker scrolls them in or a bubble needs one (_stkImg is lazy).
+function _stkPreloadAll() {
+    const list = isTouchDevice() ? _stkSorted().slice(0, 16) : _stk.list;
+    for (const n of list) _stkImg(n);
+}
 
 // Called from _memReleaseIdle. Everything here is a pure cache: a bubble or the
 // picker re-asks through _stkImg, and _memRestore warms the set again.
@@ -36863,9 +37040,13 @@ async function _troStartEpoch(prog) {
    shelf — proximity alone left the trophies visibly popping in on the first open,
    and the spotlight cue has to be decoded before the very first frame of the
    ceremony. Never on the login path. Idempotent, and a file that fails resolves. */
-function _troEnsureAssets() {
+// `withSounds` false = the art only. A phone warms only the art on idle: the
+// ceremony's three mp3s decode to ~12 MB of PCM that almost nobody's session
+// ever plays, so they wait for the walk-up (which still lands seconds before
+// anyone can press استلام).
+function _troEnsureAssets(withSounds = true) {
     if (_tro.assets) return _tro.assets;
-    const imgs = ['Shelf', 'Awards', 1, 2, 3, 4, 5, 6, 7].map(n => new Promise(res => {
+    if (!_tro.imgs) _tro.imgs = ['Shelf', 'Awards', 1, 2, 3, 4, 5, 6, 7].map(n => new Promise(res => {
         const img = new Image();
         img.decoding = 'async';
         img.onload = img.onerror = () => res();
@@ -36878,10 +37059,11 @@ function _troEnsureAssets() {
         const el = document.getElementById(id);
         if (el && !el.getAttribute('src')) el.src = AWD_SRC;
     }
+    if (!withSounds) return Promise.all(_tro.imgs);
     const snd = gameState.focusAudioEngine
         ? gameState.focusAudioEngine.ensureTrophySounds()
         : Promise.resolve();
-    _tro.assets = Promise.all([...imgs, snd]);
+    _tro.assets = Promise.all([..._tro.imgs, snd]);
     return _tro.assets;
 }
 
@@ -37581,7 +37763,7 @@ function setupTrophyUI() {
        and on the first open the trophies were visibly popping in one by one. Still
        nowhere near the login path; _troEnsureAssets is idempotent, so the proximity
        call is now just a backstop for a session where idle never fired. */
-    whenCalm(_troEnsureAssets);
+    whenCalm(() => _troEnsureAssets(!isTouchDevice()));
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -40147,6 +40329,14 @@ function _memReleaseIdle() {
     // Stickers — up to ~38 MB decoded once they've all been drawn; re-fetched on return.
     _stkRelease();
 
+    // Ambient-sound buffers the member has switched OFF (~20 MB of PCM each for the
+    // long ones). An active sound keeps its buffer — it is playing. A switched-off
+    // one re-decodes if it's turned on again (the item pulses «loading» meanwhile).
+    try {
+        const fe = gameState.focusAudioEngine;
+        if (fe) for (const k of fe.fileSoundKeys) if (!fe.sounds[k]?.active) fe.focusBuffers[k] = null;
+    } catch (_) {}
+
     // The focus mask's offscreen copy (up to the canvas's own size).
     gameState.maskCanvas = null;
     gameState.maskCtx = null;
@@ -40187,7 +40377,7 @@ function _memRestore() {
     // The track is the one rebuild slow enough to be worth starting before it is
     // asked for, so a race entry isn't met with the retry message. On idle, never
     // on the critical path — the same warm `startGame` does after spawn.
-    if (MINIGAMES_ENABLED && gameState.race && !gameState.race._trackLoadStarted) {
+    if (MINIGAMES_ENABLED && gameState.race && !gameState.race._trackLoadStarted && !isTouchDevice()) {
         whenCalm(() => loadRaceTrackAsset());
     }
 }
