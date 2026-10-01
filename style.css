@@ -13542,6 +13542,182 @@ body.is-mobile .news-list { padding: 6px 16px 20px; }
 .dm-zoom[hidden] { display: none; }
 .dm-zoom img { max-width: calc(100vw - 48px); max-height: calc(100dvh - 48px); border-radius: 14px; box-shadow: 0 20px 70px rgba(0, 0, 0, 0.6); }
 
+/* ── الرد والتفاعل ──
+   • `.dm-line` = الفقاعة وبجانبها زر الخيارات (يظهر بالتمرير بالفأرة فقط؛ الجوال
+     يضغط الفقاعة نفسها). رسائلي على اليسار فيُعكس الصف ليبقى الزر جهة المنتصف.
+   • الاقتباس داخل الفقاعة (وفوق الملصق، إذ لا فقاعة له). ألوان النص كلها صلبة.
+   • القائمة `.dm-act` تُوضع مرة واحدة من JS (top/left) — transform لحركة الدخول فقط.
+   • المداخل: التلاشي داخل الـ keyframes مع `backwards` وأساس معتم (القاعدة ٢٠). */
+.dm-line { display: flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; }
+.dm-msg.mine .dm-line { flex-direction: row-reverse; }
+.dm-line .dm-bub { min-width: 0; }
+.dm-txt { white-space: pre-wrap; overflow-wrap: anywhere; }
+.dm-more {
+    flex: 0 0 auto;
+    width: 28px; height: 28px; padding: 0;
+    border: 0; border-radius: 50%;
+    background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8b8b9' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8.5 14.5c.9 1.3 2.1 2 3.5 2s2.6-.7 3.5-2'/%3E%3Cpath d='M9 9.5h.01M15 9.5h.01' stroke-width='2.6'/%3E%3C/svg%3E") center / 17px no-repeat;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity .14s, background-color .14s;
+}
+.dm-msg:hover .dm-more, .dm-msg.act .dm-more, .dm-more:focus-visible { opacity: 1; }
+.dm-more:hover, .dm-msg.act .dm-more { background-color: rgba(255, 255, 255, 0.10); }
+.dm-msg.failed .dm-more { display: none; }
+/* بلا تمرير (جوال / لوحي): الضغط على الفقاعة يفتح قائمتها، فلا تحديد نص فوقها */
+@media (hover: none) {
+    .dm-more { display: none; }
+    .dm-msgs { -webkit-touch-callout: none; }
+    .dm-bub { -webkit-user-select: none; user-select: none; cursor: pointer; }
+}
+
+.dm-quote {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    min-width: 0;
+    max-width: 100%;
+    margin: 0 0 5px;
+    padding: 4px 9px;
+    border: 0;
+    border-inline-start: 3px solid #3BB9AB;
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.07);
+    font: inherit;
+    font-size: 13px;
+    line-height: 1.4;
+    text-align: start;
+    white-space: normal;
+    cursor: pointer;
+}
+.dm-quote b { font-size: 12px; font-weight: 700; color: #62d6c8; }
+.dm-quote span {
+    max-width: 100%;
+    color: #b8b8b9;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.dm-msg.mine .dm-quote { border-inline-start-color: #bff3ec; background: rgba(0, 0, 0, 0.20); }
+.dm-msg.mine .dm-quote b { color: #bff3ec; }
+.dm-msg.mine .dm-quote span { color: #d3ebe7; }
+.dm-bub.img .dm-quote { margin: 2px 2px 5px; }
+/* فوق ملصق: بلا فقاعة تحمله، فيأخذ خلفية الفقاعة نفسها */
+.dm-quote.solo, .dm-msg.mine .dm-quote.solo { margin: 0 0 4px; background: #26262b; border-inline-start-color: #3BB9AB; }
+.dm-msg.mine .dm-quote.solo b { color: #62d6c8; }
+.dm-msg.mine .dm-quote.solo span { color: #b8b8b9; }
+.dm-msg.flash .dm-bub { animation: dmFlash 1.4s ease; }
+@keyframes dmFlash {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(98, 214, 200, 0); }
+    18%, 62% { box-shadow: 0 0 0 3px rgba(98, 214, 200, 0.8); }
+}
+
+.dm-rx {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-top: -7px;            /* يركب حافة الفقاعة السفلى */
+    padding: 0 8px;
+}
+.dm-msg.bare .dm-rx { margin-top: 2px; }
+.dm-rx-chip {
+    height: 24px;
+    min-width: 30px;
+    padding: 0 7px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    border: 1.5px solid #141416;
+    border-radius: 50px;
+    background: #2e2e34;
+    color: #d7d7da;
+    font: 400 13px/1 "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+    cursor: pointer;
+    transition: transform .2s var(--dm-pop);
+}
+.dm-rx-chip:active { transform: scale(0.9); }
+.dm-rx-chip.mine { background: #1d4f49; border-color: #3BB9AB; color: #e6fffb; }
+.dm-rx-chip i { font: 700 11px/1 'Rubik', system-ui, sans-serif; font-style: normal; }
+.dm-rx-chip.pop { animation: dmRxPop .42s var(--dm-pop) backwards; }
+@keyframes dmRxPop {
+    from { opacity: 0; transform: scale(0.4); }
+    to   { opacity: 1; transform: none; }
+}
+
+.dm-act {
+    position: absolute;
+    top: 0; left: 0;
+    z-index: 6;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 6px;
+    direction: rtl;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 22px;
+    background: #232327;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+    animation: dmActIn .22s var(--dm-pop) backwards;
+}
+.dm-act[hidden] { display: none; }
+@keyframes dmActIn {
+    from { opacity: 0; transform: translateY(6px) scale(0.88); }
+    to   { opacity: 1; transform: none; }
+}
+.dm-act-rx { display: flex; gap: 2px; }
+.dm-act-emo {
+    width: 38px; height: 38px; padding: 0;
+    border: 0; border-radius: 50%;
+    background: transparent;
+    font: 400 22px/1 "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+    cursor: pointer;
+    transition: transform .2s var(--dm-pop), background .14s;
+}
+.dm-act-emo:hover { background: rgba(255, 255, 255, 0.10); transform: scale(1.16); }
+.dm-act-emo:active { transform: scale(0.9); }
+.dm-act-emo.on { background: rgba(59, 185, 171, 0.30); }
+.dm-act-row { display: flex; gap: 6px; }
+.dm-act-btn {
+    flex: 1 1 0;
+    height: 34px;
+    padding: 0 14px;
+    border: 0; border-radius: 50px;
+    background: rgba(255, 255, 255, 0.07);
+    color: #ececec;
+    font: 600 13px 'Baloo Bhaijaan 2', 'Rubik', system-ui, sans-serif;
+    cursor: pointer;
+    transition: background .14s, transform .2s var(--dm-pop);
+}
+.dm-act-btn:hover { background: rgba(255, 255, 255, 0.14); }
+.dm-act-btn:active { transform: scale(0.95); }
+
+.dm-reply {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--dm-line);
+    background: #19191c;
+    cursor: pointer;
+}
+.dm-reply[hidden] { display: none; }
+.dm-reply-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    line-height: 1.35;
+    padding-inline-start: 10px;
+    border-inline-start: 3px solid #3BB9AB;
+}
+.dm-reply-body b { font-size: 12px; font-weight: 700; color: #62d6c8; }
+.dm-reply-body small {
+    font-size: 13px; font-weight: 500; color: #b8b8b9;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 /* ── إشعار رسالة جديدة ── */
 .dm-toast {
     position: fixed;
@@ -13611,6 +13787,13 @@ body.is-mobile .dm-compose { padding-bottom: max(10px, env(safe-area-inset-botto
 body.is-mobile .dm-pop { max-height: 34vh; }
 body.is-mobile .dm-pop.emoji { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 body.is-mobile .dm-toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
+/* الجوال: الضغط على الفقاعة (أو الضغط المطوّل) يفتح قائمتها، فلا تحديد نص ولا قائمة
+   النظام فوقها — النسخ من القائمة نفسها. */
+body.is-mobile .dm-more { display: none; }
+body.is-mobile .dm-msgs { -webkit-touch-callout: none; }
+body.is-mobile .dm-bub { -webkit-user-select: none; user-select: none; cursor: pointer; }
+body.is-mobile .dm-act-emo { width: 42px; height: 42px; font-size: 25px; }
+body.is-mobile .dm-act-btn { height: 38px; font-size: 14px; }
 @media (prefers-reduced-motion: reduce) {
-    .dm-row.in, .dm-msg.fresh { animation: none; }
+    .dm-row.in, .dm-msg.fresh, .dm-act, .dm-rx-chip.pop, .dm-msg.flash .dm-bub { animation: none; }
 }

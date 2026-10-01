@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 354 · Updated 10/1 9:24 PM</div>
+    <div id="build-number" class="build-number">Build 355 · Updated 10/1 9:32 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -718,6 +718,16 @@
                 <div id="dm-msgs" class="dm-msgs"></div>
                 <div id="dm-pop" class="dm-pop" hidden></div>
                 <div id="dm-note" class="dm-note" hidden></div>
+                <!-- قائمة الرسالة (تفاعل / رد / نسخ) — يبنيها game.js ويضعها عند الفقاعة -->
+                <div id="dm-act" class="dm-act" hidden></div>
+                <!-- الرسالة التي يُرَدّ عليها — تنتظر الإرسال. الضغط عليها يذهب إليها. -->
+                <div id="dm-reply" class="dm-reply" hidden>
+                    <span class="dm-reply-body">
+                        <b id="dm-reply-name"></b>
+                        <small id="dm-reply-text" dir="auto"></small>
+                    </span>
+                    <button id="dm-reply-x" class="dm-x" type="button" aria-label="إلغاء الرد">✕</button>
+                </div>
                 <!-- صورة مُرفقة تنتظر الإرسال (زر الإرفاق، السحب والإفلات، أو اللصق) -->
                 <div id="dm-attach" class="dm-attach" hidden>
                     <img id="dm-attach-img" alt="">
@@ -2463,7 +2473,7 @@
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
         <link rel="modulepreload" href="firebase-config.js?v=4">
-        <script type="module" src="game.js?v=332"></script>
+        <script type="module" src="game.js?v=333"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

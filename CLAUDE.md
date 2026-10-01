@@ -124,7 +124,7 @@ Grep anchors for the major systems (all verified to exist):
 | نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
 | ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL` |
-| الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI` |
+| الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI`; reply + reactions: `_dmSetReply`, `_dmQuoteNode`, `_dmJumpTo`, `_dmReact`, `_dmPaintRx`, `_dmAct`, `DM_RX_LIST` |
 | التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `_peekBody`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad`, `tools/shots.mjs`, `tools/shots.py` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
@@ -2317,14 +2317,14 @@ and falls through.
 
 A Telegram-style conversation between two members: saved, and you come back to it. The
 HUD's chat button (`#dm-btn`, with an unread badge), or the «رسالة خاصة» pill under a
-member. Text (500), emoji, stickers, pictures and GIFs. Code is the `الرسائل الخاصة`
+member. Text (500), emoji, stickers, pictures and GIFs, **replies and reactions**. Code is the `الرسائل الخاصة`
 block at the end of `game.js`; markup is `#dm-panel` + `#dm-toast` + `#dm-zoom`; styles
 are the matching block at the foot of `style.css`.
 
 ### Where it lives — which is what keeps it cheap AND the lobbies apart
 ```
 lobbies/{lobby}/dm/inbox/{me}/{peer}   = { t, m, f, n, pn, pa }   // one row per conversation
-lobbies/{lobby}/dm/threads/{a~b}/{key} = { f, t, m? | k? | i:{w,h} }
+lobbies/{lobby}/dm/threads/{a~b}/{key} = { f, t, m? | k? | i:{w,h}, r?:{k,f,p}, rx?:{member: emoji} }
 lobbies/{lobby}/dm/media/{a~b}/{key}   = "data:image/…"            // a picture's bytes, on their own
 ```
 - **Everything is under `lobbyPath()`**, so a brother's client only ever touches
@@ -2333,8 +2333,10 @@ lobbies/{lobby}/dm/media/{a~b}/{key}   = "data:image/…"            // a pictur
   (No rules change: `lobbies` was already allowed.)
 - **ONE live listener per client**, on its OWN inbox node. A message's fan-out is two.
 - **A thread is listened to only while it is open**, on its newest page (`limitToLast`),
-  re-opened from where the cache stopped (`startAt`, minus `DM_RESUME_BACK_MS` for two
-  senders' clocks; de-duped by key). Older pages are one-shot `get()`s («رسائل أقدم»).
+  re-opened from the cached newest PAGE onward (`startAt` — the last `DM_PAGE` messages
+  are read again, ~8 KB, because their reactions may have changed while it was closed;
+  never later than `DM_RESUME_BACK_MS` before the cache stopped, for two senders'
+  clocks; de-duped by key). Older pages are one-shot `get()`s («رسائل أقدم»).
 - **A picture never rides a message record**: the thread carries `{w, h}`; the bytes are
   fetched by a one-shot `get()` only when the bubble scrolls into view, kept in memory
   and in the **Cache API** (`maqr-dm-media-v1` — `sw.js` leaves `maqr-dm-…` alone), so
@@ -2372,6 +2374,36 @@ another ghost that is online**, and everything it wrote is removed on disconnect
   nothing else — no sound, no toast.
 - Everything a member typed goes in by `textContent`; a stored picture must match
   `_DM_MEDIA_RE` (no SVG) before it becomes an `<img>`.
+
+### الرد والتفاعل — replying and reacting
+Both ride the **message record itself** — no new node, no new listener, no extra read.
+- **A reply carries its quote**: `r: { k, f, p }` = the replied-to message's key, author
+  and `DM_QUOTE_LEN` (70) characters of it. The quote is drawn from the record, never
+  looked up, so it shows even when the original is pages back. Pressing it
+  (`_dmJumpTo`) scrolls the LIST (never `scrollIntoView`, invariant 11) to the original
+  and flashes it — only if that message is loaded; otherwise a toast says to load older.
+  The compose bar shows what is being replied to (`#dm-reply`, `_dmSetReply`); a send
+  (text, picture or sticker) takes it along and clears it.
+- **A reaction is one leaf**: `…/threads/{pair}/{key}/rx/{member} = emoji`, one per
+  member per message — the same emoji again removes it (`null`), another replaces it
+  (`_dmReact`, optimistic, reverted if the write fails). The open thread hears it through
+  an `onChildChanged` on the SAME query as its `onChildAdded` (`_dm.unsubChanged`, torn
+  down with it); `_dmOnMsg` treats an already-known key as "its reactions changed".
+  **Reactions are deliberately quiet** — no unread count, no toast, no inbox row; a
+  closed thread reads them on its next open. A reaction to a message older than the
+  newest page isn't seen live by the other side (they get it when that page is loaded).
+- **Checked on read too** (`_dmParseMsg`): a reaction not in `DM_RX_LIST` is dropped, at
+  most four are kept, the quote is cleaned like any text, and every key that goes into a
+  selector must match `_DM_KEY_RE`.
+- **One menu** (`#dm-act`, `_dmAct`): six emoji + «رد» + «نسخ». A PC opens it from the
+  button that appears beside a bubble on hover (`.dm-more`) or a right-click (left to
+  the browser when text is selected); a phone by **tapping the bubble** or holding it
+  (`contextmenu` on Android, a `DM_HOLD_MS` passive touch timer for iOS — on the list
+  itself, invariant 34). That is why a phone's bubbles are `user-select: none` and the
+  menu has «نسخ». It is placed ONCE from the bubble's rect and closes on any scroll or
+  outside press; `_dm.actShut` stops the press that closed it from reopening it, and
+  `_dm.holdAt` swallows the click a long press ends in (it would zoom a picture).
+- A member who can't be messaged (`dmCanMessage` false) gets «نسخ» only.
 
 ### Privacy — say it honestly
 The site signs in to Firebase anonymously, so the rules can not tie a row to a person.

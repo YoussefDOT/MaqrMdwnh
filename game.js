@@ -42280,8 +42280,9 @@ function setupSocialUI() {
 //   • ONE live listener per client, on its OWN inbox node: a handful of ~150-byte
 //     rows. Nobody else listens there, so a message's fan-out is exactly two clients.
 //   • A thread is listened to ONLY while it is open on screen, on its newest page
-//     (`limitToLast`), and re-opened from where the cache stopped (`startAt`). Older
-//     pages are one-shot get()s on «رسائل أقدم». Nothing here is polled.
+//     (`limitToLast`), and re-opened from the cached newest page onward (`startAt` —
+//     the page is re-read for its reactions, ~8 KB). Older pages are one-shot get()s
+//     on «رسائل أقدم». Nothing here is polled.
 //   • A message is ~150 bytes, downloaded once by two people. Ten thousand of them a
 //     month is ~3 MB against the 10 GB cap. (Images / GIFs are deliberately NOT here
 //     yet — a picture is thousands of messages' worth of bytes and needs its own
@@ -42298,7 +42299,8 @@ function setupSocialUI() {
 //  and readable by anyone with database access. Don't describe it as more.
 //
 //  Grep anchors: DM_, _dm, dmOpen, dmOpenWith, dmCanMessage, _dmOnInbox, _dmSend,
-//  _dmAttachThread, _dmRenderList, _dmRenderThread, dmUpdate, setupDmUI.
+//  _dmAttachThread, _dmRenderList, _dmRenderThread, dmUpdate, setupDmUI; the reply and
+//  the reactions: _dmSetReply, _dmQuoteNode, _dmJumpTo, _dmReact, _dmPaintRx, _dmAct.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const DM_MAX_LEN        = 500;
@@ -42321,6 +42323,12 @@ const DM_FILE_MAX_BYTES = 15 * 1024 * 1024;
 const DM_MEDIA_CACHE    = 'maqr-dm-media-v1';   // Cache API — sw.js leaves `maqr-dm-…` alone
 const DM_MEDIA_MEM_MAX  = 40;
 const DM_MEDIA_MEM_CHARS = 14 * 1024 * 1024;   // …and at most this much of them held in memory
+// الرد والتفاعل — see «الرد والتفاعل» below.
+const DM_RX_LIST        = ['❤️', '😂', '👍', '👏', '😮', '😢'];   // the only values a reaction may hold (checked on read too)
+const DM_RX_COOLDOWN_MS = 250;
+const DM_QUOTE_LEN      = 70;      // characters of the replied-to message carried inside the reply
+const DM_HOLD_MS        = 420;     // a finger held this long on a message opens its menu
+const _DM_KEY_RE        = /^\d{13}[a-z0-9]{4}$/;                    // a message key, as _dmSend mints it
 
 const _dm = {
     wired: false, started: false,
@@ -42329,8 +42337,12 @@ const _dm = {
     open: false, canvasOff: false, offT: 0,
     view: 'list', peer: '',
     threads: {},                 // peer → { msgs: [], keys: Set, more, loaded, loading, lastTs }
-    unsubThread: null, unsubOnce: null,
+    unsubThread: null, unsubOnce: null, unsubChanged: null,
     unread: 0, lastSentAt: 0,
+    reply: null,                 // the message being replied to: { k, f, p }
+    act: '',                     // key of the message whose menu is open
+    actShut: null,               // { k, at } — the menu a press just closed (so that press doesn't reopen it)
+    lastRxAt: 0, holdT: 0, holdAt: 0,
     els: null, pop: '',
     toastT: 0, toastPeer: '',
     ghostArmed: {},
@@ -42601,6 +42613,8 @@ function dmClose() {
     _dmDetachThread();
     _dmPop('');
     _dmZoom('');
+    _dmAct('');
+    _dmSetReply(null);
     _dmSetAttachment(null);
     try { E.input.blur(); E.search.blur(); } catch (_) {}
     E.panel.classList.remove('active');
@@ -42743,6 +42757,8 @@ function _dmShowList() {
     const E = _dm.els;
     _dmDetachThread();
     _dmPop('');
+    _dmAct('');
+    _dmSetReply(null);
     _dm.view = 'list';
     _dm.peer = '';
     E.viewThread.hidden = true;
@@ -42761,6 +42777,7 @@ function _dmThread(peer) {
 function _dmDetachThread() {
     if (_dm.unsubThread) { try { _dm.unsubThread(); } catch (_) {} _dm.unsubThread = null; }
     if (_dm.unsubOnce) { try { _dm.unsubOnce(); } catch (_) {} _dm.unsubOnce = null; }
+    if (_dm.unsubChanged) { try { _dm.unsubChanged(); } catch (_) {} _dm.unsubChanged = null; }
     if (_dm.io) { try { _dm.io.disconnect(); } catch (_) {} _dm.io = null; }
 }
 
@@ -42768,14 +42785,23 @@ function _dmAttachThread(peer) {
     _dmDetachThread();
     const th = _dmThread(peer);
     const node = ref(database, `${_dm.base}/threads/${_dmPair(peer)}`);
-    // First open: the newest page. Re-open: only what was written since the cache
-    // stopped (a little earlier, for two senders whose clocks disagree) — de-duped by key.
+    // First open: the newest page. Re-open: from the cached newest PAGE onward — a
+    // message never changes, but its reactions do, so the last DM_PAGE messages are
+    // read again (~8 KB) to pick up what was reacted to while the thread was closed;
+    // and never later than a little before the cache stopped (two senders' clocks
+    // disagree). Everything is de-duped by key (_dmOnMsg).
+    let from = th.lastTs - DM_RESUME_BACK_MS;
+    if (th.msgs.length) {
+        const pageTs = parseInt(th.msgs[Math.max(0, th.msgs.length - DM_PAGE)].k.slice(0, 13), 10);
+        if (pageTs > 0 && pageTs < from) from = pageTs;
+    }
     const q = (th.loaded && th.lastTs)
-        ? query(node, orderByKey(), startAt(String(Math.max(0, th.lastTs - DM_RESUME_BACK_MS))))
+        ? query(node, orderByKey(), startAt(String(Math.max(0, from))))
         : query(node, orderByKey(), limitToLast(DM_PAGE));
-    _dm.unsubThread = onChildAdded(q,
-        (snap) => { try { _dmOnMsg(peer, snap.key, snap.val()); } catch (e) { console.error('[dm msg]', e); } },
-        () => {});
+    const onMsg = (snap) => { try { _dmOnMsg(peer, snap.key, snap.val()); } catch (e) { console.error('[dm msg]', e); } };
+    _dm.unsubThread = onChildAdded(q, onMsg, () => {});
+    // A reaction is a change to a message that is already here.
+    _dm.unsubChanged = onChildChanged(q, onMsg, () => {});
     if (!th.loaded) {
         // `value` fires once, after the initial page's child_added events.
         _dm.unsubOnce = onValue(q, () => {
@@ -42797,17 +42823,45 @@ function _dmParseMsg(key, v) {
         m: typeof v.m === 'string' ? _dmCleanText(v.m, DM_MAX_LEN) : '',
         s: (typeof v.k === 'string' && _stkSafeName(v.k)) ? v.k : '',
         i: null,
+        r: null,                 // the message this one replies to: { k, f, p }
+        rx: {},                  // member id → emoji
     };
     if (v.i && typeof v.i === 'object') {
         const w = Math.round(+v.i.w), h = Math.round(+v.i.h);
         if (w >= 1 && h >= 1 && w <= 6000 && h <= 6000) msg.i = { w, h };
     }
+    if (v.r && typeof v.r === 'object' && typeof v.r.k === 'string' && _DM_KEY_RE.test(v.r.k)) {
+        const p = _dmCleanText(v.r.p, DM_QUOTE_LEN).replace(/\n/g, ' ');
+        if (p) msg.r = { k: v.r.k, f: String(v.r.f || '').slice(0, 64), p };
+    }
+    if (v.rx && typeof v.rx === 'object') {
+        let n = 0;
+        for (const [u, e] of Object.entries(v.rx)) {
+            if (n >= 4) break;
+            if (_dmKeyOk(u) && DM_RX_LIST.includes(e)) { msg.rx[u] = e; n++; }
+        }
+    }
     return (msg.m || msg.s || msg.i) ? msg : null;
 }
+function _dmFindMsg(th, key) {
+    for (let i = th.msgs.length - 1; i >= 0; i--) if (th.msgs[i].k === key) return th.msgs[i];
+    return null;
+}
+function _dmRxSig(rx) { return Object.keys(rx).sort().map(u => u + ':' + rx[u]).join('|'); }
+function _dmThreadShown(peer) { return _dm.open && _dm.view === 'thread' && _dm.peer === peer; }
 
 function _dmOnMsg(peer, key, v) {
     const th = _dmThread(peer);
-    if (typeof key !== 'string' || th.keys.has(key)) return;
+    if (typeof key !== 'string') return;
+    if (th.keys.has(key)) {
+        // Already here. The one thing that changes on a stored message is its reactions.
+        const cur = _dmFindMsg(th, key), nw = _dmParseMsg(key, v);
+        if (!cur || !nw || _dmRxSig(cur.rx) === _dmRxSig(nw.rx)) return;
+        const theirs = (nw.rx[peer] && nw.rx[peer] !== cur.rx[peer]) ? nw.rx[peer] : '';
+        cur.rx = nw.rx;
+        if (_dmThreadShown(peer)) _dmPaintRx(key, cur, theirs);
+        return;
+    }
     const msg = _dmParseMsg(key, v);
     if (!msg) return;
     th.keys.add(key);
@@ -42861,6 +42915,9 @@ function _dmMsgNode(msg, prev, fresh) {
         + ((prev && prev.f === msg.f && msg.t - prev.t < DM_GROUP_MS) ? ' cont' : '');
     row.dataset.k = msg.k;
     const bub = document.createElement('div');
+    // A sticker has no bubble to hold the quote, so its quote stands above it.
+    if (msg.r && msg.s && !msg.i) row.appendChild(_dmQuoteNode(msg.r, true));
+    else if (msg.r) bub.appendChild(_dmQuoteNode(msg.r, false));
     if (msg.i) {
         // The frame is sized from the record, so nothing jumps when the bytes land;
         // the bytes themselves are fetched only when it scrolls into view.
@@ -42883,21 +42940,43 @@ function _dmMsgNode(msg, prev, fresh) {
         _dmWatchPic(frame);
     } else if (msg.s) {
         bub.className = 'dm-bub stk';
+        row.classList.add('bare');
         const img = document.createElement('img');
         img.alt = msg.s;
         img.loading = 'lazy';
         img.decoding = 'async';
         img.src = _stkUrl(msg.s);
         bub.appendChild(img);
+    } else if (msg.r) {
+        // A reply: the quote is already inside the bubble, the words go under it.
+        bub.className = 'dm-bub';
+        const tx = document.createElement('div');
+        tx.className = 'dm-txt';
+        tx.dir = 'auto';
+        tx.textContent = msg.m;
+        bub.appendChild(tx);
     } else {
         const big = msg.m.length <= 12 && _DM_EMOJI_ONLY.test(msg.m);
         bub.className = 'dm-bub' + (big ? ' big' : '');
+        if (big) row.classList.add('bare');
         bub.dir = 'auto';
         bub.textContent = msg.m;
     }
+    // The bubble and, beside it, the button a mouse gets on hover (a phone taps the
+    // bubble itself — see setupDmUI).
+    const line = document.createElement('div');
+    line.className = 'dm-line';
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'dm-more';
+    more.setAttribute('aria-label', 'خيارات الرسالة');
+    line.append(bub, more);
+    row.appendChild(line);
+    const rx = _dmRxNode(msg, '');
+    if (rx) row.appendChild(rx);
     const tm = document.createElement('time');
     try { tm.textContent = new Date(msg.t).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' }); } catch (_) {}
-    row.append(bub, tm);
+    row.appendChild(tm);
     frag.appendChild(row);
     return frag;
 }
@@ -42923,6 +43002,7 @@ function _dmPaintThreadState() {
 function _dmRenderThread() {
     const E = _dm.els;
     const th = _dmThread(_dm.peer);
+    _dmAct('');                      // its row is about to be rebuilt
     const frag = document.createDocumentFragment();
     let prev = null;
     for (const m of th.msgs) { frag.appendChild(_dmMsgNode(m, prev, false)); prev = m; }
@@ -42983,6 +43063,8 @@ function _dmPaintPeerHead() {
 function _dmShowThread(peer) {
     const E = _dm.els;
     _dmPop('');
+    _dmAct('');
+    _dmSetReply(null);
     _dm.view = 'thread';
     _dm.peer = peer;
     E.viewList.hidden = true;
@@ -43041,6 +43123,8 @@ function _dmSend(text, stk, att) {
     const msg = { f: _dm.me, t };
     if (stk) msg.k = stk; else if (m) msg.m = m;
     if (att) msg.i = { w: att.w, h: att.h };
+    const rp = _dm.reply;
+    if (rp && _DM_KEY_RE.test(rp.k) && rp.p) msg.r = { k: rp.k, f: rp.f, p: rp.p };
     const preview = stk ? DM_STK_LABEL
         : att ? (DM_IMG_LABEL + (m ? ' ' + m.replace(/\s+/g, ' ') : '')).slice(0, DM_PREVIEW)
         : m.replace(/\s+/g, ' ').slice(0, DM_PREVIEW);
@@ -43071,6 +43155,7 @@ function _dmSend(text, stk, att) {
     })).catch(() => {});
     _dmOnMsg(peer, key, msg);       // shown at once — the listener's own copy is de-duped by key
     _dm.inbox[peer] = { t, m: preview, f: _dm.me, n: 0, pn: info.name, pa: _dmSafeAvatar(info.avatar) };
+    if (rp) _dmSetReply(null);
     return true;
 }
 
@@ -43257,6 +43342,226 @@ function _dmZoom(url) {
     z.hidden = false;
 }
 
+// ─── الرد والتفاعل — replying to a message, reacting to one ──────────────────
+// Both ride the message record itself, so neither adds a node, a listener or a read:
+//   • A REPLY carries its quote with it — `r: { k, f, p }` = the replied-to message's
+//     key, its author and DM_QUOTE_LEN characters of it. The quote is drawn from the
+//     record, never looked up, so it shows even when the original is pages back (and
+//     pressing it scrolls there when it is on screen).
+//   • A REACTION is one leaf, `threads/{pair}/{key}/rx/{member} = emoji` — one per
+//     member per message, written by an update() of that leaf alone and removed by
+//     writing null. It reaches the other side as a child_changed on the open thread
+//     (_dmAttachThread); a closed thread costs nothing and reads it on its next open.
+//     It is deliberately QUIET: no unread count, no toast, no inbox row.
+//   • What may be stored is checked on READ as well (_dmParseMsg): a reaction is one
+//     of DM_RX_LIST or it is dropped, the quote is cleaned like any other text.
+// One menu serves both (#dm-act): a mouse gets a button beside the bubble on hover (or
+// a right-click); a finger taps the bubble or holds it. It also carries «نسخ», because
+// a phone's bubbles are not selectable — a long press there belongs to this menu.
+
+function _dmQuoteText(msg) {
+    const body = (msg.m || '').replace(/\s+/g, ' ').trim();
+    const t = msg.s ? DM_STK_LABEL : msg.i ? (DM_IMG_LABEL + (body ? ' ' + body : '')) : body;
+    return t.slice(0, DM_QUOTE_LEN);
+}
+
+function _dmQuoteNode(r, solo) {
+    const q = document.createElement('button');
+    q.type = 'button';
+    q.className = 'dm-quote' + (solo ? ' solo' : '');
+    q.dataset.to = r.k;
+    q.dir = 'rtl';
+    const nm = document.createElement('b');
+    nm.textContent = r.f === _dm.me ? 'أنت' : _dmPeerInfo(_dm.peer).name;
+    const tx = document.createElement('span');
+    tx.dir = 'auto';
+    tx.textContent = r.p;
+    q.append(nm, tx);
+    return q;
+}
+
+// Scroll the list (never scrollIntoView — it scrolls every ancestor) to a message and
+// flash it. A message that isn't loaded can't be jumped to.
+function _dmJumpTo(key) {
+    const E = _dm.els;
+    if (!E || !_DM_KEY_RE.test(key || '')) return;
+    const row = E.msgs.querySelector(`.dm-msg[data-k="${key}"]`);
+    if (!row) {
+        _libToast(_dmThread(_dm.peer).more ? 'الرسالة الأصلية أقدم — اضغط «رسائل أقدم» لتحميلها' : 'الرسالة الأصلية غير موجودة');
+        return;
+    }
+    const box = E.msgs;
+    const br = box.getBoundingClientRect(), rr = row.getBoundingClientRect();
+    const top = box.scrollTop + (rr.top - br.top) - (box.clientHeight - rr.height) / 2;
+    try { box.scrollTo({ top: Math.max(0, top), behavior: 'smooth' }); } catch (_) { box.scrollTop = Math.max(0, top); }
+    row.classList.remove('flash');
+    void row.offsetWidth;                        // restart the flash if it is still playing
+    row.classList.add('flash');
+    setTimeout(() => row.classList.remove('flash'), 1500);
+}
+
+function _dmSetReply(msg) {
+    const E = _dm.els;
+    if (!E) return;
+    const box = E.msgs;
+    const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+    _dm.reply = msg ? { k: msg.k, f: msg.f, p: _dmQuoteText(msg) } : null;
+    E.reply.hidden = !_dm.reply;
+    if (_dm.reply) {
+        E.replyName.textContent = msg.f === _dm.me ? 'الرد على رسالتك' : 'الرد على ' + _dmPeerInfo(_dm.peer).name;
+        E.replyText.textContent = _dm.reply.p;
+        try { E.input.focus({ preventScroll: true }); } catch (_) {}
+    }
+    // The bar takes its height from the list: keep the newest message in view.
+    if (near && _dm.view === 'thread') box.scrollTop = box.scrollHeight;
+}
+
+// The chips under a message: one per emoji, a count when both reacted with the same.
+// null when nobody reacted.
+function _dmRxNode(msg, popEmo) {
+    const by = new Map();
+    for (const [u, e] of Object.entries(msg.rx)) {
+        const g = by.get(e) || { n: 0, mine: false };
+        g.n++;
+        if (u === _dm.me) g.mine = true;
+        by.set(e, g);
+    }
+    if (!by.size) return null;
+    const wrap = document.createElement('div');
+    wrap.className = 'dm-rx';
+    for (const e of DM_RX_LIST) {
+        const g = by.get(e);
+        if (!g) continue;
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dm-rx-chip' + (g.mine ? ' mine' : '') + (e === popEmo ? ' pop' : '');
+        b.dataset.e = e;
+        b.setAttribute('aria-label', g.mine ? 'إزالة تفاعلك ' + e : 'تفاعل بـ ' + e);
+        const em = document.createElement('span');
+        em.textContent = e;
+        b.appendChild(em);
+        if (g.n > 1) {
+            const c = document.createElement('i');
+            c.textContent = _chatArNum(g.n);
+            b.appendChild(c);
+        }
+        wrap.appendChild(b);
+    }
+    return wrap;
+}
+function _dmPaintRx(key, msg, popEmo) {
+    const E = _dm.els;
+    // (the key goes into a selector — one that isn't ours has no row anyway)
+    const row = E && _DM_KEY_RE.test(key) && E.msgs.querySelector(`.dm-msg[data-k="${key}"]`);
+    if (!row) return;
+    const box = E.msgs;
+    const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+    const old = row.querySelector('.dm-rx');
+    const nw = _dmRxNode(msg, popEmo);
+    if (old && nw) old.replaceWith(nw);
+    else if (old) old.remove();
+    else if (nw) row.insertBefore(nw, row.querySelector('time'));
+    if (near) box.scrollTop = box.scrollHeight;
+}
+
+// My reaction to a message: the same emoji again takes it back, another one replaces
+// it. Shown at once; put back as it was if the write is refused.
+function _dmReact(key, emo) {
+    const peer = _dm.peer;
+    if (!_dmThreadShown(peer) || !_DM_KEY_RE.test(key || '') || !DM_RX_LIST.includes(emo)) return;
+    if (!dmCanMessage(peer)) { _libToast('لا يمكن مراسلة هذا العضو الآن'); return; }
+    const msg = _dmFindMsg(_dmThread(peer), key);
+    if (!msg) return;
+    const now = Date.now();
+    if (now - _dm.lastRxAt < DM_RX_COOLDOWN_MS) return;
+    _dm.lastRxAt = now;
+    const was = msg.rx[_dm.me] || '';
+    const next = was === emo ? '' : emo;
+    const apply = (v) => {
+        if (v) msg.rx[_dm.me] = v; else delete msg.rx[_dm.me];
+        if (_dmThreadShown(peer)) _dmPaintRx(key, msg, v);
+    };
+    apply(next);
+    _dmGhostArm(peer);
+    update(ref(database), { [`${_dm.base}/threads/${_dmPair(peer)}/${key}/rx/${_dm.me}`]: next || null })
+        .catch(() => { apply(was); _libToast('تعذّر حفظ التفاعل'); });
+    if (next) _meetBlip(1.4, 0.04);
+}
+
+function _dmCopy(text) {
+    const ok = () => _libToast('نُسخت الرسالة');
+    const fail = () => _libToast('تعذّر النسخ');
+    try {
+        if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(ok, fail);
+        else {
+            const ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            document.execCommand('copy') ? ok() : fail();
+            ta.remove();
+        }
+    } catch (_) { fail(); }
+}
+
+// The message menu: '' closes it, a key opens it on that message. Built per open, and
+// placed ONCE from the bubble's rect — it closes on any scroll instead of following.
+function _dmAct(key) {
+    const E = _dm.els;
+    if (!E) return;
+    const act = E.act;
+    if (_dm.act) E.msgs.querySelector('.dm-msg.act')?.classList.remove('act');
+    _dm.act = '';
+    act.hidden = true;
+    act.textContent = '';
+    if (!key || !_DM_KEY_RE.test(key) || !_dm.open || _dm.view !== 'thread') return;
+    const msg = _dmFindMsg(_dmThread(_dm.peer), key);
+    const row = E.msgs.querySelector(`.dm-msg[data-k="${key}"]`);
+    const bub = row && row.querySelector('.dm-bub');
+    if (!msg || !bub || row.classList.contains('failed')) return;
+    const can = dmCanMessage(_dm.peer);
+    if (!can && !msg.m) return;                  // nothing this menu could offer
+    if (can) {
+        const rx = document.createElement('div');
+        rx.className = 'dm-act-rx';
+        for (const e of DM_RX_LIST) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'dm-act-emo' + (msg.rx[_dm.me] === e ? ' on' : '');
+            b.dataset.e = e;
+            b.setAttribute('aria-label', 'تفاعل بـ ' + e);
+            b.textContent = e;
+            rx.appendChild(b);
+        }
+        act.appendChild(rx);
+    }
+    const rowEl = document.createElement('div');
+    rowEl.className = 'dm-act-row';
+    const item = (what, label) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dm-act-btn';
+        b.dataset.do = what;
+        b.textContent = label;
+        rowEl.appendChild(b);
+    };
+    if (can) item('reply', 'رد');
+    if (msg.m) item('copy', 'نسخ');
+    act.appendChild(rowEl);
+    _dm.act = key;
+    row.classList.add('act');
+    act.hidden = false;
+    // Above the bubble, on the bubble's own side; under it when there is no room above.
+    const vr = E.viewThread.getBoundingClientRect(), mr = E.msgs.getBoundingClientRect(), br = bub.getBoundingClientRect();
+    const mw = act.offsetWidth, mh = act.offsetHeight;
+    let top = br.top - mh - 8;
+    if (top < mr.top + 4) top = Math.min(br.bottom + 8, mr.bottom - mh - 4);
+    top = Math.max(mr.top + 4, top);
+    let left = row.classList.contains('mine') ? br.left : br.right - mw;
+    left = Math.max(vr.left + 8, Math.min(left, vr.right - mw - 8));
+    act.style.top = Math.round(top - vr.top) + 'px';
+    act.style.left = Math.round(left - vr.left) + 'px';
+}
+
 // ─── Emoji / stickers ────────────────────────────────────────────────────────
 function _dmPop(kind) {
     const E = _dm.els;
@@ -43339,6 +43644,8 @@ function setupDmUI() {
         msgs: $('dm-msgs'), pop: $('dm-pop'), note: $('dm-note'),
         card: panel.querySelector('.dm-card'), drop: $('dm-drop'),
         attach: $('dm-attach'), attachImg: $('dm-attach-img'), attachInfo: $('dm-attach-info'),
+        reply: $('dm-reply'), replyName: $('dm-reply-name'), replyText: $('dm-reply-text'),
+        act: $('dm-act'),
         file: $('dm-file'),
         compose: $('dm-compose'), input: $('dm-input'),
         emojiBtn: $('dm-emoji-btn'), stkBtn: $('dm-stk-btn'),
@@ -43355,10 +43662,97 @@ function setupDmUI() {
         const row = e.target.closest && e.target.closest('.dm-row');
         if (row && row.dataset.peer) _dmShowThread(row.dataset.peer);
     });
+    // Open a message's menu — unless this very press just closed it (a second press on
+    // the same message puts the menu away, it doesn't bounce it).
+    const actOpen = (key) => {
+        const shut = _dm.actShut;
+        if (shut && shut.k === key && Date.now() - shut.at < 700) return;
+        _dmAct(key);
+    };
+    const rowKey = (el) => { const r = el.closest('.dm-msg'); return (r && r.dataset.k) || ''; };
+    const noHover = () => { try { return window.matchMedia('(hover: none)').matches; } catch (_) { return false; } };
     E.msgs.addEventListener('click', (e) => {
-        if (e.target.closest && e.target.closest('.dm-state.more')) { _dmLoadOlder(); return; }
-        const pic = e.target.closest && e.target.closest('.dm-pic.ready');
-        if (pic) { const im = pic.querySelector('img'); if (im) _dmZoom(im.src); }
+        const t = e.target;
+        if (!t.closest) return;
+        if (t.closest('.dm-state.more')) { _dmLoadOlder(); return; }
+        if (Date.now() - _dm.holdAt < 700) return;          // the click a long press ends in
+        const quote = t.closest('.dm-quote');
+        if (quote) { _dmJumpTo(quote.dataset.to); return; }
+        const chip = t.closest('.dm-rx-chip');
+        if (chip) { _dmReact(rowKey(chip), chip.dataset.e); return; }
+        const more = t.closest('.dm-more');
+        if (more) { actOpen(rowKey(more)); return; }
+        const pic = t.closest('.dm-pic.ready');
+        if (pic) { const im = pic.querySelector('img'); if (im) _dmZoom(im.src); return; }
+        // No hover (a phone, a tablet): a tap on the bubble is how its menu opens. (A PC
+        // keeps the click for selecting text, and has the button beside the bubble.)
+        if (isMobile() || noHover()) { const bub = t.closest('.dm-bub'); if (bub) actOpen(rowKey(bub)); }
+    });
+    // Right-click on a PC, and Android's long press, both arrive as `contextmenu`.
+    E.msgs.addEventListener('contextmenu', (e) => {
+        const key = e.target.closest ? rowKey(e.target) : '';
+        if (!key) return;
+        // A PC user with text selected wants the browser's own menu (copy the selection).
+        if (!isMobile() && String(window.getSelection ? window.getSelection() : '').length) return;
+        e.preventDefault();
+        clearTimeout(_dm.holdT);
+        _dm.holdT = 0;
+        if (_dm.act === key) return;                        // the hold timer got there first
+        _dm.holdAt = Date.now();
+        _dmAct(key);
+    });
+    // iOS sends no `contextmenu`: a finger held still on a message opens the menu. On
+    // the list itself and passive — the list must keep scrolling freely (invariant 34).
+    let holdX = 0, holdY = 0;
+    const holdEnd = () => { clearTimeout(_dm.holdT); _dm.holdT = 0; };
+    E.msgs.addEventListener('touchstart', (e) => {
+        holdEnd();
+        if (!e.targetTouches || e.targetTouches.length !== 1 || !e.target.closest) return;
+        if (e.target.closest('.dm-quote, .dm-rx-chip, .dm-state')) return;
+        const key = rowKey(e.target);
+        if (!key) return;
+        holdX = e.targetTouches[0].clientX; holdY = e.targetTouches[0].clientY;
+        _dm.holdT = setTimeout(() => {
+            _dm.holdT = 0;
+            if (_dm.act === key) return;
+            _dm.holdAt = Date.now();
+            _dmAct(key);
+        }, DM_HOLD_MS);
+    }, { passive: true });
+    E.msgs.addEventListener('touchmove', (e) => {
+        if (!_dm.holdT) return;
+        const p = e.targetTouches && e.targetTouches[0];
+        if (!p || Math.abs(p.clientX - holdX) > 10 || Math.abs(p.clientY - holdY) > 10) holdEnd();
+    }, { passive: true });
+    E.msgs.addEventListener('touchend', holdEnd, { passive: true });
+    E.msgs.addEventListener('touchcancel', holdEnd, { passive: true });
+    // The menu is placed once, so anything that moves the list puts it away.
+    E.msgs.addEventListener('scroll', () => { if (_dm.act) _dmAct(''); }, { passive: true });
+    // A press anywhere else in the drawer closes it.
+    E.card.addEventListener('pointerdown', (e) => {
+        if (!_dm.act || E.act.contains(e.target)) return;
+        _dm.actShut = { k: _dm.act, at: Date.now() };
+        _dmAct('');
+    });
+    // Its buttons must not take the focus off the text box (a phone would drop the keyboard).
+    E.act.addEventListener('mousedown', (e) => e.preventDefault());
+    E.act.addEventListener('click', (e) => {
+        const key = _dm.act;
+        if (!key || !e.target.closest) return;
+        const emo = e.target.closest('.dm-act-emo');
+        const btn = e.target.closest('.dm-act-btn');
+        if (!emo && !btn) return;
+        const msg = _dmFindMsg(_dmThread(_dm.peer), key);
+        _dmAct('');
+        if (!msg) return;
+        if (emo) _dmReact(key, emo.dataset.e);
+        else if (btn.dataset.do === 'reply') _dmSetReply(msg);
+        else if (btn.dataset.do === 'copy') _dmCopy(msg.m);
+    });
+    $('dm-reply-x')?.addEventListener('click', () => _dmSetReply(null));
+    // The bar's own quote takes you to the message you are replying to.
+    E.reply.addEventListener('click', (e) => {
+        if (_dm.reply && e.target.closest && !e.target.closest('#dm-reply-x')) _dmJumpTo(_dm.reply.k);
     });
     // ── Pictures: the button, a drop anywhere on the drawer, a paste ──
     $('dm-img-btn')?.addEventListener('click', () => { if (!_dm.attBusy) E.file.click(); });
@@ -43443,7 +43837,9 @@ function setupDmUI() {
         if (e.key !== 'Escape' || !_dm.open) return;
         const zoom = document.getElementById('dm-zoom');
         if (zoom && !zoom.hidden) { _dmZoom(''); return; }
+        if (_dm.act) { _dmAct(''); return; }
         if (_dm.pop) { _dmPop(''); return; }
+        if (_dm.reply) { _dmSetReply(null); return; }
         // On a PC the first Escape only lets go of the text field (back to playing);
         // the next one puts the drawer away.
         const ae = document.activeElement;
