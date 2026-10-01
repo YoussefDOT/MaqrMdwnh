@@ -1,7 +1,9 @@
 # Mdwnh Presence Relay (Cloudflare Worker)
 
 A tiny, **stateless** WebSocket relay for live player positions only.
-It stores nothing. Everything that must persist stays in Firebase.
+It stores nothing of them. Everything that must persist stays in Firebase.
+(The one thing it keeps is for ليمو, the robot: today's spend, and a short log of his
+last exchanges and the room's last chat lines — see `src/index.js`.)
 
 - One Durable Object = one lobby room (`male` / `female` / future lobbies).
 - Players connect to: `wss://mdwnh-presence.<your-subdomain>.workers.dev/lobby/<lobbyId>?uid=<uid>`

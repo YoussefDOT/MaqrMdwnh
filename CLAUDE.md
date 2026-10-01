@@ -121,11 +121,11 @@ Grep anchors for the major systems (all verified to exist):
 | الملصقات + الرموز التعبيرية | `STK_`, `_stk`, `receiveSticker`, `_stkSend`, `_stkUpdate`, `_stkSearch`, `_emo` |
 | «يكتب الآن» + الانصهار | `CHAT_TYP_`, `CHAT_MORPH_MS`, `sendTypingWS`, `_chatSetTyping`, `_chatMorphFx`, `_chatDrawTyping` |
 | القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump`, `jumpTapWhileMoving`, `JUMP_FLICK_`, `jumpMaybeHint` |
-| نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy` |
+| نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
-| ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`; `index.js` → `_lemoAsk`, `BUDGET_KEY` |
+| ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL` |
 | الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI` |
-| التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
+| التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `_peekBody`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad`, `tools/shots.mjs`, `tools/shots.py` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds`, `_seamlessLoop`, `_mp3CutBytes`, `_glideParam`, `_warmGames`, `playSoundRobust` |
@@ -1619,7 +1619,7 @@ home, where his seeded life carries on.
   a member gets there (`_lemoStairBob`, a function of distance — no state).
   **The timeline never uses any of this** (it must stay pure).
 - **His words ride the RELAY, never Firebase, and the page never sees the key.** The page
-  sends `{t:'lemoq', f, k, n, g, q, slug, near, tm, hj, st, on}` (no `uid` — an old
+  sends `{t:'lemoq', f, k, n, g, q, slug, near, tm, hj, st, on, men?}` (no `uid` — an old
   client drops it); the lobby's Durable Object does NOT forward it: it asks the model
   (`presence-server/src/lemo.js`) and broadcasts `{t:'lemot', to, k}` (he is thinking —
   that is the lock) and `{t:'lemoa', to, k, p:[{m}|{s}] | e}` to everyone, the asker
@@ -1638,10 +1638,43 @@ home, where his seeded life carries on.
   in the picker); **a mention with no question → refused**; someone else's answer in
   flight → refused; and after he answers YOU, `LEMO_ASK_GAP_MS` (4 s) before you may
   call again — exactly the gap someone else needs.
+- **He is never cut off** (`lemoTalkingTo` → `_lemoCallHolds`): a mention is refused
+  until he has finished — on his way to someone, the answer waiting for him to arrive,
+  the bubble itself. A second call used to replace the first and take the bubble down
+  mid-sentence. Someone else's call holds him until their client sends him home (which
+  is also what clears the bubble on every screen); your OWN call holds only while
+  something of his is on screen or due, so a follow-up while he still stands beside you
+  works. Two escapes, or one background tab would lock him for the whole
+  `LEMO_CALL_MAX_MS`: the caller has left, or his last word has been gone
+  `LEMO_FREE_AFTER_MS` on this screen and nobody released him. `lemoSummon`'s
+  transaction applies the same test to the doc it is about to replace, so two members
+  calling in the same moment don't both win.
+- **Mentions inside a question** («@ليمو ما رأيك في @فلان»): a pill's text is the
+  member's DISPLAY name («Mu»), which the roster he reads has never heard of. So the
+  page keeps it as `@name` in `q` and sends `men: [{ n, slug }]` (the slug from
+  `_chatMenRoster`), and the relay (`mentionedMembers`) puts that member's details
+  straight into the question's context — no tool call. An `@name` typed by hand is
+  matched there too, against every name the team uses (roster name, display, `dbKey`,
+  Telegram name/handle, slug — **never the email**): that is the only way to ask about
+  someone offline, since the picker offers online members only. Unknown → he is told so.
+- **What he remembers** — the relay's `lemoLog` (`LOG_KEY`): his last `LEMO_HISTORY` (10)
+  messages — questions and answers — **and the room's last `LEMO_ROOM` (10) chat
+  lines, which he overhears** (`_lemoHear`: a `{"t":"chat"` message is forwarded as
+  ever and a cleaned copy is logged, names resolved from the roster by Discord id at
+  ask time). Nothing older than `LEMO_LOG_TTL_MS` (2 h). A message that mentions HIM
+  is not logged as chat — it goes in with its answer. `historyMessages` turns the log
+  into the turns before the question, a run of chat lines as ONE turn labelled as
+  overheard. **It is in the Durable Object's storage, not just in memory**: a quiet
+  room hibernates within seconds and wakes with its memory empty, which is why he used
+  to forget a conversation between two questions. Private messages never reach the
+  relay, so he never sees them.
 - **The budget is in the relay** (`_lemoAsk`): one question at a time per lobby, a daily
   spend cap per lobby (`LEMO_DAILY_USD`) and a daily count per member
   (`LEMO_USER_DAILY`), kept in the Durable Object's storage so it survives the room
-  sleeping. Settings are `vars` in `wrangler.jsonc`; the key is a **secret**
+  sleeping. `LEMO_CAPS_OFF_UNTIL` (`YYYY-MM-DD`, Riyadh) lifts both caps up to and
+  including that day; they return the day after with no redeploy (set to `2026-10-07`
+  on 2026-10-01 at the owner's request — only the OpenAI account's own limit stands in
+  the meantime). Settings are `vars` in `wrangler.jsonc`; the key is a **secret**
   (`npx wrangler secret put OPENAI_API_KEY --name mdwnh-presence`). **Never put the key
   in a file, and never ask for it in a chat.**
 - **What he is and what he knows** live in `lemo.js` as plain text: `PERSONA` (a cheeky
@@ -1652,12 +1685,16 @@ home, where his seeded life carries on.
   (cached 30 min); `member_details` is the one tool. The page adds the context he teases
   with: who is asking and their gender (the lobby's), who is near, the local + Hijri
   date, and how long they have worked today.
+- **Pressing him also fans out his last five lines** (`lemoPress` → `peekOpen`), exactly
+  like a press on a member — see **«ماذا فاتني؟»**. `_lemo.hist` is filled by
+  `_lemoHistPush` from `_lemoSay` (never the wait line), as this client heard them.
 - **Picker**: always the LAST row (`d: Infinity`), with a state line. Avatar
   `LemoPFP.jpg`. `uid 'lemo'` is excluded from pings, cooldowns and the mention sound.
 - **The model's quirks, learned live**: `gpt-6-luna` on `/v1/chat/completions` refuses
   function tools unless `reasoning_effort` is `'none'` — which is also the cheapest and
   fastest setting, so that is what `callModel` sends. A real answer is ~2,500 tokens in
-  (mostly the cached system prompt) + ~60 out, ~2.5 s, ~$0.0003. `npx wrangler tail`
+  (mostly the cached system prompt) + ~60 out, ~2.5 s, ~$0.0003 — a few hundred tokens
+  more when the room has been talking or the question mentions members. `npx wrangler tail`
   shows every question's token count and the day's running spend (`[lemo] …`).
 - **Testing the relay without the key**: `npx wrangler dev` in `presence-server/` with a
   `.dev.vars` (gitignored) holding a dummy key and `OPENAI_BASE_URL` pointed at a local
@@ -2261,8 +2298,12 @@ a press on another member fans their last `PEEK_MAX` messages out above them and
 «رسالة خاصة» pill under them (→ `dmOpenWith`). A press anywhere else puts an open fan away
 and falls through.
 - **The history is what THIS client heard** (`_histPush`, on the player object, from
-  `receiveChatMessage` / `receiveSticker`). The relay keeps nothing, so a late joiner
-  starts empty. Memory only. Bubbles still live over the head are left out of the fan.
+  `receiveChatMessage` / `receiveSticker`). The relay sends no history (its short log is
+  ليمو's alone), so a late joiner starts empty. Memory only. Bubbles still live over the
+  head are left out of the fan.
+- **ليمو has one too.** He is not in `players`, so `_peekBody(uid)` hands the fan a
+  stand-in (`_lemoPeekBody`: his head, his floor, and the height his own bubble is
+  using) wherever it would read the player. No «رسالة خاصة» pill.
 - **"Liquid" is the MOTION, not a blur**: each bubble buds out of the one under it on a
   damped spring, stretched while it travels, joined for a moment by a thinning neck.
   No `backdrop-filter`, no shadow — بطاطس runs the same thing. Dashed outline, dimmer
@@ -3000,7 +3041,7 @@ When a panel's elements animate in **one-by-one** (a staggered/sequenced entranc
 ### Live movement runs over a WebSocket relay (not Firebase)
 High-frequency walking used to write `x/y` to Firebase **every animation frame** — wasteful (counts against the 10GB/month download cap) and laggy with several players. Live positions now go over a tiny **Cloudflare Worker + Durable Object** relay instead; Firebase stays the source of truth for everything that must persist.
 
-- **Server**: [`presence-server/`](presence-server/) — a stateless relay. One Durable Object = one lobby room (keyed by `gameState.selectedLobby`, so male/female never mix). It forwards each position payload to the other sockets in the room and stores nothing; on disconnect it sends `{t:'bye',uid}`. Deploy with `npx wrangler deploy`. URL: `wss://mdwnh-presence.yosefbore3y.workers.dev/lobby/<lobby>?uid=<uid>`. Free tier bills incoming WS messages 20:1 → ~2M msgs/day free.
+- **Server**: [`presence-server/`](presence-server/) — a stateless relay. One Durable Object = one lobby room (keyed by `gameState.selectedLobby`, so male/female never mix). It forwards each position payload to the other sockets in the room and stores nothing but ليمو's daily spend and his short memory of the room (see **نداء ليمو**); on disconnect it sends `{t:'bye',uid}`. Deploy with `npx wrangler deploy`. URL: `wss://mdwnh-presence.yosefbore3y.workers.dev/lobby/<lobby>?uid=<uid>`. Free tier bills incoming WS messages 20:1 → ~2M msgs/day free.
 - **Client** (`game.js`, the "Live position relay" block above `updatePlayerPosition`): `ensurePresenceSocket()` opens/heals the socket (called from `startGame`, the 10s presence heartbeat, and `_resyncPresence`). `sendPositionWS(x,y,force)` sends `{uid,x,y,m,s,fl,w}` throttled to ~11/sec (`w` = the **sender's own `performance.now()`** — see the jitter buffer below; it also force-sends on a movement **start**, on a **stop**, and on a **heading change >≈37°**, so a turn isn't corner-cut across a whole interval). `onPresenceMessage()` feeds others' positions into a per-player **interpolation buffer** (`pushNetSample`). `disconnectPresenceSocket()` on logout. Auto-reconnects on close (2s backoff).
 - **Smooth movement = a jitter buffer, built the way competitive shooters build one** (`pushNetSample` / `interpolateRemoteFromBuffer`, in the entity-helpers block; per-player state on `player._netBuf` + `player._netClock`). Each remote player is rendered `delay` ms **in the past**, gliding between the two buffered samples bracketing that render time. Three things make it hold up on a bad link, and all three are load-bearing:
   1. **Samples are stamped with the SENDER's clock (`w`), never with arrival time.** Each packet carries the sender's `performance.now()`; the receiver keeps a per-player offset (sender clock → local clock) estimated by a **minimum filter** — the fastest packet seen defines the true send time, later ones are simply late (a faster path snaps the offset down instantly, otherwise it creeps at `NET_OFF_CREEP` to follow drift). Samples are therefore spaced by when they were **sent** — a clean, even 90 ms — so jitter can no longer deform the replayed motion. `w` is monotonic with an **arbitrary per-tab epoch**; the offset absorbs the epoch, so this needs no wall clock, no `serverNow()`, and **no server change** (the Worker forwards raw bytes). Arrival-stamping is what the old version did, and it fed jitter straight into the timeline: a burst of three packets 5 ms apart replayed as the avatar sprinting, then stalling. Measured in a replay harness, 5–250 ms of jitter made the old buffer render **30 world units per frame on average (6× true walk speed) with single-frame jumps of 648**; sender-stamped it is **5.00/frame, max 5.43** — i.e. exact.

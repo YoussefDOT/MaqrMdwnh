@@ -11,6 +11,9 @@
     "LEMO_MODEL": "gpt-6-luna",
     "LEMO_DAILY_USD": "0.10",     // spend cap PER LOBBY per day (~500 answers)
     "LEMO_USER_DAILY": "40",      // questions one member may ask per day
+    // Both caps above are lifted up to and including this day (Riyadh time) and come
+    // back by themselves the day after — nothing to redeploy. "" = caps always on.
+    "LEMO_CAPS_OFF_UNTIL": "2026-10-07",
     "LEMO_PRICE_IN": "0.10",      // $ per million input tokens (for the cap's arithmetic)
     "LEMO_PRICE_OUT": "0.50",     // $ per million output tokens
     "SITE_BASE": "https://youssefdot.github.io/MaqrMdwnh"   // where patch-notes.json is read from
@@ -24,7 +27,7 @@
   },
 
   // Required on the free tier: Durable Objects must use the SQLite backend.
-  // (We don't store anything, but the class must be declared this way.)
+  // (All we store is ليمو's daily spend and his short memory of the room.)
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["LobbyRoom"] }
   ]

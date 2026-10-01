@@ -30361,7 +30361,8 @@ const _lemo = {
     lastT: 0,
     retKey: 0, retPath: null, retPlan: null,
     say: null,                    // what is over his head: { parts, i, t0, life, lay, stk, wait }
-    saidAt: 0,
+    saidAt: 0, saidKey: 0,        // when his last word went away, and for which call (its t0)
+    hist: [],                     // his last PEEK_MAX lines — the fan a press on him opens (_lemoHistPush)
     ai: { busy: null, ans: null, mine: null, myNextAt: 0 },
 };
 
@@ -30690,7 +30691,9 @@ function _lemoNavRound(leg, fl) {
    RULES
    • Asleep → refused («أيقظه أولًا»). In a work session → refused. A mention with
      no question → refused: he needs something to answer.
-   • While he is thinking for someone, nobody else may call him.
+   • While he is thinking for someone, nobody else may call him — and nobody at all
+     until he has finished: walking over, the answer on its way to his head, the
+     bubble itself (lemoTalkingTo). A call used to cut him off mid-sentence.
    • After he answers YOU, you wait LEMO_ASK_GAP_MS (4 s) before calling again —
      which is exactly the gap someone else needs to get a word in. */
 const LEMO_UID  = 'lemo';
@@ -30713,6 +30716,8 @@ const LEMO_ANS_TIMEOUT_MS = 22000;  // no answer by now → he says his brain fr
 const LEMO_SAY_HOLD_MS   = 30000;   // an answer waits for him to GET THERE (a long walk outlasts a bubble); past this it is said anyway
 const LEMO_LINGER_MS     = 700;     // after his last word disappears he goes home almost at once — at 5 s he
                                    // kept trailing the member round the room with nothing left to say
+const LEMO_FREE_AFTER_MS = 4000;    // his last word gone this long and the caller's client still hasn't sent him
+                                   // home (a tab in the background): the call no longer holds him from the rest
 const LEMO_SAY_MAX       = 170;     // characters in one bubble
 // What he says when he has arrived and the answer hasn't.
 const LEMO_WAIT_LINES = ['ثانية واحدة… 🤔', 'استنى أفكّر 😭', 'لحظة، دماغي بتحمّل ⏳', 'إممم… 💀', 'استنى استنى…'];
@@ -30743,6 +30748,23 @@ function lemoIsBusy() {
 function lemoBusyFor() {
     const b = _lemo.ai.busy;
     return (b && Date.now() - b.at < LEMO_ANS_TIMEOUT_MS) ? b.to : '';
+}
+// Does this call still hold him? Someone else's does from the moment it starts —
+// the walk over, the thinking, the bubble — until their client sends him home, which
+// is also what takes the bubble down on every screen (_lemoApplyDoc). It lets go by
+// itself if that client never does (LEMO_FREE_AFTER_MS), or if the caller has left.
+// MY OWN call holds only while something of his is on screen or on its way: once
+// the bubble is fully gone I may ask the next thing while he is still beside me.
+function _lemoCallHolds(c, at) {
+    if (!c || !(serverNow() < at)) return false;
+    if (c.u === gameState.userId) return !!(_lemo.say || (_lemo.ai.ans && _lemo.ai.ans.to === c.u));
+    if (!gameState.players[c.u]) return false;
+    return !(_lemo.saidKey === c.t0 && !_lemo.say && Date.now() - _lemo.saidAt > LEMO_FREE_AFTER_MS);
+}
+// Who he is talking to right now — nobody may call him until he is done. '' when free.
+function lemoTalkingTo() {
+    const d = _lemo.doc, c = d && d.call;
+    return _lemoCallHolds(c, d ? d.at : 0) ? c.u : '';
 }
 
 function _lemoFinite(v, lo, hi) { v = Number(v); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : null; }
@@ -30787,6 +30809,7 @@ function lemoSummon() {
     if (_lemo.summoning) return Promise.resolve('busy');
     const other = lemoBusyFor();
     if (other && other !== gameState.userId) return Promise.resolve('busy');
+    if (lemoTalkingTo()) return Promise.resolve('busy');
     _lemo.summoning = true;
     const here = { x: Math.round(_lemo.x), y: Math.round(_lemo.y), fl: _lemo.floor === 2 ? 2 : 1, f: _lemo.face === -1 ? -1 : 1,
                    w: _lemo.state === 'walking' ? 1 : 0 };
@@ -30795,6 +30818,10 @@ function lemoSummon() {
     let outcome = 'fail';
     return runTransaction(ref(database, lobbyPath('lemo')), (cur) => {
         if (!cur || cur.s !== 'awake') { outcome = 'sleep'; return; }
+        // Two members calling in the same moment: the doc decides, and the second one
+        // waits — he is not pulled away from the first before he has said a word.
+        const held = cur.call;
+        if (held && held.u !== gameState.userId && _lemoCallHolds(held, cur.at)) { outcome = 'busy'; return; }
         const t0 = serverNow() + LEMO_CALL_LEAD;
         outcome = 'ok';
         return {
@@ -30864,7 +30891,7 @@ function _lemoCleanParts(p) {
 // The question goes to the RELAY, not to the lobby: the room asks the model and
 // tells everyone what he said. No `uid` field on purpose — a client that predates
 // this drops a message without one instead of reading it as a position.
-function _lemoSendQuestion(k, q) {
+function _lemoSendQuestion(k, q, men) {
     const ws = presenceNet.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     const me = gameState.players[gameState.userId];
@@ -30901,11 +30928,13 @@ function _lemoSendQuestion(k, q) {
         st: bits.join('، '),
         on: Object.keys(gameState.players).length,
     };
+    // Who the question points at (see _chatSend). Left out when there is nobody.
+    if (men && men.length) msg.men = men;
     try { ws.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
 }
 
 // Called by _chatSend once the message (with its question) is on its way.
-function lemoAsk(q) {
+function lemoAsk(q, men) {
     lemoSummon().then(r => {
         if (r === 'sleep') { _libToast('ليمو نام قبل أن يسمعك — أيقظه أولًا'); return; }
         if (r === 'busy')  { _libToast('ليمو مشغول الآن مع غيرك'); return; }
@@ -30916,7 +30945,7 @@ function lemoAsk(q) {
         // His own "thinking" state starts here, so the wait line can show even if
         // the relay's `lemot` is a moment behind.
         _lemo.ai.busy = { to: gameState.userId, k, at: Date.now() };
-        if (!_lemoSendQuestion(k, q)) {
+        if (!_lemoSendQuestion(k, q, men)) {
             _lemo.ai.busy = null;
             _lemo.ai.mine.done = true;
             _lemo.ai.ans = { to: gameState.userId, k, parts: [{ m: LEMO_ERR_LINES.err }], at: Date.now() };
@@ -30956,9 +30985,23 @@ function _lemoSay(parts, i, wait) {
     if (p.s) { _stkImg(p.s); say.life = 4200; }
     else { say.lay = _lemoSayLayout(p.m); say.life = Math.min(9500, 3000 + p.m.length * 70); }
     _lemo.say = say;
+    if (!wait) _lemoHistPush(say);
     // A soft cue for whoever is close enough to hear him — never for someone working.
     if (!wait) _chatArrivalCue({ x: _lemo.x, y: _lemo.y });
     perfWake(600);
+}
+
+// Everything he says is also remembered, the way a member's bubbles are (_histPush):
+// the last PEEK_MAX, as THIS client heard them, for the fan a press on him opens.
+// Never the wait line.
+function _lemoHistPush(say) {
+    const h = _lemo.hist;
+    h.push({
+        ref: say, parts: say.stk ? [] : [{ t: say.parts[say.i].m }], stk: say.stk,
+        lay: say.stk ? { rtl: true, lines: [], w: PEEK_STK, h: PEEK_STK } : say.lay,
+        at: Date.now(), ago: '', agoAt: 0, agoW: 0,
+    });
+    while (h.length > PEEK_MAX) h.shift();
 }
 
 // One frame of the conversation, while a call is on. From gameLoop only.
@@ -30975,7 +31018,7 @@ function _lemoTalkStep(c, f) {
     let say = _lemo.say;
     if (say && !say.wait && now - say.t0 > say.life) {
         if (say.i + 1 < say.parts.length) _lemoSay(say.parts, say.i + 1, false);
-        else { _lemo.say = null; _lemo.saidAt = now; }
+        else { _lemo.say = null; _lemo.saidAt = now; _lemo.saidKey = c.t0; }
         say = _lemo.say;
     }
     // "There" = arrived, or already braking beside them (the stop clip's last second).
@@ -31227,7 +31270,33 @@ function _lemoRetPose(d, t) {
     else { _lemo.state = 'walking'; _lemo.anim = 'Walk'; _lemo.frame = w.f; }
 }
 
-// ─── Pressing him: the chat box opens with his mention already typed ─────────
+// ─── Pressing him: the chat box opens with his mention already typed, and his
+//     last few lines fan out above him — the same «ماذا فاتني؟» a member has ─────
+// ليمو as the fan sees a member (see _peekBody): where his head is, and how much of
+// the space above it his own bubble is using. One object, refilled on each read.
+const _lemoPeek = {
+    userId: LEMO_UID, floor: 1, x: 0, y: 0, renderX: 0, renderY: 0, renderScale: 1, bobOffset: 0,
+    _pendingSpawn: null, _typing: null, _hist: null, _chat: [], _live: { lay: { h: 0 }, a: 1 },
+};
+function _lemoPeekBody() {
+    if (!_lemo.shown || gameState._hideLemo) return null;
+    const b = _lemoPeek, lsc = _lemo.sc || 1;
+    // drawPeek starts the fan PLAYER_SIZE/2 + CHAT_HEAD_GAP above a member's centre:
+    // put that point where his own bubble's tail sits (drawLemoSay).
+    b.x = b.renderX = _lemo.x;
+    b.y = b.renderY = _lemo.y - (LEMO_H / 2) * lsc - 12 + PLAYER_SIZE / 2 + CHAT_HEAD_GAP;
+    b.floor = _lemo.floor === 2 ? 2 : 1;
+    b._hist = _lemo.hist;
+    const say = _lemo.say;
+    b._chat.length = 0;
+    if (say) {
+        const sc = Math.min(1.4, 1 / Math.max(0.6, gameState.zoom || 1)) * lsc;
+        b._live.lay.h = ((say.stk ? STK_BUB : say.lay.h) + 14) * sc;
+        b._live.a = say.wait ? 1 : Math.max(0, Math.min(1, (say.life - (Date.now() - say.t0)) / 260));
+        b._chat.push(b._live);
+    }
+    return b;
+}
 function lemoWantsPress(world) {
     if (!world || !_lemo.shown || gameState._hideLemo || (_lemo.alpha ?? 1) < 0.5) return false;
     const vis = _meetFadeAt(_lemo.x) * (_lemo.floor === 2 ? (gameState.secondFloorVis ?? 1) : 1);
@@ -31237,6 +31306,10 @@ function lemoWantsPress(world) {
     return Math.abs(world.x - _lemo.x) <= LEMO_W * 0.56 * sc && world.y <= feet + 4 && world.y >= feet - LEMO_H * sc - 8;
 }
 function lemoPress() {
+    // His last lines, like a press on a member — asleep or not, working or not. A
+    // second press puts them away.
+    const body = _lemoPeekBody();
+    if (body) { if (_peek.uid === LEMO_UID && !_peek.out) peekClose(); else peekOpen(body); }
     if (lemoIsAsleep()) { _libToast('ليمو نائم 😴 — اقترب منه ليستيقظ'); return; }
     if (localInWorkPhase() || gameState.isLockedIn) { _libToast('لا يمكنك مناداة ليمو أثناء جلسة العمل'); return; }
     if (!_chatUi.open) { if (!chatCanOpen()) return; openChatBox(); }
@@ -36287,11 +36360,17 @@ function _chatSend() {
     const now = Date.now();
     // نداء ليمو — checked first: a refusal holds the whole message, like a cooldown.
     const callsLemo = parts.some(p => p.u === LEMO_UID);
-    // What is being asked: the message without his own mention (another member's
-    // mention reads as their name). He must be given something to answer.
-    const lemoQ = callsLemo
-        ? _chatClean(parts.filter(p => p.u !== LEMO_UID).map(p => (p.u ? p.n : p.t)).join(' '))
-        : '';
+    // What is being asked: the message without his own mention. He must be given
+    // something to answer. Another member's mention stays «@name» and goes along in
+    // `lemoMen` with the roster slug behind it: the pill shows the member's DISPLAY
+    // name («Mu»), which the roster he reads has never heard of — he used to answer
+    // as if nobody had been named.
+    const lemoAbout = callsLemo ? parts.filter(p => p.u !== LEMO_UID) : [];
+    const lemoQ = _chatClean(lemoAbout.map(p => (p.u ? '@' + p.n : p.t)).join(' '));
+    const lemoMen = lemoAbout.filter(p => p.u).map(p => {
+        const rec = _chatMenRoster(p.u);
+        return { n: p.n, slug: (rec && rec.slug) || '' };
+    });
     if (callsLemo) {
         let why = '';
         const busyFor = lemoBusyFor();
@@ -36300,6 +36379,10 @@ function _chatSend() {
         else if (lemoQ.length < 2) why = 'اكتب سؤالك لليمو بعد اسمه، ثم أرسل';
         else if (_lemo.summoning || busyFor) {
             why = (busyFor && busyFor !== gameState.userId) ? 'ليمو يفكّر في ردٍّ لغيرك — لحظة' : 'ليمو يفكّر في ردّك — لحظة';
+        }
+        // …and not until he has finished: on his way to someone, or still speaking.
+        else if (lemoTalkingTo()) {
+            why = lemoTalkingTo() !== gameState.userId ? 'ليمو يكلّم غيرك الآن — انتظر حتى ينتهي' : 'دع ليمو يُكمل كلامه أولًا';
         }
         else if (now < _lemo.ai.myNextAt) {
             // The four seconds after he answers ME: the gap someone else needs.
@@ -36343,7 +36426,7 @@ function _chatSend() {
     }
     for (const p of parts) if (p.u) p.l = _chatMen.last[p.u] ? _chatMen.last[p.u].lv : 1;
     _chatUi.lastSentAt = now;
-    if (callsLemo) lemoAsk(lemoQ);
+    if (callsLemo) lemoAsk(lemoQ, lemoMen);
     closeChatBox(true);   // the message ends the typing bubble — see closeChatBox
     const me = gameState.players[gameState.userId];
     if (me) receiveChatMessage(me, null, parts.map(p => ({ ...p })));   // show it locally at once — no round trip
@@ -36628,7 +36711,8 @@ function _chatMenCandidates(q) {
     if (!localInWorkPhase() && !gameState.isLockedIn) {
         const lemoHit = !qn || ['ليمو', 'lemo', 'limo', 'الروبوت'].some(k => _chatMenNorm(k).includes(qn));
         if (lemoHit) {
-            const sub = lemoIsAsleep() ? 'نائم — أيقظه أولًا' : lemoIsBusy() ? 'يفكّر في ردّ الآن' : 'اسأله — سيأتي إليك ويجيب';
+            const sub = lemoIsAsleep() ? 'نائم — أيقظه أولًا' : lemoIsBusy() ? 'يفكّر في ردّ الآن'
+                      : lemoTalkingTo() ? 'يتكلّم الآن — انتظر حتى ينتهي' : 'اسأله — سيأتي إليك ويجيب';
             out.push({ uid: LEMO_UID, name: LEMO_NAME, sub, d: Infinity, avatar: LEMO_PFP, lemo: true });
         }
     }
@@ -41933,11 +42017,17 @@ function _peekHitPlayer(world) {
     return best;
 }
 
+// Whose fan it is: a member — or ليمو, who is not in `players` (see _lemoPeekBody).
+function _peekBody(uid) {
+    return uid === LEMO_UID ? _lemoPeekBody() : gameState.players[uid];
+}
+
 function peekOpen(player) {
-    const live = player._chat || [];
+    const isLemo = player.userId === LEMO_UID;
+    const live = isLemo ? (_lemo.say ? [_lemo.say] : []) : (player._chat || []);
     const items = (player._hist || []).filter(h => !live.includes(h.ref)).slice(-PEEK_MAX).reverse();
     if (!items.length && !live.length) {
-        const parts = [{ t: 'لم يكتب شيئًا بعد' }];
+        const parts = [{ t: isLemo ? 'لم يقل شيئًا بعد' : 'لم يكتب شيئًا بعد' }];
         items.push({ ref: null, parts, stk: '', lay: _chatLayout(parts), at: 0, ago: '', agoAt: 0, agoW: 0, empty: true });
     }
     _peek.uid = player.userId;
@@ -41988,7 +42078,7 @@ function peekCanvasPress(world) {
 // bubbles). PURE in (items, age): the PiP pass draws it without advancing anything.
 function drawPeek() {
     if (!_peek.uid) return;
-    const player = gameState.players[_peek.uid];
+    const player = _peekBody(_peek.uid);
     const ctx = gameState.ctx;
     if (!player || !ctx || player._pendingSpawn != null) return;
     const now = Date.now();
@@ -42139,7 +42229,7 @@ function updateSocial() {
 
     if (_peek.uid) {
         const now = Date.now();
-        const pl = gameState.players[_peek.uid];
+        const pl = _peekBody(_peek.uid);
         if (!pl || _chatMustClose()) { _peek.uid = ''; _peek.items = []; }
         else if (_peek.out) { if (now - _peek.out > PEEK_OUT_MS) { _peek.uid = ''; _peek.items = []; } else perfWake(120); }
         else if (now - _peek.t0 > PEEK_LIFE_MS) peekClose();

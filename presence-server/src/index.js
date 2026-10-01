@@ -1,7 +1,7 @@
 // Mdwnh presence relay — Cloudflare Worker + Durable Object
 // -----------------------------------------------------------------------------
-// This is a DUMB, STATELESS relay for live player positions ONLY.
-// It stores nothing. A player sends "I'm at x,y", we forward it to everyone
+// This is a DUMB relay for live player positions.
+// It stores nothing of them. A player sends "I'm at x,y", we forward it to everyone
 // else in the same lobby, then it's gone. Everything that must PERSIST
 // (pomodoro, azkar, accounts, prayer, shared-pomo) still lives in Firebase.
 //
@@ -12,17 +12,30 @@
 // asking ليمو something. It is NOT forwarded — the room asks the language model
 // (src/lemo.js) and broadcasts `{t:'lemot'}` ("he is thinking, for this member")
 // and then `{t:'lemoa'}` (the answer, or an error code) to everyone, the asker
-// included. The only thing this object stores is today's spend, so the daily
-// budget survives the room going to sleep.
+// included.
+//
+// AND HE OVERHEARS (مقر ١.٥): a `{"t":"chat"` message is forwarded like everything
+// else, and a copy of the line goes into a short log, so that when someone asks him
+// something he knows what the room was talking about.
+//
+// The only things this object stores are today's spend (so the daily budget survives
+// the room going to sleep) and that log: his last LEMO_HISTORY messages and the
+// room's last LEMO_ROOM lines, nothing older than LEMO_LOG_TTL_MS. It is stored, not
+// just held in memory, because a quiet room hibernates within seconds and wakes with
+// its memory empty — he used to forget the conversation between two questions.
 // -----------------------------------------------------------------------------
 
-import { askLemo, cleanQuestion, LemoError } from './lemo.js';
+import { askLemo, cleanQuestion, cleanChat, LemoError } from './lemo.js';
 
 const LEMO_PREFIX = '{"t":"lemoq"';
+const CHAT_PREFIX = '{"t":"chat"';
 const LEMO_BUSY_MS = 25000;        // a question stuck longer than this no longer blocks the next
 const LEMO_USER_GAP_MS = 3500;     // one member, one question, then a breath (the page says 4 s)
-const LEMO_HISTORY = 6;            // messages of the lobby's conversation he remembers
+const LEMO_HISTORY = 10;           // messages of his own conversation he remembers (questions + answers)
+const LEMO_ROOM = 10;              // …and lines of the room's chat he has overheard
+const LEMO_LOG_TTL_MS = 2 * 3600 * 1000;   // past this, neither is worth carrying
 const BUDGET_KEY = 'lemo:budget';
+const LOG_KEY = 'lemo:log';
 
 // The day rolls over at midnight in Riyadh (UTC+3) — where most of the team is.
 const dayKey = () => new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10);
@@ -55,7 +68,7 @@ export class LobbyRoom {
     this.state = state;
     this.env = env;
     this.lemoBusyAt = 0;           // a question is with the model
-    this.lemoHist = [];            // the lobby's last few turns with him (memory only)
+    this.lemoLog = null;           // what he remembers — read from storage on first use (see _lemoLogGet)
     this.lemoLast = new Map();     // uid → when he last answered them
     // Keep-alive without an audience: a client's bare "ping" is answered "pong"
     // by the runtime itself — it is NOT forwarded to the lobby and does not even
@@ -94,6 +107,47 @@ export class LobbyRoom {
       if (peer === ws) continue;
       try { peer.send(message); } catch (_) { /* peer is gone; ignore */ }
     }
+    // The room's own chat: forwarded above as ever, and overheard by ليمو. The same
+    // cheap prefix test — a position never pays for it.
+    if (typeof message === 'string' && message.startsWith(CHAT_PREFIX)) {
+      return this._lemoHear(ws, message);
+    }
+  }
+
+  // His memory: `{k:'c',u,p|s,at}` a line of the room's chat, `{k:'q',u,n,m,at}` a
+  // question he was asked, `{k:'a',p,at}` his answer (see historyMessages in lemo.js).
+  async _lemoLogGet() {
+    if (!this.lemoLog) {
+      const saved = await this.state.storage.get(LOG_KEY);
+      this.lemoLog = Array.isArray(saved) ? saved : [];
+    }
+    return this.lemoLog;
+  }
+
+  // The last few of each kind, and nothing stale. In place: the array is shared.
+  _lemoLogTrim(log) {
+    const old = Date.now() - LEMO_LOG_TTL_MS;
+    let mine = 0, room = 0;
+    for (let i = log.length - 1; i >= 0; i--) {
+      const e = log[i];
+      const keep = e && e.at >= old && (e.k === 'c' ? ++room <= LEMO_ROOM : ++mine <= LEMO_HISTORY);
+      if (!keep) log.splice(i, 1);
+    }
+  }
+
+  async _lemoHear(ws, raw) {
+    let msg;
+    try { msg = JSON.parse(raw); } catch (_) { return; }
+    const tags = this.state.getTags(ws);
+    const uid = tags && tags[0];
+    // Only what this socket's own member said — never a line in someone else's name.
+    if (!uid || msg.uid !== uid) return;
+    const line = cleanChat(msg);
+    if (!line) return;
+    const log = await this._lemoLogGet();
+    log.push({ k: 'c', u: uid, ...line, at: Date.now() });
+    this._lemoLogTrim(log);
+    await this.state.storage.put(LOG_KEY, log);
   }
 
   // A player disconnected — tell everyone so they can drop the avatar at once
@@ -138,22 +192,29 @@ export class LobbyRoom {
     const day = dayKey();
     let b = await this.state.storage.get(BUDGET_KEY);
     if (!b || b.day !== day) b = { day, usd: 0, calls: 0, users: {} };
-    if (b.usd >= capUsd) return fail('tired');
-    if ((b.users[uid] || 0) >= capUser) return fail('you');
+    // LEMO_CAPS_OFF_UNTIL ('YYYY-MM-DD', Riyadh): both caps are lifted up to and
+    // including that day and return by themselves the day after. The spend is still
+    // counted and logged. (Dates in this form compare as text.)
+    const capsOff = String(env.LEMO_CAPS_OFF_UNTIL || '') >= day;
+    if (!capsOff && b.usd >= capUsd) return fail('tired');
+    if (!capsOff && (b.users[uid] || 0) >= capUser) return fail('you');
+    const log = await this._lemoLogGet();
+    this._lemoLogTrim(log);
 
     this.lemoBusyAt = now;
     this._sendAll({ t: 'lemot', to: uid, k });
     try {
-      const res = await askLemo(env, q, this.lemoHist);
+      // A copy: the room may go on talking while he thinks.
+      const res = await askLemo(env, q, log.slice());
       const pin = Number(env.LEMO_PRICE_IN) || 0.10, pout = Number(env.LEMO_PRICE_OUT) || 0.50;
       b.usd += (res.tokensIn * pin + res.tokensOut * pout) / 1e6;
       b.calls += 1;
       b.users[uid] = (b.users[uid] || 0) + 1;
-      await this.state.storage.put(BUDGET_KEY, b);
       const said = res.parts.map(p => (p.m ? p.m : `[ملصق: ${p.s}]`)).join(' / ');
-      this.lemoHist.push({ role: 'user', content: `${q.name}: ${q.text}` },
-                         { role: 'assistant', content: JSON.stringify({ p: res.parts }) });
-      while (this.lemoHist.length > LEMO_HISTORY) this.lemoHist.shift();
+      const at = Date.now();
+      log.push({ k: 'q', u: uid, n: q.name, m: q.text, at }, { k: 'a', p: res.parts, at });
+      this._lemoLogTrim(log);
+      await this.state.storage.put({ [BUDGET_KEY]: b, [LOG_KEY]: log });
       this.lemoLast.set(uid, Date.now());
       this._sendAll({ t: 'lemoa', to: uid, k, p: res.parts });
       console.log(`[lemo] ${uid} in=${res.tokensIn} out=${res.tokensOut} day=$${b.usd.toFixed(4)} :: ${said}`);
