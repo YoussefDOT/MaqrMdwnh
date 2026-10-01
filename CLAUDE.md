@@ -124,7 +124,8 @@ Grep anchors for the major systems (all verified to exist):
 | نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
 | ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL` |
-| الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI`; reply + reactions: `_dmSetReply`, `_dmQuoteNode`, `_dmJumpTo`, `_dmReact`, `_dmPaintRx`, `_dmAct`, `DM_RX_LIST` |
+| الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI`; reply + reactions: `_dmSetReply`, `_dmQuoteNode`, `_dmJumpTo`, `_dmReact`, `_dmPaintRx`, `_dmAct`, `_dmRxQuick`, `DM_RX_LIST`; edit + delete: `_dmStartEdit`, `_dmCommitEdit`, `_dmDelete`, `_dmApplyDeleted`, `_dmPeerRowPatch`; picker: `_dmEmojiPanel`, `_dmPop`; effects: `DM_FX`, `_dmPlayFx`, `_dmScreenFx`, `_dmFxUnread`; also `_dmFillText`, `_dmPaintDown`, `_dmFocusInput` |
+| رموز آبل التعبيرية (صور) | `_emoImgs`, `emoLoadData`, `_emoActivate`, `_emoTextNode`, `_emoParse`, `_emoDrawSlots`, `_emoKey`, `emoIsOne`, `emoRecent`, `emoNoteUsed`, `EMO_IMG_KEY`, `tools/bake_emoji.mjs` |
 | التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `_peekBody`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad`, `tools/shots.mjs`, `tools/shots.py` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
@@ -163,6 +164,8 @@ Grep anchors for the major systems (all verified to exist):
 - **Never hand-edit generated files**: `Hats/hats.json`, `Art/Workspace/manifest.json`,
   `Art/Workspace/Baked_*` + `baked.json`, `Stickers/stickers.json`, `Stickers/sm/`, the
   `#build-number` div. The pre-commit hook owns them (edit a world layer → the bake reruns).
+  `Emoji/` (images + `emoji.json`) is generated too, by `node tools/bake_emoji.mjs` — run
+  by hand on a Mac, not by the hook (see **رموز آبل التعبيرية**).
 - **Match surrounding style** — comment density, naming, Arabic labels. All UI text is
   Arabic and spell-checked (see top of file).
 - **When a product decision is needed** (behaviour, wording, visuals not derivable from
@@ -320,6 +323,12 @@ Each one is a shipped bug (details in Common Bugs & the feature sections):
     (`_seamlessLoop` + `loop = true`), never a `setTimeout` scheduler; a phone never
     streams through `MediaElementAudioSourceNode`; one-shots go through the Web Audio
     buffers (`playSoundRobust` routes there). See **Focus Audio Engine → Why it crackled**.
+36. **An emoji in the DOM may be an `<img>`, so never read one back from `textContent`.**
+    On non-Apple devices every emoji in a text node is swapped for `img.emo` (its `alt`
+    holds the emoji, and `textContent` skips an `alt`). A button that stands for an emoji
+    carries it in `data-e`. And a canvas string is measured and drawn through the wrapped
+    `fillText` / `measureText` — never cache a width measured before `_emoImgs.active`.
+    See **رموز آبل التعبيرية**.
 
 ---
 
@@ -342,7 +351,8 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar whose cells he can press to **اعتماد** a day as done (even one taken off or never opened) or **رفع الإجازة** off a past one. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. See **لوحة القائد**. |
 | **القفز** | مسافة، أو نقرتان على شخصيتك. على الجوال: سحبة سريعة للأعلى في أي مكان، أو نقرة واحدة في أي مكان وأنت تمشي (والنقرتان ما زالتا تعملان). قفزة في المكان — أو، أثناء الحركة، **على طاولة** تمشي فوقها (أكبر قليلًا)، ومنها إلى الأرض، و**من حافة الطابق الثاني** إلى الأرض بهبوط قوي: غبار وموجة وهزّة وصوت لمن حولك إلا من في جلسة عمل. صفر فايربيس. See **القفز**. |
 | **نداء ليمو** | `@ليمو` مع سؤال (أو اضغط عليه فيُكتب اسمه): يترك ما يفعله و**يمشي** إليك — طريق حقيقي حول الأثاث، يصعد الدرج، ويلحق بك إن تحرّكت — ثم **يجيبك** (ذكاء اصطناعي يسأله المُرحِّل لا الصفحة)، وقد يرد بملصق. ثم يمشي عائدًا. لا يُنادى نائمًا ولا من جلسة عمل ولا بلا سؤال، وبعد رده عليك تنتظر ٤ ثوانٍ. See **Lemo → نداء ليمو**. |
-| **الرسائل الخاصة** | زر في صندوق الأدوات (أو «رسالة خاصة» تحت عضو تضغط عليه): محادثات محفوظة بين عضوين من القسم نفسه — نص، رموز، ملصقات، صور و GIF (سحب وإفلات / لصق). على الحاسوب دُرج في الثلث الأيمن واللعب مستمر بجانبه. See **الرسائل الخاصة**. |
+| **الرسائل الخاصة** | زر في صندوق الأدوات (أو «رسالة خاصة» تحت عضو تضغط عليه): محادثات محفوظة بين عضوين من القسم نفسه — نص، كل الرموز، ملصقات، صور و GIF (سحب وإفلات / لصق)، رد (بالسحب على الجوال)، تفاعل بأي رمز، تعديل («معدّلة»)، حذف بتحذير، وتأثيرات إرسال كتأثيرات iMessage. على الحاسوب دُرج في الثلث الأيمن واللعب مستمر بجانبه. See **الرسائل الخاصة**. |
+| **رموز آبل التعبيرية** | الرموز بالشكل نفسه على كل جهاز: صورة مكان كل رمز على غير أجهزة آبل، في الصفحة وعلى الكانفس. See **رموز آبل التعبيرية**. |
 | **التفاعلات + «ماذا فاتني؟»** | تفاعلات طاولة الاجتماعات في كل مكان (١–٦، أو ضغطة مطوّلة على شخصيتك)؛ والضغط على عضو يُظهر آخر خمس رسائل كتبها. صفر فايربيس. See **التفاعلات في العالم**. |
 | **نشرة الأخبار** | A button under the login pill opens the member-facing changelog, grouped by day (`patch-notes.json`). See **نشرة الأخبار**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head (on a phone: a slim bar docked to the keyboard, and the camera lifts you into view). ١٠٠ حرف, wrapping onto up to three balanced lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, a قوس on the screen edge pointing at whoever called you (it stays until you see them), a شريط at the bottom, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
@@ -385,6 +395,9 @@ tools/shots.mjs, shots.py    — headless-Chrome screenshots of the features, fo
 presence-server/src/index.js — the relay (Cloudflare Worker + Durable Object): positions, events, ليمو's questions
 presence-server/src/lemo.js  — ليمو's brain: persona, what he knows, the model call, the answer's shape
 LemoPFP.jpg                  — ليمو's face in the @ picker / mention pills
+Emoji/                       — Apple's emoji as 72 px WebPs (3,482 of them, ~7 MB) + emoji.json,
+                               the picker's list. Baked from the Mac's own font by
+                               tools/bake_emoji.mjs (+ tools/emoji_apple.swift). See رموز آبل التعبيرية.
 firebase-config.js           — the Firebase SDK re-exports (writes are wrapped by game.js's
                                ownership gate). Imported as `firebase-config.js?v=N` — bump
                                N in game.js AND index.html's modulepreload together
@@ -2313,18 +2326,68 @@ and falls through.
 
 ---
 
+## رموز آبل التعبيرية — the same emoji on every device
+
+An emoji is drawn by whatever font the DEVICE has, so one message read as Apple's on an
+iPhone, Google's on an Android and Microsoft's on Windows. Now every device shows
+Apple's. Code is the `رموز آبل التعبيرية` block just above the DM block in `game.js`;
+`img.emo` in `style.css`; assets in `Emoji/`.
+
+- **The font itself can't ship** (192 MB, and it is Apple's). What ships is one **72 px
+  WebP per emoji** rendered from it — 3,482 files, ~7 MB, each device downloading only the
+  emoji it actually sees. Named by key = code points in hex, FE0F dropped, joined by `-`
+  (`_emoKey` — the bake uses the same rule). **Licence note:** these are Apple's drawings;
+  shipping them is the same grey area the emoji hats already sit in. The owner chose it.
+- **`Emoji/emoji.json`** = `{ v, px, cats: [{id, n, e:[…]}], more }`: the picker's
+  categories in the **system keyboard's own order**, plus the keys of the skin-tone
+  variants. `v` (a hash of the set) becomes `?h=` on every image URL — the service worker
+  treats that as immutable, cache-first.
+- **Baking** (`node tools/bake_emoji.mjs`, by hand, on a Mac, after a macOS update that
+  adds emoji): the list comes from the keyboard's framework (`tools/emoji_apple.swift
+  list`), skin tones are generated and kept if Unicode recommends them (`\p{RGI_Emoji}`)
+  AND the font has a single glyph for them, CoreText renders each, PIL writes WebP. Not in
+  the pre-commit hook (needs macOS + Swift).
+- **An Apple device does NOTHING** (`_emoWantImages` → `_emoNativeApple`): no image, no
+  observer, no canvas wrap — it already draws these. **The owner tests on a Mac, so he
+  never sees the image path**: set localStorage `mdwnh_emoji_img` to `'1'` to force it on
+  (`'0'` forces it off anywhere).
+- **DOM**: one `MutationObserver` on `<body>` (`_emoActivate`) swaps each known emoji in a
+  text node for `<img class="emo" alt="…" loading="lazy">` (`_emoTextNode`). Text fields
+  and anything `contenteditable` are skipped (the chat's type box keeps the device's
+  glyphs while typing). Hence **invariant 36**.
+- **Canvas**: `fillText` / `strokeText` / `measureText` are wrapped on the 2D context
+  prototypes (`_emoPatchCanvasIn`; the Document-PiP window gets its own). A string with a
+  known emoji is drawn with an **EM SPACE** in its place — an Apple emoji is exactly 1em
+  wide — and the image is drawn into that slot (`_emoDrawSlots`). **Where the slot is
+  comes from a hidden DOM line and a `Range`** (`_emoMeasureSlots`): in mixed
+  Arabic/English text the visual order is not the string's, and canvas has no way to ask
+  where a character landed. Measured once per (font, direction, text), cached
+  (`_emoImgs.parse`); `measureText` never needs it.
+- **What counts as an emoji** (`_EMO_RE`): flags, keycaps, ZWJ chains, and single
+  pictographs — but a character that is TEXT by default (©, ▶, ✔, the ⏸ in a paused badge)
+  only with its emoji selector or a skin tone. An emoji the set doesn't have is left to
+  the device's font.
+- **An image that hasn't arrived leaves its slot empty**; when it lands the baked sprites
+  are dropped (`_emoInvalidateSoon` → `_sprInvalidateFonts`) so they re-bake with it.
+  `_memReleaseIdle` drops the canvas's decoded images and the slot cache (`_emoRelease`).
+- **Loading**: `setupEmojiImages` (an `init` step) fetches `emoji.json` 1.5 s after load
+  on non-Apple devices only, bounded (9 s), awaited by nothing. Everyone fetches it when
+  the DM panel first opens (the picker's list, and what a reaction may be).
+
 ## الرسائل الخاصة — private messages (مقر ١.٥)
 
 A Telegram-style conversation between two members: saved, and you come back to it. The
 HUD's chat button (`#dm-btn`, with an unread badge), or the «رسالة خاصة» pill under a
-member. Text (500), emoji, stickers, pictures and GIFs, **replies and reactions**. Code is the `الرسائل الخاصة`
+member. Text (500), every emoji, stickers, pictures and GIFs, **replies (a swipe on a
+phone), reactions with any emoji, edits, deletes and send effects**. Code is the `الرسائل الخاصة`
 block at the end of `game.js`; markup is `#dm-panel` + `#dm-toast` + `#dm-zoom`; styles
 are the matching block at the foot of `style.css`.
 
 ### Where it lives — which is what keeps it cheap AND the lobbies apart
 ```
 lobbies/{lobby}/dm/inbox/{me}/{peer}   = { t, m, f, n, pn, pa }   // one row per conversation
-lobbies/{lobby}/dm/threads/{a~b}/{key} = { f, t, m? | k? | i:{w,h}, r?:{k,f,p}, rx?:{member: emoji} }
+lobbies/{lobby}/dm/threads/{a~b}/{key} = { f, t, m? | k? | i:{w,h}, r?:{k,f,p}, rx?:{member: emoji}, e?, x? }
+                                       = { f, t, d }                 // a deleted message (tombstone)
 lobbies/{lobby}/dm/media/{a~b}/{key}   = "data:image/…"            // a picture's bytes, on their own
 ```
 - **Everything is under `lobbyPath()`**, so a brother's client only ever touches
@@ -2392,10 +2455,24 @@ Both ride the **message record itself** — no new node, no new listener, no ext
   **Reactions are deliberately quiet** — no unread count, no toast, no inbox row; a
   closed thread reads them on its next open. A reaction to a message older than the
   newest page isn't seen live by the other side (they get it when that page is loaded).
-- **Checked on read too** (`_dmParseMsg`): a reaction not in `DM_RX_LIST` is dropped, at
+- **A reaction is ANY single emoji** (`emoIsOne`: the one-emoji pattern, and — once
+  `emoji.json` has loaded — a member of the set). The menu's row scrolls sideways
+  (`_dmRxQuick`: my reaction on that message, then what I used most recently, then
+  `DM_RX_LIST`), and «+» opens the full picker in reaction mode (`_dm.popFor`). Chips are
+  drawn in the order the reactions were stored.
+- **Checked on read too** (`_dmParseMsg`): a reaction that isn't one emoji is dropped, at
   most four are kept, the quote is cleaned like any text, and every key that goes into a
   selector must match `_DM_KEY_RE`.
-- **One menu** (`#dm-act`, `_dmAct`): six emoji + «رد» + «نسخ». A PC opens it from the
+- **A quote shows the original's CURRENT words** when it is loaded (`_dmQuoteNow`): an
+  edit updates every quote of it on screen, a delete turns it into «رسالة محذوفة»
+  (`_dmRefreshQuotes`). The copy the reply carries (`r.p`) is the fallback.
+- **Swipe to reply** (a phone): a finger dragged sideways on a message — either way —
+  moves the bubble with it, shows an arrow behind it and replies on release past
+  `DM_SWIPE_GO_PX`. The listeners are passive and on the list; `touch-action: pan-y` on
+  `.dm-msgs` is what hands a sideways drag to them. The bubble moves by an inline
+  `transform` on `.dm-line`.
+- **One menu** (`#dm-act`, `_dmAct`): the reaction row + «رد» + «نسخ» + «تعديل» + «أعد
+  التأثير» + «حذف» (the last three only where they apply). A PC opens it from the
   button that appears beside a bubble on hover (`.dm-more`) or a right-click (left to
   the browser when text is selected); a phone by **tapping the bubble** or holding it
   (`contextmenu` on Android, a `DM_HOLD_MS` passive touch timer for iOS — on the list
@@ -2404,6 +2481,70 @@ Both ride the **message record itself** — no new node, no new listener, no ext
   outside press; `_dm.actShut` stops the press that closed it from reopening it, and
   `_dm.holdAt` swallows the click a long press ends in (it would zoom a picture).
 - A member who can't be messaged (`dmCanMessage` false) gets «نسخ» only.
+
+### التعديل والحذف — editing and deleting
+Both are changes to the message record, so they ride the `onChildChanged` the open thread
+already has — no node, no listener, no read.
+- **Edit** (`_dmStartEdit` → `_dmCommitEdit`): the menu's «تعديل», or **↑ in an empty box**
+  on a PC. The reply bar turns into the edit bar (`.dm-reply.edit`, `_dmPaintBar`), the
+  send arrow into a ✓, and what the box held before comes back afterwards. Writes
+  `…/{key}/m` + `…/{key}/e` (when). The row is rebuilt in place (`_dmRepaintMsg`) and wears
+  a small **«معدّلة» tag** before its time (`.dm-ed`). Own messages only; a sticker has
+  nothing to edit; a picture's caption can be edited or emptied. No time limit.
+- **Delete** (`_dmAskDelete` → `_dmDelete`): own messages only, after the in-drawer
+  warning (`#dm-confirm`) — it is deleted for both and can't be undone. The record is
+  REPLACED by a tombstone `{ f, t, d }` and the picture's bytes are removed.
+  **A tombstone, not a removal**: the thread listens to a `limitToLast` window, where
+  `child_removed` also fires for every message that merely slides out of the window, and
+  a thread cached by a closed panel learns of a delete only by re-reading a record that
+  still exists. **Tombstones stay in `th.msgs`** (pages are counted by them — dropping
+  them made a page look short and `more` false) and are never drawn (`_dmPrevShown`,
+  `_dmShownCount`).
+- **The inbox preview follows** when the message was the newest (`row.t === msg.t`): mine
+  by `update()`, theirs by `_dmPeerRowPatch` — a transaction that changes their row only
+  while it still shows that message, and on a delete steps it back to the previous
+  message and takes one off their unread count. (It returns `cur` when `cur` is null: a
+  transaction that returns `undefined` on its first, locally-null run aborts without
+  ever asking the server.)
+- An older client (cached `game.js`) ignores `e` and the tombstone until it reloads.
+
+### منتقي الرموز — every emoji, recent first
+`_dmEmojiPanel` builds ~1,900 buttons ONCE from `emoji.json` (`_emoImgs.cats`, the system
+keyboard's categories and order) and re-attaches the node on each open; only
+«المستخدمة مؤخرًا» is refilled (`emoRecent`, this device, shared with the reaction row).
+Category tabs scroll the list by hand (invariant 11). Sections are
+`content-visibility: auto` with their height written exactly from JS (`_dmEmojiOpen`) so
+a jump lands where it should. Before the list has loaded it shows the old short set
+(`EMO_LIST`). Buttons carry the emoji in `data-e` (invariant 36). Dropped by
+`_memReleaseIdle` when the panel is closed.
+
+### تأثيرات الرسائل — iMessage-style effects (`DM_FX`)
+A message may carry `x`: four **bubble** effects (صدمة، صاخب، لطيف، حبر سري) and seven
+that **fill the drawer** (قصاصات ملونة، بالونات، ألعاب نارية، قلوب، ليزر، صدى، دائرة ضوء).
+- **Sent by HOLDING the send button** (`DM_SEND_HOLD_MS`; a right-click on a PC): the
+  effects list opens in the pop (`_dmPop('fx')`), and choosing one sends. The click a
+  hold ends in is swallowed (`_dm.sendHeldAt`).
+- **Plays** when the message arrives in an open, visible thread (`_dmFxArrived`, only if
+  it is fresher than `DM_FX_LIVE_MS`); what arrived while the thread was closed or the
+  tab hidden plays ONCE on coming back — the newest unread one (`th.fxUnread`,
+  `_dmFxUnread`). «أعد التأثير» in the menu replays it.
+- **All CSS**: elements built for one burst, animating `transform` / `opacity` only, in
+  `#dm-fx` (inside the card, `pointer-events: none`), removed by a timer. No rAF loop, no
+  canvas. Their base style is `opacity: 0` ON PURPOSE — they are decoration, not content,
+  so a skipped animation shows nothing (the opposite of invariant 20's case).
+  `prefers-reduced-motion` gets the message without the show.
+- **Secret ink is a state, not a burst**: `.dm-msg.fx-ink` blurs the words (a STATIC
+  blur — invariant 12) under a dotted veil until hovered, or pressed (`.ink-open`, 6 s).
+
+### Small things that make it feel finished
+- **The caret is already in the box** when a thread opens on a PC (`_dmFocusInput`). It
+  must be called again AFTER `.active` lands: the panel is `visibility: hidden` until
+  then and a hidden element refuses the focus — that was the "I still have to press it"
+  bug on «رسالة خاصة».
+- **Links** in a message are real `<a>`s (`_dmFillText`: http/https only, `noopener`).
+- **Drafts**: what was typed and not sent waits in that thread (`th.draft`, this session).
+- **«إلى آخر الرسائل»** (`#dm-down`, `_dmPaintDown`): appears once scrolled
+  `DM_DOWN_SHOW_PX` up, with a count of what arrived meanwhile.
 
 ### Privacy — say it honestly
 The site signs in to Firebase anonymously, so the rules can not tie a row to a person.
@@ -4606,6 +4747,7 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
 | Race + fig zones play the join sound but no panel ever appears; laptop-boss works fine | `MINIGAMES_ENABLED` was left `false` after the games table was wired. The zone press still ran `joinOrCreateMinigameLobby` (hence the sound) and wrote a lobby session to Firebase — but `listenToRace`/`listenToCoffee` were skipped, so `gameState.race.session` was never populated and `showRaceLobby` never ran. Laptop-boss was unaffected because it's solo: `openBossConfirm` opens its modal locally and needs no listener | `MINIGAMES_ENABLED = true`; the separately-dead old break-room rects moved behind `MINIGAME_LEGACY_ZONES` |
 | Faint text (every subtitle, every «muted» line) shows brighter lines between its letters — since day one, whole site | Every muted colour was `rgba(255,255,255,0.4)`-style. Arabic glyphs overlap at the joins and a translucent colour is applied per glyph, so each overlap got painted twice | Every text colour made solid (the blended colour it rendered as), `-tx` solid twins for translucent tokens, canvas text fills too. Invariant 33 |
 | Settings panel opens completely empty on Firefox | The rows sat at `opacity: 0` and relied on the `settingsRowIn` keyframe to reveal them; Firefox sometimes never triggered the sequence, so nothing was ever faded in. Same root cause as the earlier pomodoro-settings blank | Keep the fade in the keyframes, keep the base style opaque, and hide during the delay with `animation-fill-mode: backwards` — a skipped animation costs the flourish, not the content |
+| «رسالة خاصة» opens the thread but the text box isn't focused — a second press needed | `_dmShowThread` focused the input while the panel was still `visibility: hidden` (`.active` lands two frames later), and a hidden element refuses the focus | `_dmFocusInput()` is called again from `dmOpen`'s double-rAF, right after `.active` is added |
 | Settings/pomodoro rows slide in at full opacity — no fade, looks wrong (every browser) | The Firefox blank-panel fix above was first done by **deleting the fade** (`transform`-only keyframes, base `opacity: 1`), which cured the blank but left the cascade fadeless | `backwards` fill mode gives both: fade restored inside the keyframes, base style still opaque |
 | Reader closes the tab mid-session → the whole reading session is lost | Reading time was only written at انتهيت (`runTransaction` on `books/{slug}/totalMs` + the leaderboard), so nothing at all existed until the session ended | `bankReadingProgress()` commits the delta since the last bank every `READING_BANK_INTERVAL_MS` (60 s); `endReadingSession` just banks the tail. `r._bankedMs` is what stops double-counting |
 | Reader returns after closing the tab and is **frozen** — can't move at all, mezzanine drawn over them; only deleting `users/{uid}/x,y` in Firebase frees them | A seated player's stored `x/y` **IS the sofa cushion**, and the sofas are solid furniture in the collision mask. The login restore guards on `!checkCollision(...)` — but `checkCollision` returns **walkable for everything until the collision masks decode** (`if (!worldCollision.built) return false`), and the restore normally lands first. So the cushion position was accepted, and the masks landing a moment later buried the player inside the couch. The books sofas sit **under the mezzanine footprint**, hence "stuck on floor 1 seeing floor 2" | Three layers: the restore skips the stored position when `data.sitSeatId` is set; `sitSeatId/sitX/sitY` are nulled by `onDisconnect` (armed per-field in the `.info/connected` block) so the seat frees and the stale seat can't be restored; and `_unstickLocalPlayer()` runs the moment `worldCollision.built` flips, spiralling any genuinely-buried free player out to the nearest walkable point |

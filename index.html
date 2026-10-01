@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 355 · Updated 10/1 9:32 PM</div>
+    <div id="build-number" class="build-number">Build 356 · Updated 10/1 10:41 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -715,18 +715,37 @@
                     </span>
                     <button id="dm-close2" class="dm-x" type="button" aria-label="إغلاق">✕</button>
                 </header>
-                <div id="dm-msgs" class="dm-msgs"></div>
+                <!-- قائمة الرسائل، وفوقها زر «إلى آخر الرسائل» (يظهر حين تصعد كثيرًا) -->
+                <div class="dm-stage">
+                    <div id="dm-msgs" class="dm-msgs"></div>
+                    <button id="dm-down" class="dm-down" type="button" aria-label="إلى آخر الرسائل">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+                        <i id="dm-down-n" class="dm-down-n" hidden></i>
+                    </button>
+                </div>
                 <div id="dm-pop" class="dm-pop" hidden></div>
                 <div id="dm-note" class="dm-note" hidden></div>
-                <!-- قائمة الرسالة (تفاعل / رد / نسخ) — يبنيها game.js ويضعها عند الفقاعة -->
+                <!-- قائمة الرسالة (تفاعلات تُمرَّر + «كل الرموز» / رد / نسخ / تعديل / حذف) —
+                     يبنيها game.js ويضعها عند الفقاعة -->
                 <div id="dm-act" class="dm-act" hidden></div>
-                <!-- الرسالة التي يُرَدّ عليها — تنتظر الإرسال. الضغط عليها يذهب إليها. -->
+                <!-- تحذير قبل حذف رسالة: الحذف عند الطرفين ولا يُسترجع -->
+                <div id="dm-confirm" class="dm-confirm" hidden>
+                    <div class="dm-confirm-card" role="alertdialog" aria-labelledby="dm-confirm-title" aria-describedby="dm-confirm-text">
+                        <b id="dm-confirm-title">حذف هذه الرسالة؟</b>
+                        <p id="dm-confirm-text"></p>
+                        <div class="dm-confirm-row">
+                            <button id="dm-confirm-yes" class="dm-confirm-btn danger" type="button">حذف</button>
+                            <button id="dm-confirm-no" class="dm-confirm-btn" type="button">إلغاء</button>
+                        </div>
+                    </div>
+                </div>
+                <!-- الرسالة التي يُرَدّ عليها أو تُعدَّل — تنتظر الإرسال. الضغط عليها يذهب إليها. -->
                 <div id="dm-reply" class="dm-reply" hidden>
                     <span class="dm-reply-body">
                         <b id="dm-reply-name"></b>
                         <small id="dm-reply-text" dir="auto"></small>
                     </span>
-                    <button id="dm-reply-x" class="dm-x" type="button" aria-label="إلغاء الرد">✕</button>
+                    <button id="dm-reply-x" class="dm-x" type="button" aria-label="إلغاء">✕</button>
                 </div>
                 <!-- صورة مُرفقة تنتظر الإرسال (زر الإرفاق، السحب والإفلات، أو اللصق) -->
                 <div id="dm-attach" class="dm-attach" hidden>
@@ -760,14 +779,21 @@
                     </button>
                     <textarea id="dm-input" class="dm-input" rows="1" maxlength="500" placeholder="اكتب رسالة…"
                               enterkeyhint="send" autocapitalize="off" aria-label="اكتب رسالة خاصة"></textarea>
-                    <button id="dm-send" class="dm-send" type="submit" aria-label="إرسال">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <!-- ضغطة: إرسال (أو حفظ التعديل). ضغطة مطوّلة أو زر الفأرة الأيمن: إرسال بتأثير -->
+                    <button id="dm-send" class="dm-send" type="submit" aria-label="إرسال" title="إرسال — اضغط مطوّلًا لإرسالها بتأثير">
+                        <svg class="dm-send-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <path d="M20 12L4 5l3 7-3 7z"/>
+                        </svg>
+                        <svg class="dm-send-ok" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M5 12.5l4.5 4.5L19 7.5"/>
                         </svg>
                     </button>
                 </form>
                 <div id="dm-drop" class="dm-drop" hidden><span>أفلِت الصورة هنا</span></div>
             </section>
+            <!-- تأثيرات الرسائل التي تملأ المحادثة (قصاصات، بالونات، ألعاب نارية…) — عناصر
+                 يبنيها game.js لدفقة واحدة ثم يزيلها. لا تستقبل ضغطًا. -->
+            <div id="dm-fx" class="dm-fx" aria-hidden="true"></div>
         </div>
     </div>
     <!-- عرض صورة من محادثة خاصة بالحجم الكامل -->
@@ -2473,7 +2499,7 @@
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
         <link rel="modulepreload" href="firebase-config.js?v=4">
-        <script type="module" src="game.js?v=333"></script>
+        <script type="module" src="game.js?v=335"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

@@ -70,7 +70,9 @@ self.addEventListener('notificationclick', (e) => {
 // content hashes of a file we just re-downloaded. Without this the cache would grow
 // a new ~3 MB entry per art edit and never shed the old ones.
 async function dropOtherVersions(cache, url) {
-    const keys = await cache.keys();
+    // Only the entries for THIS path (any query) — listing the whole cache for every
+    // file stored was fine for a dozen world layers, not for a few thousand emoji.
+    const keys = await cache.keys(url.origin + url.pathname, { ignoreSearch: true });
     await Promise.all(keys.map(k => {
         const ku = new URL(k.url);
         if (ku.pathname === url.pathname && ku.href !== url.href) return cache.delete(k);

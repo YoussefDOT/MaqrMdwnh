@@ -13450,19 +13450,62 @@ body.is-mobile .news-list { padding: 6px 16px 20px; }
 }
 .dm-pop[hidden] { display: none; }
 .dm-pop { overflow-x: hidden; }
-/* minmax(0, 1fr) لا 1fr: العمود 1fr لا يصغر عن محتواه، فكانت الصور تمدّ الشبكة
-   خارج اللوحة وتظهر شريط تمرير أفقيًا. */
-.dm-pop.emoji { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 2px; }
+/* ── منتقي الرموز: كل الرموز، بالأقسام، والمستخدمة مؤخرًا أولًا ──
+   شريط أقسام ثابت فوق قائمة تُمرَّر. القسم البعيد لا يُرسم حتى يُوصل إليه
+   (content-visibility) وارتفاعه يُكتب من JS بدقة (_dmEmojiOpen) حتى يهبط القفز إليه
+   في مكانه. minmax(0, 1fr) لا 1fr: العمود 1fr لا يصغر عن محتواه. */
+.dm-pop.emoji { display: flex; flex-direction: column; padding: 0; overflow: hidden; height: 300px; max-height: 300px; }
+.dm-emo-wrap { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.dm-emo-for { display: none; padding: 9px 14px 0; font-size: 12px; font-weight: 700; color: #62d6c8; }
+.dm-emo-wrap.rx .dm-emo-for { display: block; }
+.dm-emo-tabs {
+    flex: 0 0 auto;
+    display: flex;
+    gap: 2px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--dm-line);
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.dm-emo-tabs::-webkit-scrollbar { display: none; }
+.dm-emo-tab {
+    flex: 1 0 auto;
+    min-width: 32px; height: 32px; padding: 0;
+    display: grid; place-items: center;
+    border: 0; border-radius: 10px;
+    background: transparent;
+    font-size: 18px; line-height: 1;
+    opacity: 0.5;
+    filter: grayscale(1);
+    cursor: pointer;
+    transition: opacity .16s, background .16s;
+}
+.dm-emo-tab[hidden] { display: none; }
+.dm-emo-tab:hover { opacity: 0.85; }
+.dm-emo-tab.on { opacity: 1; filter: none; background: rgba(255, 255, 255, 0.10); }
+.dm-emo-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 8px;
+}
+.dm-emo-sec { content-visibility: auto; padding-bottom: 8px; }
+.dm-emo-sec h4 { margin: 0; height: 30px; line-height: 30px; padding: 0 4px; font-size: 12px; font-weight: 700; color: #8e8e8f; }
+.dm-emo-grid { display: grid; grid-template-columns: repeat(8, minmax(0, 1fr)); gap: 2px; }
 .dm-emo {
     min-width: 0;
     padding: 0;
     aspect-ratio: 1;
+    display: grid; place-items: center;
     border: 0; border-radius: 10px;
     background: transparent;
-    font-size: 22px;
+    font-size: 22px; line-height: 1;
     cursor: pointer;
 }
 .dm-emo:hover { background: rgba(255, 255, 255, 0.09); }
+.dm-emo:active { transform: scale(0.88); }
 .dm-stk-search { height: 36px; margin-bottom: 8px; }
 .dm-stk-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
 .dm-stk-grid .dm-empty { grid-column: 1 / -1; margin: 14px 0; }
@@ -13665,8 +13708,36 @@ body.is-mobile .news-list { padding: 6px 16px 20px; }
     from { opacity: 0; transform: translateY(6px) scale(0.88); }
     to   { opacity: 1; transform: none; }
 }
-.dm-act-rx { display: flex; gap: 2px; }
+.dm-act { max-width: min(306px, calc(100% - 16px)); }
+/* التفاعلات صف يُمرَّر أفقيًا (الأحدث استعمالًا أولًا)، وبعده «+» ثابت يفتح كل الرموز */
+.dm-act-rx { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.dm-act-rxs {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior: contain;
+    scrollbar-width: none;
+    /* يتلاشى عند الطرف الأيسر: هناك المزيد */
+    -webkit-mask-image: linear-gradient(to right, transparent 0, #000 22px);
+            mask-image: linear-gradient(to right, transparent 0, #000 22px);
+}
+.dm-act-rxs::-webkit-scrollbar { display: none; }
+.dm-act-plus {
+    flex: 0 0 auto;
+    width: 34px; height: 34px; padding: 0;
+    border: 0; border-radius: 50%;
+    background: rgba(255, 255, 255, 0.10) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ececec' stroke-width='2.4' stroke-linecap='round'%3E%3Cpath d='M12 5v14M5 12h14'/%3E%3C/svg%3E") center / 16px no-repeat;
+    cursor: pointer;
+    transition: background-color .14s, transform .2s var(--dm-pop);
+}
+.dm-act-plus:hover { background-color: rgba(255, 255, 255, 0.18); }
+.dm-act-plus:active { transform: scale(0.9); }
 .dm-act-emo {
+    flex: 0 0 auto;
     width: 38px; height: 38px; padding: 0;
     border: 0; border-radius: 50%;
     background: transparent;
@@ -13677,9 +13748,11 @@ body.is-mobile .news-list { padding: 6px 16px 20px; }
 .dm-act-emo:hover { background: rgba(255, 255, 255, 0.10); transform: scale(1.16); }
 .dm-act-emo:active { transform: scale(0.9); }
 .dm-act-emo.on { background: rgba(59, 185, 171, 0.30); }
-.dm-act-row { display: flex; gap: 6px; }
+.dm-act-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.dm-act-btn.danger { color: #ff8a7a; }
 .dm-act-btn {
-    flex: 1 1 0;
+    flex: 1 1 auto;
+    white-space: nowrap;
     height: 34px;
     padding: 0 14px;
     border: 0; border-radius: 50px;
@@ -13785,7 +13858,8 @@ body.is-mobile .dm-search input,
 body.is-mobile .dm-stk-search { font-size: 16px; }
 body.is-mobile .dm-compose { padding-bottom: max(10px, env(safe-area-inset-bottom)); }
 body.is-mobile .dm-pop { max-height: 34vh; }
-body.is-mobile .dm-pop.emoji { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+body.is-mobile .dm-pop.emoji { height: 34vh; max-height: 34vh; }
+body.is-mobile .dm-emo-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 body.is-mobile .dm-toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
 /* الجوال: الضغط على الفقاعة (أو الضغط المطوّل) يفتح قائمتها، فلا تحديد نص ولا قائمة
    النظام فوقها — النسخ من القائمة نفسها. */
@@ -13796,4 +13870,401 @@ body.is-mobile .dm-act-emo { width: 42px; height: 42px; font-size: 25px; }
 body.is-mobile .dm-act-btn { height: 38px; font-size: 14px; }
 @media (prefers-reduced-motion: reduce) {
     .dm-row.in, .dm-msg.fresh, .dm-act, .dm-rx-chip.pop, .dm-msg.flash .dm-bub { animation: none; }
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   رموز آبل التعبيرية — صورة مكان كل رمز على الأجهزة التي لا تملك خط آبل
+   (game.js → _emoTextNode). تُقاس بـ em فتتبع حجم النص حولها، ولا تلتقط ضغطًا
+   حتى يصل الضغط إلى الزر الذي يحملها.
+   ═══════════════════════════════════════════════════════════════════════════ */
+img.emo {
+    display: inline-block;
+    width: 1.2em; height: 1.2em;
+    margin: 0 0.03em;
+    vertical-align: -0.25em;
+    object-fit: contain;
+    pointer-events: none;
+    -webkit-user-drag: none;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   الرسائل الخاصة — السحب للرد، التعديل، الحذف، زر «إلى آخر الرسائل»، التأثيرات
+   ───────────────────────────────────────────────────────────────────────────
+   • السحب: `touch-action: pan-y` على القائمة يترك السحب الأفقي لنا دون أن نمنع
+     التمرير (المستمعات passive). الفقاعة تتحرك بـ transform مكتوب من JS على
+     `.dm-line`، والسهم خلفها عنصر زائف على الصف.
+   • التأثيرات: عناصر تُبنى لدفقة واحدة وتتحرك بـ transform / opacity فقط ثم تُزال.
+     أساسها opacity: 0 عمدًا — هي زينة لا محتوى، فإن لم تعمل الحركة لا يظهر شيء.
+   • الحبر السري: تمويه ثابت (لا حركة لانهائية) يزول بالتمرير أو الضغط.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.dm-stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.dm-msgs { touch-action: pan-y; overflow-x: hidden; }
+.dm-msg { position: relative; }
+.dm-line { position: relative; z-index: 1; }
+
+.dm-down {
+    position: absolute;
+    bottom: 10px; left: 12px;
+    z-index: 3;
+    width: 38px; height: 38px; padding: 0;
+    display: grid; place-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 50%;
+    background: #2b2b31;
+    color: #ececec;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+    cursor: pointer;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(8px) scale(0.9);
+    transition: opacity .18s ease, transform .3s var(--dm-pop), visibility 0s linear .18s;
+}
+.dm-down.show { opacity: 1; visibility: visible; transform: none; transition: opacity .18s ease, transform .3s var(--dm-pop), visibility 0s; }
+.dm-down svg { width: 18px; height: 18px; }
+.dm-down-n {
+    position: absolute;
+    top: -7px; right: -5px;
+    min-width: 18px; height: 18px;
+    padding: 0 5px;
+    border-radius: 50px;
+    background: #3BB9AB;
+    color: #0c1b19;
+    font: 700 10px/18px 'Rubik', system-ui, sans-serif;
+    font-style: normal;
+    text-align: center;
+}
+.dm-down-n[hidden] { display: none; }
+
+/* معدّلة / روابط / اقتباس رسالة محذوفة / خروج رسالة حُذفت */
+.dm-msg.ed time { display: block; }
+/* «معدّلة»: وسم صغير قبل الوقت، لا كلمة في سطره */
+.dm-ed {
+    display: inline-block;
+    margin-inline-end: 5px;
+    padding: 2px 6px 1px;
+    border-radius: 50px;
+    background: rgba(255, 255, 255, 0.09);
+    color: #a2a2a4;
+    font-size: 8.5px; font-weight: 700; font-style: normal;
+    line-height: 1.3;
+    vertical-align: 1px;
+}
+.dm-link {
+    color: #8fdcff;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    unicode-bidi: isolate;
+    overflow-wrap: anywhere;
+}
+.dm-msg.mine .dm-link { color: #dcfffa; }
+.dm-quote.gone span { font-style: italic; color: #8e8e8f; }
+.dm-msg.mine .dm-quote.gone span { color: #a9cfc9; }
+.dm-msg.out { opacity: 0; transform: scale(0.86); transition: opacity .2s ease, transform .2s ease; }
+
+/* السحب للرد */
+.dm-msg.sw::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 30px; height: 30px;
+    margin-top: -15px;
+    border-radius: 50%;
+    background: #2e2e34 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23ffffff' stroke-width='2.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 8l-5 4 5 4'/%3E%3Cpath d='M5 12h9a5 5 0 0 1 5 5v1'/%3E%3C/svg%3E") center / 16px no-repeat;
+    opacity: 0.5;
+    transform: scale(0.72);
+    transition: transform .18s var(--dm-pop), opacity .16s, background-color .16s;
+}
+.dm-msg.sw-l::after { right: 6px; }      /* الفقاعة ذهبت يسارًا: الفراغ على يمينها */
+.dm-msg.sw-r::after { left: 6px; }
+.dm-msg.sw-go::after { opacity: 1; transform: scale(1); background-color: #3BB9AB; }
+
+/* شريط التعديل: نفس شريط الرد بلون آخر، وزر الإرسال يصير علامة ✓ */
+.dm-reply.edit .dm-reply-body { border-inline-start-color: #F7B500; }
+.dm-reply.edit .dm-reply-body b { color: #ffd766; }
+.dm-send { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+.dm-send .dm-send-ok { display: none; width: 19px; height: 19px; transform: none; }
+.dm-compose.editing .dm-send-go { display: none; }
+.dm-compose.editing .dm-send-ok { display: block; }
+.dm-compose.editing .dm-send { background: #F7B500; color: #241a00; }
+.dm-compose.editing .dm-send:hover { background: #ffc628; }
+
+/* تحذير الحذف — داخل الدُّرج نفسه، بلا backdrop-filter */
+.dm-confirm {
+    position: absolute;
+    inset: 0;
+    z-index: 8;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgba(8, 8, 11, 0.74);
+    animation: dmFadeIn .18s ease backwards;
+}
+.dm-confirm[hidden] { display: none; }
+@keyframes dmFadeIn { from { opacity: 0; } to { opacity: 1; } }
+.dm-confirm-card {
+    width: min(300px, 100%);
+    padding: 18px 16px 14px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 22px;
+    background: #232327;
+    box-shadow: 0 18px 60px rgba(0, 0, 0, 0.6);
+    text-align: center;
+    animation: dmActIn .26s var(--dm-pop) backwards;
+}
+.dm-confirm-card b { display: block; font-size: 16px; font-weight: 700; color: #f3f3f3; }
+.dm-confirm-card p { margin: 6px 0 14px; font-size: 13px; font-weight: 500; line-height: 1.65; color: #b8b8b9; }
+.dm-confirm-row { display: flex; gap: 8px; }
+.dm-confirm-btn {
+    flex: 1 1 0;
+    height: 40px;
+    border: 0; border-radius: 50px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #ececec;
+    font: 700 14px 'Baloo Bhaijaan 2', 'Rubik', system-ui, sans-serif;
+    cursor: pointer;
+    transition: background .14s, transform .2s var(--dm-pop);
+}
+.dm-confirm-btn:hover { background: rgba(255, 255, 255, 0.15); }
+.dm-confirm-btn:active { transform: scale(0.95); }
+.dm-confirm-btn.danger { background: #F04D39; color: #fff; }
+.dm-confirm-btn.danger:hover { background: #ff604c; }
+
+/* قائمة التأثيرات (ضغطة مطوّلة على زر الإرسال) */
+.dm-pop.fx { padding: 10px 12px 12px; }
+.dm-pop.fx h4 { margin: 2px 2px 8px; font-size: 12px; font-weight: 700; color: #8e8e8f; }
+.dm-pop.fx h4:not(:first-child) { margin-top: 12px; }
+.dm-fx-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.dm-fx-chip {
+    height: 34px;
+    padding: 0 14px;
+    border: 0; border-radius: 50px;
+    background: rgba(255, 255, 255, 0.08);
+    color: #ececec;
+    font: 600 13px 'Baloo Bhaijaan 2', 'Rubik', system-ui, sans-serif;
+    cursor: pointer;
+    transition: background .14s, transform .2s var(--dm-pop);
+}
+.dm-fx-chip:hover { background: rgba(59, 185, 171, 0.32); }
+.dm-fx-chip:active { transform: scale(0.94); }
+
+/* ── تأثيرات الفقاعة ── */
+.dm-msg.fx-slam, .dm-msg.fx-loud { z-index: 3; }
+.dm-msg.fx-slam .dm-line { animation: dmFxSlam .62s cubic-bezier(0.2, 0.9, 0.3, 1) backwards; }
+@keyframes dmFxSlam {
+    0%   { opacity: 0; transform: scale(3.2) rotate(-7deg); }
+    42%  { opacity: 1; transform: scale(0.9) rotate(1deg); }
+    62%  { transform: scale(1.06); }
+    100% { transform: none; }
+}
+.dm-msgs.fx-quake > .dm-msg:not(.fx-slam) { animation: dmFxQuake .44s ease-out; }
+@keyframes dmFxQuake {
+    0%, 100% { transform: none; }
+    20% { transform: translateY(5px); }
+    45% { transform: translateY(-3px); }
+    70% { transform: translateY(2px); }
+}
+.dm-msg.fx-loud .dm-line { transform-origin: right bottom; animation: dmFxLoud 1.5s ease backwards; }
+.dm-msg.mine.fx-loud .dm-line { transform-origin: left bottom; }
+@keyframes dmFxLoud {
+    0%   { transform: scale(0.6); }
+    14%  { transform: scale(1.7) rotate(-2deg); }
+    22%  { transform: scale(1.7) rotate(2.5deg); }
+    30%  { transform: scale(1.7) rotate(-2.5deg); }
+    38%  { transform: scale(1.7) rotate(2deg); }
+    46%  { transform: scale(1.7) rotate(-1.5deg); }
+    54%  { transform: scale(1.7) rotate(1deg); }
+    72%  { transform: scale(1.7); }
+    100% { transform: none; }
+}
+.dm-msg.fx-gentle .dm-line { transform-origin: right bottom; animation: dmFxGentle 2.3s ease-out backwards; }
+.dm-msg.mine.fx-gentle .dm-line { transform-origin: left bottom; }
+@keyframes dmFxGentle {
+    0%   { opacity: 0; transform: scale(0.3); }
+    30%  { opacity: 1; transform: scale(0.46); }
+    100% { transform: none; }
+}
+/* الحبر السري */
+.dm-msg.fx-ink .dm-bub { position: relative; overflow: hidden; cursor: pointer; }
+.dm-msg.fx-ink .dm-txt,
+.dm-msg.fx-ink .dm-cap,
+.dm-msg.fx-ink .dm-pic,
+.dm-msg.fx-ink .dm-bub.stk img { filter: blur(8px); transition: filter .5s ease; }
+.dm-msg.fx-ink .dm-bub::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background-image:
+        radial-gradient(rgba(255, 255, 255, 0.6) 0.9px, transparent 1.3px),
+        radial-gradient(rgba(255, 255, 255, 0.38) 0.8px, transparent 1.2px);
+    background-size: 7px 7px, 11px 11px;
+    background-position: 0 0, 3px 5px;
+    transition: opacity .5s ease;
+}
+.dm-msg.fx-ink.ink-open .dm-txt,
+.dm-msg.fx-ink.ink-open .dm-cap,
+.dm-msg.fx-ink.ink-open .dm-pic,
+.dm-msg.fx-ink.ink-open .dm-bub.stk img { filter: none; }
+.dm-msg.fx-ink.ink-open .dm-bub::after { opacity: 0; }
+@media (hover: hover) and (pointer: fine) {
+    .dm-msg.fx-ink .dm-bub:hover .dm-txt,
+    .dm-msg.fx-ink .dm-bub:hover .dm-cap,
+    .dm-msg.fx-ink .dm-bub:hover .dm-pic,
+    .dm-msg.fx-ink .dm-bub.stk:hover img { filter: none; }
+    .dm-msg.fx-ink .dm-bub:hover::after { opacity: 0; }
+}
+
+/* ── تأثيرات تملأ المحادثة ── */
+.dm-fx {
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+    overflow: hidden;
+    border-radius: inherit;
+    pointer-events: none;
+    visibility: hidden;
+}
+.dm-fx.on { visibility: visible; }
+.dm-fx.dark::before,
+.dm-fx.spot::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    background: rgba(4, 4, 7, 0.66);
+    animation: dmFxDim 3.3s ease backwards;
+}
+.dm-fx.spot::before {
+    background: radial-gradient(circle at var(--x) var(--y),
+        rgba(4, 4, 7, 0) 0, rgba(4, 4, 7, 0) var(--rad), rgba(4, 4, 7, 0.92) calc(var(--rad) + 70px));
+}
+@keyframes dmFxDim {
+    0%   { opacity: 0; }
+    12%  { opacity: 1; }
+    80%  { opacity: 1; }
+    100% { opacity: 0; }
+}
+.dm-cf {
+    position: absolute;
+    top: -24px;
+    border-radius: 2px;
+    opacity: 0;
+    animation: dmCf 3s cubic-bezier(0.2, 0.6, 0.4, 1) backwards;
+}
+@keyframes dmCf {
+    0%   { opacity: 1; transform: translate3d(0, 0, 0) rotate(0deg); }
+    85%  { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(var(--dx), var(--dy), 0) rotate(var(--r)); }
+}
+.dm-bl {
+    position: absolute;
+    bottom: -140px;
+    aspect-ratio: 0.82;
+    border-radius: 50% 50% 50% 50% / 46% 46% 54% 54%;
+    background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.75) 0 7%, rgba(255, 255, 255, 0) 24%), var(--c);
+    opacity: 0;
+    animation: dmBl 3.6s cubic-bezier(0.3, 0.1, 0.5, 1) backwards;
+}
+.dm-bl::before {
+    content: '';
+    position: absolute;
+    top: calc(100% - 3px); left: calc(50% - 5px);
+    border: 5px solid transparent;
+    border-top: 0;
+    border-bottom-color: var(--c);
+}
+.dm-bl::after {
+    content: '';
+    position: absolute;
+    top: 100%; left: 50%;
+    width: 1.5px; height: 64px;
+    background: rgba(255, 255, 255, 0.5);
+}
+@keyframes dmBl {
+    0%   { opacity: 1; transform: translate3d(0, 0, 0) rotate(-3deg); }
+    50%  { transform: translate3d(var(--sx), calc(var(--dy) * 0.5), 0) rotate(4deg); }
+    96%  { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(0, var(--dy), 0) rotate(-2deg); }
+}
+.dm-fw {
+    position: absolute;
+    width: 5px; height: 5px;
+    margin: -2.5px;
+    border-radius: 50%;
+    opacity: 0;
+    animation: dmFw 1.25s cubic-bezier(0.1, 0.7, 0.3, 1) backwards;
+}
+@keyframes dmFw {
+    0%   { opacity: 0; transform: rotate(var(--a)) translateX(0) scale(1); }
+    6%   { opacity: 1; }
+    70%  { opacity: 1; }
+    100% { opacity: 0; transform: rotate(var(--a)) translateX(var(--d)) scale(0.3); }
+}
+.dm-hr {
+    --s: 1;
+    position: absolute;
+    width: 46px; height: 46px;
+    margin: -23px;
+    opacity: 0;
+    background: #ff3b5c;
+    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21s-7.5-4.6-9.6-9.2C.9 8.4 2.6 4.5 6.3 4.5c2.2 0 3.9 1.2 5.7 3.4 1.8-2.2 3.5-3.4 5.7-3.4 3.7 0 5.4 3.9 3.9 7.3C19.5 16.4 12 21 12 21z'/%3E%3C/svg%3E") center / contain no-repeat;
+            mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21s-7.5-4.6-9.6-9.2C.9 8.4 2.6 4.5 6.3 4.5c2.2 0 3.9 1.2 5.7 3.4 1.8-2.2 3.5-3.4 5.7-3.4 3.7 0 5.4 3.9 3.9 7.3C19.5 16.4 12 21 12 21z'/%3E%3C/svg%3E") center / contain no-repeat;
+    animation: dmHr 2.6s cubic-bezier(0.3, 0.6, 0.4, 1) backwards;
+}
+.dm-hr.big { width: 120px; height: 120px; margin: -60px; animation-duration: 3.3s; }
+@keyframes dmHr {
+    0%   { opacity: 0; transform: translate3d(0, 0, 0) scale(0); }
+    18%  { opacity: 1; transform: translate3d(0, -10px, 0) scale(calc(var(--s) * 1.15)); }
+    30%  { transform: translate3d(0, -14px, 0) scale(var(--s)); }
+    80%  { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(var(--sx), var(--dy), 0) scale(var(--s)); }
+}
+.dm-lz {
+    position: absolute;
+    width: 180%; height: 3px;
+    margin-top: -1.5px;
+    transform-origin: 0 50%;
+    border-radius: 3px;
+    background: linear-gradient(to right, var(--c), rgba(255, 255, 255, 0) 88%);
+    box-shadow: 0 0 10px 1px var(--c);
+    opacity: 0;
+    animation: dmLz 1.3s ease-in-out 2 backwards;
+}
+@keyframes dmLz {
+    0%   { opacity: 0; transform: rotate(var(--a0)); }
+    10%  { opacity: 0.95; }
+    50%  { transform: rotate(var(--a1)); }
+    90%  { opacity: 0.95; }
+    100% { opacity: 0; transform: rotate(var(--a0)); }
+}
+.dm-ec {
+    --s: 1;
+    position: absolute;
+    max-width: 62%;
+    padding: 6px 12px;
+    border-radius: 16px;
+    background: #1f6f66;
+    color: #f4fffd;
+    font-size: 14px; font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    opacity: 0;
+    animation: dmEc 2.2s ease-out backwards;
+}
+.dm-ec.pic { padding: 0; background: transparent; }
+.dm-ec.pic img { display: block; width: 64px; height: 64px; object-fit: contain; }
+@keyframes dmEc {
+    0%   { opacity: 0; transform: scale(calc(var(--s) * 0.3)); }
+    25%  { opacity: 0.95; transform: scale(var(--s)); }
+    70%  { opacity: 0.9; }
+    100% { opacity: 0; transform: translateY(-20px) scale(calc(var(--s) * 1.25)); }
+}
+
+body.is-mobile .dm-down { bottom: 12px; }
+body.is-mobile .dm-act { max-width: calc(100% - 16px); }
+@media (prefers-reduced-motion: reduce) {
+    .dm-confirm, .dm-confirm-card, .dm-msg.out { animation: none; transition: none; }
 }

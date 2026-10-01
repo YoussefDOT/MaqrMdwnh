@@ -5085,6 +5085,7 @@ function init() {
     });
     step('juice resume', _juiceWireResume);   // JUICE: resume audio on the first gesture (refresh autoplay)
     step('juice ui', setupJuiceUi);           // JUICE: wire the UI blip early so the login/lobby menu blips too
+    step('emoji', setupEmojiImages);          // Apple's emoji on devices that don't have them (no-op on Apple's own)
 }
 
 // ─── World-art loader ───────────────────────────────────────────────────────────
@@ -16886,7 +16887,8 @@ if (/^(localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.)/.test(location.hostname))
                      openChatBox, closeChatBox, _chatUi,
                      isOnStairs, checkCollision, _lemoRound, LEMO_SPOTS, LEMO_ROUTE, LEMO_MEET_SPOTS,
                      LEMO_MEET_HOME, LEMO_MEET_LINKS, LEMO_SPAWN,
-                     teleportEntity, updatePlayerPosition, sendPositionWS, _dmSend };
+                     teleportEntity, updatePlayerPosition, sendPositionWS, _dmSend,
+                     _dmThread, _dmAct, _dmReact, _dmStartEdit, _dmDelete, _dmPlayFx, _dmPop, _emoImgs };
         } };
 }
 
@@ -17459,6 +17461,8 @@ function _pipSetupWindow(win) {
     if (!doc.body) { try { (doc.documentElement || doc).appendChild(doc.createElement('body')); } catch (e) {} }
     doc.documentElement.lang = 'ar';
     doc.documentElement.dir = 'rtl';
+    // Its canvas belongs to ITS window — the emoji wrap on ours doesn't reach it.
+    if (_emoImgs.active) { try { _emoPatchCanvasIn(win); } catch (e) {} }
 
     const fontLink = doc.createElement('link');
     fontLink.rel = 'stylesheet';
@@ -38049,6 +38053,7 @@ function _stkSetupUI() {
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'chat-emo';
+            b.dataset.e = em;              // an emoji may be swapped for its image: never read it back from the text
             b.textContent = em;
             frag.appendChild(b);
         }
@@ -38057,7 +38062,7 @@ function _stkSetupUI() {
             const b = e.target.closest && e.target.closest('.chat-emo');
             if (!b) return;
             e.preventDefault();
-            _emoInsert(b.textContent);
+            _emoInsert(b.dataset.e || b.textContent);
         });
         _emo.pop.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
     }
@@ -41588,10 +41593,14 @@ function _memReleaseIdle() {
 
     // Stickers — up to ~38 MB decoded once they've all been drawn; re-fetched on return.
     _stkRelease();
+    // The emoji images the canvas holds, and where each sits in a line — pure caches.
+    _emoRelease();
 
     // الرسائل الخاصة: pictures held in memory (up to ~14 MB of strings). The Cache API
     // still has every one of them, so a thread re-fills without touching Firebase.
     _dm.media.clear();
+    // …and the emoji picker's ~1,900 buttons, when it isn't on screen (rebuilt on its next open).
+    if (!_dm.open) { _dm.emoPanel = null; _dm.emoPanelKey = ''; }
 
     // Ambient-sound buffers the member has switched OFF (~20 MB of PCM each for the
     // long ones). An active sound keeps its buffer — it is playing. A switched-off
@@ -42262,6 +42271,377 @@ function setupSocialUI() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+//  رموز آبل التعبيرية — the same emoji on every device
+//  ---------------------------------------------------------------------------
+//  An emoji is drawn by whatever font the DEVICE has, so the same message read as
+//  Apple's on an iPhone, Google's on an Android and Microsoft's on Windows. Now
+//  every device shows Apple's.
+//
+//  HOW: `Emoji/<key>.webp` — one 72 px image per emoji, baked from the Mac's own
+//  font by tools/bake_emoji.mjs, with `Emoji/emoji.json` listing them (and giving
+//  the picker its categories, in the system keyboard's order).
+//   • An Apple device already draws these, so it does NOTHING here: no fetch of
+//     images, no observer, no canvas patch (`_emoWantImages`). The owner tests on
+//     a Mac — set localStorage `mdwnh_emoji_img` to '1' to see the image path.
+//   • DOM: ONE MutationObserver on <body> swaps an emoji in any text node for an
+//     <img class="emo" alt="😀"> (lazy-loaded). Text fields and anything
+//     contenteditable are skipped. Consequence: `el.textContent` no longer
+//     contains an emoji that was swapped — carry it in a data attribute instead
+//     (the pickers use `data-e`).
+//   • Canvas: fillText / measureText / strokeText are wrapped. A string with a
+//     known emoji is drawn with an EM SPACE in its place (an Apple emoji is exactly
+//     1em wide) and the image is drawn into that slot. WHERE the slot is comes from
+//     a hidden DOM line and a Range — the only way to get it right in mixed
+//     Arabic/English text, where the visual order is not the string's. Measured
+//     once per (font, direction, text) and cached; measureText never needs it.
+//   • An image that hasn't arrived leaves its slot empty for a moment; when it
+//     lands the baked sprites are dropped (`_sprInvalidateFonts`) so they re-bake
+//     with it. An emoji the set doesn't have is left to the device's own font.
+//   • Every URL carries `?h=<set hash>`: the service worker treats it as immutable
+//     (cache-first, never revalidated). The set is ~7 MB on disk and each device
+//     downloads only the emoji it actually sees.
+//
+//  Grep anchors: _emoImgs, emoLoadData, _emoActivate, _emoTextNode, _emoParse,
+//  _emoDrawSlots, _emoKey, emoRecent, emoNoteUsed, tools/bake_emoji.mjs.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const EMO_IMG_KEY        = 'mdwnh_emoji_img';      // '1' forces the images on, '0' off (testing)
+const EMO_RECENT_KEY     = 'mdwnh_emoji_recent';
+const EMO_RECENT_MAX     = 40;
+const EMO_DATA_TIMEOUT_MS = 9000;
+const EMO_CANVAS_IMG_MAX = 320;                    // decoded images kept for the canvas (72² → ~20 KB each)
+const EMO_PARSE_MAX      = 700;
+const EMO_DRAW_SCALE     = 1.06;                   // the image against its 1em slot
+const _EMO_SLOT          = String.fromCodePoint(0x2003);   // EM SPACE
+
+const _emoImgs = {
+    on: false, active: false, ready: false, loading: null,
+    v: '', cats: [], has: new Set(), miss: new Set(),
+    obs: null, imgs: new Map(), parse: new Map(), probe: null, range: null, invT: 0,
+};
+
+// One emoji, as a sequence: a flag, a keycap, a tag flag, a ZWJ chain, or a single
+// pictograph. A character that is TEXT by default (©, ▶, ✔) only counts with its
+// emoji selector (FE0F) or a skin tone after it.
+const _EMO_RE = /\p{Regional_Indicator}{2}|[#*0-9]\u{fe0f}?\u{20e3}|\u{1f3f4}[\u{e0020}-\u{e007e}]+\u{e007f}|\p{Extended_Pictographic}[\u{fe0f}\u{1f3fb}-\u{1f3ff}]?(?:\u{200d}\p{Extended_Pictographic}[\u{fe0f}\u{1f3fb}-\u{1f3ff}]?)+|\p{Emoji_Presentation}[\u{fe0f}\u{1f3fb}-\u{1f3ff}]?|\p{Extended_Pictographic}[\u{fe0f}\u{1f3fb}-\u{1f3ff}]/gu;
+const _EMO_ONE_RE = new RegExp('^(?:' + _EMO_RE.source + ')$', 'u');
+// A cheap "could there be one in here?" — nearly every string fails it at once.
+const _EMO_QUICK = /[\u{a9}\u{ae}\u{203c}-\u{3299}\u{1f000}-\u{1faff}]|\u{20e3}/u;
+
+function _emoKey(s) {
+    let k = '';
+    for (const ch of s) {
+        const c = ch.codePointAt(0);
+        if (c === 0xfe0f) continue;
+        k += (k ? '-' : '') + c.toString(16);
+    }
+    return k;
+}
+function _emoUrl(key) { return 'Emoji/' + key + '.webp?h=' + _emoImgs.v; }
+function _emoKnown(key) { return _emoImgs.has.has(key) && !_emoImgs.miss.has(key); }
+// Is this string exactly one emoji? (What a reaction may hold — checked on read too.)
+function emoIsOne(s) {
+    if (typeof s !== 'string' || !s || s.length > 28 || !_EMO_ONE_RE.test(s)) return false;
+    return !_emoImgs.ready || _emoImgs.has.has(_emoKey(s));
+}
+
+function _emoNativeApple() {
+    const ua = navigator.userAgent || '', pf = navigator.platform || '';
+    return /^(Mac|iPhone|iPad|iPod)/.test(pf) || /\b(Macintosh|iPhone|iPad|iPod)\b/.test(ua);
+}
+function _emoWantImages() {
+    let f = null;
+    try { f = localStorage.getItem(EMO_IMG_KEY); } catch (_) {}
+    if (f === '1') return true;
+    if (f === '0') return false;
+    return !_emoNativeApple();
+}
+
+// The list: categories for the picker, and the set of emoji that have an image.
+// Idempotent; a failed load may be tried again by the next caller.
+function emoLoadData() {
+    if (_emoImgs.ready) return Promise.resolve(true);
+    if (_emoImgs.loading) return _emoImgs.loading;
+    const ac = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+    const timer = setTimeout(() => { try { ac && ac.abort(); } catch (_) {} }, EMO_DATA_TIMEOUT_MS);
+    _emoImgs.loading = fetch('Emoji/emoji.json', { cache: 'no-store', signal: ac ? ac.signal : undefined })
+        .then(r => (r.ok ? r.json() : Promise.reject(new Error('emoji.json ' + r.status))))
+        .then((d) => {
+            const cats = [];
+            const has = new Set();
+            for (const c of (Array.isArray(d && d.cats) ? d.cats : [])) {
+                if (!c || !Array.isArray(c.e)) continue;
+                const e = c.e.filter(x => typeof x === 'string' && x.length <= 28 && _EMO_ONE_RE.test(x));
+                for (const x of e) has.add(_emoKey(x));
+                if (e.length) cats.push({ id: String(c.id || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24) || ('c' + cats.length), n: String(c.n || '').slice(0, 40), e });
+            }
+            for (const k of String((d && d.more) || '').split(' ')) if (/^[0-9a-f-]{2,80}$/.test(k)) has.add(k);
+            if (!cats.length) throw new Error('emoji.json empty');
+            _emoImgs.v = String(d.v || '').replace(/[^0-9a-z]/gi, '').slice(0, 16) || '1';
+            _emoImgs.cats = cats;
+            _emoImgs.has = has;
+            _emoImgs.ready = true;
+            return true;
+        })
+        .catch((err) => { console.warn('[emoji]', err && err.message); _emoImgs.loading = null; return false; })
+        .finally(() => clearTimeout(timer));
+    return _emoImgs.loading;
+}
+
+// ─── Recently used (this device) — the picker's first row, the reactions' order ──
+function emoRecent() {
+    try {
+        const a = JSON.parse(localStorage.getItem(EMO_RECENT_KEY) || '[]');
+        return Array.isArray(a) ? a.filter(emoIsOne).slice(0, EMO_RECENT_MAX) : [];
+    } catch (_) { return []; }
+}
+function emoNoteUsed(e) {
+    if (!emoIsOne(e)) return;
+    try {
+        const a = emoRecent().filter(x => x !== e);
+        a.unshift(e);
+        localStorage.setItem(EMO_RECENT_KEY, JSON.stringify(a.slice(0, EMO_RECENT_MAX)));
+    } catch (_) {}
+}
+
+// ─── DOM ─────────────────────────────────────────────────────────────────────
+const _EMO_SKIP_TAGS = { SCRIPT: 1, STYLE: 1, TEXTAREA: 1, INPUT: 1, SELECT: 1, OPTION: 1, TITLE: 1, NOSCRIPT: 1 };
+function _emoSkip(el) {
+    if (!el || el.nodeType !== 1) return true;
+    if (el.isContentEditable) return true;
+    for (let p = el; p && p.nodeType === 1; p = p.parentNode) {
+        if (_EMO_SKIP_TAGS[p.tagName] || p.namespaceURI !== 'http://www.w3.org/1999/xhtml') return true;
+        if (p === document.body) break;
+    }
+    return false;
+}
+function _emoNode(ch, key) {
+    const im = document.createElement('img');
+    im.className = 'emo';
+    im.alt = ch;
+    im.draggable = false;
+    im.decoding = 'async';
+    im.loading = 'lazy';
+    // The set said it has it and the file isn't there: back to the device's own glyph.
+    im.onerror = () => {
+        _emoImgs.miss.add(key);
+        if (im.isConnected) im.replaceWith(document.createTextNode(ch));
+    };
+    im.src = _emoUrl(key);
+    return im;
+}
+function _emoTextNode(node) {
+    const t = node.nodeValue;
+    if (!t || !_EMO_QUICK.test(t)) return;
+    const par = node.parentNode;
+    if (!par || _emoSkip(par)) return;
+    _EMO_RE.lastIndex = 0;
+    let m, last = 0, frag = null;
+    while ((m = _EMO_RE.exec(t))) {
+        const key = _emoKey(m[0]);
+        if (!_emoKnown(key)) continue;
+        if (!frag) frag = document.createDocumentFragment();
+        if (m.index > last) frag.appendChild(document.createTextNode(t.slice(last, m.index)));
+        frag.appendChild(_emoNode(m[0], key));
+        last = m.index + m[0].length;
+    }
+    if (!frag) return;
+    if (last < t.length) frag.appendChild(document.createTextNode(t.slice(last)));
+    par.replaceChild(frag, node);
+}
+function _emoWalk(root) {
+    if (!root) return;
+    if (root.nodeType === 3) { _emoTextNode(root); return; }
+    if (root.nodeType !== 1 || _EMO_SKIP_TAGS[root.tagName]) return;
+    // Collected first: replacing a node under a live walker loses its place.
+    const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const hits = [];
+    for (let n = w.nextNode(); n; n = w.nextNode()) if (_EMO_QUICK.test(n.nodeValue)) hits.push(n);
+    for (const n of hits) _emoTextNode(n);
+}
+
+// ─── Canvas ──────────────────────────────────────────────────────────────────
+function _emoCtxDir(ctx) {
+    const d = ctx.direction;
+    if (d === 'ltr' || d === 'rtl') return d;
+    const c = ctx.canvas;
+    if (!c || !c.isConnected) return 'ltr';
+    return c._emoDir || (c._emoDir = (getComputedStyle(c).direction === 'rtl' ? 'rtl' : 'ltr'));
+}
+// text → { s, slots: [{ i, key, fx }], w, em, dir, pos } or null (nothing to swap).
+function _emoParse(ctx, text) {
+    if (!_emoImgs.active || typeof text !== 'string' || text.length > 600 || !_EMO_QUICK.test(text)) return null;
+    const font = ctx.font, dir = _emoCtxDir(ctx);
+    const id = font + '\n' + dir + '\n' + text;
+    const hit = _emoImgs.parse.get(id);
+    if (hit !== undefined) return hit;
+    _EMO_RE.lastIndex = 0;
+    let m, last = 0, s = '';
+    const slots = [];
+    while ((m = _EMO_RE.exec(text))) {
+        const key = _emoKey(m[0]);
+        if (!_emoKnown(key)) continue;
+        s += text.slice(last, m.index);
+        slots.push({ i: s.length, key, fx: 0 });
+        s += _EMO_SLOT;
+        last = m.index + m[0].length;
+    }
+    let e = null;
+    if (slots.length) {
+        s += text.slice(last);
+        const px = /(\d+(?:\.\d+)?)px/.exec(font);
+        e = { s, slots, w: 0, em: px ? parseFloat(px[1]) : 16, dir, font, pos: false };
+    }
+    const cache = _emoImgs.parse;
+    if (cache.size >= EMO_PARSE_MAX) cache.delete(cache.keys().next().value);
+    cache.set(id, e);
+    return e;
+}
+// Where each slot sits along the line, as a fraction of its width. From a hidden DOM
+// line with the same font and direction: the engine that shapes canvas text shapes
+// this too, and a Range gives the box of one character wherever bidi put it.
+function _emoMeasureSlots(e, width) {
+    e.pos = true;
+    e.w = width;
+    let p = _emoImgs.probe;
+    if (!p) {
+        p = _emoImgs.probe = document.createElement('span');
+        p.setAttribute('aria-hidden', 'true');
+        // The canvas takes its paragraph direction from ctx.direction, never from the
+        // text — so the direction is set explicitly below, and the line is isolated.
+        p.style.cssText = 'position:fixed;left:0;top:-9999px;visibility:hidden;pointer-events:none;'
+            + 'white-space:pre;line-height:1;letter-spacing:0;unicode-bidi:isolate;';
+        document.body.appendChild(p);
+        _emoImgs.range = document.createRange();
+    }
+    try {
+        p.style.font = e.font;
+        p.style.direction = e.dir;
+        p.textContent = e.s;
+        const tn = p.firstChild, base = p.getBoundingClientRect(), r = _emoImgs.range;
+        const bw = base.width || 1;
+        for (const sl of e.slots) {
+            r.setStart(tn, sl.i);
+            r.setEnd(tn, sl.i + 1);
+            const b = r.getBoundingClientRect();
+            sl.fx = (b.left - base.left + b.width / 2) / bw;
+        }
+    } catch (_) {
+        for (const sl of e.slots) sl.fx = -1;       // drawn nowhere rather than in the wrong place
+    }
+}
+function _emoCanvasImg(key) {
+    const map = _emoImgs.imgs;
+    let rec = map.get(key);
+    if (rec) return rec.ok ? rec.img : null;
+    if (map.size >= EMO_CANVAS_IMG_MAX) {
+        const old = map.keys().next().value;
+        const o = map.get(old);
+        map.delete(old);
+        if (o) { o.img.onload = o.img.onerror = null; try { o.img.src = ''; } catch (_) {} }
+    }
+    const img = new Image();
+    rec = { img, ok: false };
+    map.set(key, rec);
+    img.decoding = 'async';
+    const good = () => { if (map.get(key) === rec) { rec.ok = true; _emoInvalidateSoon(); } };
+    img.onload = () => { if (img.decode) img.decode().then(good, good); else good(); };
+    img.onerror = () => {
+        _emoImgs.miss.add(key);
+        map.delete(key);
+        _emoImgs.parse.clear();                      // strings holding it go back to the device's glyph
+        _emoInvalidateSoon();
+    };
+    img.src = _emoUrl(key);
+    return null;
+}
+// An image landed (or turned out missing): whatever was baked without it is stale.
+function _emoInvalidateSoon() {
+    if (_emoImgs.invT) return;
+    _emoImgs.invT = setTimeout(() => {
+        _emoImgs.invT = 0;
+        try { _sprInvalidateFonts(); } catch (_) {}
+        try { perfWake(600); } catch (_) {}
+    }, 140);
+}
+function _emoDrawSlots(ctx, e, x, y, nativeMeasure) {
+    if (!e.pos) _emoMeasureSlots(e, nativeMeasure.call(ctx, e.s).width);
+    const w = e.w, al = ctx.textAlign, rtl = e.dir === 'rtl';
+    let left = x;
+    if (al === 'center') left = x - w / 2;
+    else if (al === 'right' || (al === 'end' && !rtl) || (al === 'start' && rtl)) left = x - w;
+    const em = e.em, size = em * EMO_DRAW_SCALE, bl = ctx.textBaseline;
+    // The glyph is the em square, its bottom edge 1/8 em under the baseline.
+    let cy = y - em * 0.375;
+    if (bl === 'middle') cy = y;
+    else if (bl === 'top' || bl === 'hanging') cy = y + em * 0.5;
+    else if (bl === 'bottom' || bl === 'ideographic') cy = y - em * 0.5;
+    for (const sl of e.slots) {
+        if (sl.fx < 0) continue;
+        const im = _emoCanvasImg(sl.key);
+        if (im) ctx.drawImage(im, left + sl.fx * w - size / 2, cy - size / 2, size, size);
+    }
+}
+function _emoPatchCanvasIn(win) {
+    if (!win) return;
+    const protos = [];
+    try { if (win.CanvasRenderingContext2D) protos.push(win.CanvasRenderingContext2D.prototype); } catch (_) {}
+    try { if (win.OffscreenCanvasRenderingContext2D) protos.push(win.OffscreenCanvasRenderingContext2D.prototype); } catch (_) {}
+    for (const P of protos) {
+        if (!P || P._emoPatched) continue;
+        const fill = P.fillText, stroke = P.strokeText, meas = P.measureText;
+        if (typeof fill !== 'function' || typeof meas !== 'function') continue;
+        P._emoPatched = true;
+        P.fillText = function (text, x, y, maxW) {
+            const e = (maxW === undefined) ? _emoParse(this, text) : null;
+            if (!e) return fill.apply(this, arguments);
+            fill.call(this, e.s, x, y);
+            _emoDrawSlots(this, e, x, y, meas);
+        };
+        if (typeof stroke === 'function') P.strokeText = function (text, x, y, maxW) {
+            const e = (maxW === undefined) ? _emoParse(this, text) : null;
+            return e ? stroke.call(this, e.s, x, y) : stroke.apply(this, arguments);
+        };
+        P.measureText = function (text) {
+            const e = _emoParse(this, text);
+            return meas.call(this, e ? e.s : text);
+        };
+    }
+}
+
+function _emoActivate() {
+    if (!_emoImgs.on || _emoImgs.active || !_emoImgs.ready) return;
+    _emoImgs.active = true;
+    try { _emoPatchCanvasIn(window); } catch (err) { console.warn('[emoji] canvas', err); }
+    try {
+        if (typeof MutationObserver !== 'undefined' && document.body) {
+            _emoImgs.obs = new MutationObserver((recs) => {
+                for (const r of recs) {
+                    if (r.type === 'characterData') _emoTextNode(r.target);
+                    else for (const n of r.addedNodes) _emoWalk(n);
+                }
+            });
+            _emoImgs.obs.observe(document.body, { childList: true, subtree: true, characterData: true });
+            _emoWalk(document.body);
+        }
+    } catch (err) { console.warn('[emoji] dom', err); }
+    _emoInvalidateSoon();
+}
+// Dropped with the other pure caches when the tab has been in the background a while.
+function _emoRelease() {
+    for (const rec of _emoImgs.imgs.values()) { rec.img.onload = rec.img.onerror = null; try { rec.img.src = ''; } catch (_) {} }
+    _emoImgs.imgs.clear();
+    _emoImgs.parse.clear();
+}
+function setupEmojiImages() {
+    if (!_emoWantImages()) return;                  // an Apple device draws its own
+    _emoImgs.on = true;
+    // Off the first paint; nothing waits on it (a failed load just leaves the
+    // device's own emoji in place, and the picker tries again when it opens).
+    setTimeout(() => { emoLoadData().then((ok) => { if (ok) _emoActivate(); }); }, 1500);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 //  الرسائل الخاصة — private messages (مقر ١.٥)
 //  ---------------------------------------------------------------------------
 //  A Telegram-style conversation between two members: it is SAVED, and you come back
@@ -42271,7 +42651,8 @@ function setupSocialUI() {
 //  WHERE IT LIVES — and why that is what keeps it cheap and the lobbies apart:
 //
 //    lobbies/{lobby}/dm/inbox/{me}/{peer}  = { t, m, f, n, pn, pa }   one row per conversation
-//    lobbies/{lobby}/dm/threads/{a~b}/{key} = { f, t, m | k }         the messages
+//    lobbies/{lobby}/dm/threads/{a~b}/{key} = { f, t, m? | k? | i, r?, rx?, e?, x? }   the messages
+//                                           = { f, t, d }                        a deleted one (tombstone)
 //
 //   • Everything is under lobbyPath(): a brother's client only ever reads and writes
 //     lobbies/male/dm, a sister's only lobbies/female/dm. The two can not reach each
@@ -42300,7 +42681,10 @@ function setupSocialUI() {
 //
 //  Grep anchors: DM_, _dm, dmOpen, dmOpenWith, dmCanMessage, _dmOnInbox, _dmSend,
 //  _dmAttachThread, _dmRenderList, _dmRenderThread, dmUpdate, setupDmUI; the reply and
-//  the reactions: _dmSetReply, _dmQuoteNode, _dmJumpTo, _dmReact, _dmPaintRx, _dmAct.
+//  the reactions: _dmSetReply, _dmQuoteNode, _dmJumpTo, _dmReact, _dmPaintRx, _dmAct,
+//  _dmRxQuick; editing and deleting: _dmStartEdit, _dmCommitEdit, _dmDelete,
+//  _dmApplyDeleted, _dmPeerRowPatch; the picker: _dmEmojiPanel, _dmPop; the effects:
+//  DM_FX, _dmPlayFx, _dmScreenFx, _dmFxUnread; also _dmFillText, _dmPaintDown, _dmFocusInput.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const DM_MAX_LEN        = 500;
@@ -42324,10 +42708,34 @@ const DM_MEDIA_CACHE    = 'maqr-dm-media-v1';   // Cache API — sw.js leaves `m
 const DM_MEDIA_MEM_MAX  = 40;
 const DM_MEDIA_MEM_CHARS = 14 * 1024 * 1024;   // …and at most this much of them held in memory
 // الرد والتفاعل — see «الرد والتفاعل» below.
-const DM_RX_LIST        = ['❤️', '😂', '👍', '👏', '😮', '😢'];   // the only values a reaction may hold (checked on read too)
+// A reaction may be ANY single emoji (checked on read too — emoIsOne). These are the
+// ones the menu offers first, after whatever was used recently.
+const DM_RX_LIST        = ['❤️', '😂', '👍', '👏', '😮', '😢', '🔥', '🙏', '🤲', '💯', '😍', '🤔', '😭', '👀', '🎉', '✅'];
+const DM_RX_QUICK_MAX   = 30;      // how many the menu's scrolling row holds
 const DM_RX_COOLDOWN_MS = 250;
 const DM_QUOTE_LEN      = 70;      // characters of the replied-to message carried inside the reply
 const DM_HOLD_MS        = 420;     // a finger held this long on a message opens its menu
+const DM_SWIPE_ARM_PX   = 10;      // a finger that moved this far, mostly sideways, is swiping the message
+const DM_SWIPE_GO_PX    = 56;      // let go past this → reply to it
+const DM_SWIPE_MAX_PX   = 84;
+const DM_DOWN_SHOW_PX   = 260;     // scrolled this far up → the «to the newest» button
+const DM_SEND_HOLD_MS   = 380;     // the send button held this long opens the effects
+const DM_FX_LIVE_MS     = 20000;   // a message this fresh plays its effect as it arrives
+// تأثيرات الرسائل — see «تأثيرات الرسائل» below. `scr` = it fills the drawer; otherwise it plays on the bubble.
+const DM_FX = {
+    slam:      { n: 'صدمة',         scr: false },
+    loud:      { n: 'صاخب',         scr: false },
+    gentle:    { n: 'لطيف',         scr: false },
+    ink:       { n: 'حبر سري',      scr: false },
+    confetti:  { n: 'قصاصات ملونة', scr: true },
+    balloons:  { n: 'بالونات',      scr: true },
+    fireworks: { n: 'ألعاب نارية',  scr: true },
+    love:      { n: 'قلوب',         scr: true },
+    lasers:    { n: 'ليزر',         scr: true },
+    echo:      { n: 'صدى',          scr: true },
+    spot:      { n: 'دائرة ضوء',    scr: true },
+};
+function _dmFxOk(x) { return typeof x === 'string' && Object.prototype.hasOwnProperty.call(DM_FX, x); }
 const _DM_KEY_RE        = /^\d{13}[a-z0-9]{4}$/;                    // a message key, as _dmSend mints it
 
 const _dm = {
@@ -42340,6 +42748,14 @@ const _dm = {
     unsubThread: null, unsubOnce: null, unsubChanged: null,
     unread: 0, lastSentAt: 0,
     reply: null,                 // the message being replied to: { k, f, p }
+    edit: null,                  // the message being edited: { k, was, p } (was = what the box held before)
+    delKey: '',                  // the message the delete warning is asking about
+    popFor: '',                  // the message the emoji picker is choosing a reaction for
+    emoPanel: null, emoPanelKey: '',
+    sw: null,                    // a swipe-to-reply in progress
+    below: 0,                    // messages that arrived while the reader was scrolled up
+    fxSeen: new Set(), fxT: 0, fxClearT: 0,
+    sendHoldT: 0, sendHeldAt: 0,
     act: '',                     // key of the message whose menu is open
     actShut: null,               // { k, at } — the menu a press just closed (so that press doesn't reopen it)
     lastRxAt: 0, holdT: 0, holdAt: 0,
@@ -42590,7 +43006,12 @@ function dmOpen(peer) {
         E.btn?.classList.add('active');
         _dmFitViewport();
         // display can't transition: always laid out, `.active` after a double rAF.
-        requestAnimationFrame(() => requestAnimationFrame(() => { if (_dm.open) E.panel.classList.add('active'); }));
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+            if (!_dm.open) return;
+            E.panel.classList.add('active');
+            _dmFocusInput();            // it could not take the focus while the panel was still hidden
+        }));
+        emoLoadData();                  // the picker's list (and what a reaction may be) — one small file, once
         // On a phone the panel is opaque and full-screen: the world pass stops once
         // the fade-in is over (see _worldCanvasHidden), never on frame one.
         clearTimeout(_dm.offT);
@@ -42614,6 +43035,11 @@ function dmClose() {
     _dmPop('');
     _dmZoom('');
     _dmAct('');
+    _dmStashDraft();
+    _dmConfirmClose();
+    _dmFxClear();
+    clearTimeout(_dm.fxT);
+    if (_dm.edit) _dmEndEdit(true);
     _dmSetReply(null);
     _dmSetAttachment(null);
     try { E.input.blur(); E.search.blur(); } catch (_) {}
@@ -42755,6 +43181,11 @@ function _dmRenderList(animate) {
 
 function _dmShowList() {
     const E = _dm.els;
+    _dmStashDraft();
+    _dmConfirmClose();
+    _dmFxClear();
+    clearTimeout(_dm.fxT);
+    _dm.edit = null;
     _dmDetachThread();
     _dmPop('');
     _dmAct('');
@@ -42813,19 +43244,27 @@ function _dmAttachThread(peer) {
 }
 
 // A stored record → a message, every field re-checked (it is another client's data).
-// null when there is nothing in it to show.
+// null when there is nothing in it to show. A DELETED message comes back as a
+// tombstone (`d`): it stays in the thread's list — pages are counted by it — and is
+// never drawn.
 function _dmParseMsg(key, v) {
     if (!v || typeof v !== 'object' || typeof key !== 'string') return null;
     const msg = {
         k: key,
         f: String(v.f || '').slice(0, 64),
         t: Number(v.t) || parseInt(key.slice(0, 13), 10) || 0,
-        m: typeof v.m === 'string' ? _dmCleanText(v.m, DM_MAX_LEN) : '',
-        s: (typeof v.k === 'string' && _stkSafeName(v.k)) ? v.k : '',
+        m: '',
+        s: '',
         i: null,
         r: null,                 // the message this one replies to: { k, f, p }
         rx: {},                  // member id → emoji
+        e: Number(v.e) > 0 ? 1 : 0,          // edited
+        d: !!v.d,                // deleted
+        x: _dmFxOk(v.x) ? v.x : '',          // the effect it was sent with
     };
+    if (msg.d) { msg.e = 0; msg.x = ''; return msg; }
+    if (typeof v.m === 'string') msg.m = _dmCleanText(v.m, DM_MAX_LEN);
+    if (typeof v.k === 'string' && _stkSafeName(v.k)) msg.s = v.k;
     if (v.i && typeof v.i === 'object') {
         const w = Math.round(+v.i.w), h = Math.round(+v.i.h);
         if (w >= 1 && h >= 1 && w <= 6000 && h <= 6000) msg.i = { w, h };
@@ -42838,7 +43277,7 @@ function _dmParseMsg(key, v) {
         let n = 0;
         for (const [u, e] of Object.entries(v.rx)) {
             if (n >= 4) break;
-            if (_dmKeyOk(u) && DM_RX_LIST.includes(e)) { msg.rx[u] = e; n++; }
+            if (_dmKeyOk(u) && emoIsOne(e)) { msg.rx[u] = e; n++; }
         }
     }
     return (msg.m || msg.s || msg.i) ? msg : null;
@@ -42849,34 +43288,53 @@ function _dmFindMsg(th, key) {
 }
 function _dmRxSig(rx) { return Object.keys(rx).sort().map(u => u + ':' + rx[u]).join('|'); }
 function _dmThreadShown(peer) { return _dm.open && _dm.view === 'thread' && _dm.peer === peer; }
+// The message drawn just above index `idx` (tombstones are skipped).
+function _dmPrevShown(th, idx) {
+    for (let i = idx - 1; i >= 0; i--) if (!th.msgs[i].d) return th.msgs[i];
+    return null;
+}
+function _dmShownCount(th) { let n = 0; for (const m of th.msgs) if (!m.d) n++; return n; }
+function _dmNearEnd() {
+    const box = _dm.els.msgs;
+    return box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+}
 
 function _dmOnMsg(peer, key, v) {
     const th = _dmThread(peer);
     if (typeof key !== 'string') return;
     if (th.keys.has(key)) {
-        // Already here. The one thing that changes on a stored message is its reactions.
+        // Already here. What can change on a stored message: its reactions, its words
+        // (an edit), and whether it still exists (a delete leaves a tombstone).
         const cur = _dmFindMsg(th, key), nw = _dmParseMsg(key, v);
-        if (!cur || !nw || _dmRxSig(cur.rx) === _dmRxSig(nw.rx)) return;
+        if (!cur || !nw || cur.d) return;
+        if (nw.d) { _dmApplyDeleted(peer, cur); return; }
+        const edited = nw.m !== cur.m || nw.e !== cur.e;
+        const reacted = _dmRxSig(cur.rx) !== _dmRxSig(nw.rx);
+        if (!edited && !reacted) return;
         const theirs = (nw.rx[peer] && nw.rx[peer] !== cur.rx[peer]) ? nw.rx[peer] : '';
-        cur.rx = nw.rx;
-        if (_dmThreadShown(peer)) _dmPaintRx(key, cur, theirs);
+        cur.m = nw.m; cur.e = nw.e; cur.rx = nw.rx;
+        if (!_dmThreadShown(peer)) return;
+        if (edited) _dmRepaintMsg(peer, cur);
+        else _dmPaintRx(key, cur, theirs);
         return;
     }
     const msg = _dmParseMsg(key, v);
     if (!msg) return;
     th.keys.add(key);
     const atEnd = !th.msgs.length || key > th.msgs[th.msgs.length - 1].k;
-    if (atEnd) th.msgs.push(msg);
-    else { th.msgs.push(msg); th.msgs.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0)); }
+    th.msgs.push(msg);
+    if (!atEnd) th.msgs.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
     if (msg.t > th.lastTs) th.lastTs = msg.t;
-    if (!(_dm.open && _dm.view === 'thread' && _dm.peer === peer)) return;
+    if (msg.d || !_dmThreadShown(peer)) return;
     const E = _dm.els;
     if (atEnd) {
         const box = E.msgs;
-        const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+        const near = _dmNearEnd();
         _dmPaintThreadState();
-        box.appendChild(_dmMsgNode(msg, th.msgs[th.msgs.length - 2] || null, true));
+        box.appendChild(_dmMsgNode(msg, _dmPrevShown(th, th.msgs.length - 1), true));
         if (near || msg.f === _dm.me) box.scrollTop = box.scrollHeight;
+        else if (th.loaded) { _dm.below++; _dmPaintDown(); }
+        _dmFxArrived(peer, th, msg);
     } else {
         _dmRenderThread();
     }
@@ -42898,8 +43356,46 @@ function _dmSameDay(a, b) {
     return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
 }
 
-// One message → its DOM (a day divider first, when the day turned). Text goes in by
-// textContent only — it is another member's data.
+// A message's words → nodes: plain text, and a link for every http(s) address in it.
+// Text goes in as text nodes only — it is another member's data.
+const _DM_URL_RE = /\bhttps?:\/\/[^\s<>"']+/gi;
+function _dmFillText(el, text) {
+    el.textContent = '';
+    if (!text) return;
+    _DM_URL_RE.lastIndex = 0;
+    let m, last = 0;
+    while ((m = _DM_URL_RE.exec(text))) {
+        const url = m[0].replace(/[.,!?؟،؛:)\]}»]+$/, '');     // the sentence's own punctuation is not the address
+        if (url.length < 11) continue;
+        if (m.index > last) el.appendChild(document.createTextNode(text.slice(last, m.index)));
+        const a = document.createElement('a');
+        a.className = 'dm-link';
+        a.href = url;                         // only ever http:// or https:// — the pattern admits nothing else
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer nofollow';
+        a.dir = 'ltr';
+        a.textContent = url;
+        el.appendChild(a);
+        last = m.index + url.length;
+        _DM_URL_RE.lastIndex = last;
+    }
+    if (last < text.length) el.appendChild(document.createTextNode(text.slice(last)));
+}
+// The line under a message: a small «معدّلة» tag when it was edited, then the time.
+function _dmFillClock(tm, msg) {
+    tm.textContent = '';
+    if (msg.e) {
+        const tag = document.createElement('i');
+        tag.className = 'dm-ed';
+        tag.textContent = 'معدّلة';
+        tm.appendChild(tag);
+    }
+    let c = '';
+    try { c = new Date(msg.t).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' }); } catch (_) {}
+    tm.appendChild(document.createTextNode(c));
+}
+
+// One message → its DOM (a day divider first, when the day turned).
 function _dmMsgNode(msg, prev, fresh) {
     const frag = document.createDocumentFragment();
     if (!prev || !_dmSameDay(prev.t, msg.t)) {
@@ -42912,7 +43408,8 @@ function _dmMsgNode(msg, prev, fresh) {
     const mine = msg.f === _dm.me;
     const row = document.createElement('div');
     row.className = 'dm-msg' + (mine ? ' mine' : '') + (fresh ? ' fresh' : '')
-        + ((prev && prev.f === msg.f && msg.t - prev.t < DM_GROUP_MS) ? ' cont' : '');
+        + ((prev && prev.f === msg.f && msg.t - prev.t < DM_GROUP_MS) ? ' cont' : '')
+        + (msg.e ? ' ed' : '') + (msg.x === 'ink' ? ' fx-ink' : '');
     row.dataset.k = msg.k;
     const bub = document.createElement('div');
     // A sticker has no bubble to hold the quote, so its quote stands above it.
@@ -42934,7 +43431,7 @@ function _dmMsgNode(msg, prev, fresh) {
             const cap = document.createElement('div');
             cap.className = 'dm-cap';
             cap.dir = 'auto';
-            cap.textContent = msg.m;
+            _dmFillText(cap, msg.m);
             bub.appendChild(cap);
         }
         _dmWatchPic(frame);
@@ -42947,20 +43444,17 @@ function _dmMsgNode(msg, prev, fresh) {
         img.decoding = 'async';
         img.src = _stkUrl(msg.s);
         bub.appendChild(img);
-    } else if (msg.r) {
-        // A reply: the quote is already inside the bubble, the words go under it.
-        bub.className = 'dm-bub';
+    } else {
+        // Its own element (not the bubble's bare text): a reply's quote sits above it,
+        // and the secret-ink effect blurs it without blurring the bubble.
+        const big = !msg.r && msg.m.length <= 12 && _DM_EMOJI_ONLY.test(msg.m);
+        bub.className = 'dm-bub' + (big ? ' big' : '');
+        if (big) row.classList.add('bare');
         const tx = document.createElement('div');
         tx.className = 'dm-txt';
         tx.dir = 'auto';
-        tx.textContent = msg.m;
+        _dmFillText(tx, msg.m);
         bub.appendChild(tx);
-    } else {
-        const big = msg.m.length <= 12 && _DM_EMOJI_ONLY.test(msg.m);
-        bub.className = 'dm-bub' + (big ? ' big' : '');
-        if (big) row.classList.add('bare');
-        bub.dir = 'auto';
-        bub.textContent = msg.m;
     }
     // The bubble and, beside it, the button a mouse gets on hover (a phone taps the
     // bubble itself — see setupDmUI).
@@ -42975,7 +43469,7 @@ function _dmMsgNode(msg, prev, fresh) {
     const rx = _dmRxNode(msg, '');
     if (rx) row.appendChild(rx);
     const tm = document.createElement('time');
-    try { tm.textContent = new Date(msg.t).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' }); } catch (_) {}
+    _dmFillClock(tm, msg);
     row.appendChild(tm);
     frag.appendChild(row);
     return frag;
@@ -42986,7 +43480,7 @@ function _dmPaintThreadState() {
     const th = _dmThread(_dm.peer);
     let st = E.msgs.querySelector('.dm-state');
     const want = !th.loaded ? 'جارٍ التحميل…'
-        : !th.msgs.length ? 'لا رسائل بعد — ابدأ المحادثة 👋'
+        : !_dmShownCount(th) ? (th.more ? 'رسائل أقدم' : 'لا رسائل بعد — ابدأ المحادثة 👋')
         : th.more ? 'رسائل أقدم' : '';
     if (!want) { if (st) st.remove(); return; }
     if (!st) {
@@ -42995,7 +43489,8 @@ function _dmPaintThreadState() {
         st.className = 'dm-state';
         E.msgs.prepend(st);
     }
-    st.textContent = th.loading ? 'جارٍ التحميل…' : want;
+    const txt = th.loading ? 'جارٍ التحميل…' : want;
+    if (st.dataset.t !== txt) { st.dataset.t = txt; st.textContent = txt; }
     st.classList.toggle('more', want === 'رسائل أقدم');
 }
 
@@ -43005,10 +43500,36 @@ function _dmRenderThread() {
     _dmAct('');                      // its row is about to be rebuilt
     const frag = document.createDocumentFragment();
     let prev = null;
-    for (const m of th.msgs) { frag.appendChild(_dmMsgNode(m, prev, false)); prev = m; }
+    for (const m of th.msgs) {
+        if (m.d) continue;
+        frag.appendChild(_dmMsgNode(m, prev, false));
+        prev = m;
+    }
     E.msgs.textContent = '';
     E.msgs.appendChild(frag);
     _dmPaintThreadState();
+}
+// Rebuild the list where the reader is: what they were looking at stays put.
+function _dmRerenderKeep() {
+    const box = _dm.els.msgs;
+    const before = box.scrollHeight - box.scrollTop;
+    _dmRenderThread();
+    box.scrollTop = box.scrollHeight - before;
+}
+// One message changed (an edit): its row alone is rebuilt, in place.
+function _dmRepaintMsg(peer, msg) {
+    const E = _dm.els;
+    if (!E || !_dmThreadShown(peer) || !_DM_KEY_RE.test(msg.k)) return;
+    const row = E.msgs.querySelector(`.dm-msg[data-k="${msg.k}"]`);
+    if (!row) return;
+    const th = _dmThread(peer);
+    const near = _dmNearEnd();
+    if (_dm.act === msg.k) _dmAct('');
+    const nw = _dmMsgNode(msg, _dmPrevShown(th, th.msgs.indexOf(msg)), false).querySelector('.dm-msg');
+    if (!nw) return;
+    row.replaceWith(nw);
+    _dmRefreshQuotes(msg.k);
+    if (near) E.msgs.scrollTop = E.msgs.scrollHeight;
 }
 
 function _dmLoadOlder() {
@@ -43062,11 +43583,16 @@ function _dmPaintPeerHead() {
 
 function _dmShowThread(peer) {
     const E = _dm.els;
+    _dmStashDraft();
     _dmPop('');
     _dmAct('');
-    _dmSetReply(null);
+    _dmConfirmClose();
+    _dm.edit = null;
+    _dm.reply = null;
+    _dmPaintBar();
     _dm.view = 'thread';
     _dm.peer = peer;
+    _dm.below = 0;
     E.viewList.hidden = true;
     E.viewThread.hidden = false;
     E.peerKey = '';
@@ -43075,16 +43601,44 @@ function _dmShowThread(peer) {
     E.compose.classList.toggle('is-off', !can);
     E.note.hidden = can;
     if (!can) E.note.textContent = 'لا يمكن مراسلة هذا العضو الآن.';
-    E.input.value = '';
+    const th = _dmThread(peer);
+    E.input.value = can ? (th.draft || '') : '';
     _dmSetAttachment(null);
     _dmAutosize();
     _dmRenderThread();
     E.msgs.scrollTop = E.msgs.scrollHeight;
+    _dmPaintDown();
+    // What I haven't read yet may carry an effect: the newest one plays once the
+    // unread stretch has arrived (see _dmFxUnread).
+    const row = _dm.inbox[peer];
+    th.fxUnread = (row && row.n > 0) ? row.n : 0;
+    clearTimeout(_dm.fxT);
+    if (th.fxUnread) _dm.fxT = setTimeout(() => _dmFxUnread(peer), 900);
     _dmAttachThread(peer);
     _dmMarkRead();
-    // A PC gets the caret at once; a phone waits for a tap (focusing here would throw
-    // the keyboard up over a thread nobody has read yet).
-    if (can && !isMobile()) { try { E.input.focus({ preventScroll: true }); } catch (_) {} }
+    _dmFocusInput();
+}
+// The caret goes straight into the text box on a PC — a thread is opened to write in.
+// (A phone waits for a tap: focusing would throw the keyboard up over a thread nobody
+// has read yet.) The panel is `visibility: hidden` until `.active` lands, and a hidden
+// element can't take the focus — so dmOpen calls this again once it has.
+function _dmFocusInput() {
+    const E = _dm.els;
+    if (!E || isMobile() || !_dm.open || _dm.view !== 'thread' || !dmCanMessage(_dm.peer)) return;
+    if (!E.panel.classList.contains('active')) return;
+    try {
+        void E.panel.offsetWidth;            // the visibility change has to be computed first
+        E.input.focus({ preventScroll: true });
+        const n = E.input.value.length;
+        E.input.setSelectionRange(n, n);
+    } catch (_) {}
+}
+// What was being typed in a thread waits there for the next visit (this session only).
+function _dmStashDraft() {
+    const E = _dm.els;
+    if (!E || _dm.view !== 'thread' || !_dm.peer) return;
+    const th = _dmThread(_dm.peer);
+    th.draft = _dm.edit ? (_dm.edit.was || '') : E.input.value;
 }
 
 function _dmMarkRead() {
@@ -43109,7 +43663,7 @@ function _dmGhostArm(peer) {
     } catch (_) {}
 }
 
-function _dmSend(text, stk, att) {
+function _dmSend(text, stk, att, fx) {
     const peer = _dm.peer;
     if (!_dm.open || _dm.view !== 'thread' || !peer) return false;
     if (!dmCanMessage(peer)) { _libToast('لا يمكن مراسلة هذا العضو الآن'); return false; }
@@ -43125,6 +43679,7 @@ function _dmSend(text, stk, att) {
     if (att) msg.i = { w: att.w, h: att.h };
     const rp = _dm.reply;
     if (rp && _DM_KEY_RE.test(rp.k) && rp.p) msg.r = { k: rp.k, f: rp.f, p: rp.p };
+    if (_dmFxOk(fx)) msg.x = fx;
     const preview = stk ? DM_STK_LABEL
         : att ? (DM_IMG_LABEL + (m ? ' ' + m.replace(/\s+/g, ' ') : '')).slice(0, DM_PREVIEW)
         : m.replace(/\s+/g, ' ').slice(0, DM_PREVIEW);
@@ -43164,11 +43719,13 @@ function _dmAutosize() {
     ta.style.height = 'auto';
     ta.style.height = Math.min(112, Math.max(36, ta.scrollHeight)) + 'px';
 }
-function _dmSubmit() {
+function _dmSubmit(fx) {
     const E = _dm.els;
     if (_dm.attBusy) return;                    // the picture is still being prepared
-    if (_dmSend(E.input.value, '', _dm.att)) {
+    if (_dm.edit) { _dmCommitEdit(E.input.value); return; }
+    if (_dmSend(E.input.value, '', _dm.att, fx)) {
         E.input.value = '';
+        _dmThread(_dm.peer).draft = '';
         _dmAutosize();
         _dmPop('');
         _dmSetAttachment(null);
@@ -43276,6 +43833,7 @@ function _dmSetAttachment(att) {
 function _dmPickFile(file) {
     const E = _dm.els;
     if (!file || !E || _dm.attBusy) return;
+    if (_dm.edit) _dmEndEdit(true);            // a picture is a new message, not part of an edit
     if (!_dm.open || _dm.view !== 'thread' || !dmCanMessage(_dm.peer)) { _libToast('افتح محادثة أولًا لإرسال صورة'); return; }
     // Pictures and GIFs only — by type, or by extension when the system gives no type.
     // (A video dropped or picked here is refused; the picker itself only lists these.)
@@ -43365,19 +43923,41 @@ function _dmQuoteText(msg) {
     return t.slice(0, DM_QUOTE_LEN);
 }
 
+// What a quote says NOW: the original's current words when it is loaded (it may have
+// been edited since, or deleted), otherwise the copy the reply carries.
+function _dmQuoteNow(r) {
+    const orig = _dmFindMsg(_dmThread(_dm.peer), r.k);
+    if (orig && orig.d) return { p: 'رسالة محذوفة', gone: true };
+    if (orig) return { p: _dmQuoteText(orig) || r.p, gone: false };
+    return { p: r.p, gone: false };
+}
 function _dmQuoteNode(r, solo) {
     const q = document.createElement('button');
     q.type = 'button';
     q.className = 'dm-quote' + (solo ? ' solo' : '');
     q.dataset.to = r.k;
+    q.dataset.p = r.p;
     q.dir = 'rtl';
     const nm = document.createElement('b');
     nm.textContent = r.f === _dm.me ? 'أنت' : _dmPeerInfo(_dm.peer).name;
     const tx = document.createElement('span');
     tx.dir = 'auto';
-    tx.textContent = r.p;
+    const now = _dmQuoteNow(r);
+    tx.textContent = now.p;
+    q.classList.toggle('gone', now.gone);
     q.append(nm, tx);
     return q;
+}
+// A message was edited or deleted: every quote of it on screen follows.
+function _dmRefreshQuotes(key) {
+    const E = _dm.els;
+    if (!E || !_DM_KEY_RE.test(key)) return;
+    for (const q of E.msgs.querySelectorAll(`.dm-quote[data-to="${key}"]`)) {
+        const now = _dmQuoteNow({ k: key, p: q.dataset.p || '' });
+        const tx = q.querySelector('span');
+        if (tx) tx.textContent = now.p;
+        q.classList.toggle('gone', now.gone);
+    }
 }
 
 // Scroll the list (never scrollIntoView — it scrolls every ancestor) to a message and
@@ -43400,20 +43980,354 @@ function _dmJumpTo(key) {
     setTimeout(() => row.classList.remove('flash'), 1500);
 }
 
+// The bar above the text box: the message being replied to, or the one being edited.
+function _dmPaintBar() {
+    const E = _dm.els;
+    if (!E) return;
+    const near = _dmNearEnd();
+    const ed = _dm.edit, rp = _dm.reply;
+    E.reply.hidden = !(ed || rp);
+    E.reply.classList.toggle('edit', !!ed);
+    E.compose.classList.toggle('editing', !!ed);
+    if (ed) {
+        E.replyName.textContent = 'تعديل الرسالة';
+        E.replyText.textContent = ed.p;
+    } else if (rp) {
+        E.replyName.textContent = rp.f === _dm.me ? 'الرد على رسالتك' : 'الرد على ' + _dmPeerInfo(_dm.peer).name;
+        E.replyText.textContent = rp.p;
+    }
+    // The bar takes its height from the list: keep the newest message in view.
+    if (near && _dm.view === 'thread') E.msgs.scrollTop = E.msgs.scrollHeight;
+}
 function _dmSetReply(msg) {
     const E = _dm.els;
     if (!E) return;
-    const box = E.msgs;
-    const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+    if (msg && _dm.edit) _dmEndEdit(true);
     _dm.reply = msg ? { k: msg.k, f: msg.f, p: _dmQuoteText(msg) } : null;
-    E.reply.hidden = !_dm.reply;
-    if (_dm.reply) {
-        E.replyName.textContent = msg.f === _dm.me ? 'الرد على رسالتك' : 'الرد على ' + _dmPeerInfo(_dm.peer).name;
-        E.replyText.textContent = _dm.reply.p;
-        try { E.input.focus({ preventScroll: true }); } catch (_) {}
+    _dmPaintBar();
+    if (_dm.reply) { try { E.input.focus({ preventScroll: true }); } catch (_) {} }
+}
+
+// ─── التعديل والحذف — editing a message, deleting one ────────────────────────
+// Both are changes to the message record itself, so they reach the other side through
+// the listener the open thread already has (child_changed) — no new node, no new read.
+//   • AN EDIT writes the new words and `e` (when). The row is rebuilt in place and
+//     wears «معدّلة». A picture's caption can be edited (and emptied); a sticker has
+//     nothing to edit. No time limit.
+//   • A DELETE replaces the record with a tombstone `{ f, t, d }` and removes the
+//     picture's bytes. A tombstone — not a removal — because the thread listens to a
+//     `limitToLast` window: there, child_removed also fires for every message that
+//     merely slides out of the window, so a real removal can't be told apart; and a
+//     thread cached by a closed panel only learns of a delete by re-reading a record
+//     that still exists. Tombstones are never drawn. Only the author may delete, and
+//     only after a warning — it can't be undone.
+//   • When the message was the conversation's newest, both inbox rows' preview
+//     follows (mine by update, theirs by a transaction that touches it only if it
+//     still shows that message).
+
+function _dmPreviewOf(msg) {
+    const body = (msg.m || '').replace(/\s+/g, ' ');
+    return (msg.s ? DM_STK_LABEL : msg.i ? (DM_IMG_LABEL + (body ? ' ' + body : '')) : body).slice(0, DM_PREVIEW);
+}
+// Their inbox row for this conversation, changed ONLY while it still shows message `t`.
+function _dmPeerRowPatch(peer, t, fn) {
+    runTransaction(ref(database, `${_dm.base}/inbox/${peer}/${_dm.me}`), (cur) => {
+        if (cur == null) return cur;             // nothing known locally: the server's copy is fetched and this runs again
+        if (Number(cur.t) !== t) return;         // a newer message is on their row — leave it
+        return fn(cur);
+    }).catch(() => {});
+}
+
+function _dmStartEdit(msg) {
+    const E = _dm.els;
+    if (!E || !msg || msg.d || msg.s || msg.f !== _dm.me || !_dmThreadShown(_dm.peer)) return;
+    if (!dmCanMessage(_dm.peer)) { _libToast('لا يمكن مراسلة هذا العضو الآن'); return; }
+    const was = _dm.edit ? _dm.edit.was : E.input.value;      // what the box held goes back when the edit ends
+    _dm.reply = null;
+    _dmSetAttachment(null);
+    _dmPop('');
+    _dm.edit = { k: msg.k, was, p: _dmQuoteText(msg) || DM_IMG_LABEL };
+    E.input.value = msg.m;
+    _dmAutosize();
+    _dmPaintBar();
+    try {
+        E.input.focus({ preventScroll: true });
+        const n = E.input.value.length;
+        E.input.setSelectionRange(n, n);
+    } catch (_) {}
+}
+function _dmEndEdit(restore) {
+    const E = _dm.els, ed = _dm.edit;
+    if (!E || !ed) return;
+    _dm.edit = null;
+    E.input.value = restore ? (ed.was || '') : '';
+    _dmAutosize();
+    _dmPaintBar();
+}
+function _dmCommitEdit(text) {
+    const peer = _dm.peer, ed = _dm.edit;
+    if (!ed || !_dmThreadShown(peer)) return;
+    const msg = _dmFindMsg(_dmThread(peer), ed.k);
+    if (!msg || msg.d || msg.f !== _dm.me) { _dmEndEdit(true); return; }
+    const m = _dmCleanText(text, DM_MAX_LEN);
+    if (!m && !msg.i) { _libToast('لا يمكن ترك الرسالة فارغة — احذفها إن أردت'); return; }
+    if (m === msg.m) { _dmEndEdit(true); return; }
+    if (!dmCanMessage(peer)) { _libToast('لا يمكن مراسلة هذا العضو الآن'); return; }
+    const was = { m: msg.m, e: msg.e };
+    msg.m = m; msg.e = 1;
+    _dmRepaintMsg(peer, msg);
+    const node = `${_dm.base}/threads/${_dmPair(peer)}/${msg.k}`;
+    const up = { [node + '/m']: m || null, [node + '/e']: Math.round(serverNow()) };
+    const row = _dm.inbox[peer];
+    const newest = !!(row && row.t === msg.t);
+    const oldPreview = newest ? row.m : '';
+    if (newest) {
+        const pv = _dmPreviewOf(msg);
+        row.m = pv;
+        up[`${_dm.base}/inbox/${_dm.me}/${peer}/m`] = pv;
+        _dmPeerRowPatch(peer, msg.t, (cur) => Object.assign({}, cur, { m: pv }));
     }
-    // The bar takes its height from the list: keep the newest message in view.
-    if (near && _dm.view === 'thread') box.scrollTop = box.scrollHeight;
+    _dmGhostArm(peer);
+    update(ref(database), up).catch(() => {
+        msg.m = was.m; msg.e = was.e;
+        if (newest && _dm.inbox[peer]) _dm.inbox[peer].m = oldPreview;
+        _dmRepaintMsg(peer, msg);
+        _libToast('تعذّر حفظ التعديل');
+    });
+    _dmEndEdit(true);
+}
+
+// The warning before a delete. '' / no message closes it.
+function _dmAskDelete(msg) {
+    const E = _dm.els;
+    if (!E || !msg || msg.d || msg.f !== _dm.me) return;
+    _dm.delKey = msg.k;
+    E.confirmText.textContent = 'ستُحذف عندك وعند ' + _dmPeerInfo(_dm.peer).name + '، ولا يمكن استرجاعها.';
+    E.confirm.hidden = false;
+}
+function _dmConfirmClose() {
+    _dm.delKey = '';
+    if (_dm.els && _dm.els.confirm) _dm.els.confirm.hidden = true;
+}
+function _dmDelete(key) {
+    const peer = _dm.peer;
+    if (!_dmThreadShown(peer) || !_DM_KEY_RE.test(key || '')) return;
+    const th = _dmThread(peer);
+    const msg = _dmFindMsg(th, key);
+    if (!msg || msg.d || msg.f !== _dm.me) return;
+    const pair = _dmPair(peer);
+    const keep = { m: msg.m, s: msg.s, i: msg.i, r: msg.r, rx: msg.rx, e: msg.e, x: msg.x };
+    const up = { [`${_dm.base}/threads/${pair}/${key}`]: { f: _dm.me, t: msg.t, d: Math.round(serverNow()) } };
+    if (msg.i) up[`${_dm.base}/media/${pair}/${key}`] = null;
+    // It was the newest message: the two inbox rows step back to the one before it.
+    const row = _dm.inbox[peer];
+    const rowWas = row ? Object.assign({}, row) : null;
+    if (row && row.t === msg.t) {
+        const prev = _dmPrevShown(th, th.msgs.indexOf(msg));
+        const pv = prev ? { t: prev.t, m: _dmPreviewOf(prev), f: prev.f } : { t: msg.t, m: 'رسالة محذوفة', f: _dm.me };
+        Object.assign(row, pv);
+        const mine = `${_dm.base}/inbox/${_dm.me}/${peer}`;
+        up[mine + '/t'] = pv.t; up[mine + '/m'] = pv.m; up[mine + '/f'] = pv.f;
+        _dmPeerRowPatch(peer, msg.t, (cur) => {
+            const n = Math.round(+cur.n) || 0;
+            return Object.assign({}, cur, pv, { n: Math.max(0, n - (n > 0 ? 1 : 0)) });   // one unread less, if they hadn't read it
+        });
+    }
+    _dmGhostArm(peer);
+    _dmApplyDeleted(peer, msg);
+    update(ref(database), up).catch(() => {
+        Object.assign(msg, keep, { d: false });
+        if (rowWas) _dm.inbox[peer] = rowWas;
+        if (_dmThreadShown(peer)) _dmRerenderKeep();
+        _libToast('تعذّر حذف الرسالة');
+    });
+}
+// A message is gone (I deleted it, or the other side did): it becomes a tombstone and
+// leaves the screen.
+function _dmApplyDeleted(peer, msg) {
+    msg.d = true;
+    msg.m = ''; msg.s = ''; msg.i = null; msg.r = null; msg.rx = {}; msg.e = 0; msg.x = '';
+    _dm.media.delete(_dmPair(peer) + '/' + msg.k);
+    if (!_dmThreadShown(peer)) return;
+    const E = _dm.els;
+    if (_dm.act === msg.k) _dmAct('');
+    if (_dm.popFor === msg.k) _dmPop('');
+    if (_dm.delKey === msg.k) _dmConfirmClose();
+    if (_dm.edit && _dm.edit.k === msg.k) _dmEndEdit(true);
+    if (_dm.reply && _dm.reply.k === msg.k) _dmSetReply(null);
+    const row = _DM_KEY_RE.test(msg.k) && E.msgs.querySelector(`.dm-msg[data-k="${msg.k}"]`);
+    if (!row) { _dmRefreshQuotes(msg.k); return; }
+    // It shrinks away, then the list is rebuilt (the day lines and the grouping of
+    // the messages around it may have changed).
+    row.classList.add('out');
+    setTimeout(() => { if (_dmThreadShown(peer)) _dmRerenderKeep(); }, 230);
+}
+
+// ─── تأثيرات الرسائل — message effects ───────────────────────────────────────
+// A message may carry `x`, one of DM_FX: four that play on the BUBBLE (صدمة، صاخب،
+// لطيف، حبر سري) and seven that fill the drawer (قصاصات، بالونات، ألعاب نارية، قلوب،
+// ليزر، صدى، دائرة ضوء). Sent by HOLDING the send button (a right-click on a PC).
+//   • It plays when the message arrives while the thread is open, and — for what
+//     came in while it was closed — the newest unread one plays once, on opening.
+//     «أعد التأثير» in the message's menu replays it.
+//   • Everything is CSS: elements animating transform / opacity only, built for one
+//     burst and removed after it. No timer loop, no canvas, nothing left running.
+//     `prefers-reduced-motion` gets the message without the show.
+//   • Secret ink is a STATE, not a burst: the words stay blurred until hovered or
+//     tapped. The blur is static (invariant 12).
+function _dmFxReduced() {
+    try { return window.matchMedia('(prefers-reduced-motion: reduce)').matches; } catch (_) { return false; }
+}
+function _dmFxArrived(peer, th, msg) {
+    // Nobody is looking (the tab is in the background): it waits, with the other
+    // unread ones, for the moment they come back (see the visibilitychange wiring).
+    if (document.hidden) {
+        if (msg.f !== _dm.me && msg.x) th.fxUnread = (th.fxUnread | 0) + 1;
+        return;
+    }
+    // The unread stretch is still arriving (the thread has just opened): wait for it.
+    if (th.fxUnread > 0) {
+        clearTimeout(_dm.fxT);
+        _dm.fxT = setTimeout(() => _dmFxUnread(peer), 420);
+        return;
+    }
+    if (!msg.x || !th.loaded || _dm.fxSeen.has(msg.k)) return;
+    if (Math.abs(serverNow() - msg.t) > DM_FX_LIVE_MS) { _dm.fxSeen.add(msg.k); return; }
+    _dmPlayFx(msg);
+}
+function _dmFxUnread(peer) {
+    const th = _dmThread(peer);
+    if (document.hidden) return;                 // kept for when the tab is looked at again
+    let n = th.fxUnread | 0;
+    th.fxUnread = 0;
+    if (!_dmThreadShown(peer)) return;
+    let play = null;
+    for (let i = th.msgs.length - 1; i >= 0 && n > 0; i--) {
+        const m = th.msgs[i];
+        if (m.d || m.f === _dm.me) continue;
+        n--;
+        if (!m.x || _dm.fxSeen.has(m.k)) continue;
+        _dm.fxSeen.add(m.k);
+        if (!play) play = m;
+    }
+    if (play) _dmPlayFx(play);
+}
+function _dmPlayFx(msg) {
+    const E = _dm.els;
+    if (!E || !msg || msg.d || !_dmFxOk(msg.x) || !_dmThreadShown(_dm.peer)) return;
+    _dm.fxSeen.add(msg.k);
+    const row = _DM_KEY_RE.test(msg.k) && E.msgs.querySelector(`.dm-msg[data-k="${msg.k}"]`);
+    if (!row) return;
+    const kind = msg.x;
+    if (kind === 'ink') { row.classList.remove('ink-open'); return; }
+    if (_dmFxReduced()) return;
+    if (!DM_FX[kind].scr) {
+        row.classList.remove('fx-slam', 'fx-loud', 'fx-gentle');
+        void row.offsetWidth;                    // restart it if it is still playing
+        row.classList.add('fx-' + kind);
+        setTimeout(() => row.classList.remove('fx-' + kind), 2600);
+        if (kind === 'slam') setTimeout(() => {
+            if (!row.isConnected) return;
+            E.msgs.classList.add('fx-quake');
+            setTimeout(() => E.msgs.classList.remove('fx-quake'), 460);
+        }, 290);
+        return;
+    }
+    _dmScreenFx(kind, row, msg);
+}
+const DM_FX_COLORS = ['#F04D39', '#F7B500', '#3BB9AB', '#3D7DD8', '#ff8fb1', '#ffffff'];
+function _dmFxClear() {
+    const L = _dm.els && _dm.els.fx;
+    clearTimeout(_dm.fxClearT);
+    if (!L) return;
+    L.className = 'dm-fx';
+    L.textContent = '';
+    L.removeAttribute('style');
+}
+function _dmScreenFx(kind, row, msg) {
+    const E = _dm.els, L = E.fx;
+    if (!L) return;
+    _dmFxClear();
+    const cr = E.card.getBoundingClientRect();
+    const br = (row.querySelector('.dm-bub') || row).getBoundingClientRect();
+    const W = cr.width, H = cr.height;
+    const bx = Math.round(br.left + br.width / 2 - cr.left), by = Math.round(br.top + br.height / 2 - cr.top);
+    const rnd = (a, b, d) => (a + Math.random() * (b - a)).toFixed(d || 0);
+    const pick = (a) => a[(Math.random() * a.length) | 0];
+    const add = (cls, css) => {
+        const d = document.createElement('div');
+        d.className = cls;
+        d.style.cssText = css;
+        L.appendChild(d);
+        return d;
+    };
+    const small = isMobile();
+    let ms = 3600;
+    if (kind === 'confetti') {
+        for (let i = 0, n = small ? 54 : 84; i < n; i++) {
+            add('dm-cf', `left:${rnd(0, 100, 1)}%;background:${pick(DM_FX_COLORS)};width:${rnd(6, 11)}px;height:${rnd(9, 16)}px;`
+                + `--dx:${rnd(-90, 90)}px;--dy:${Math.round(H + 70)}px;--r:${rnd(-900, 900)}deg;`
+                + `animation-duration:${rnd(2.1, 3.5, 2)}s;animation-delay:${rnd(0, 0.7, 2)}s;`);
+        }
+        ms = 4500;
+    } else if (kind === 'balloons') {
+        for (let i = 0; i < 13; i++) {
+            add('dm-bl', `left:${rnd(2, 82, 1)}%;--c:${pick(DM_FX_COLORS.slice(0, 5))};width:${rnd(44, 72)}px;`
+                + `--dy:${-Math.round(H + 240)}px;--sx:${rnd(-36, 36)}px;`
+                + `animation-duration:${rnd(3, 4.4, 2)}s;animation-delay:${rnd(0, 0.9, 2)}s;`);
+        }
+        ms = 5500;
+    } else if (kind === 'fireworks') {
+        L.classList.add('dark');
+        for (let b = 0; b < 5; b++) {
+            const cx = Math.round(W * (0.14 + Math.random() * 0.72)), cy = Math.round(H * (0.12 + Math.random() * 0.42));
+            const col = pick(DM_FX_COLORS), delay = b * 0.42 + Math.random() * 0.15, n = small ? 18 : 24;
+            for (let i = 0; i < n; i++) {
+                add('dm-fw', `left:${cx}px;top:${cy}px;background:${col};--a:${Math.round((360 / n) * i + Math.random() * 10 - 5)}deg;`
+                    + `--d:${rnd(54, 128)}px;animation-delay:${delay.toFixed(2)}s;`);
+            }
+        }
+        ms = 3900;
+    } else if (kind === 'love') {
+        add('dm-hr big', `left:${bx}px;top:${by}px;--dy:${-Math.round(by + 160)}px;--sx:${rnd(-26, 26)}px;`);
+        for (let i = 0; i < 10; i++) {
+            add('dm-hr', `left:${bx + Math.round(Math.random() * 150 - 75)}px;top:${by}px;--dy:${-Math.round(by + 100 + Math.random() * 80)}px;`
+                + `--sx:${rnd(-50, 50)}px;--s:${rnd(0.35, 0.8, 2)};animation-delay:${rnd(0.25, 1.3, 2)}s;`);
+        }
+        ms = 4300;
+    } else if (kind === 'lasers') {
+        L.classList.add('dark');
+        for (let i = 0; i < 9; i++) {
+            const a0 = Math.random() * 360;
+            add('dm-lz', `left:${bx}px;top:${by}px;--c:${pick(DM_FX_COLORS.slice(0, 5))};--a0:${Math.round(a0)}deg;`
+                + `--a1:${Math.round(a0 + (Math.random() < 0.5 ? -1 : 1) * (50 + Math.random() * 90))}deg;`
+                + `animation-duration:${rnd(0.9, 1.6, 2)}s;`);
+        }
+        ms = 3300;
+    } else if (kind === 'echo') {
+        const text = (msg.m || '').replace(/\s+/g, ' ').slice(0, 40);
+        for (let i = 0, n = small ? 16 : 24; i < n; i++) {
+            const d = add('dm-ec', `left:${rnd(2, 70, 1)}%;top:${rnd(3, 88, 1)}%;--s:${rnd(0.55, 1.45, 2)};animation-delay:${rnd(0, 1.1, 2)}s;`);
+            if (text) { d.dir = 'auto'; d.textContent = text; }
+            else if (msg.s) {
+                const im = document.createElement('img');
+                im.alt = '';
+                im.src = _stkUrl(msg.s);
+                d.classList.add('pic');
+                d.appendChild(im);
+            } else d.textContent = '📷';
+        }
+        ms = 3500;
+    } else if (kind === 'spot') {
+        L.classList.add('spot');
+        L.style.setProperty('--x', bx + 'px');
+        L.style.setProperty('--y', by + 'px');
+        L.style.setProperty('--rad', Math.round(Math.max(br.width, br.height) * 0.62 + 34) + 'px');
+        ms = 3300;
+    }
+    void L.offsetWidth;
+    L.classList.add('on', kind);
+    _dm.fxClearT = setTimeout(_dmFxClear, ms);
 }
 
 // The chips under a message: one per emoji, a count when both reacted with the same.
@@ -43429,9 +44343,7 @@ function _dmRxNode(msg, popEmo) {
     if (!by.size) return null;
     const wrap = document.createElement('div');
     wrap.className = 'dm-rx';
-    for (const e of DM_RX_LIST) {
-        const g = by.get(e);
-        if (!g) continue;
+    for (const [e, g] of by) {
         const b = document.createElement('button');
         b.type = 'button';
         b.className = 'dm-rx-chip' + (g.mine ? ' mine' : '') + (e === popEmo ? ' pop' : '');
@@ -43468,7 +44380,7 @@ function _dmPaintRx(key, msg, popEmo) {
 // it. Shown at once; put back as it was if the write is refused.
 function _dmReact(key, emo) {
     const peer = _dm.peer;
-    if (!_dmThreadShown(peer) || !_DM_KEY_RE.test(key || '') || !DM_RX_LIST.includes(emo)) return;
+    if (!_dmThreadShown(peer) || !_DM_KEY_RE.test(key || '') || !emoIsOne(emo)) return;
     if (!dmCanMessage(peer)) { _libToast('لا يمكن مراسلة هذا العضو الآن'); return; }
     const msg = _dmFindMsg(_dmThread(peer), key);
     if (!msg) return;
@@ -43485,7 +44397,7 @@ function _dmReact(key, emo) {
     _dmGhostArm(peer);
     update(ref(database), { [`${_dm.base}/threads/${_dmPair(peer)}/${key}/rx/${_dm.me}`]: next || null })
         .catch(() => { apply(was); _libToast('تعذّر حفظ التفاعل'); });
-    if (next) _meetBlip(1.4, 0.04);
+    if (next) { _meetBlip(1.4, 0.04); emoNoteUsed(next); }
 }
 
 function _dmCopy(text) {
@@ -43503,6 +44415,21 @@ function _dmCopy(text) {
     } catch (_) { fail(); }
 }
 
+// What the menu's reaction row offers, in order: my reaction on this message, the
+// emoji I used most recently (anywhere — typing or reacting), then the usual ones.
+function _dmRxQuick(mine) {
+    const out = [], seen = new Set();
+    const add = (e) => {
+        if (out.length >= DM_RX_QUICK_MAX || seen.has(e) || !emoIsOne(e)) return;
+        seen.add(e);
+        out.push(e);
+    };
+    if (mine) add(mine);
+    for (const e of emoRecent()) add(e);
+    for (const e of DM_RX_LIST) add(e);
+    return out;
+}
+
 // The message menu: '' closes it, a key opens it on that message. Built per open, and
 // placed ONCE from the bubble's rect — it closes on any scroll instead of following.
 function _dmAct(key) {
@@ -43517,35 +44444,49 @@ function _dmAct(key) {
     const msg = _dmFindMsg(_dmThread(_dm.peer), key);
     const row = E.msgs.querySelector(`.dm-msg[data-k="${key}"]`);
     const bub = row && row.querySelector('.dm-bub');
-    if (!msg || !bub || row.classList.contains('failed')) return;
+    if (!msg || msg.d || !bub || row.classList.contains('failed')) return;
     const can = dmCanMessage(_dm.peer);
-    if (!can && !msg.m) return;                  // nothing this menu could offer
+    const mine = msg.f === _dm.me;
+    const replay = !!msg.x && msg.x !== 'ink';
+    if (!can && !msg.m && !mine && !replay) return;      // nothing this menu could offer
     if (can) {
+        // A row that scrolls sideways, then «+» for any other emoji.
         const rx = document.createElement('div');
         rx.className = 'dm-act-rx';
-        for (const e of DM_RX_LIST) {
+        const sc = document.createElement('div');
+        sc.className = 'dm-act-rxs';
+        for (const e of _dmRxQuick(msg.rx[_dm.me] || '')) {
             const b = document.createElement('button');
             b.type = 'button';
             b.className = 'dm-act-emo' + (msg.rx[_dm.me] === e ? ' on' : '');
             b.dataset.e = e;
             b.setAttribute('aria-label', 'تفاعل بـ ' + e);
             b.textContent = e;
-            rx.appendChild(b);
+            sc.appendChild(b);
         }
+        const plus = document.createElement('button');
+        plus.type = 'button';
+        plus.className = 'dm-act-plus';
+        plus.setAttribute('aria-label', 'تفاعل آخر — كل الرموز');
+        plus.title = 'كل الرموز';
+        rx.append(sc, plus);
         act.appendChild(rx);
     }
     const rowEl = document.createElement('div');
     rowEl.className = 'dm-act-row';
-    const item = (what, label) => {
+    const item = (what, label, cls) => {
         const b = document.createElement('button');
         b.type = 'button';
-        b.className = 'dm-act-btn';
+        b.className = 'dm-act-btn' + (cls ? ' ' + cls : '');
         b.dataset.do = what;
         b.textContent = label;
         rowEl.appendChild(b);
     };
     if (can) item('reply', 'رد');
     if (msg.m) item('copy', 'نسخ');
+    if (can && mine && !msg.s) item('edit', 'تعديل');
+    if (replay) item('fx', 'أعد التأثير');
+    if (mine) item('del', 'حذف', 'danger');
     act.appendChild(rowEl);
     _dm.act = key;
     row.classList.add('act');
@@ -43562,26 +44503,142 @@ function _dmAct(key) {
     act.style.left = Math.round(left - vr.left) + 'px';
 }
 
-// ─── Emoji / stickers ────────────────────────────────────────────────────────
-function _dmPop(kind) {
+// ─── Emoji / stickers / send effects ─────────────────────────────────────────
+// The emoji picker holds EVERY emoji, by category (the system keyboard's own order),
+// with the ones used recently first. Built once (~1,900 buttons) and re-attached on
+// each open; only «recent» is refilled. Before the list has loaded it shows the short
+// built-in set. With `_dm.popFor` set it is choosing a REACTION for that message.
+function _dmEmojiBtn(e) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dm-emo';
+    b.dataset.e = e;                 // never read back from the text — it may become an image
+    b.textContent = e;
+    return b;
+}
+function _dmEmojiPanel() {
+    const stamp = _emoImgs.ready ? _emoImgs.v : 'basic';
+    if (_dm.emoPanel && _dm.emoPanelKey === stamp) return _dm.emoPanel;
+    const cats = _emoImgs.ready ? _emoImgs.cats : [{ id: 'basic', n: 'الرموز', e: EMO_LIST }];
+    const wrap = document.createElement('div');
+    wrap.className = 'dm-emo-wrap';
+    const forEl = document.createElement('div');
+    forEl.className = 'dm-emo-for';
+    forEl.textContent = 'اختر تفاعلًا للرسالة';
+    const tabs = document.createElement('div');
+    tabs.className = 'dm-emo-tabs';
+    const sc = document.createElement('div');
+    sc.className = 'dm-emo-scroll';
+    const section = (id, title, list, icon) => {
+        const sec = document.createElement('section');
+        sec.className = 'dm-emo-sec';
+        sec.dataset.cat = id;
+        sec.dataset.n = String(list.length);
+        const h = document.createElement('h4');
+        h.textContent = title;
+        const grid = document.createElement('div');
+        grid.className = 'dm-emo-grid';
+        for (const e of list) grid.appendChild(_dmEmojiBtn(e));
+        sec.append(h, grid);
+        sc.appendChild(sec);
+        const tab = document.createElement('button');
+        tab.type = 'button';
+        tab.className = 'dm-emo-tab';
+        tab.dataset.cat = id;
+        tab.title = title;
+        tab.setAttribute('aria-label', title);
+        tab.textContent = icon || list[0] || '';
+        tabs.appendChild(tab);
+    };
+    section('recent', 'المستخدمة مؤخرًا', [], '🕘');
+    for (const c of cats) section(c.id, c.n, c.e, '');
+    wrap.append(forEl, tabs, sc);
+    let syncT = 0;
+    sc.addEventListener('scroll', () => {
+        if (syncT) return;
+        syncT = setTimeout(() => { syncT = 0; _dmEmojiSyncTab(wrap); }, 90);
+    }, { passive: true });
+    _dm.emoPanel = wrap;
+    _dm.emoPanelKey = stamp;
+    return wrap;
+}
+function _dmEmojiSyncTab(panel) {
+    const sc = panel.querySelector('.dm-emo-scroll');
+    if (!sc || !panel.isConnected) return;
+    const top = sc.getBoundingClientRect().top + 10;
+    let cur = '';
+    for (const sec of sc.children) {
+        if (sec.hidden) continue;
+        if (!cur || sec.getBoundingClientRect().top <= top) cur = sec.dataset.cat;
+        else break;
+    }
+    for (const t of panel.querySelectorAll('.dm-emo-tab')) t.classList.toggle('on', t.dataset.cat === cur);
+}
+function _dmEmojiOpen(panel) {
+    const sc = panel.querySelector('.dm-emo-scroll');
+    const rec = sc.querySelector('.dm-emo-sec[data-cat="recent"]');
+    const list = emoRecent();
+    const grid = rec.querySelector('.dm-emo-grid');
+    grid.textContent = '';
+    for (const e of list) grid.appendChild(_dmEmojiBtn(e));
+    rec.dataset.n = String(list.length);
+    rec.hidden = !list.length;
+    const recTab = panel.querySelector('.dm-emo-tab[data-cat="recent"]');
+    if (recTab) recTab.hidden = !list.length;
+    panel.classList.toggle('rx', !!_dm.popFor);
+    // A section far down the list isn't laid out until it is scrolled to
+    // (content-visibility). Its height is stated exactly, so a jump to it lands right.
+    const g = sc.querySelector('.dm-emo-sec:not([hidden]) .dm-emo-grid');
+    if (g) {
+        const cols = getComputedStyle(g).gridTemplateColumns.split(' ').filter(Boolean).length || 8;
+        const cell = (g.clientWidth - (cols - 1) * 2) / cols;
+        if (cell > 4) for (const sec of sc.children) {
+            const rows = Math.ceil((+sec.dataset.n || 0) / cols);
+            sec.style.setProperty('contain-intrinsic-block-size', 'auto ' + Math.round(30 + rows * cell + Math.max(0, rows - 1) * 2 + 8) + 'px');
+        }
+    }
+    sc.scrollTop = 0;
+    _dmEmojiSyncTab(panel);
+}
+
+function _dmPop(kind, forKey) {
     const E = _dm.els;
     if (!E) return;
     _dm.pop = kind;
-    E.emojiBtn.classList.toggle('on', kind === 'emoji');
+    _dm.popFor = (kind === 'emoji' && forKey) ? forKey : '';
+    E.emojiBtn.classList.toggle('on', kind === 'emoji' && !_dm.popFor);
     E.stkBtn.classList.toggle('on', kind === 'stk');
     E.pop.hidden = !kind;
-    E.pop.textContent = '';
+    E.pop.textContent = '';          // (this only detaches the emoji panel — it is kept and re-attached)
     E.pop.className = 'dm-pop' + (kind ? ' ' + kind : '');
     if (kind === 'emoji') {
-        const frag = document.createDocumentFragment();
-        for (const e of EMO_LIST) {
-            const b = document.createElement('button');
-            b.type = 'button';
-            b.className = 'dm-emo';
-            b.textContent = e;
-            frag.appendChild(b);
-        }
-        E.pop.appendChild(frag);
+        const mount = () => {
+            const p = _dmEmojiPanel();
+            E.pop.textContent = '';
+            E.pop.appendChild(p);
+            _dmEmojiOpen(p);
+        };
+        mount();
+        if (!_emoImgs.ready) emoLoadData().then((ok) => { if (ok && _dm.pop === 'emoji') mount(); });
+    } else if (kind === 'fx') {
+        const group = (title, scr) => {
+            const h = document.createElement('h4');
+            h.textContent = title;
+            const row = document.createElement('div');
+            row.className = 'dm-fx-row';
+            for (const [id, d] of Object.entries(DM_FX)) {
+                if (d.scr !== scr) continue;
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'dm-fx-chip';
+                b.dataset.fx = id;
+                b.textContent = d.n;
+                row.appendChild(b);
+            }
+            E.pop.append(h, row);
+        };
+        group('أرسلها بتأثير على الفقاعة', false);
+        group('أو بتأثير يملأ المحادثة', true);
     } else if (kind === 'stk') {
         const s = document.createElement('input');
         s.type = 'search';
@@ -43622,6 +44679,23 @@ function _dmPop(kind) {
     }
 }
 
+// The «to the newest» button: shown once the reader has scrolled well up, with a
+// count of what arrived meanwhile.
+function _dmPaintDown() {
+    const E = _dm.els;
+    if (!E || !E.down) return;
+    const box = E.msgs;
+    const far = box.scrollHeight - box.scrollTop - box.clientHeight;
+    if (far < 90) _dm.below = 0;
+    const show = _dm.view === 'thread' && far > DM_DOWN_SHOW_PX;
+    const key = (show ? 1 : 0) + '|' + _dm.below;
+    if (E.downKey === key) return;
+    E.downKey = key;
+    E.down.classList.toggle('show', show);
+    E.downN.hidden = !(_dm.below > 0);
+    E.downN.textContent = _dm.below > 99 ? '+٩٩' : _chatArNum(_dm.below);
+}
+
 // ─── Per frame (from updateSocial) — the single guard that closes it ─────────
 function dmUpdate() {
     if (!_dm.open) return;
@@ -43646,6 +44720,8 @@ function setupDmUI() {
         attach: $('dm-attach'), attachImg: $('dm-attach-img'), attachInfo: $('dm-attach-info'),
         reply: $('dm-reply'), replyName: $('dm-reply-name'), replyText: $('dm-reply-text'),
         act: $('dm-act'),
+        confirm: $('dm-confirm'), confirmText: $('dm-confirm-text'),
+        fx: $('dm-fx'), down: $('dm-down'), downN: $('dm-down-n'), downKey: '',
         file: $('dm-file'),
         compose: $('dm-compose'), input: $('dm-input'),
         emojiBtn: $('dm-emoji-btn'), stkBtn: $('dm-stk-btn'),
@@ -43675,7 +44751,8 @@ function setupDmUI() {
         const t = e.target;
         if (!t.closest) return;
         if (t.closest('.dm-state.more')) { _dmLoadOlder(); return; }
-        if (Date.now() - _dm.holdAt < 700) return;          // the click a long press ends in
+        if (Date.now() - _dm.holdAt < 700) { e.preventDefault(); return; }   // the click a long press or a swipe ends in
+        if (t.closest('a.dm-link')) return;                 // a link opens; it is not a tap on the bubble
         const quote = t.closest('.dm-quote');
         if (quote) { _dmJumpTo(quote.dataset.to); return; }
         const chip = t.closest('.dm-rx-chip');
@@ -43684,6 +44761,13 @@ function setupDmUI() {
         if (more) { actOpen(rowKey(more)); return; }
         const pic = t.closest('.dm-pic.ready');
         if (pic) { const im = pic.querySelector('img'); if (im) _dmZoom(im.src); return; }
+        // Secret ink: the first press on it lifts the ink for a few seconds.
+        const ink = t.closest('.dm-msg.fx-ink:not(.ink-open)');
+        if (ink && t.closest('.dm-bub')) {
+            ink.classList.add('ink-open');
+            setTimeout(() => ink.classList.remove('ink-open'), 6000);
+            return;
+        }
         // No hover (a phone, a tablet): a tap on the bubble is how its menu opens. (A PC
         // keeps the click for selecting text, and has the button beside the bubble.)
         if (isMobile() || noHover()) { const bub = t.closest('.dm-bub'); if (bub) actOpen(rowKey(bub)); }
@@ -43692,6 +44776,7 @@ function setupDmUI() {
     E.msgs.addEventListener('contextmenu', (e) => {
         const key = e.target.closest ? rowKey(e.target) : '';
         if (!key) return;
+        if (e.target.closest('a.dm-link')) return;          // the browser's own menu for a link (copy / open)
         // A PC user with text selected wants the browser's own menu (copy the selection).
         if (!isMobile() && String(window.getSelection ? window.getSelection() : '').length) return;
         e.preventDefault();
@@ -43701,33 +44786,86 @@ function setupDmUI() {
         _dm.holdAt = Date.now();
         _dmAct(key);
     });
-    // iOS sends no `contextmenu`: a finger held still on a message opens the menu. On
-    // the list itself and passive — the list must keep scrolling freely (invariant 34).
+    // iOS sends no `contextmenu`: a finger held still on a message opens the menu. And
+    // a finger dragged SIDEWAYS on a message replies to it (either way; the bubble
+    // follows the finger and an arrow appears behind it). On the list itself and
+    // passive — it must keep scrolling freely (invariant 34); `touch-action: pan-y` on
+    // the list is what leaves a sideways drag to us.
     let holdX = 0, holdY = 0;
     const holdEnd = () => { clearTimeout(_dm.holdT); _dm.holdT = 0; };
+    const swEnd = (commit) => {
+        const sw = _dm.sw;
+        _dm.sw = null;
+        if (!sw || !sw.on) return;
+        const go = commit && Math.abs(sw.dx) >= DM_SWIPE_GO_PX;
+        sw.line.style.transition = 'transform .28s cubic-bezier(0.22, 1, 0.36, 1)';
+        sw.line.style.transform = '';
+        setTimeout(() => {
+            sw.line.style.transition = '';
+            sw.row.classList.remove('sw', 'sw-l', 'sw-r', 'sw-go');
+        }, 290);
+        _dm.holdAt = Date.now();                // the click this touch may end in is not a tap on the bubble
+        if (!go) return;
+        const msg = _dmFindMsg(_dmThread(_dm.peer), sw.row.dataset.k);
+        if (msg && !msg.d) _dmSetReply(msg);
+    };
     E.msgs.addEventListener('touchstart', (e) => {
         holdEnd();
+        swEnd(false);
         if (!e.targetTouches || e.targetTouches.length !== 1 || !e.target.closest) return;
         if (e.target.closest('.dm-quote, .dm-rx-chip, .dm-state')) return;
-        const key = rowKey(e.target);
+        const row = e.target.closest('.dm-msg');
+        const key = (row && row.dataset.k) || '';
         if (!key) return;
         holdX = e.targetTouches[0].clientX; holdY = e.targetTouches[0].clientY;
+        const line = row.querySelector('.dm-line');
+        if (line && !row.classList.contains('failed') && dmCanMessage(_dm.peer)) {
+            _dm.sw = { row, line, dx: 0, on: false, go: false };
+        }
         _dm.holdT = setTimeout(() => {
             _dm.holdT = 0;
-            if (_dm.act === key) return;
+            if (_dm.act === key || (_dm.sw && _dm.sw.on)) return;
             _dm.holdAt = Date.now();
             _dmAct(key);
         }, DM_HOLD_MS);
     }, { passive: true });
     E.msgs.addEventListener('touchmove', (e) => {
-        if (!_dm.holdT) return;
         const p = e.targetTouches && e.targetTouches[0];
-        if (!p || Math.abs(p.clientX - holdX) > 10 || Math.abs(p.clientY - holdY) > 10) holdEnd();
+        if (!p) { holdEnd(); swEnd(false); return; }
+        const dx = p.clientX - holdX, dy = p.clientY - holdY;
+        if (_dm.holdT && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) holdEnd();
+        const sw = _dm.sw;
+        if (!sw) return;
+        if (!sw.on) {
+            if (Math.abs(dy) > DM_SWIPE_ARM_PX && Math.abs(dy) >= Math.abs(dx)) { _dm.sw = null; return; }   // it is a scroll
+            if (Math.abs(dx) < DM_SWIPE_ARM_PX || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+            sw.on = true;
+            if (_dm.act) _dmAct('');
+            sw.row.classList.add('sw');
+        }
+        // One to one up to the point where letting go replies, then it resists.
+        const a = Math.abs(dx);
+        const lim = a <= DM_SWIPE_GO_PX ? a : DM_SWIPE_GO_PX + (a - DM_SWIPE_GO_PX) * 0.3;
+        sw.dx = dx;
+        sw.line.style.transform = 'translateX(' + (Math.sign(dx) * Math.min(DM_SWIPE_MAX_PX, lim)).toFixed(1) + 'px)';
+        sw.row.classList.toggle('sw-l', dx < 0);
+        sw.row.classList.toggle('sw-r', dx > 0);
+        const go = a >= DM_SWIPE_GO_PX;
+        if (go !== sw.go) {
+            sw.go = go;
+            sw.row.classList.toggle('sw-go', go);
+            if (go) { try { navigator.vibrate && navigator.vibrate(8); } catch (_) {} }
+        }
     }, { passive: true });
-    E.msgs.addEventListener('touchend', holdEnd, { passive: true });
-    E.msgs.addEventListener('touchcancel', holdEnd, { passive: true });
+    E.msgs.addEventListener('touchend', () => { holdEnd(); swEnd(true); }, { passive: true });
+    E.msgs.addEventListener('touchcancel', () => { holdEnd(); swEnd(false); }, { passive: true });
     // The menu is placed once, so anything that moves the list puts it away.
-    E.msgs.addEventListener('scroll', () => { if (_dm.act) _dmAct(''); }, { passive: true });
+    E.msgs.addEventListener('scroll', () => { if (_dm.act) _dmAct(''); _dmPaintDown(); }, { passive: true });
+    E.down?.addEventListener('click', () => {
+        _dm.below = 0;
+        const box = E.msgs;
+        try { box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' }); } catch (_) { box.scrollTop = box.scrollHeight; }
+    });
     // A press anywhere else in the drawer closes it.
     E.card.addEventListener('pointerdown', (e) => {
         if (!_dm.act || E.act.contains(e.target)) return;
@@ -43740,19 +44878,37 @@ function setupDmUI() {
         const key = _dm.act;
         if (!key || !e.target.closest) return;
         const emo = e.target.closest('.dm-act-emo');
+        const plus = e.target.closest('.dm-act-plus');
         const btn = e.target.closest('.dm-act-btn');
-        if (!emo && !btn) return;
+        if (!emo && !plus && !btn) return;
         const msg = _dmFindMsg(_dmThread(_dm.peer), key);
         _dmAct('');
-        if (!msg) return;
+        if (!msg || msg.d) return;
         if (emo) _dmReact(key, emo.dataset.e);
+        else if (plus) _dmPop('emoji', key);               // any emoji at all, as a reaction
         else if (btn.dataset.do === 'reply') _dmSetReply(msg);
         else if (btn.dataset.do === 'copy') _dmCopy(msg.m);
+        else if (btn.dataset.do === 'edit') _dmStartEdit(msg);
+        else if (btn.dataset.do === 'fx') _dmPlayFx(msg);
+        else if (btn.dataset.do === 'del') _dmAskDelete(msg);
     });
-    $('dm-reply-x')?.addEventListener('click', () => _dmSetReply(null));
-    // The bar's own quote takes you to the message you are replying to.
+    // The reaction row scrolls sideways; a mouse wheel over it scrolls it too (it is
+    // an RTL row, so "further" is a smaller scrollLeft).
+    E.act.addEventListener('wheel', (e) => {
+        const sc = e.target.closest && e.target.closest('.dm-act-rxs');
+        if (!sc || Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+        e.preventDefault();
+        sc.scrollLeft -= e.deltaY;
+    }, { passive: false });
+    // The delete warning.
+    $('dm-confirm-yes')?.addEventListener('click', () => { const k = _dm.delKey; _dmConfirmClose(); if (k) _dmDelete(k); });
+    $('dm-confirm-no')?.addEventListener('click', _dmConfirmClose);
+    E.confirm?.addEventListener('click', (e) => { if (e.target === E.confirm) _dmConfirmClose(); });
+    $('dm-reply-x')?.addEventListener('click', () => { if (_dm.edit) _dmEndEdit(true); else _dmSetReply(null); });
+    // The bar's own quote takes you to the message you are replying to (or editing).
     E.reply.addEventListener('click', (e) => {
-        if (_dm.reply && e.target.closest && !e.target.closest('#dm-reply-x')) _dmJumpTo(_dm.reply.k);
+        const cur = _dm.edit || _dm.reply;
+        if (cur && e.target.closest && !e.target.closest('#dm-reply-x')) _dmJumpTo(cur.k);
     });
     // ── Pictures: the button, a drop anywhere on the drawer, a paste ──
     $('dm-img-btn')?.addEventListener('click', () => { if (!_dm.attBusy) E.file.click(); });
@@ -43800,11 +44956,53 @@ function setupDmUI() {
             }
         }
     });
-    E.compose.addEventListener('submit', (e) => { e.preventDefault(); _dmSubmit(); });
+    E.compose.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (Date.now() - _dm.sendHeldAt < 700) return;      // the click a hold on the send button ends in
+        _dmSubmit();
+    });
+    // Holding the send button (a right-click on a PC) offers the effects.
+    const sendBtn = $('dm-send');
+    const fxOffer = () => {
+        if (_dm.edit || _dm.attBusy) return;
+        if (!_dmCleanText(E.input.value, DM_MAX_LEN) && !_dm.att) { _libToast('اكتب رسالتك أولًا ثم اختر تأثيرها'); return; }
+        _dmPop(_dm.pop === 'fx' ? '' : 'fx');
+    };
+    const sendUp = () => { clearTimeout(_dm.sendHoldT); _dm.sendHoldT = 0; };
+    if (sendBtn) {
+        sendBtn.addEventListener('pointerdown', (e) => {
+            if (e.button) return;
+            sendUp();
+            _dm.sendHoldT = setTimeout(() => {
+                _dm.sendHoldT = 0;
+                _dm.sendHeldAt = Date.now();
+                try { navigator.vibrate && navigator.vibrate(8); } catch (_) {}
+                fxOffer();
+            }, DM_SEND_HOLD_MS);
+        });
+        for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) sendBtn.addEventListener(ev, sendUp);
+        sendBtn.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            sendUp();
+            if (Date.now() - _dm.sendHeldAt < 900) return;   // Android's long press: the hold above already opened it
+            _dm.sendHeldAt = Date.now();
+            fxOffer();
+        });
+    }
     E.input.addEventListener('input', _dmAutosize);
     E.input.addEventListener('keydown', (e) => {
         // Enter sends; Shift+Enter is a new line. An Enter that commits an IME word isn't a send.
-        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); _dmSubmit(); }
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); _dmSubmit(); return; }
+        // ↑ in an empty box: edit the last message I sent.
+        if (e.key === 'ArrowUp' && !E.input.value && !_dm.edit && !e.isComposing && _dm.view === 'thread') {
+            const th = _dmThread(_dm.peer);
+            for (let i = th.msgs.length - 1; i >= 0; i--) {
+                const m = th.msgs[i];
+                if (m.d || m.f !== _dm.me) continue;
+                if (!m.s && m.m) { e.preventDefault(); _dmStartEdit(m); }
+                break;
+            }
+        }
     });
     E.input.addEventListener('focus', () => { if (isMobile()) _dmPop(''); });
     E.emojiBtn.addEventListener('click', () => _dmPop(_dm.pop === 'emoji' ? '' : 'emoji'));
@@ -43814,16 +45012,34 @@ function setupDmUI() {
     E.compose.addEventListener('mousedown', (e) => { if (e.target !== E.input) e.preventDefault(); });
     E.pop.addEventListener('mousedown', (e) => { if (!(e.target.closest && e.target.closest('.dm-stk-search'))) e.preventDefault(); });
     E.pop.addEventListener('click', (e) => {
-        const emo = e.target.closest && e.target.closest('.dm-emo');
+        const t = e.target;
+        if (!t.closest) return;
+        // A category tab: its section to the top (the list is scrolled by hand —
+        // scrollIntoView would scroll every ancestor too).
+        const tab = t.closest('.dm-emo-tab');
+        if (tab) {
+            const sc = E.pop.querySelector('.dm-emo-scroll');
+            const sec = sc && sc.querySelector(`.dm-emo-sec[data-cat="${tab.dataset.cat}"]`);
+            if (sec) sc.scrollTop += sec.getBoundingClientRect().top - sc.getBoundingClientRect().top;
+            return;
+        }
+        const emo = t.closest('.dm-emo');
         if (emo) {
-            const ta = E.input, v = emo.textContent;
+            const v = emo.dataset.e || '';
+            if (!v) return;
+            // Opened from a message's «+»: this emoji is the reaction.
+            if (_dm.popFor) { const key = _dm.popFor; _dmPop(''); _dmReact(key, v); return; }
+            const ta = E.input;
             if (ta.value.length + v.length > DM_MAX_LEN) return;
             const a = ta.selectionStart ?? ta.value.length, b = ta.selectionEnd ?? a;
             ta.setRangeText(v, a, b, 'end');
             _dmAutosize();
+            emoNoteUsed(v);
             return;
         }
-        const st = e.target.closest && e.target.closest('.dm-stk');
+        const fx = t.closest('.dm-fx-chip');
+        if (fx) { _dmSubmit(fx.dataset.fx); return; }
+        const st = t.closest('.dm-stk');
         if (st && st.dataset.stk) {
             if (_dmSend('', st.dataset.stk)) { _stkNoteUsed(st.dataset.stk); _dmPop(''); }
         }
@@ -43837,8 +45053,10 @@ function setupDmUI() {
         if (e.key !== 'Escape' || !_dm.open) return;
         const zoom = document.getElementById('dm-zoom');
         if (zoom && !zoom.hidden) { _dmZoom(''); return; }
+        if (_dm.delKey) { _dmConfirmClose(); return; }
         if (_dm.act) { _dmAct(''); return; }
         if (_dm.pop) { _dmPop(''); return; }
+        if (_dm.edit) { _dmEndEdit(true); return; }
         if (_dm.reply) { _dmSetReply(null); return; }
         // On a PC the first Escape only lets go of the text field (back to playing);
         // the next one puts the drawer away.
@@ -43860,7 +45078,16 @@ function setupDmUI() {
     window.visualViewport?.addEventListener('resize', fit);
     window.visualViewport?.addEventListener('scroll', fit);
     window.addEventListener('resize', fit);
-    document.addEventListener('visibilitychange', () => { if (!document.hidden) _dmMarkRead(); });
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden) return;
+        _dmMarkRead();
+        // An effect that arrived while the tab was in the background plays now.
+        if (_dm.open && _dm.view === 'thread' && _dm.peer && _dmThread(_dm.peer).fxUnread > 0) {
+            const peer = _dm.peer;
+            clearTimeout(_dm.fxT);
+            _dm.fxT = setTimeout(() => _dmFxUnread(peer), 350);
+        }
+    });
     // The inbox listener waits for calm — never on the login / spawn path.
     whenCalm(dmStart);
 }
