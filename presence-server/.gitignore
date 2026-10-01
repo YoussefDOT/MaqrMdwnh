@@ -2,3 +2,5 @@ node_modules/
 .wrangler/
 ._*
 .DS_Store
+# local secrets for `wrangler dev` — never commit
+.dev.vars

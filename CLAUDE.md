@@ -56,7 +56,10 @@ python3 -m http.server 8080
 either, it just doesn't get the saving yet): the database rules —
 `firebase deploy --only database` (e.g. the `users` `.indexOn: lobby` the players
 listener uses) — and the presence relay — `cd presence-server && npx wrangler deploy`
-(e.g. the `"ping"` auto-response).
+(e.g. the `"ping"` auto-response, and **ليمو's answers**: the relay is what asks the
+model. Its API key is a Worker secret — `npx wrangler secret put OPENAI_API_KEY --name
+mdwnh-presence` — never a file in the repo, never pasted into a chat. Until the relay is
+deployed, ليمو walks over and says his brain froze).
 
 **Every push updates نشرة الأخبار.** `patch-notes.json` is the member-facing changelog shown by the
 menu's «نشرة الأخبار» button. Before pushing, add (or extend) TODAY's entry at the TOP of `days`
@@ -117,9 +120,13 @@ Grep anchors for the major systems (all verified to exist):
 | Proximity chat | `CHAT_`, `updateChatSystem`, `drawChatBubbles`, `receiveChatMessage`, `sendChatWS`, `drawChatBeacons` |
 | الملصقات + الرموز التعبيرية | `STK_`, `_stk`, `receiveSticker`, `_stkSend`, `_stkUpdate`, `_stkSearch`, `_emo` |
 | «يكتب الآن» + الانصهار | `CHAT_TYP_`, `CHAT_MORPH_MS`, `sendTypingWS`, `_chatSetTyping`, `_chatMorphFx`, `_chatDrawTyping` |
-| القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump` |
-| نداء ليمو | `LEMO_UID`, `lemoSummon`, `_lemoCallPose`, `_lemoCallSpots`, `lemoIsAsleep`, `lemoIsBusy` |
-| نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad` |
+| القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump`, `jumpTapWhileMoving`, `JUMP_FLICK_`, `jumpMaybeHint` |
+| نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy` |
+| ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
+| ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`; `index.js` → `_lemoAsk`, `BUDGET_KEY` |
+| الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI` |
+| التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
+| نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad`, `tools/shots.mjs`, `tools/shots.py` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds`, `_seamlessLoop`, `_mp3CutBytes`, `_glideParam`, `_warmGames`, `playSoundRobust` |
 | Settings (full panel, pills, live preview) | `setupSettingsUI`, `_stg`, `_stgSeg`, `_stgShowTab`, `_stgPreviewKick` |
@@ -203,7 +210,9 @@ Walk this top-down for ANY new piece of state; when in doubt read **Firebase Cos
    (one-shot `get()`s, zero fan-out). NOT under `users/{uid}`.
 5. Must be seen live by everyone to render another player (avatar ring, hat, floor,
    task) → **`users/{uid}/…`** — the documented exception; keep writes rare and small.
-6. Lobby-shared feature state → **`lobbyPath('…')`** so male/female never mix.
+6. Lobby-shared feature state → **`lobbyPath('…')`** so male/female never mix. (Private
+   messages live there too — `lobbyPath('dm/…')` — precisely BECAUSE that keeps the two
+   lobbies apart by structure; each client listens only to its own inbox row set.)
 7. Client-only ambience nobody needs synced → **plain `gameState`, no network.**
    Shared ambience that must look the same for everyone (Lemo) → **one tiny
    `lobbyPath` doc that changes only on rare events + a seeded timeline computed
@@ -331,10 +340,12 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **حضور المقر** (was تحدي المثابرة) | The leader's daily duty: the site **open three hours a day**, mandatory from الأحد ١٣ سبتمبر ٢٠٢٦, with **two vacation days a week** (taking one wipes today's progress; cancellable the same day). A foldable card under the user card (the azkar dock hangs under it) and a week ladder your avatar walks. Round one (the seven-day work streak) is over — members who earned points get an undismissable «استلام» popup on login. Styled in the مدونة brand; pressing anywhere on the card opens the week panel. See **حضور المقر**. |
 | **رف الجوائز** | Three trophies (and four hidden, blacked-out ones) on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar whose cells he can press to **اعتماد** a day as done (even one taken off or never opened) or **رفع الإجازة** off a past one. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. See **لوحة القائد**. |
-| **القفز** | مسافة، أو نقرتان على شخصيتك (وعلى الجوال نقرتان في أي مكان). قفزة في المكان — أو، أثناء الحركة، **على طاولة** تمشي فوقها (أكبر قليلًا)، ومنها إلى الأرض، و**من حافة الطابق الثاني** إلى الأرض بهبوط قوي: غبار وموجة وهزّة وصوت لمن حولك إلا من في جلسة عمل. صفر فايربيس. See **القفز**. |
-| **نداء ليمو** | `@ليمو` في الدردشة: يترك ما يفعله، يومض ويختفي، يظهر بجانبك ويمشي إليك ويقول «عايز ايه؟» ثم يعود إلى جولته. واحد في كل مرة، ولا يُنادى نائمًا ولا من جلسة عمل. See **Lemo → نداء ليمو**. |
+| **القفز** | مسافة، أو نقرتان على شخصيتك. على الجوال: سحبة سريعة للأعلى في أي مكان، أو نقرة واحدة في أي مكان وأنت تمشي (والنقرتان ما زالتا تعملان). قفزة في المكان — أو، أثناء الحركة، **على طاولة** تمشي فوقها (أكبر قليلًا)، ومنها إلى الأرض، و**من حافة الطابق الثاني** إلى الأرض بهبوط قوي: غبار وموجة وهزّة وصوت لمن حولك إلا من في جلسة عمل. صفر فايربيس. See **القفز**. |
+| **نداء ليمو** | `@ليمو` مع سؤال (أو اضغط عليه فيُكتب اسمه): يترك ما يفعله و**يمشي** إليك — طريق حقيقي حول الأثاث، يصعد الدرج، ويلحق بك إن تحرّكت — ثم **يجيبك** (ذكاء اصطناعي يسأله المُرحِّل لا الصفحة)، وقد يرد بملصق. ثم يمشي عائدًا. لا يُنادى نائمًا ولا من جلسة عمل ولا بلا سؤال، وبعد رده عليك تنتظر ٤ ثوانٍ. See **Lemo → نداء ليمو**. |
+| **الرسائل الخاصة** | زر في صندوق الأدوات (أو «رسالة خاصة» تحت عضو تضغط عليه): محادثات محفوظة بين عضوين من القسم نفسه — نص، رموز، ملصقات، صور و GIF (سحب وإفلات / لصق). على الحاسوب دُرج في الثلث الأيمن واللعب مستمر بجانبه. See **الرسائل الخاصة**. |
+| **التفاعلات + «ماذا فاتني؟»** | تفاعلات طاولة الاجتماعات في كل مكان (١–٦، أو ضغطة مطوّلة على شخصيتك)؛ والضغط على عضو يُظهر آخر خمس رسائل كتبها. صفر فايربيس. See **التفاعلات في العالم**. |
 | **نشرة الأخبار** | A button under the login pill opens the member-facing changelog, grouped by day (`patch-notes.json`). See **نشرة الأخبار**. |
-| **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head. ١٠٠ حرف, wrapping onto up to three balanced lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, a قوس on the screen edge pointing at whoever called you (it stays until you see them), a شريط at the bottom, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
+| **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head (on a phone: a slim bar docked to the keyboard, and the camera lifts you into view). ١٠٠ حرف, wrapping onto up to three balanced lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, a قوس on the screen edge pointing at whoever called you (it stays until you see them), a شريط at the bottom, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
 | **غرفة الاجتماعات** | A room snapped onto the top-right of the scene, hidden behind a doorway that glows white until you walk up to it. Press its table → a seat (the sofa hop) and a full-screen look at the real table with everyone round it: six reactions, the proximity chat, and a **green ring on whoever is talking in the Discord call** — fed live by MdwnhBot over the relay, zero Firebase. See **غرفة الاجتماعات**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until someone walks up, then wanders it — and now and then walks the owner-drawn route to the meeting room, roams round the table and walks back. **One Lemo per lobby**: everyone sees the same robot, from a seeded timeline off one tiny Firebase doc that only changes when he's woken or put to bed. Arrive to an empty lobby → he's asleep. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
@@ -369,6 +380,10 @@ style.css      ~12700 lines — all styling; mobile rules under body.is-mobile
 tools/bake_world.py          — bakes the world layers into Art/Workspace/Baked_* (run by the hook)
 tools/pre-commit.sh          — versioned copy of .git/hooks/pre-commit (install it on a fresh clone)
 patch-notes.json             — نشرة الأخبار: the member-facing changelog, newest day first (update every push)
+Art/News/<release>/*.webp    — a release entry's screenshots (made by tools/shots.mjs + tools/shots.py)
+tools/shots.mjs, shots.py    — headless-Chrome screenshots of the features, for a release's news entry
+presence-server/src/index.js — the relay (Cloudflare Worker + Durable Object): positions, events, ليمو's questions
+presence-server/src/lemo.js  — ليمو's brain: persona, what he knows, the model call, the answer's shape
 LemoPFP.jpg                  — ليمو's face in the @ picker / mention pills
 firebase-config.js           — the Firebase SDK re-exports (writes are wrapped by game.js's
                                ownership gate). Imported as `firebase-config.js?v=N` — bump
@@ -1436,10 +1451,12 @@ wandering entity streamed through Firebase would be the most expensive write pat
 in the app, and the relay would still leave late joiners out of step.
 
 ### The timeline (`_lemoStep`, `_lemoPose`) — keep it PURE
-Every segment is one whole playthrough (wake 3.375 s, idle 3 or 6 s, walk 6 s, play
-6.5 s), so the timeline is **computed, not ticked**: `_lemoPose(t)` steps segments until
-`t` falls inside one, then reads the frame off the elapsed time. `_lemoStep` may read
-**nothing but the segment and its rng** — no clock, no players, no sheet state (Play
+Every segment has a length known the moment it starts (wake 3.375 s, idle 3 or 6 s,
+play 6.5 s; a walk's comes from its DISTANCE — see **Walking**), so the timeline is
+**computed, not ticked**: `_lemoPose(t)` steps segments until
+`t` falls inside one, then reads the frame off the elapsed time (`_lemoTimePose` — it
+was `_lemoPose`). `_lemoStep` may read **nothing but the segment and its rng** — no
+clock, no players, no sheet state, **no collision / route grid** (Play
 used to wait for its sheet; now drawLemo just stands him in Idle until it lands). One
 impure read and two clients part ways for the rest of the day. A lobby occupied for
 days has tens of thousands of segments behind it: ~33 ms per 100k steps, spread by
@@ -1475,15 +1492,39 @@ days has tens of thousands of segments behind it: ~33 ms per 100k steps, spread 
   art; a moved or added point has to keep that true (the break-room spots all see
   `LEMO_ROUTE[0]` cleanly).
 - **In the meeting room he fades with it** (`_meetFadeAt`), like a player.
-- **Walking**: the cycle can't be looped — it opens with a warm-up and closes with an
-  overshoot. So the **travel is bound to frames 0→45** (`LEMO_WALK_MOVE_FRAMES`) and the
-  last 15 frames play **in place** as he settles. One walk = one playthrough, whatever
-  the distance. Easing is `_lemoEase` — **ease-out only**, deliberately: the walk art
-  already carries its own warm-up, and easing the movement in on top of it read as him
-  creeping off the mark.
-- **Turning**: the art faces RIGHT, so a leftward trip mirrors him — `_lemo.face` is a
-  plain ±1 snap into `ctx.scale`, no tween. He snaps back to the default when the walk
-  animation ends.
+- **Walking — three clips in one sheet, at a FIXED speed** (`_lemoWalkPlan` /
+  `_lemoWalkAt`). The owner's breakdown of the 60 frames: **0–10** the warm-up (he leans
+  into it — the slowest part), **11–32** the loopable cruise, **33–59** the stop (still
+  travelling for the first 15, settled in place for the last dozen). A walk is no longer
+  "play all 60 frames and stretch the distance to fit": he cruises at `LEMO_SPEED`
+  (95 units/s), the cruise loops for as long as the distance needs, and the two ramps
+  are smoothsteps tied to the frames that draw them (each is worth half a cruise of the
+  same length). A hop too short to reach the cruise is walked slower, never faster.
+  He is a ball on a wheel — the cruise frames are near-identical, so leaving the loop at
+  any frame for the stop clip doesn't pop.
+- **A route is ONE trip** (`_lemoTrip`): the whole way to the meeting room (and back) is
+  a single walk whose corners are rounded (`_lemoRound`, `LEMO_CORNER_R` = 110,
+  `LEMO_CORNER_STEPS` points per corner) — he used to stop dead and restart at every
+  route point, and a radius of 34 still read as a stiff elbow. **110 was checked against
+  the walls for all 40 timeline route combinations (clear up to 120)** — a moved route
+  point has to keep that true, because the timeline can't ask the grid. Routes found ON
+  the grid (`_lemoNavRound`) pass `_lemoRound` an `ok(x, y)` test instead: each corner
+  is rounded as wide as the walkable floor allows, tighter if not, sharp if nothing fits
+  (a string-pulled route bends AROUND things — the inside of the bend is the furniture). The segment's length is the plain
+  polyline's (cheap, allocation-light for the catch-up); the rounded path is built only
+  for the segment on screen and walked by fraction.
+- **Turning**: the art faces RIGHT, so a leftward stretch mirrors him — a plain ±1
+  **snap** into `ctx.scale`, no tween. (A flip-through-the-middle tween was tried in
+  ١.٥; the owner asked for the snap back. Don't reintroduce it.)
+- **The nap** (`LEMO_NAP_CHANCE`, 0.4% of the idles at the two spots beside his bed,
+  `LEMO_BED_SPOTS`): he walks to `LEMO_SPAWN`, lies down (WakeUp played **backwards**)
+  and sleeps — a terminal `sleep` segment, so it is still pure and everyone sees it. The
+  doc still says `awake`; `lemoIsAsleep()` reads the timeline too, and `_lemoMaybeWake`
+  may replace **only the very doc whose timeline put him to bed** (same `at` + `seed`).
+- **No jump between modes.** Three things can drive him — the timeline, a call, the walk
+  home — and whenever that changes (or the doc does) the difference between where he was
+  drawn and where the new pose puts him is glided off (`_lemo.ox/oy`, rate-capped), not
+  shown as a snap. A flash is the one deliberate teleport; a floor change can't be glided.
 
 ### Sprites — everything is baked by `Art/Lemo/slice.py`
 Re-run it after touching a master; it prints the `fw`/`fh`/`box` that **`LEMO_ANIMS` in
@@ -1535,35 +1576,92 @@ ensures them; WakeUp lasts long enough for them to land).
 - The drop shadow uses the avatars' exact values; `installLowGfxShadowGuard` zeroes
   `shadowBlur` on reduced tiers, so it's free on mobile like every other world shadow.
 - `drawLemo(floorPass)` is called once per floor (before each floor's players); he is drawn
-  only in the pass matching `_lemo.floor`, scaled by `FLOOR2_SCALE` and faded with the
-  mezzanine up there.
+  only in the pass matching `_lemo.floor`, at `_lemo.sc` (the staircase's own curve, or
+  his floor's scale — eased, so it can't pop at either end) and faded with the mezzanine.
+- What he SAYS is drawn by `drawLemoSay()` in the on-top pass (with the chat bubbles),
+  never inside `drawLemo` — there the mezzanine art and the players painted over it.
 
-### نداء ليمو — `@ليمو` calls him over
-A mention of **ليمو** (picker row, found by «ليمو» / «lemo») interrupts him **for everyone**:
-flash white → gone → flash in beside the caller → walk up → «عايز ايه؟» (canvas bubble) →
-linger → flash out → flash back in at a random break-room spot, where his seeded life resumes.
+### نداء ليمو — `@ليمو <a question>`: he WALKS over, and ANSWERS (مقر ١.٥)
+A mention of **ليمو** with a question — or a press on him (`lemoPress`: the chat box
+opens with his mention already typed) — and he stops what he is doing, **walks** to the
+caller along a real route, and says the answer over his head. Then he lingers and walks
+home, where his seeded life carries on.
 
-- **Still one tiny doc.** `lemoSummon()` is a transaction writing
-  `{ s:'awake', at:<call end>, seed, from:<LEMO_SPOTS index>, call:{u, at, fx,fy,f0,ff, ax,ay, sx,sy, fl, face} }`.
-  `_lemoCallPose(call, t)` is PURE (`LEMO_CALL` phases); after `at` the timeline starts from
-  `from` in an idle, not a wake (`sim.back` → the flash-in). The caller measures the geometry
-  once (`_lemoCallSpots`: a free spot beside them on THEIR floor, and a clear appear point
-  further out) — nobody else searches.
-- **The call is the lock**: the transaction aborts while `serverNow() < at` (busy) or when he
-  is asleep. The sender's message is refused (shake + «uh-uh» + toast) when he is asleep
-  («أيقظه أولًا» — also a `_libToast`), busy, or the sender is in a work phase / locked in.
-  In a work phase he isn't even offered in the picker.
-- **Picker**: always the LAST row, whatever the distance (`d: Infinity`, no «الأقرب» tag), with
-  a state line (نائم / مشغول / سيأتي إليك). Avatar `LemoPFP.jpg` (`LEMO_PFP`, allowed by
-  `_chatSetAvatar`; loaded in `startLemo` into `gameState.avatarCache.lemo` for the canvas
-  pill). Colour: fixed teal. `uid 'lemo'` is excluded from pings, cooldowns and the mention
-  sound, and its pill never degrades to text for being "offline".
-- **Floor 2**: `call.fl` puts him on the mezzanine (`_lemo.floor`), see drawLemo above.
-- **The flash** must read as a flash, not a fade (it looked like a plain fade-in on floor 2):
-  fully white at full opacity first (`_lemoFlashIn` / `_lemoFlashOut`), with a light burst and
-  ring around him (`_lemo.glow` → `_lemoDrawGlow`, drawn even while he is invisible). The
-  sprite is washed white in one small scratch canvas (`_lemoWhiteFrame`, source-atop).
-- The caller hears a soft blip when «عايز ايه؟» pops up (`_lemo.callCue`).
+- **Still one tiny doc, and nothing about the walk is written.** A call is
+  `{ s:'awake', at:<latest end>, seed, from:<home spot>, call:{ u, t0, x, y, fl, f, w } }`
+  — who called, when, and where he stood at that moment. Every client steers its own
+  copy toward the caller it sees (`_lemoFolStep`: `start → loop → end` on the walk
+  clip's three parts, at `LEMO_CALL_SPEED` / `LEMO_CALL_RATE`); they all end up in the
+  same place because the caller is. He re-routes while the caller moves (never
+  mid-staircase) and comes to stand **BESIDE them** — `LEMO_CALL_STAND` (128) to the
+  side he is already on (`_lemoFolPlan`; the other side, then "as close as the route
+  gets", when that spot isn't open floor in plain sight of them: a seat is inside
+  furniture). Stopped below a member, the bubble over his head covered the very person
+  he was talking to; `drawLemoSay` also leans his box away from them, tail still over
+  his own head. He follows again once they have drifted `LEMO_CALL_SLACK`. Already close → he doesn't walk at all (and if he was
+  rolling, he just plays the stop clip in place).
+- **The caller's client ends it** (`_lemoRelease`): `{ …, ret:{ x, y, fl, f, t0 } }` with
+  the route home measured once, there — so the walk back is PURE again
+  (`_lemoRetPose(ret, t)`, the same route from the same point on every client). A call
+  nobody released (a closed tab) ends by itself at `at` with the old flash to his spot
+  (`sim.back`). **The flash is now only the fallback** — also used when there is no route.
+- **Routes** (`_lemoNavBuild`, `_lemoNavPath`): a two-layer, 16-unit grid built once from
+  the same `checkCollision()` a member obeys; A* per floor, string-pulled, corners
+  rounded. **The staircase is NOT part of the grid**: it is one fixed stretch
+  (`_lemoNav.stair.line`) — the painted band's own middle, measured off the mask, from
+  the right end to the **middle of the LAST step** (`LEMO_STAIR_LAST_STEP` in from the
+  left end), then a turn and straight **UP through the opening** onto the platform. Left
+  to A* he cut across the steps and stepped onto the mezzanine from their middle; walked
+  to the band's far-left edge he came out THROUGH the rails — the way up is the opening
+  above the last step, nowhere else. It is a few long strokes on purpose: the turn onto
+  the last step can only be a curve between long segments. Its points
+  are flagged `st`, which scales him with `stairScaleAt` and gives him the climbing bob
+  a member gets there (`_lemoStairBob`, a function of distance — no state).
+  **The timeline never uses any of this** (it must stay pure).
+- **His words ride the RELAY, never Firebase, and the page never sees the key.** The page
+  sends `{t:'lemoq', f, k, n, g, q, slug, near, tm, hj, st, on}` (no `uid` — an old
+  client drops it); the lobby's Durable Object does NOT forward it: it asks the model
+  (`presence-server/src/lemo.js`) and broadcasts `{t:'lemot', to, k}` (he is thinking —
+  that is the lock) and `{t:'lemoa', to, k, p:[{m}|{s}] | e}` to everyone, the asker
+  included. `p` is at most two parts: a line, or a sticker name (he may answer with a
+  sticker alone, or a line and then a sticker). `e` is an error code the PAGE turns into
+  one of his own lines (`LEMO_ERR_LINES`): `budget` (OpenAI says the account is empty —
+  «قولوا للأخ يوسف»), `nokey`, `tired` (the relay's own daily cap), `you` (this member's
+  daily cap), `busy`, `wait`, `err`.
+- **Timing**: the answer is generated WHILE he walks, so it is usually ready as he
+  arrives (`_lemoTalkStep`). Arrived first → a wait line (`LEMO_WAIT_LINES`, picked off
+  the call so every screen shows the same one) until it lands. An answer is HELD until
+  he is there (arrived, or already braking beside them) — a long walk outlasts a bubble,
+  and said on the way it was gone before he arrived — for at most `LEMO_SAY_HOLD_MS`; no answer in `LEMO_ANS_TIMEOUT_MS` → his
+  brain-froze line, on the asker's screen.
+- **Rules**: asleep → refused («أيقظه أولًا»); in a work session → refused (he isn't even
+  in the picker); **a mention with no question → refused**; someone else's answer in
+  flight → refused; and after he answers YOU, `LEMO_ASK_GAP_MS` (4 s) before you may
+  call again — exactly the gap someone else needs.
+- **The budget is in the relay** (`_lemoAsk`): one question at a time per lobby, a daily
+  spend cap per lobby (`LEMO_DAILY_USD`) and a daily count per member
+  (`LEMO_USER_DAILY`), kept in the Durable Object's storage so it survives the room
+  sleeping. Settings are `vars` in `wrangler.jsonc`; the key is a **secret**
+  (`npx wrangler secret put OPENAI_API_KEY --name mdwnh-presence`). **Never put the key
+  in a file, and never ask for it in a chat.**
+- **What he is and what he knows** live in `lemo.js` as plain text: `PERSONA` (a cheeky
+  gen-z robot, Egyptian-ish Arabic, 😭 💀 🔥 🥀 — never 🤣 🥲; never says he is an AI;
+  answers English with «يا مستعمر»; clean humour only), `KNOWLEDGE`, and `LATEST_WORKS`
+  (**the owner fills this in** — empty, he says management hasn't told him). The member
+  list + roles and the last three days of patch notes are fetched from the live sites
+  (cached 30 min); `member_details` is the one tool. The page adds the context he teases
+  with: who is asking and their gender (the lobby's), who is near, the local + Hijri
+  date, and how long they have worked today.
+- **Picker**: always the LAST row (`d: Infinity`), with a state line. Avatar
+  `LemoPFP.jpg`. `uid 'lemo'` is excluded from pings, cooldowns and the mention sound.
+- **The model's quirks, learned live**: `gpt-6-luna` on `/v1/chat/completions` refuses
+  function tools unless `reasoning_effort` is `'none'` — which is also the cheapest and
+  fastest setting, so that is what `callModel` sends. A real answer is ~2,500 tokens in
+  (mostly the cached system prompt) + ~60 out, ~2.5 s, ~$0.0003. `npx wrangler tail`
+  shows every question's token count and the day's running spend (`[lemo] …`).
+- **Testing the relay without the key**: `npx wrangler dev` in `presence-server/` with a
+  `.dev.vars` (gitignored) holding a dummy key and `OPENAI_BASE_URL` pointed at a local
+  stub. Delete the file afterwards.
 
 ---
 
@@ -1712,6 +1810,21 @@ box is always laid out and enter/exit is `opacity` + `visibility` + `.active`.
     input only when the height changed (`_chatRemeasure`), never per frame.
   - The outside-focus guard is now `!input.contains(target)` — a press on a pill is a
     press IN the input.
+
+### الجوال: شريط مُثبَّت فوق لوحة المفاتيح (`.docked`, مقر ١.٥)
+On a phone the box no longer floats over your head — it sat exactly where the people
+next to you stand, with half the screen already under the keyboard. `openChatBox` sets
+`_chatUi.docked` (`isMobile()` and not at the meeting table) and the wrap becomes a slim
+full-width bar pinned to the bottom of the **visual viewport** (the top of the keyboard).
+- **Written only on `force`** (open, a `visualViewport` resize **or scroll** — iOS slides
+  the viewport instead of resizing it), never per frame — the keyboard rule above.
+- **The camera lifts you** (`_chatUi.camLift`, screen px → `updateCamera`): your avatar
+  goes to the middle of what is left above the bar, so the people around you stay in
+  view. It eases back on close.
+- **Your own three dots**: nothing floats over your head any more, so the local player
+  gets the same `_typing` bubble everyone else sees (and the same melt into the
+  message). `_chatSelfLift` is 0 while docked.
+- The counter shows only from 20 left (`.near`), and send only when there is text.
 
 ### Mentions (الإشارات)
 Typing `@` (at the start or after a space — an `@` mid-word is an email) opens
@@ -1965,6 +2078,14 @@ separate, delayed animation and only found tables straight ahead. **Don't bring 
   jump sets `player._hatKick` (launch + landing shove, see Hat physics).
 - **Space belongs to whatever is focused first** (inputs, buttons, `[tabindex]`, `role=button`).
 - **The self double-tap undoes the single tap** (it opened the chat box) unless text is typed.
+- **A phone has two better ways than the double tap** (١.٥ — it was too hard to land):
+  **a flick UP** anywhere on the world (`JUMP_FLICK_MS` / `JUMP_FLICK_PX`; a one-finger
+  drag on the world does nothing else), and — with a thumb on the joystick — **ONE free
+  tap** with the other hand (`jumpTapWhileMoving`, at the same two spots a free tap is
+  noted). The double tap stays, loosened (450 ms / 90 px). `jumpMaybeHint` says so once
+  per device. **The canvas touch handlers read `targetTouches`, never `touches`**: with
+  a thumb on the joystick the second finger used to count as "two fingers" — the tap
+  was dropped and the pair read as a pinch that zoomed the world.
 - **The anywhere double-tap (phone) only counts a FIRST tap that nothing else took**
   (`jumpNoteFreeTap` at the end of the tap chain) — a tap that sat you down or opened
   something must not make the second one a jump. Checked right after the minigame buttons.
@@ -2111,6 +2232,112 @@ the seat pings before it's in a call). A `meet` from another player is returned 
 - The old bot mirrored voice members into `users/{uid}` every 10 s (and nulled `x/y` on
   leaving the call). That was removed with this rewrite; the site writes its own
   avatar/name at login.
+
+## التفاعلات في العالم + «ماذا فاتني؟» (مقر ١.٥)
+
+Two small things that make the room talk back — **zero Firebase**, both. Code is the
+`مقر ١.٥ — التفاعلات في العالم` block near the end of `game.js`; no markup, no CSS (canvas).
+
+### التفاعلات — the table's six reactions, anywhere
+Keys **1–6** on a PC (`e.code`, so an Arabic layout works), or **HOLD your own character**
+(`RX_HOLD_MS`): a ring of six buds out around you, slide to one, let go. Nothing is on
+screen until you hold — that is the whole anti-clutter design.
+- It rides the event the meeting table already used (`{t:'react',uid,r}`); the avatar
+  motion + rising emoji are `_meetReactFx`, unchanged. `receiveMeetReaction` no longer
+  requires a seat; at the table `reactNow` still goes through `meetReact` (its overlay
+  seat and "lit" state ride on it). A member in a work session sees it and hears nothing.
+- **A quick press on yourself still opens the chat box — on RELEASE now** (desktop:
+  `rxHoldArm` on mousedown, `rxMouseUp` opens the box or picks from the ring). The double
+  press = jump still works: the second press closes the box the first one's release opened.
+- Phone: the touch handlers arm the hold on `touchstart`, cancel it on a move, and the
+  `touchend` with the ring up `preventDefault`s (no synthesized click) and returns.
+- Drawn by `drawReactRing` in SCREEN space, from `render()` only — never the PiP pass —
+  so easing the selection scale where it is drawn advances it once a frame. With a mouse
+  each disc wears its key (how a PC user learns 1–6).
+
+### «ماذا فاتني؟» — press a member, see their last five messages
+`peekCanvasPress(world)` is asked in both hit-test chains right after the self-press:
+a press on another member fans their last `PEEK_MAX` messages out above them and shows a
+«رسالة خاصة» pill under them (→ `dmOpenWith`). A press anywhere else puts an open fan away
+and falls through.
+- **The history is what THIS client heard** (`_histPush`, on the player object, from
+  `receiveChatMessage` / `receiveSticker`). The relay keeps nothing, so a late joiner
+  starts empty. Memory only. Bubbles still live over the head are left out of the fan.
+- **"Liquid" is the MOTION, not a blur**: each bubble buds out of the one under it on a
+  damped spring, stretched while it travels, joined for a moment by a thinning neck.
+  No `backdrop-filter`, no shadow — بطاطس runs the same thing. Dashed outline, dimmer
+  SOLID text (`PEEK_TEXT_COL`, invariant 33) and a "how long ago" tab say "earlier".
+- `drawPeek` is a pure function of `(items, age)`, called inside `_drawChatBubblesOnTop`
+  (so the PiP pass can draw it); the lifecycle is `updateSocial`, from `gameLoop` only.
+
+---
+
+## الرسائل الخاصة — private messages (مقر ١.٥)
+
+A Telegram-style conversation between two members: saved, and you come back to it. The
+HUD's chat button (`#dm-btn`, with an unread badge), or the «رسالة خاصة» pill under a
+member. Text (500), emoji, stickers, pictures and GIFs. Code is the `الرسائل الخاصة`
+block at the end of `game.js`; markup is `#dm-panel` + `#dm-toast` + `#dm-zoom`; styles
+are the matching block at the foot of `style.css`.
+
+### Where it lives — which is what keeps it cheap AND the lobbies apart
+```
+lobbies/{lobby}/dm/inbox/{me}/{peer}   = { t, m, f, n, pn, pa }   // one row per conversation
+lobbies/{lobby}/dm/threads/{a~b}/{key} = { f, t, m? | k? | i:{w,h} }
+lobbies/{lobby}/dm/media/{a~b}/{key}   = "data:image/…"            // a picture's bytes, on their own
+```
+- **Everything is under `lobbyPath()`**, so a brother's client only ever touches
+  `lobbies/male/dm` and a sister's `lobbies/female/dm`: they can not reach each other
+  **by structure**. On top of that `dmCanMessage` filters by the roster's `gender`.
+  (No rules change: `lobbies` was already allowed.)
+- **ONE live listener per client**, on its OWN inbox node. A message's fan-out is two.
+- **A thread is listened to only while it is open**, on its newest page (`limitToLast`),
+  re-opened from where the cache stopped (`startAt`, minus `DM_RESUME_BACK_MS` for two
+  senders' clocks; de-duped by key). Older pages are one-shot `get()`s («رسائل أقدم»).
+- **A picture never rides a message record**: the thread carries `{w, h}`; the bytes are
+  fetched by a one-shot `get()` only when the bubble scrolls into view, kept in memory
+  and in the **Cache API** (`maqr-dm-media-v1` — `sw.js` leaves `maqr-dm-…` alone), so
+  each of the two people downloads it once per device. It is SHRUNK before it leaves
+  (`DM_IMG_SIDE` 1100, JPEG; a 2 MB photo went out as 219 KB). A GIF up to
+  `DM_GIF_MAX_BYTES` (2 MB) is sent as it is so it still moves; a bigger one as a still.
+  **The 1 GB of database STORAGE is the nearer limit than the 10 GB of downloads** — a
+  retention rule is the next thing to add if the team sends a lot of them.
+- The peer's unread count is theirs to reset, so their inbox row is a `runTransaction`;
+  the message + my own row (+ the picture) are one multi-path `update()`.
+
+### Identity, and who may write to whom (`dmCanMessage` — the ONE rule)
+A member id is the roster's **primary** Discord id (`_dmCanon`), so a member with two
+accounts has one inbox. The roster knows them → its `gender` decides. A guest → only
+while they stand in my lobby, or a thread I already have. **A سراج ghost may only message
+another ghost that is online**, and everything it wrote is removed on disconnect
+(`_dmGhostArm`) — a test account never lands in a real member's inbox.
+
+### The panel
+- **A phone**: full screen, modal (`dmIsModal()`), the world pass stops under it
+  (`_dm.canvasOff`), and its top/height are written from `visualViewport` so the compose
+  bar is never under the keyboard.
+- **A PC**: a drawer on the **right third**, sliding in from the edge, with a feathered
+  tint on that side only (no full-screen scrim) — **the room stays playable beside it**.
+  It takes the keyboard only while one of its own text fields has the focus
+  (`dmHoldsInput()` — the keydown and `handleMovement` guards ask that, not
+  `dmIsOpen()`); focusing one stops the walk (`_dmStopWalk`); Escape first lets go of
+  the field, then closes. The container is `pointer-events: none`, the card `auto`.
+- Pictures: the button, a drop anywhere on the drawer, or a paste; a preview bar before
+  sending (the text box becomes the caption). The file input lists **extensions**, not
+  MIME types — macOS's picker allowed videos when it didn't recognise one of the types.
+  While the panel is open a file dropped beside it is cancelled, or the browser would
+  LEAVE the page to show it.
+- A member in a work session (or behind azkar / prayer / a minigame) gets the badge and
+  nothing else — no sound, no toast.
+- Everything a member typed goes in by `textContent`; a stored picture must match
+  `_DM_MEDIA_RE` (no SVG) before it becomes an `<img>`.
+
+### Privacy — say it honestly
+The site signs in to Firebase anonymously, so the rules can not tie a row to a person.
+"Private" means **hidden by the app** — not encrypted, and readable by anyone with
+database access. Don't describe it as more.
+
+---
 
 ## Dismissing panels — the backdrop is a back button
 
@@ -2965,7 +3192,7 @@ Five separate fixed elements, stacked, and **none of them is inside another**:
 | element | what it is |
 |---|---|
 | `#user-card` | identity ONLY — avatar, name, points + rank chip, and the tasks chevron. The player count is gone; the gear and تخصيص moved out. |
-| `#hud-tools` | a glass box of **circle buttons** (تخصيص، الإعدادات) to the card's **left** |
+| `#hud-tools` | a glass box of **circle buttons** (القائد، تخصيص، الرسائل الخاصة with its unread badge، الإعدادات) to the card's **left** |
 | `#chal-dock` | the حضور المقر card, straight **under** the user card |
 | `#azkar-dock` | the azkar button + the Siraj time-spoof button, on a dock **under** the حضور المقر card (under the user card when that card is hidden) |
 | `#lib-panel` | the tasks panel, under the whole stack |
@@ -4240,6 +4467,13 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
 - **Data lives in `patch-notes.json`** — `{ days: [{ date:'YYYY-MM-DD', title, items:[{tag, text}] }] }`,
   newest first (the client sorts anyway). Fetched `no-store` on idle after the menu shows and on
   open; `.json` is never cached by sw.js. Rendered with `textContent` only.
+- **A RELEASE entry** (a day carrying `version`, e.g. «١.٥»): a banner, an `intro` line,
+  and `features: [{ img, title, text }]` — each a heading, a taped-on screenshot and a
+  paragraph — before the ordinary `items`. `img` must be `Art/News/<release>/<name>.webp`
+  (anything else is ignored; a missing file removes its frame). The screenshots are
+  made, not hand-captured: `node tools/shots.mjs` drives a headless Chrome as two سراج
+  ghosts and stages each feature through the dev-only `window.__mq.x` handle, and
+  `python3 tools/shots.py` turns the PNGs into the WebPs. It talks to the LIVE lobby.
 - **UPDATE IT ON EVERY PUSH** (see Quick Start): add today's day at the top (or extend today's),
   member-facing Arabic, spell-checked, no jargon. **Never edit or remove an older day** — the
   file only grows; the modal scrolls.

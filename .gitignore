@@ -35,3 +35,6 @@ Hats/masters/
 
 # Python bytecode (tools/bake_world.py)
 __pycache__/
+
+# Wrangler state when a wrangler command is run from the repo root
+.wrangler/

@@ -1,5 +1,5 @@
-import { database, pointsDatabase, ref, onValue, get, authReady, query, orderByKey, startAt, endAt, orderByChild, equalTo, onChildAdded, onChildChanged, onChildRemoved, goOffline,
-         update as _fbUpdate, set as _fbSet, remove as _fbRemove, runTransaction as _fbRunTransaction, onDisconnect as _fbOnDisconnect } from './firebase-config.js?v=3';
+import { database, pointsDatabase, ref, onValue, get, authReady, query, orderByKey, startAt, endAt, limitToLast, orderByChild, equalTo, onChildAdded, onChildChanged, onChildRemoved, goOffline,
+         update as _fbUpdate, set as _fbSet, remove as _fbRemove, runTransaction as _fbRunTransaction, onDisconnect as _fbOnDisconnect } from './firebase-config.js?v=4';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 //  ملكية الجلسة — one account, one live tab
@@ -1133,11 +1133,59 @@ function _newsRender(days) {
             head.appendChild(rel);
         }
         sec.appendChild(head);
+        // A RELEASE (a day carrying `version`): a banner, an intro line, and its headline
+        // features as taped-on screenshots with a heading each — then the ordinary items.
+        // Everything is still textContent; a picture's path must be one of ours.
+        if (day.version) {
+            sec.classList.add('is-release');
+            const ban = document.createElement('div');
+            ban.className = 'news-rel-banner';
+            const bn = document.createElement('span');
+            bn.className = 'news-rel-name';
+            bn.textContent = 'مقر المدونة';
+            const bv = document.createElement('b');
+            bv.className = 'news-rel-ver';
+            bv.textContent = String(day.version).slice(0, 8);
+            ban.append(bn, bv);
+            sec.appendChild(ban);
+        }
         if (day.title) {
             const h = document.createElement('h3');
             h.className = 'news-title';
             h.textContent = String(day.title);
             sec.appendChild(h);
+        }
+        if (day.intro) {
+            const p = document.createElement('p');
+            p.className = 'news-intro';
+            p.textContent = String(day.intro);
+            sec.appendChild(p);
+        }
+        for (const [fi, f] of (Array.isArray(day.features) ? day.features : []).entries()) {
+            if (!f || !f.title) continue;
+            const box = document.createElement('article');
+            box.className = 'news-feat' + (fi % 2 ? ' alt' : '');
+            // Heading, then the picture, then the words about it.
+            const h4 = document.createElement('h4');
+            h4.textContent = String(f.title);
+            box.appendChild(h4);
+            if (typeof f.img === 'string' && /^Art\/News\/[\w.\-\/]+\.(?:webp|png|jpe?g)$/.test(f.img) && !f.img.includes('..')) {
+                const fig = document.createElement('figure');
+                fig.className = 'news-shot';
+                const img = document.createElement('img');
+                img.loading = 'lazy';
+                img.decoding = 'async';
+                img.alt = String(f.title);
+                img.src = f.img;
+                // A picture that isn't there must not leave a broken frame behind.
+                img.addEventListener('error', () => fig.remove(), { once: true });
+                fig.appendChild(img);
+                box.appendChild(fig);
+            }
+            const tx = document.createElement('p');
+            tx.textContent = String(f.text || '');
+            box.appendChild(tx);
+            sec.appendChild(box);
         }
         const ul = document.createElement('ul');
         ul.className = 'news-items';
@@ -7114,6 +7162,7 @@ function startGame(userData) {
     setupAdminUI();
     setupWorkChallenge();
     setupChatUI();
+    setupSocialUI();
     setupMeetingUI();
     setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
     startTabTitleTicker();
@@ -8661,7 +8710,7 @@ function setupControls() {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
         if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || readingEndCardOpen()
-            || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || settingsIsOpen()) return;
+            || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || settingsIsOpen() || dmHoldsInput()) return;
         // مسافة = قفزة. Space belongs to whatever is FOCUSED first, though: a field
         // being typed into, or a button/link it activates (the settings rows, the
         // meeting seat, the trophy slots are all focusable). Only a press that reaches
@@ -8677,6 +8726,15 @@ function setupControls() {
             if (!e.repeat) triggerJump();
             return;
         }
+        // ١–٦ = a reaction, at once (فرح، تصفيق، ضحك، حب، حزن، غضب) — the same six the
+        // meeting table has. e.code is the PHYSICAL key, so an Arabic layout works too.
+        if (!e.repeat && !e.ctrlKey && !e.metaKey && !e.altKey && /^Digit[1-6]$/.test(e.code)) {
+            const ae = document.activeElement;
+            if (!(ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable))) {
+                reactNow(MEET_REACTIONS[+e.code.charAt(5) - 1].k);
+                return;
+            }
+        }
         gameState.keys[e.code] = true;
     });
     window.addEventListener('keyup', (e) => { gameState.keys[e.code] = false; });
@@ -8690,7 +8748,7 @@ function setupControls() {
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
         // Disable scroll zoom while the dashboard / customization / fireplace / tasks panel is open
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || meetingIsOpen() || settingsIsOpen()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || meetingIsOpen() || settingsIsOpen() || dmIsModal()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -8741,7 +8799,13 @@ function setupControls() {
         // Pressing your OWN character opens the chat box above your head. Checked
         // BEFORE handleClickOffSofa: while seated, a press on yourself lands ON the
         // sofa, and that helper swallows the click.
-        if (chatSelfPress(clickWorld)) return;
+        // The box opens on RELEASE now, not on press: a press that is HELD opens the
+        // reaction ring instead (see التفاعلات → rxHoldArm / rxMouseUp).
+        if (e.button === 0 && chatWantsSelfPress(clickWorld)) { rxHoldArm(e.clientX, e.clientY, true); return; }
+        // Pressing ليمو: the chat box opens with his mention already typed.
+        if (lemoWantsPress(clickWorld)) { e.preventDefault(); lemoPress(); return; }
+        // Pressing ANOTHER member: their last messages + the «رسالة خاصة» pill.
+        if (peekCanvasPress(clickWorld)) return;
         // ...and clicking anywhere off the sofa does the same thing.
         if (handleClickOffSofa(clickWorld)) return;
         // Dashboard entry = second-floor papers desk — opens the dashboard (work
@@ -9363,17 +9427,20 @@ function initMobileControls() {
     if (canvas) {
         let pinchDist = 0;
 
+        // `targetTouches` (fingers that STARTED on the canvas), never `touches` (every
+        // finger on the screen): with a thumb on the joystick, the second finger's tap
+        // or flick used to read as a two-finger pinch between the two and zoom the world.
         canvas.addEventListener('touchstart', (e) => {
-            if (e.touches.length === 2) {
+            if (e.targetTouches.length === 2) {
                 pinchDist = Math.hypot(
-                    e.touches[0].clientX - e.touches[1].clientX,
-                    e.touches[0].clientY - e.touches[1].clientY
+                    e.targetTouches[0].clientX - e.targetTouches[1].clientX,
+                    e.targetTouches[0].clientY - e.targetTouches[1].clientY
                 );
             }
         }, { passive: true });
 
         canvas.addEventListener('touchmove', (e) => {
-            if (e.touches.length !== 2) return;
+            if (e.targetTouches.length !== 2) return;
             // Disable pinch during active race
             if (gameState.race && gameState.race.active) return;
             // Disable pinch-zoom during a reading session — same reason as the
@@ -9382,8 +9449,8 @@ function initMobileControls() {
             abortReadingCamera();   // a pinch during the exit tween wins (see the wheel handler)
 
             const newDist = Math.hypot(
-                e.touches[0].clientX - e.touches[1].clientX,
-                e.touches[0].clientY - e.touches[1].clientY
+                e.targetTouches[0].clientX - e.targetTouches[1].clientX,
+                e.targetTouches[0].clientY - e.targetTouches[1].clientY
             );
             if (pinchDist === 0) { pinchDist = newDist; return; }
 
@@ -9396,26 +9463,49 @@ function initMobileControls() {
         canvas.addEventListener('touchend', () => { pinchDist = 0; }, { passive: true });
 
         // ── Canvas tap → laptop interaction (mobile) ─────────────────
-        let tapMoved = false;
-        let tapStartX = 0, tapStartY = 0;
+        // `targetTouches`, like the pinch above: a thumb resting on the joystick must
+        // not turn the other hand's tap into "two fingers" — that is what made a jump
+        // while walking so hard to land.
+        let tapMoved = false, tapMulti = false;
+        let tapStartX = 0, tapStartY = 0, tapStartT = 0;
 
         canvas.addEventListener('touchstart', (e) => {
-            if (e.touches.length !== 1) return;
-            tapMoved = false;
-            tapStartX = e.touches[0].clientX;
-            tapStartY = e.touches[0].clientY;
+            if (e.targetTouches.length !== 1) { tapMulti = true; rxHoldCancel(); return; }
+            tapMoved = false; tapMulti = false;
+            tapStartX = e.targetTouches[0].clientX;
+            tapStartY = e.targetTouches[0].clientY;
+            tapStartT = performance.now();
+            // A finger HELD on my own character opens the reaction ring (see التفاعلات).
+            rxHoldArm(tapStartX, tapStartY, false);
         }, { passive: true });
 
         canvas.addEventListener('touchmove', (e) => {
-            if (e.touches.length !== 1) return;
-            const dx = e.touches[0].clientX - tapStartX;
-            const dy = e.touches[0].clientY - tapStartY;
-            if (Math.hypot(dx, dy) > 10) tapMoved = true;
+            if (e.targetTouches.length !== 1) return;
+            const tt = e.targetTouches[0];
+            if (rxRingIsOpen()) { rxRingPoint(tt.clientX, tt.clientY); return; }
+            const dx = tt.clientX - tapStartX;
+            const dy = tt.clientY - tapStartY;
+            if (Math.hypot(dx, dy) > 10) { tapMoved = true; rxHoldCancel(); }
         }, { passive: true });
 
         canvas.addEventListener('touchend', (e) => {
-            if (tapMoved) return; // was a drag, not a tap
+            // The ring is up: lifting the finger picks (or dismisses). Cancel the tap so
+            // no synthesized click follows it onto the canvas.
+            if (rxRingIsOpen()) { e.preventDefault(); rxRingRelease(); return; }
+            rxHoldCancel();
+            if (tapMulti) return;     // a pinch, not a tap
             if (e.changedTouches.length !== 1) return;
+            if (tapMoved) {
+                // القفز: a quick flick UP anywhere on the world = a jump. A one-finger
+                // drag on the world does nothing else, so the gesture is free.
+                const ft = e.changedTouches[0];
+                const fdx = ft.clientX - tapStartX, fdy = ft.clientY - tapStartY;
+                if (!isMinigameActive() && performance.now() - tapStartT < JUMP_FLICK_MS
+                    && fdy < -JUMP_FLICK_PX && Math.abs(fdx) < -fdy * 0.9) {
+                    if (triggerJump()) jumpHintDone();
+                }
+                return;
+            }
             const t = e.changedTouches[0];
 
             // Check race return button tap
@@ -9467,6 +9557,13 @@ function initMobileControls() {
             // branch below does — a synthesized click here would land on the canvas.
             if (selfDoubleTapJump(clickWorld)) { e.preventDefault(); return; }
             if (chatWantsSelfPress(clickWorld)) { e.preventDefault(); openChatBox(); return; }
+            // Pressing ليمو: the box opens with his mention typed (cancel first, focus
+            // second — the same keyboard rule as the self-press above).
+            if (lemoWantsPress(clickWorld)) { e.preventDefault(); lemoPress(); return; }
+            // Pressing ANOTHER member: their last messages fan out above them, with a
+            // «رسالة خاصة» pill under them. Before the sofa helper, for the same reason
+            // the self-press is: the press landed on a person, not on the room.
+            if (peekCanvasPress(clickWorld)) { e.preventDefault(); return; }
             // ...and tapping anywhere off the sofa does the same thing.
             if (handleClickOffSofa(clickWorld)) return;
 
@@ -9545,13 +9642,18 @@ function initMobileControls() {
             }
             // Laptops only: blocked while a pomodoro/free-mode session is active (including
             // break) so you can't hop to a different laptop mid-session.
-            if (gameState.pomodoro.active || gameState.freeMode.active) { jumpNoteFreeTap(t.clientX, t.clientY); return; }
+            if (gameState.pomodoro.active || gameState.freeMode.active) {
+                if (!jumpTapWhileMoving()) jumpNoteFreeTap(t.clientX, t.clientY);
+                return;
+            }
             if (gameState.activeLaptop && !gameState.isLockedIn && !gameState.anim.active) {
                 if (gameState.activeLaptop.claimedBy) return;
                 showLaptopModeSelect();
                 return;
             }
-            // Nothing took this tap — it may be the first half of a double-tap jump.
+            // Nothing took this tap. With a thumb on the joystick it IS the jump (one
+            // tap, no double) — otherwise it may be the first half of a double-tap jump.
+            if (jumpTapWhileMoving()) return;
             jumpNoteFreeTap(t.clientX, t.clientY);
         }, { passive: false });   // non-passive so the chat branch above can preventDefault
     }
@@ -10734,6 +10836,7 @@ function doLogout() {
     _azkarFakeMin  = null;
     disconnectPresenceSocket();   // close the live-position relay; don't reconnect
     stopLemo();                   // his lobby doc listener
+    dmStop();                     // the private-messages inbox + any open thread
     // Explicit logout — don't auto-resume on the next load.
     try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
     clearPendingEndCard();
@@ -11243,6 +11346,9 @@ function onPresenceMessage(data) {
     // member is `s` / `ids`). See الاجتماع → the voice feed.
     if (msg.t === 'spk' || msg.t === 'vc') { if (msg.on === 1) perfWake(); onMeetVoiceMsg(msg); return; }
     if (msg.t === 'meetq') { _meetOnBotQuery(); return; }
+    // ليمو's words, from the relay itself (no `uid`: the sender is the room, not a
+    // player) — "he is thinking for X" and then the answer. See نداء ليمو.
+    if (msg.t === 'lemot' || msg.t === 'lemoa') { perfWake(); onLemoRelay(msg); return; }
     if (!msg.uid || msg.uid === gameState.userId) return;
     // Someone's Firebase view says we left — say otherwise. (The ask is also their
     // position, so it carries on through the normal handling below.)
@@ -11491,7 +11597,9 @@ function updateCamera() {
     
     const { x: px, y: py } = getPlayerRenderPos(player);
     const targetX = -px;
-    const targetY = -py;
+    // A phone with the type bar docked to the keyboard: lift me into the middle of
+    // the part of the screen that is still visible (see updateChatInputPos).
+    const targetY = -py - (_chatUi.camLift || 0) / Math.max(0.2, gameState.zoom);
     const lerpFactor = 1 - Math.pow(1 - CAMERA_SMOOTHING, gameState.dtFactor);
     gameState.camera.x += (targetX - gameState.camera.x) * lerpFactor;
     gameState.camera.y += (targetY - gameState.camera.y) * lerpFactor;
@@ -11507,7 +11615,7 @@ function handleMovement() {
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
     // minigame overlays, locked-in sessions, kidnap anim, prayer, sitting, reading.
     if ((JUICE_ENTRANCE && _entrance.active)
-        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || isMinigameOverlayOpen() || settingsIsOpen()
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || isMinigameOverlayOpen() || settingsIsOpen() || dmHoldsInput()
         || gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)
         || readingEndCardOpen()) {
@@ -12364,6 +12472,7 @@ function gameLoop(timestamp) {
         updateReadingCamera();
         updatePomodoro();
         runSlowTasks();              // one DOM-lifecycle guard per frame — see SLOW_TASKS
+        updateSocial();              // reaction ring, the tapped member's history, DM guards
         updateChatSystem();          // chat bubble springs + the floating input's position.
                                      // Before the minigame early-returns, so entering a
                                      // race/fig/boss game still closes an open chat box.
@@ -12451,7 +12560,7 @@ function gameLoop(timestamp) {
 function _worldCanvasHidden() {
     return gameState.azkar.active || troCeremonyIsRunning() || _meet.canvasOff || _stg.canvasOff || _pipCoversWorld() ||
         (gameState._isMobile && (gameState.prayer.isOverlayActive
-            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen() || _lib.canvasOff));
+            || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen() || _lib.canvasOff || _dm.canvasOff));
 }
 
 function render() {
@@ -12584,6 +12693,7 @@ function render() {
     }
     _drawChatBubblesOnTop(W, H); // over EVERYTHING — players, mezzanine, overlays, focus mask
     drawChatBeacons(W, H);       // بوصلة من أشار إليّ من خارج الشاشة — فوق كل شيء كذلك
+    drawReactRing(W, H);         // حلقة التفاعلات حول شخصيتي (ضغطة مطوّلة)
     drawTeleportOverlay(W, H);
     drawMinigameLoadFade(W, H);
 
@@ -12619,6 +12729,8 @@ function _drawChatBubblesOnTop(W, H) {
     ctx.translate(gameState.camera.x, gameState.camera.y);
     drawChatBubbles(1);
     drawChatBubbles(2);
+    drawPeek();                 // the tapped member's last messages + the «رسالة خاصة» pill
+    drawLemoSay();              // what ليمو is saying — over everything, like a bubble
     ctx.restore();
 }
 
@@ -16765,7 +16877,17 @@ if (document.readyState === 'loading') { document.addEventListener('DOMContentLo
 // Dev-only handle (localhost / LAN): lets a console or a profiler reach the live
 // state without exporting anything from the module. Never present in production.
 if (/^(localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.)/.test(location.hostname)) {
-    window.__mq = { gameState, PERF, worldCache, worldCollision, render, _own };
+    window.__mq = { gameState, PERF, worldCache, worldCollision, render, _own,
+        // مقر ١.٥ — a getter, not a value: these are declared further down the module,
+        // so reading them here at evaluation time would be a temporal-dead-zone throw.
+        get x() {
+            return { _lemo, _lemoNav, _lemoNavBuild, _lemoNavPath, _lemoApplyDoc, onLemoRelay, lemoPress,
+                     _dm, dmOpen, dmClose, _dmPickFile, _dmSubmit, _peek, peekOpen, _rx, reactNow,
+                     openChatBox, closeChatBox, _chatUi,
+                     isOnStairs, checkCollision, _lemoRound, LEMO_SPOTS, LEMO_ROUTE, LEMO_MEET_SPOTS,
+                     LEMO_MEET_HOME, LEMO_MEET_LINKS, LEMO_SPAWN,
+                     teleportEntity, updatePlayerPosition, sendPositionWS, _dmSend };
+        } };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -29979,10 +30101,135 @@ const LEMO_ANIMS = {
     Play:     { frames: 52, cols: 4, fw: 342, fh: 338, box: [137, 26, 1847, 1719], fps: 8,  loop: false },
 };
 
-// The walk cycle can't just be looped: it opens with a warm-up and closes with an
-// overshoot. So the TRAVEL is bound to frames 0→45 and the last 15 frames play out
-// in place as he settles. One walk = one playthrough, whatever the distance.
-const LEMO_WALK_MOVE_FRAMES = 45;
+// ── The walk — three clips in one sheet (مقر ١.٥) ───────────────────────────────
+// The owner's breakdown of the 60 frames:
+//   0–10   the WARM-UP: he leans into it. The slowest part — he is still picking up speed.
+//   11–32  the CRUISE: loopable, for as long as the trip needs.
+//   33–59  the STOP: he eases off (still travelling for the first 15 frames) and is
+//          settled, in place, for the last dozen.
+// So a walk is no longer "play all 60 frames and stretch the distance to fit": he has
+// a FIXED cruising speed, the cruise loops as long as the distance needs, and the two
+// ramps are tied to the frames that draw them. That is what lets him walk any
+// distance, along any path — and follow someone (see نداء ليمو).
+const LEMO_WALK_FPS      = 10;
+const LEMO_WALK_START_N  = 11;      // frames 0–10
+const LEMO_WALK_LOOP_0   = 11;
+const LEMO_WALK_LOOP_N   = 22;      // frames 11–32
+const LEMO_WALK_END_0    = 33;
+const LEMO_WALK_END_N    = 27;      // frames 33–59
+const LEMO_WALK_END_MOVE = 15;      // …of which he is still moving in the first 15
+const LEMO_SPEED         = 95;      // world units per second at the cruise — the same for every stroll
+const LEMO_CORNER_R      = 110;     // how round a route's corners are walked (world units). 34 read as a
+                                   // stiff elbow; 110 is a turn. Checked against the walls for every
+                                   // timeline trip (all 40 route combinations clear up to 120) — a
+                                   // moved route point has to keep that true.
+const LEMO_CORNER_STEPS  = 14;      // points per rounded corner
+
+// A walk of length D at cruise speed V, with the clip played `rate`× as fast.
+// The warm-up ramps 0→V and the stop ramps V→0 on a smoothstep, so each covers
+// exactly half of what the cruise would in the same time. A hop too short to reach
+// the cruise is walked slower, never faster.
+function _lemoWalkPlan(D, V, rate) {
+    const fm = 1000 / (LEMO_WALK_FPS * rate);           // ms per sheet frame
+    const Ts = LEMO_WALK_START_N * fm, Tem = LEMO_WALK_END_MOVE * fm, Te = LEMO_WALK_END_N * fm;
+    const ramp = (Ts + Tem) / 2000;                      // seconds of cruise the two ramps are worth
+    let v = V, Tl = 0;
+    if (D >= V * ramp) Tl = (D - V * ramp) / V * 1000;
+    else v = ramp > 0 ? D / ramp : 0;
+    return { v, fm, Ts, Tl, Tem, Te, ms: Ts + Tl + Te };
+}
+// How far along he is, and which sheet frame shows, `el` ms into a planned walk.
+function _lemoWalkAt(pl, el) {
+    const vs = pl.v / 1000;
+    if (el < pl.Ts) {
+        const u = Math.max(0, el / pl.Ts);
+        return { d: vs * pl.Ts * (u * u * u - u * u * u * u / 2), f: Math.min(LEMO_WALK_START_N - 1, Math.floor(el / pl.fm)) };
+    }
+    const d0 = vs * pl.Ts * 0.5;
+    const e2 = el - pl.Ts;
+    if (e2 < pl.Tl) return { d: d0 + vs * e2, f: LEMO_WALK_LOOP_0 + (Math.floor(e2 / pl.fm) % LEMO_WALK_LOOP_N) };
+    const e3 = e2 - pl.Tl;
+    const u = Math.min(1, e3 / pl.Tem);
+    return {
+        d: d0 + vs * pl.Tl + vs * pl.Tem * (u - u * u * u + u * u * u * u / 2),
+        f: Math.min(LEMO_WALK_END_0 + LEMO_WALK_END_N - 1, LEMO_WALK_END_0 + Math.floor(e3 / pl.fm)),
+    };
+}
+
+// ── Paths: a polyline with its running length ────────────────────────────────
+function _lemoPathMake(pts) {
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+    return { pts, cum, len: cum[cum.length - 1] };
+}
+// The point `d` along it, the floor of the stretch it is on, and which way he is heading.
+function _lemoPathAt(path, d) {
+    const pts = path.pts, cum = path.cum;
+    if (pts.length < 2) { const p = pts[0] || { x: 0, y: 0 }; return { x: p.x, y: p.y, fl: p.fl || 0, dx: 0, st: !!p.st }; }
+    if (d <= 0) return { x: pts[0].x, y: pts[0].y, fl: pts[0].fl || 0, dx: _lemoSegDx(pts, 0), st: !!pts[0].st };
+    if (d >= path.len) { const p = pts[pts.length - 1]; return { x: p.x, y: p.y, fl: p.fl || 0, dx: _lemoSegDx(pts, pts.length - 2), st: !!p.st }; }
+    let i = 1;
+    while (i < cum.length - 1 && cum[i] < d) i++;
+    const a = pts[i - 1], b = pts[i], L = cum[i] - cum[i - 1];
+    const t = L > 0 ? (d - cum[i - 1]) / L : 0;
+    // `st`: this stretch is the staircase (both of its ends are on it).
+    return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, fl: (t < 0.5 ? a.fl : b.fl) || 0, dx: _lemoSegDx(pts, i - 1), st: !!(a.st && b.st) };
+}
+function _lemoSegDx(pts, i) {
+    const a = pts[i], b = pts[i + 1];
+    if (!a || !b) return 0;
+    const L = Math.hypot(b.x - a.x, b.y - a.y);
+    return L > 0 ? (b.x - a.x) / L : 0;
+}
+// Round every corner: the vertex is replaced by a short curve that starts and ends
+// `r` back along its two legs (less on a short leg). A corner walked as a point is
+// what makes a route read as a robot arm; walked as a curve it reads as him turning.
+function _lemoRound(pts, r, ok) {
+    if (pts.length < 3) return pts.slice();
+    const out = [pts[0]];
+    for (let i = 1; i < pts.length - 1; i++) {
+        const a = pts[i - 1], b = pts[i], c = pts[i + 1];
+        const la = Math.hypot(b.x - a.x, b.y - a.y), lc = Math.hypot(c.x - b.x, c.y - b.y);
+        // A floor change (the stairs' hand-over) is kept as a sharp point.
+        if (la < 1 || lc < 1 || (a.fl || 0) !== (b.fl || 0) || (b.fl || 0) !== (c.fl || 0)) { out.push(b); continue; }
+        const k = Math.min(r, la * 0.45, lc * 0.45);
+        const p0 = { x: b.x + (a.x - b.x) * (k / la), y: b.y + (a.y - b.y) * (k / la) };
+        const p1 = { x: b.x + (c.x - b.x) * (k / lc), y: b.y + (c.y - b.y) * (k / lc) };
+        // `ok` (routes found on the grid only): a curve that would leave the walkable
+        // floor is tried again tighter, and kept sharp if nothing fits.
+        if (ok) {
+            let kk = k, fits = false;
+            for (let pass = 0; pass < 4 && !fits; pass++, kk *= 0.6) {
+                const q0 = { x: b.x + (a.x - b.x) * (kk / la), y: b.y + (a.y - b.y) * (kk / la) };
+                const q1 = { x: b.x + (c.x - b.x) * (kk / lc), y: b.y + (c.y - b.y) * (kk / lc) };
+                fits = true;
+                for (let s = 1; s < LEMO_CORNER_STEPS && fits; s++) {
+                    const t = s / LEMO_CORNER_STEPS, m = 1 - t;
+                    fits = ok(m * m * q0.x + 2 * m * t * b.x + t * t * q1.x, m * m * q0.y + 2 * m * t * b.y + t * t * q1.y);
+                }
+                if (fits) { p0.x = q0.x; p0.y = q0.y; p1.x = q1.x; p1.y = q1.y; }
+            }
+            if (!fits) { out.push(b); continue; }
+        }
+        for (let s = 0; s <= LEMO_CORNER_STEPS; s++) {
+            const t = s / LEMO_CORNER_STEPS, m = 1 - t;
+            out.push({ x: m * m * p0.x + 2 * m * t * b.x + t * t * p1.x, y: m * m * p0.y + 2 * m * t * b.y + t * t * p1.y, fl: b.fl, st: b.st });
+        }
+    }
+    out.push(pts[pts.length - 1]);
+    return out;
+}
+// His size: on the staircase it grows with every step (the same curve a member's
+// does), otherwise it is his floor's.
+function _lemoScaleAt(x, onStair, fl) {
+    if (onStair) return stairScaleAt(x);
+    return fl === 2 ? FLOOR2_SCALE : 1;
+}
+// The climbing bob a member gets on the steps — a function of how far along the route
+// he is, so it is the same on every screen and needs no state of its own.
+const LEMO_STAIR_BOB = 7;
+function _lemoStairBob(d) { return Math.abs(Math.sin(d * 0.082)) * LEMO_STAIR_BOB; }
+
 
 // Segment lengths — every one is a whole playthrough, which is what lets the
 // timeline be computed rather than stepped frame by frame.
@@ -29990,9 +30237,7 @@ const _lemoAnimMs = (n) => LEMO_ANIMS[n].frames * 1000 / LEMO_ANIMS[n].fps;
 const LEMO_SLEEP_CYCLE_MS = _lemoAnimMs('Sleeping');   // 5000
 const LEMO_WAKE_MS        = _lemoAnimMs('WakeUp');     // 3375
 const LEMO_IDLE_CYCLE_MS  = _lemoAnimMs('Idle');       // 3000
-const LEMO_WALK_MS        = _lemoAnimMs('Walk');       // 6000
 const LEMO_PLAY_MS        = _lemoAnimMs('Play');       // 6500
-const LEMO_WALK_TRAVEL_MS = LEMO_WALK_MOVE_FRAMES * 1000 / LEMO_ANIMS.Walk.fps;   // 4500
 
 // Spawn + wander spots, in source-art px (measured off Art/Lemo/reff.png, which is
 // the same 2210×3160 space as the workspace layers — hence sx2w/sy2w straight through).
@@ -30062,6 +30307,13 @@ const LEMO_REST_MIN_WALKS = 8;    // break-room hops before a meeting-room trip 
 const LEMO_MEET_CHANCE    = 0.06; // ...then the chance, per idle, that he sets off
 const LEMO_MEET_MIN_WALKS = 3;    // hops around the table before he may head back
 const LEMO_MEET_MAX_WALKS = 6;
+// The nap: very rarely, standing at one of the two spots beside his bed, an idle ends
+// with him walking back to it and going to sleep — until somebody walks up to him.
+// ~0.4% of those idles: about once every hour or two of a busy lobby.
+const LEMO_NAP_CHANCE = 0.004;
+const LEMO_BED_SPOTS = LEMO_SPOTS.slice()
+    .sort((a, b) => Math.hypot(a.x - LEMO_SPAWN.x, a.y - LEMO_SPAWN.y) - Math.hypot(b.x - LEMO_SPAWN.x, b.y - LEMO_SPAWN.y))
+    .slice(0, 2);
 // Arriving to an empty lobby puts him to bed — unless he was woken under a minute
 // ago: then someone else is arriving at the same moment and just isn't in our users
 // snapshot yet, and a reset would steal their wake.
@@ -30071,32 +30323,23 @@ const LEMO_RESET_GRACE_MS = 60000;
 // that is invisible, in one it's a hitch. He isn't drawn until caught up.
 const LEMO_STEP_BUDGET = 20000;
 
-// Travel easing — ease in AND out, but NOT as two power curves stitched at t=0.5
-// (that was tried and it visibly kicked: a piecewise 0.5*(2t)^p1 / 1-0.5*(2(1-t))^p2
-// only has a continuous VELOCITY at the seam when p1 === p2, so using a lower power
-// for a faster start than the tail's power made the speed jump right at the midpoint
-// — the "sudden speedup" bug). A logistic curve has no seam: it's one smooth
-// function for the whole travel, and shifting its center below 0.5 front-loads the
-// acceleration (fast pickup) while the back two-thirds decelerate into a long, gentle
-// stop — same intent as before, minus the discontinuity.
-const _LEMO_EASE_K = 7, _LEMO_EASE_C = 0.32;
-const _LEMO_EASE_R0 = 1 / (1 + Math.exp(_LEMO_EASE_K * _LEMO_EASE_C));
-const _LEMO_EASE_R1 = 1 / (1 + Math.exp(-_LEMO_EASE_K * (1 - _LEMO_EASE_C)));
-const _lemoEase = (t) => {
-    const raw = 1 / (1 + Math.exp(-_LEMO_EASE_K * (t - _LEMO_EASE_C)));
-    return (raw - _LEMO_EASE_R0) / (_LEMO_EASE_R1 - _LEMO_EASE_R0);
-};
-
 const _lemo = {
-    x: LEMO_SPAWN.x, y: LEMO_SPAWN.y,
-    state: 'sleeping',            // sleeping | waking | idle | walking | playing
+    x: LEMO_SPAWN.x, y: LEMO_SPAWN.y,     // where he is DRAWN (the pose, plus any glide between modes)
+    rx: LEMO_SPAWN.x, ry: LEMO_SPAWN.y,   // where the current pose puts him
+    ox: 0, oy: 0,                         // the glide: what is left of a mode change's jump
+    state: 'sleeping',            // sleeping | waking | idle | walking | playing | called
     anim: 'Sleeping',
     frame: 0,
     idleFrame: 0,                 // Idle's frame at this moment — Play's stand-in until its sheet lands
     face: 1,                      // 1 = facing right (the art's default), -1 = mirrored
+    faceT: 1,                     // …the way the current pose wants him to face (applied as a snap)
+    faceS: 1,
+    sc: 1,                        // drawn scale (the stairs / the mezzanine)
+    onStair: false,               // this frame's pose is on the staircase
+    bob: 0, bobT: 0,              // the climbing bob (world px, up), and what it is easing to
     sheets: {},
     started: false,
-    doc: null,                    // the lobby doc, sanitised: { s, at, seed }
+    doc: null,                    // the lobby doc, sanitised: { s, at, seed, call, ret, from }
     docKey: '',
     docReady: false,
     sim: null,                    // the timeline since his last wake; null = asleep
@@ -30107,93 +30350,433 @@ const _lemo = {
     sleepFreed: false,
     unsub: null,
     // ── نداء ليمو (see lemoSummon) ────────────────────────────────────────────
-    floor: 1,                     // 2 only while a call has him up on the mezzanine
+    floor: 1,                     // 2 while he is up on the mezzanine
     white: 0,                     // 0..1 — the teleport flash
     glow: 0,                      // 0..1 — the light burst around it
     alpha: 1,
-    talk: 0,                      // >0 while «عايز ايه؟» is up (its age, ms)
-    callCue: 0,                   // the call whose arrival cue already played here
     summoning: false,             // a summon transaction is in flight from this client
+    releasing: false,
+    fol: null,                    // the walk to the caller — steered locally (_lemoFolStep)
+    mode: '',                     // 'time' | 'call' | 'ret' — what drove the last frame
+    lastT: 0,
+    retKey: 0, retPath: null, retPlan: null,
+    say: null,                    // what is over his head: { parts, i, t0, life, lay, stk, wait }
+    saidAt: 0,
+    ai: { busy: null, ans: null, mine: null, myNextAt: 0 },
 };
 
-/* ── نداء ليمو — a mention calls him over ─────────────────────────────────────
-   @ليمو (or @lemo) in the chat interrupts whatever he is doing, for EVERYONE: he
-   flashes white and vanishes, flashes back in beside the caller, walks up, says
-   «عايز ايه؟», waits a moment, flashes out — and reappears at one of his break-room
-   spots, where his ordinary seeded life carries on.
+/* ── طريق ليمو — a walkable grid and A* over it (مقر ١.٥) ───────────────────────
+   His own life (the seeded timeline) still walks hand-authored straight lines — it
+   has to stay a PURE function of the doc, and "is this cell walkable" depends on
+   whether this client's collision masks have decoded yet. Pathfinding is only for
+   the two things that are not on the timeline: walking to whoever called him, and
+   walking home afterwards.
 
-   Still ONE tiny lobby doc and no stream. The summon is a transaction that writes
-   `{ s:'awake', at: <when the call ends>, seed, from: <spot>, call: {...} }`: the
-   whole call is a pure function of `call` and serverNow() (`_lemoCallPose`), and the
-   timeline after it starts fresh at `at` from `from`. The caller's client measures
-   the geometry (where he is, where to appear, where to stand) once and writes it —
-   nobody else ever has to search the world.
+   Two layers (floor 1, floor 2), 16-unit cells, built once from the same
+   checkCollision() a player obeys — so he goes where a member can go and nowhere
+   else. ~24k cells in all; a search is a few milliseconds and runs only when a call
+   starts or the caller has moved.
 
-   The call IS the lock: until `at`, the transaction refuses another one. Asleep, he
-   refuses too — the message is held and the sender is told to wake him first. And
-   nobody in a work session can call him (he isn't even in their picker). */
-const LEMO_UID  = 'lemo';
-const LEMO_NAME = 'ليمو';
-const LEMO_PFP  = 'LemoPFP.jpg';
-const LEMO_TALK_TEXT = 'عايز ايه؟';
-const LEMO_CALL_LEAD = 250;                       // ms — lets the doc reach everyone first
-const LEMO_CALL = {
-    flashOut: 520, gone: 280, flashIn: 460,
-    walk: 2600, talk: 3800, linger: 1400, leave: 520,
-};
-const LEMO_CALL_MS = Object.values(LEMO_CALL).reduce((a, b) => a + b, 0);
-const LEMO_BACK_FLASH_MS = 520;                   // the flash-in back at his spot
-const LEMO_CALL_STAND = 74;                       // world px from the caller he stops at
-const LEMO_CALL_APPEAR = 170;                     // …and how far past that he appears
+   THE STAIRS ARE NOT PART OF THE GRID. Left to A*, he cut across them at whatever
+   angle was shortest and stepped onto the mezzanine from their middle. They are one
+   fixed stretch instead: their own CENTRE LINE, measured off the painted mask
+   (`_lemoNav.stair.line`, bottom → top), walked end to end. A route between floors is
+   always  leg on one floor → the whole staircase → leg on the other.  Its points are
+   flagged `st`, which is what scales him up gradually (stairScaleAt) and gives him
+   the climbing bob a member gets there. */
+const LEMO_NAV_CELL = 16;
+const LEMO_NAV_MAX_EXPAND = 40000;
+const LEMO_STAIR_LAST_STEP = 40;    // how far in from the stairs' left end he turns up (the middle of the last step)
+const _lemoNav = { ready: false, cols: 0, rows: 0, x0: 0, y0: 0, mid: 0, g: [null, null, null], pen: [null, null, null],
+                   stair: null, cost: null, stamp: null, from: null, gen: 0, hf: [], hid: [] };
 
-function lemoIsAsleep() { return !_lemo.doc || _lemo.doc.s !== 'awake'; }
-function lemoIsBusy() {
-    const d = _lemo.doc;
-    return !!(d && d.call && serverNow() < d.at);
+function _lemoNavBuild() {
+    const N = _lemoNav;
+    if (N.ready) return true;
+    if (!worldCollision.built) return false;
+    const C = LEMO_NAV_CELL;
+    N.x0 = WORLD_BOUNDS.minX; N.y0 = WORLD_BOUNDS.minY;
+    N.cols = Math.ceil((WORLD_BOUNDS.maxX - N.x0) / C) + 1;
+    N.rows = Math.ceil((WORLD_BOUNDS.maxY - N.y0) / C) + 1;
+    N.mid = (STAIR_X0 + STAIR_X1) / 2;
+    const n = N.cols * N.rows, cols = N.cols, rows = N.rows;
+    for (const fl of [1, 2]) {
+        const g = new Uint8Array(n);
+        for (let r = 0; r < rows; r++) {
+            const y = N.y0 + r * C;
+            for (let c = 0; c < cols; c++) {
+                const x = N.x0 + c * C;
+                // The steps themselves are never a cell (see the header).
+                g[r * cols + c] = (!isOnStairs(x, y) && !checkCollision(x, y, { floor: fl, elev: false, air: false })) ? 1 : 0;
+            }
+        }
+        // A cell that touches something solid costs a little more, so a route keeps
+        // a step away from walls and table corners wherever there is room to.
+        const pen = new Uint8Array(n);
+        for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+            const i = r * cols + c;
+            if (!g[i]) continue;
+            let near = (r === 0 || c === 0 || r === rows - 1 || c === cols - 1);
+            for (let dr = -1; dr <= 1 && !near; dr++) for (let dc = -1; dc <= 1; dc++) {
+                if (!g[(r + dr) * cols + (c + dc)]) { near = true; break; }
+            }
+            pen[i] = near ? 1 : 0;
+        }
+        N.g[fl] = g; N.pen[fl] = pen;
+    }
+    N.cost = new Float32Array(n);
+    N.stamp = new Uint32Array(n);
+    N.from = new Int32Array(n);
+
+    // The staircase's route, bottom (the right end, the ground) → top. The painted
+    // band's own middle, column by column, gives the run along the steps. It must NOT
+    // be walked to the band's far-left edge: the rails close that end, and he came out
+    // THROUGH them. The way onto the mezzanine is the opening above the last step — so
+    // the run stops in the middle of that step (LEMO_STAIR_LAST_STEP in from the left
+    // end), turns, and goes straight UP through the opening onto the platform.
+    const line = [];
+    const topAt = (x) => { for (let y = WORLD_BOUNDS.minY; y <= WORLD_BOUNDS.maxY; y += 3) if (isOnStairs(x, y)) return y; return null; };
+    for (let x = STAIR_X1; x >= STAIR_X0; x -= 8) {
+        let y0 = null, y1 = null;
+        for (let y = WORLD_BOUNDS.minY; y <= WORLD_BOUNDS.maxY; y += 3) {
+            if (isOnStairs(x, y)) { if (y0 === null) y0 = y; y1 = y; }
+        }
+        if (y0 !== null) line.push({ x, y: (y0 + y1) / 2 });
+    }
+    N.stair = null;
+    if (line.length >= 8) {
+        // Smoothed once (the band's edge is stepped; its middle shouldn't wobble).
+        const sm = line.map((p, i) => {
+            const a = line[Math.max(0, i - 2)], b = line[Math.min(line.length - 1, i + 2)];
+            return { x: p.x, y: (a.y + p.y * 2 + b.y) / 4 };
+        });
+        const leftX = sm[sm.length - 1].x;
+        const turnX = leftX + LEMO_STAIR_LAST_STEP;
+        const run = sm.filter(p => p.x > turnX + 4);
+        const turnY = run.length ? run[run.length - 1].y : sm[sm.length - 1].y;
+        const edge = topAt(turnX);                       // where the steps end and the platform begins
+        const b0 = sm[0];
+        const bi = _lemoNavNear(b0.x + C, b0.y, 1, 7);
+        const ti = edge === null ? -1 : _lemoNavNear(turnX, edge - C * 2, 2, 6);
+        if (bi >= 0 && ti >= 0 && run.length >= 4) {
+            const top = { x: N.x0 + (ti % cols) * C, y: N.y0 + ((ti / cols) | 0) * C };
+            // The run is one straight stroke (its middle barely moves from end to end);
+            // the two points either side of the staircase's middle are where he changes
+            // floor. Few, long strokes — so the turn onto the last step can be a real
+            // curve (a corner between eight-unit segments can't be rounded).
+            const yAt = (x) => { let b = run[0]; for (const p of run) if (Math.abs(p.x - x) < Math.abs(b.x - x)) b = p; return b.y; };
+            const inX = b0.x - 30;                       // past the band's thin right-hand tip, he is on the middle
+            const pts = [
+                { x: b0.x, y: b0.y, fl: 1 },
+                { x: inX, y: yAt(inX), fl: 1 },
+                { x: N.mid + 1, y: yAt(N.mid), fl: 1 },
+                { x: N.mid - 1, y: yAt(N.mid), fl: 2 },
+                { x: turnX, y: turnY, fl: 2 },
+                { x: turnX, y: edge, fl: 2 },
+            ].map(p => ({ ...p, st: 1 }));
+            N.stair = {
+                line: _lemoRound(pts, 34),                // the turn onto the last step is a curve too
+                bot: { x: N.x0 + (bi % cols) * C, y: N.y0 + ((bi / cols) | 0) * C },
+                top,
+            };
+        }
+    }
+    N.ready = true;
+    return true;
 }
 
-function _lemoFinite(v, lo, hi) { v = Number(v); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : null; }
-function _lemoCleanCall(c) {
-    if (!c || typeof c !== 'object') return null;
-    const X = (v) => _lemoFinite(v, WORLD_BOUNDS.minX, WORLD_BOUNDS.maxX);
-    const Y = (v) => _lemoFinite(v, WORLD_BOUNDS.minY, WORLD_BOUNDS.maxY);
-    const out = {
-        u: typeof c.u === 'string' ? c.u.slice(0, 64) : '',
-        at: _lemoFinite(c.at, 0, 9e15),
-        fx: X(c.fx), fy: Y(c.fy), f0: c.f0 === 2 ? 2 : 1, ff: c.ff === -1 ? -1 : 1,
-        ax: X(c.ax), ay: Y(c.ay), sx: X(c.sx), sy: Y(c.sy),
-        fl: c.fl === 2 ? 2 : 1, face: c.face === -1 ? -1 : 1,
+function _lemoNavCell(x, y) {
+    const N = _lemoNav, C = LEMO_NAV_CELL;
+    const c = Math.max(0, Math.min(N.cols - 1, Math.round((x - N.x0) / C)));
+    const r = Math.max(0, Math.min(N.rows - 1, Math.round((y - N.y0) / C)));
+    return r * N.cols + c;
+}
+// The nearest walkable cell to a point, searched ring by ring (a seated member's
+// cushion is inside solid furniture; a table-top isn't floor). −1 when there is none.
+function _lemoNavNear(x, y, fl, R) {
+    const N = _lemoNav, g = N.g[fl], cols = N.cols, rows = N.rows;
+    const i0 = _lemoNavCell(x, y), c0 = i0 % cols, r0 = (i0 / cols) | 0;
+    if (g[i0]) return i0;
+    for (let ring = 1; ring <= R; ring++) {
+        let best = -1, bestD = 1e9;
+        for (let dr = -ring; dr <= ring; dr++) for (let dc = -ring; dc <= ring; dc++) {
+            if (Math.max(Math.abs(dr), Math.abs(dc)) !== ring) continue;
+            const r = r0 + dr, c = c0 + dc;
+            if (r < 0 || c < 0 || r >= rows || c >= cols) continue;
+            const i = r * cols + c;
+            if (!g[i]) continue;
+            const d = dr * dr + dc * dc;
+            if (d < bestD) { bestD = d; best = i; }
+        }
+        if (best >= 0) return best;
+    }
+    return -1;
+}
+// A clear straight line on one floor — three parallel samples, so he never shaves a
+// corner he would have to squeeze past.
+function _lemoNavLos(x1, y1, x2, y2, fl) {
+    const N = _lemoNav, g = N.g[fl];
+    const L = Math.hypot(x2 - x1, y2 - y1);
+    if (L < 1) return true;
+    const nx = -(y2 - y1) / L * 9, ny = (x2 - x1) / L * 9;
+    const steps = Math.ceil(L / (LEMO_NAV_CELL * 0.5));
+    for (let s = 0; s <= steps; s++) {
+        const t = s / steps, x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
+        if (!g[_lemoNavCell(x, y)] || !g[_lemoNavCell(x + nx, y + ny)] || !g[_lemoNavCell(x - nx, y - ny)]) return false;
+    }
+    return true;
+}
+
+// One leg, on ONE floor: A* from (ax, ay) to (bx, by), then string-pulled into a few
+// long strokes. → [{x, y, fl}] (unrounded), or null when there is no way.
+function _lemoNavLeg(ax, ay, bx, by, fl) {
+    const N = _lemoNav;
+    const s = _lemoNavNear(ax, ay, fl, 6), goal = _lemoNavNear(bx, by, fl, 8);
+    if (s < 0 || goal < 0) return null;
+    const cols = N.cols, rows = N.rows, C = LEMO_NAV_CELL;
+    const g = N.g[fl], pen = N.pen[fl];
+    const gc = goal % cols, gr = (goal / cols) | 0;
+    const gen = ++N.gen;
+    const cost = N.cost, stamp = N.stamp, from = N.from, hf = N.hf, hid = N.hid;
+    hf.length = 0; hid.length = 0;
+    const push = (f, id) => {
+        let i = hf.length;
+        hf.push(f); hid.push(id);
+        while (i > 0) {
+            const p = (i - 1) >> 1;
+            if (hf[p] <= f) break;
+            hf[i] = hf[p]; hid[i] = hid[p];
+            i = p;
+        }
+        hf[i] = f; hid[i] = id;
     };
-    for (const k of ['at', 'fx', 'fy', 'ax', 'ay', 'sx', 'sy']) if (out[k] === null) return null;
+    const pop = () => {
+        const top = hid[0];
+        const f = hf.pop(), id = hid.pop();
+        const len = hf.length;
+        if (len) {
+            let i = 0;
+            for (;;) {
+                let c = i * 2 + 1;
+                if (c >= len) break;
+                if (c + 1 < len && hf[c + 1] < hf[c]) c++;
+                if (hf[c] >= f) break;
+                hf[i] = hf[c]; hid[i] = hid[c];
+                i = c;
+            }
+            hf[i] = f; hid[i] = id;
+        }
+        return top;
+    };
+    const h = (idx) => {
+        const dc = Math.abs((idx % cols) - gc), dr = Math.abs(((idx / cols) | 0) - gr);
+        return (dc + dr) + (1.4142 - 2) * Math.min(dc, dr);
+    };
+    cost[s] = 0; stamp[s] = gen; from[s] = -1;
+    push(h(s), s);
+    let found = false, expanded = 0;
+    while (hf.length && expanded++ < LEMO_NAV_MAX_EXPAND) {
+        const id = pop();
+        if (id === goal) { found = true; break; }
+        const c0 = id % cols, r0 = (id / cols) | 0, base = cost[id];
+        for (let dr = -1; dr <= 1; dr++) for (let dc = -1; dc <= 1; dc++) {
+            if (!dr && !dc) continue;
+            const r = r0 + dr, c = c0 + dc;
+            if (r < 0 || c < 0 || r >= rows || c >= cols) continue;
+            const j = r * cols + c;
+            if (!g[j]) continue;
+            // No cutting a corner diagonally between two solid cells.
+            if (dr && dc && (!g[r0 * cols + c] || !g[r * cols + c0])) continue;
+            const nc = base + ((dr && dc) ? 1.4142 : 1) + pen[j] * 0.9;
+            if (stamp[j] === gen && cost[j] <= nc) continue;
+            cost[j] = nc; stamp[j] = gen; from[j] = id;
+            push(nc + h(j), j);
+        }
+    }
+    if (!found) return null;
+    const cells = [];
+    for (let id = goal; id >= 0; id = from[id]) {
+        cells.push({ x: N.x0 + (id % cols) * C, y: N.y0 + ((id / cols) | 0) * C, fl });
+        if (cells.length > 4000) return null;
+    }
+    cells.reverse();
+    cells[0] = { x: ax, y: ay, fl };
+    // String-pulling: drop every cell the line of sight makes unnecessary, so what is
+    // left is a few long strokes rather than a staircase of sixteen-unit steps.
+    const out = [cells[0]];
+    let i = 0;
+    while (i < cells.length - 1) {
+        let j = Math.min(cells.length - 1, i + 48);
+        while (j > i + 1 && !_lemoNavLos(cells[i].x, cells[i].y, cells[j].x, cells[j].y, fl)) j--;
+        out.push(cells[j]);
+        i = j;
+    }
     return out;
 }
 
-// Where to stand beside the caller, and where to appear before walking up.
-// Checked against the CALLER's floor, with the ordinary collision.
-function _lemoCallSpots(me) {
-    const floor = me.floor || 1;
-    const free = (x, y) => !checkCollision(x, y, { floor, elev: false });
-    const clear = (a, b) => {
-        for (let i = 1; i <= 12; i++) {
-            const t = i / 12;
-            if (!free(a.x + (b.x - a.x) * t, a.y + (b.y - a.y) * t)) return false;
-        }
-        return true;
+// The staircase from one end to the other (or from where he already stands on it),
+// as flagged path points. `up` = toward the mezzanine.
+function _lemoStairRun(up, fromX, fromY) {
+    const line = _lemoNav.stair.line;                  // stored bottom → top
+    if (fromX == null) return (up ? line : line.slice().reverse()).map(p => ({ ...p }));
+    // Already on it: carry on from the point of the route nearest to where he stands.
+    let best = 0, bestD = 1e18;
+    for (let i = 0; i < line.length; i++) {
+        const d = (line[i].x - fromX) ** 2 + (line[i].y - fromY) ** 2;
+        if (d < bestD) { bestD = d; best = i; }
+    }
+    const part = up ? line.slice(best + 1) : line.slice(0, best).reverse();
+    return part.map(p => ({ ...p }));
+}
+
+// (ax, ay) on floor `af` → (bx, by) on floor `bf`, as a rounded [{x, y, fl, st?}], or
+// null. Same floor: one leg. Different floors: leg → the WHOLE staircase → leg.
+function _lemoNavPath(ax, ay, af, bx, by, bf) {
+    const N = _lemoNav;
+    if (!N.ready) return null;
+    af = af === 2 ? 2 : 1; bf = bf === 2 ? 2 : 1;
+    const S = N.stair;
+    // He is on the steps right now (a call, or a re-route, caught him mid-climb): he
+    // finishes them — toward whichever end the destination is on — and goes on from there.
+    if (S && isOnStairs(ax, ay)) {
+        const up = bf === 2;
+        const end = up ? S.top : S.bot;
+        const leg = _lemoNavLeg(end.x, end.y, bx, by, bf);
+        if (!leg) return null;
+        return [{ x: ax, y: ay, fl: af, st: 1 }].concat(_lemoStairRun(up, ax, ay), _lemoNavRound(leg, bf));
+    }
+    if (af === bf) {
+        const leg = _lemoNavLeg(ax, ay, bx, by, af);
+        return leg ? _lemoNavRound(leg, af) : null;
+    }
+    if (!S) return null;
+    const up = bf === 2;
+    const e1 = up ? S.bot : S.top, e2 = up ? S.top : S.bot;
+    const A = _lemoNavLeg(ax, ay, e1.x, e1.y, af);
+    const B = _lemoNavLeg(e2.x, e2.y, bx, by, bf);
+    if (!A || !B) return null;
+    return _lemoNavRound(A, af).concat(_lemoStairRun(up), _lemoNavRound(B, bf));
+}
+// A grid route's corners, rounded as wide as the floor allows: a string-pulled route
+// bends AROUND things, so the inside of each bend is exactly where the furniture is.
+function _lemoNavRound(leg, fl) {
+    const g = _lemoNav.g[fl];
+    return _lemoRound(leg, LEMO_CORNER_R, (x, y) => !!g[_lemoNavCell(x, y)]);
+}
+
+/* ── نداء ليمو — a mention calls him over, and he ANSWERS (مقر ١.٥) ─────────────
+   `@ليمو <a question>` in the chat (or press him: it types his mention for you).
+   He stops what he is doing and WALKS to the caller — a real route round the
+   furniture, up the stairs if he has to, following them if they move — and by the
+   time he gets there the answer is usually ready over his head. Then he lingers a
+   moment and walks home, where his seeded life carries on.
+
+   WHAT IS SHARED AND WHAT IS NOT
+   • Still ONE tiny lobby doc. A call is
+       { s:'awake', at:<latest end>, seed, from:<home spot>, call:{ u, t0, x, y, fl, f, w } }
+     — who called, when, and where he was standing at that moment. Nothing about
+     the walk is written: every client steers its own copy of him toward the caller
+     it sees (`_lemoFolStep`), and they all end up in the same place because the
+     caller is in the same place. The caller's client ends it (`_lemoRelease`) with
+       { s:'awake', at, seed, from, ret:{ x, y, fl, f, t0 } }
+     and the walk home IS pure again: the same route from the same point, timed
+     from `t0`, on every client. A call nobody released (a closed tab) ends by
+     itself at `at`, with the old flash back to his spot.
+   • His WORDS ride the relay, never Firebase: the page sends `{t:'lemoq',…}` and
+     the relay itself asks the model and broadcasts `{t:'lemot'}` (thinking) and
+     `{t:'lemoa'}` (the answer, or an error code) to the whole lobby — see
+     presence-server/src/lemo.js. The key, the budget and the persona all live there.
+
+   RULES
+   • Asleep → refused («أيقظه أولًا»). In a work session → refused. A mention with
+     no question → refused: he needs something to answer.
+   • While he is thinking for someone, nobody else may call him.
+   • After he answers YOU, you wait LEMO_ASK_GAP_MS (4 s) before calling again —
+     which is exactly the gap someone else needs to get a word in. */
+const LEMO_UID  = 'lemo';
+const LEMO_NAME = 'ليمو';
+const LEMO_PFP  = 'LemoPFP.jpg';
+const LEMO_CALL_LEAD     = 250;     // ms — lets the doc reach everyone before the call starts
+const LEMO_CALL_MAX_MS   = 70000;   // a call nobody released ends by itself here
+const LEMO_CALL_STAND    = 128;     // world px from the caller he stops at (80 read as standing on their toes)
+const LEMO_CALL_SLACK    = 54;      // …and how far they may drift before he follows again
+const LEMO_CALL_SPEED    = 215;     // he hurries when called (a stroll is LEMO_SPEED)
+const LEMO_CALL_RATE     = 1.5;     // …and the clip plays this much faster
+const LEMO_RET_SPEED     = 150;     // the walk home
+const LEMO_RET_RATE      = 1.2;
+const LEMO_REPLAN_MS     = 420;     // how often a moving caller is re-routed to
+const LEMO_LATE_MS       = 3000;    // a client that learns of a call this late skips the walk
+const LEMO_LEAVE_FLASH_MS = 520;    // an unreleased call's flash-out
+const LEMO_BACK_FLASH_MS = 520;     // …and the flash-in back at his spot
+const LEMO_ASK_GAP_MS    = 4000;    // after he answers YOU, before you may call again
+const LEMO_ANS_TIMEOUT_MS = 22000;  // no answer by now → he says his brain froze
+const LEMO_SAY_HOLD_MS   = 30000;   // an answer waits for him to GET THERE (a long walk outlasts a bubble); past this it is said anyway
+const LEMO_LINGER_MS     = 700;     // after his last word disappears he goes home almost at once — at 5 s he
+                                   // kept trailing the member round the room with nothing left to say
+const LEMO_SAY_MAX       = 170;     // characters in one bubble
+// What he says when he has arrived and the answer hasn't.
+const LEMO_WAIT_LINES = ['ثانية واحدة… 🤔', 'استنى أفكّر 😭', 'لحظة، دماغي بتحمّل ⏳', 'إممم… 💀', 'استنى استنى…'];
+// What he says when the relay answers with an error code instead of words.
+const LEMO_ERR_LINES = {
+    budget: 'مفيش ميزانية كفاية عشان أرد 😭 قولوا للأخ يوسف يصلّح الموضوع',
+    nokey:  'دماغي مش متركّب لسه 💀 قولوا للأخ يوسف يصلّح الموضوع',
+    tired:  'خلصت طاقتي النهارده 😴 كلّموني بكرة',
+    you:    'كفاية أسئلة منك النهارده 😭 سيب غيرك يسأل',
+    busy:   'واحد واحد يا جماعة 😭',
+    wait:   'استنى شوية 😭 لسه مخلّص كلام معاك',
+    err:    'دماغي هنّجت 💀 جرّب تاني كمان شوية',
+};
+
+// Asleep: the lobby doc says so — or he dozed off on his own (the timeline's rare
+// nap, see _lemoStep). Either way a mention is refused until someone walks up.
+function lemoIsAsleep() {
+    const d = _lemo.doc;
+    if (!d || d.s !== 'awake') return true;
+    const s = _lemo.sim;
+    return !d.call && !d.ret && !!s && (s.kind === 'sleep' || s.kind === 'liedown');
+}
+// Busy: he is thinking up an answer for someone.
+function lemoIsBusy() {
+    const b = _lemo.ai.busy;
+    return !!(b && Date.now() - b.at < LEMO_ANS_TIMEOUT_MS);
+}
+function lemoBusyFor() {
+    const b = _lemo.ai.busy;
+    return (b && Date.now() - b.at < LEMO_ANS_TIMEOUT_MS) ? b.to : '';
+}
+
+function _lemoFinite(v, lo, hi) { v = Number(v); return Number.isFinite(v) ? Math.max(lo, Math.min(hi, v)) : null; }
+function _lemoCleanSpot(c, tKey) {
+    if (!c || typeof c !== 'object') return null;
+    const out = {
+        t0: _lemoFinite(c[tKey], 0, 9e15),
+        x: _lemoFinite(c.x, WORLD_BOUNDS.minX, WORLD_BOUNDS.maxX),
+        y: _lemoFinite(c.y, WORLD_BOUNDS.minY, WORLD_BOUNDS.maxY),
+        fl: c.fl === 2 ? 2 : 1, f: c.f === -1 ? -1 : 1,
     };
+    return (out.t0 === null || out.x === null || out.y === null) ? null : out;
+}
+function _lemoCleanCall(c) {
+    const out = _lemoCleanSpot(c, 't0');
+    if (!out || typeof c.u !== 'string' || !c.u) return null;
+    out.u = c.u.slice(0, 64);
+    out.w = c.w === 1 || c.w === true;
+    return out;
+}
+
+// A free place to stand beside someone, on THEIR floor.
+function _lemoStandSpot(tp) {
+    const pos = getPlayerRenderPos(tp);
+    const floor = tp.floor || 1;
+    const free = (x, y) => !checkCollision(x, y, { floor, elev: false, air: false });
     const angs = [0, Math.PI, Math.PI * 0.25, Math.PI * 0.75, -Math.PI * 0.25, -Math.PI * 0.75, Math.PI / 2, -Math.PI / 2];
     for (const r of [LEMO_CALL_STAND, LEMO_CALL_STAND * 1.4, LEMO_CALL_STAND * 1.9]) {
         for (const a of angs) {
-            const st = { x: me.x + Math.cos(a) * r, y: me.y + Math.sin(a) * r * 0.8 };
-            if (!free(st.x, st.y)) continue;
-            // Appear further out along the same line, so the walk ends facing the caller.
-            for (const k of [1, 0.7, 0.45]) {
-                const ap = { x: st.x + Math.cos(a) * LEMO_CALL_APPEAR * k, y: st.y + Math.sin(a) * LEMO_CALL_APPEAR * k * 0.8 };
-                if (free(ap.x, ap.y) && clear(ap, st)) return { st, ap, floor };
-            }
-            return { st, ap: st, floor };
+            const x = pos.x + Math.cos(a) * r, y = pos.y + Math.sin(a) * r * 0.8;
+            if (free(x, y)) return { x, y, fl: floor };
         }
     }
-    return { st: { x: me.x, y: me.y }, ap: { x: me.x, y: me.y }, floor };
+    return { x: pos.x, y: pos.y, fl: floor };
 }
 
 // → Promise<'ok' | 'sleep' | 'busy' | 'fail'>
@@ -30201,30 +30784,25 @@ function lemoSummon() {
     const me = gameState.players[gameState.userId];
     if (!me || !gameState.selectedLobby) return Promise.resolve('fail');
     if (lemoIsAsleep()) return Promise.resolve('sleep');
-    if (lemoIsBusy() || _lemo.summoning) return Promise.resolve('busy');
+    if (_lemo.summoning) return Promise.resolve('busy');
+    const other = lemoBusyFor();
+    if (other && other !== gameState.userId) return Promise.resolve('busy');
     _lemo.summoning = true;
-    const spots = _lemoCallSpots(me);
-    const from = { x: _lemo.x, y: _lemo.y, f: _lemo.floor, face: _lemo.face };
-    const home = Math.floor(Math.random() * LEMO_SPOTS.length);
+    const here = { x: Math.round(_lemo.x), y: Math.round(_lemo.y), fl: _lemo.floor === 2 ? 2 : 1, f: _lemo.face === -1 ? -1 : 1,
+                   w: _lemo.state === 'walking' ? 1 : 0 };
+    const d0 = _lemo.doc;
+    const home = (d0 && d0.from >= 0 && (d0.call || d0.ret)) ? d0.from : Math.floor(Math.random() * LEMO_SPOTS.length);
     let outcome = 'fail';
     return runTransaction(ref(database, lobbyPath('lemo')), (cur) => {
         if (!cur || cur.s !== 'awake') { outcome = 'sleep'; return; }
-        const now = serverNow();
-        if (cur.call && now < (Number(cur.at) || 0)) { outcome = 'busy'; return; }
-        const at = now + LEMO_CALL_LEAD;
+        const t0 = serverNow() + LEMO_CALL_LEAD;
         outcome = 'ok';
         return {
             s: 'awake',
-            at: at + LEMO_CALL_MS,
+            at: t0 + LEMO_CALL_MAX_MS,
             seed: Math.floor(Math.random() * 2147483647),
             from: home,
-            call: {
-                u: gameState.userId, at,
-                fx: Math.round(from.x), fy: Math.round(from.y), f0: from.f, ff: from.face,
-                ax: Math.round(spots.ap.x), ay: Math.round(spots.ap.y),
-                sx: Math.round(spots.st.x), sy: Math.round(spots.st.y),
-                fl: spots.floor, face: me.x < spots.st.x ? -1 : 1,
-            },
+            call: { u: gameState.userId, t0, x: here.x, y: here.y, fl: here.fl, f: here.f, w: here.w },
         };
     }).then(r => {
         if (r && r.snapshot) _lemoApplyDoc(r.snapshot.val());
@@ -30232,50 +30810,456 @@ function lemoSummon() {
     }).catch(() => 'fail').finally(() => { _lemo.summoning = false; });
 }
 
-// One frame of the call. PURE in (call, t) — the PiP pass reads the result.
-function _lemoCallPose(c, t) {
-    const C = LEMO_CALL;
-    const idle = LEMO_ANIMS.Idle;
-    let el = t - c.at;
-    _lemo.white = 0; _lemo.alpha = 1; _lemo.talk = 0; _lemo.glow = 0;
-    _lemo.state = 'called'; _lemo.anim = 'Idle';
-    _lemo.frame = Math.floor(((t % LEMO_IDLE_CYCLE_MS) + LEMO_IDLE_CYCLE_MS) % LEMO_IDLE_CYCLE_MS * idle.fps / 1000) % idle.frames;
-    _lemo.idleFrame = _lemo.frame;
-    _lemo.caughtUp = true;
-    const at = (x, y, fl, face) => { _lemo.x = x; _lemo.y = y; _lemo.floor = fl; _lemo.face = face; };
-    if (el < C.flashOut) {                          // stop, flash white, gone
-        at(c.fx, c.fy, c.f0, c.ff);
-        _lemoFlashOut(el / C.flashOut);
-        return;
-    }
-    el -= C.flashOut;
-    if (el < C.gone) { at(c.fx, c.fy, c.f0, c.ff); _lemo.alpha = 0; return; }
-    el -= C.gone;
-    const walkFace = c.sx < c.ax ? -1 : 1;
-    if (el < C.flashIn) {                           // flash back in beside the caller
-        at(c.ax, c.ay, c.fl, walkFace);
-        _lemoFlashIn(el / C.flashIn);
-        return;
-    }
-    el -= C.flashIn;
-    if (el < C.walk) {                              // walk up
-        const k = el / C.walk;
-        const e = _lemoEase(Math.min(1, k / 0.8));
-        at(c.ax + (c.sx - c.ax) * e, c.ay + (c.sy - c.ay) * e, c.fl, walkFace);
-        if (c.ax !== c.sx || c.ay !== c.sy) {
-            _lemo.state = 'walking'; _lemo.anim = 'Walk';
-            _lemo.frame = Math.min(LEMO_ANIMS.Walk.frames - 1, Math.floor(k * LEMO_WALK_MOVE_FRAMES * 1.25));
+// The caller's client sends him home. The route is measured HERE, once, so the walk
+// back is the same one on every screen; with no route (the grid isn't built, or he is
+// somewhere a path can't leave) the call is simply cut short and he flashes home.
+function _lemoRelease() {
+    const d = _lemo.doc, c = d && d.call, f = _lemo.fol;
+    if (!c || c.u !== gameState.userId || _lemo.releasing) return;
+    _lemo.releasing = true;
+    const home = d.from >= 0 ? d.from : 0;
+    let ret = null, dur = 0;
+    if (f && !f.flash && _lemoNavBuild()) {
+        const path = _lemoHomePath(f.x, f.y, f.fl, home);
+        if (path) {
+            dur = _lemoWalkPlan(path.len, LEMO_RET_SPEED, LEMO_RET_RATE).ms;
+            ret = { x: Math.round(f.x), y: Math.round(f.y), fl: f.fl === 2 ? 2 : 1, f: f.face === -1 ? -1 : 1 };
         }
+    }
+    const myT0 = c.t0, me = gameState.userId;
+    runTransaction(ref(database, lobbyPath('lemo')), (cur) => {
+        // Someone else has called him since, or it already ended: not mine to end.
+        if (!cur || cur.s !== 'awake' || !cur.call || cur.call.u !== me || cur.call.t0 !== myT0) return;
+        const now = serverNow();
+        const seed = Math.floor(Math.random() * 2147483647);
+        if (!ret) return { s: 'awake', at: now + LEMO_LEAVE_FLASH_MS + 150, seed, from: home, call: cur.call };
+        return { s: 'awake', at: now + 150 + dur + 300, seed, from: home, ret: { ...ret, t0: now + 150 } };
+    }).then(r => { if (r && r.snapshot) _lemoApplyDoc(r.snapshot.val()); })
+      .catch(() => {})
+      .finally(() => { _lemo.releasing = false; });
+}
+function _lemoHomePath(x, y, fl, home) {
+    const sp = LEMO_SPOTS[home] || LEMO_SPOTS[0];
+    const pts = _lemoNavPath(x, y, fl, sp.x, sp.y, 1);
+    if (!pts) return null;
+    pts.push({ x: sp.x, y: sp.y, fl: 1 });       // the grid's last cell is NEAR his spot; end ON it
+    return _lemoPathMake(pts);
+}
+
+// ─── What he says: asking, and the relay's answer ────────────────────────────
+function _lemoCleanParts(p) {
+    const out = [];
+    if (!Array.isArray(p)) return out;
+    for (const it of p.slice(0, 2)) {
+        if (!it || typeof it !== 'object') continue;
+        if (typeof it.s === 'string' && _stkSafeName(it.s)) out.push({ s: it.s });
+        else if (typeof it.m === 'string') {
+            const m = String(it.m).replace(_CHAT_STRIP_RE, ' ').replace(/\s+/g, ' ').trim().slice(0, LEMO_SAY_MAX);
+            if (m) out.push({ m });
+        }
+    }
+    return out;
+}
+
+// The question goes to the RELAY, not to the lobby: the room asks the model and
+// tells everyone what he said. No `uid` field on purpose — a client that predates
+// this drops a message without one instead of reading it as a position.
+function _lemoSendQuestion(k, q) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    const me = gameState.players[gameState.userId];
+    if (!me) return false;
+    const near = [];
+    for (const p of Object.values(gameState.players)) {
+        if (p === me || p._exitT != null || (p.floor || 1) !== (me.floor || 1)) continue;
+        const d = Math.hypot((p.x || 0) - me.x, (p.y || 0) - me.y);
+        if (d <= CHAT_HEAR_R) near.push({ n: _chatClean(p.username).slice(0, 24), d });
+    }
+    near.sort((a, b) => a.d - b.d);
+    const now = new Date();
+    let tm = '', hj = '';
+    try { tm = now.toLocaleString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch (_) {}
+    try { hj = now.toLocaleDateString('ar-SA-u-ca-islamic-umalqura', { day: 'numeric', month: 'long', year: 'numeric' }); } catch (_) {}
+    // A line about how the member's day is going — it is what he teases them with.
+    const bits = [];
+    try {
+        const wm = Math.floor(gamesWorkMsToday() / 60000);
+        bits.push(wm > 0 ? `عمل اليوم ${wm} دقيقة` : 'لم يعمل اليوم بعد');
+    } catch (_) {}
+    if (isBreakActive()) bits.push('في استراحة الآن');
+    else if (gameState.isSitting) bits.push('جالس على الكنبة');
+    if ((me.floor || 1) === 2) bits.push('في الطابق الثاني');
+    const rec = MDWNH_ROSTER.byDiscord[String(gameState.userId)];
+    const msg = {
+        t: 'lemoq', f: gameState.userId, k,
+        n: _chatClean(me.username).slice(0, 32) || 'عضو',
+        g: gameState.selectedLobby === 'female' ? 'f' : 'm',
+        q: _chatClean(q),
+        slug: (rec && rec.slug) || '',
+        near: near.slice(0, 5).map(x => x.n).filter(Boolean),
+        tm, hj,
+        st: bits.join('، '),
+        on: Object.keys(gameState.players).length,
+    };
+    try { ws.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
+}
+
+// Called by _chatSend once the message (with its question) is on its way.
+function lemoAsk(q) {
+    lemoSummon().then(r => {
+        if (r === 'sleep') { _libToast('ليمو نام قبل أن يسمعك — أيقظه أولًا'); return; }
+        if (r === 'busy')  { _libToast('ليمو مشغول الآن مع غيرك'); return; }
+        if (r !== 'ok')    { _libToast('لم يصل النداء إلى ليمو، حاول مجددًا'); return; }
+        const c = _lemo.doc && _lemo.doc.call;
+        const k = c ? c.t0 : Date.now();
+        _lemo.ai.mine = { k, at: Date.now(), done: false };
+        // His own "thinking" state starts here, so the wait line can show even if
+        // the relay's `lemot` is a moment behind.
+        _lemo.ai.busy = { to: gameState.userId, k, at: Date.now() };
+        if (!_lemoSendQuestion(k, q)) {
+            _lemo.ai.busy = null;
+            _lemo.ai.mine.done = true;
+            _lemo.ai.ans = { to: gameState.userId, k, parts: [{ m: LEMO_ERR_LINES.err }], at: Date.now() };
+        }
+    });
+}
+
+// `{t:'lemot'}` / `{t:'lemoa'}` from the relay (see onPresenceMessage). Relayed data:
+// every field is re-checked, and all it can do is put words over his head.
+function onLemoRelay(msg) {
+    const ai = _lemo.ai;
+    const to = typeof msg.to === 'string' ? msg.to.slice(0, 64) : '';
+    const k = Number(msg.k) || 0;
+    if (!to) return;
+    if (msg.t === 'lemot') { ai.busy = { to, k, at: Date.now() }; return; }
+    const e = typeof msg.e === 'string' ? msg.e : '';
+    // "one at a time" / "wait" are told to the asker alone; nobody else's state moves.
+    if ((e === 'busy' || e === 'wait') && to !== gameState.userId) return;
+    if (!(e === 'busy' || e === 'wait') || (ai.busy && ai.busy.to === to)) ai.busy = null;
+    let parts = _lemoCleanParts(msg.p);
+    if (!parts.length) parts = [{ m: LEMO_ERR_LINES[e] || LEMO_ERR_LINES.err }];
+    ai.ans = { to, k, parts, at: Date.now() };
+    if (to === gameState.userId && ai.mine) ai.mine.done = true;
+}
+
+function _lemoSayLayout(text) {
+    const parts = [{ t: text }];
+    let lay = _chatLayoutAt(parts, 214);
+    if (lay.lines.length > 4) lay = _chatLayoutAt(parts, 290);
+    return lay;
+}
+// Put the next thing over his head.
+function _lemoSay(parts, i, wait) {
+    const p = parts[i];
+    if (!p) { _lemo.say = null; return; }
+    const say = { parts, i, t0: Date.now(), wait: !!wait, stk: p.s || '', lay: null, life: 0 };
+    if (p.s) { _stkImg(p.s); say.life = 4200; }
+    else { say.lay = _lemoSayLayout(p.m); say.life = Math.min(9500, 3000 + p.m.length * 70); }
+    _lemo.say = say;
+    // A soft cue for whoever is close enough to hear him — never for someone working.
+    if (!wait) _chatArrivalCue({ x: _lemo.x, y: _lemo.y });
+    perfWake(600);
+}
+
+// One frame of the conversation, while a call is on. From gameLoop only.
+function _lemoTalkStep(c, f) {
+    const ai = _lemo.ai, now = Date.now(), mine = c.u === gameState.userId;
+    if (ai.busy && now - ai.busy.at > LEMO_ANS_TIMEOUT_MS) ai.busy = null;
+    if (ai.ans && now - ai.ans.at > LEMO_SAY_HOLD_MS + 15000) ai.ans = null;
+    // My question went unanswered: he says so himself, on my screen.
+    if (mine && ai.mine && !ai.mine.done && now - ai.mine.at > LEMO_ANS_TIMEOUT_MS) {
+        ai.mine.done = true;
+        ai.busy = null;
+        ai.ans = { to: c.u, k: ai.mine.k, parts: [{ m: LEMO_ERR_LINES.err }], at: now };
+    }
+    let say = _lemo.say;
+    if (say && !say.wait && now - say.t0 > say.life) {
+        if (say.i + 1 < say.parts.length) _lemoSay(say.parts, say.i + 1, false);
+        else { _lemo.say = null; _lemo.saidAt = now; }
+        say = _lemo.say;
+    }
+    // "There" = arrived, or already braking beside them (the stop clip's last second).
+    const arrived = !!(f && (f.arrived || f.phase === 'end'));
+    if (ai.ans && ai.ans.to === c.u && (!say || say.wait)) {
+        if (arrived || now - ai.ans.at > LEMO_SAY_HOLD_MS) {
+            const parts = ai.ans.parts;
+            ai.ans = null;
+            _lemoSay(parts, 0, false);
+            if (mine) ai.myNextAt = now + LEMO_ASK_GAP_MS;
+            say = _lemo.say;
+        }
+    } else if (!say && arrived && ai.busy && ai.busy.to === c.u && now - f.arrivedAt > 420) {
+        // He got here first: the wait line (the same one on every screen — picked off the call).
+        _lemoSay([{ m: LEMO_WAIT_LINES[Math.abs(Math.round(c.t0 / 7)) % LEMO_WAIT_LINES.length] }], 0, true);
+        say = _lemo.say;
+    } else if (say && say.wait && !(ai.busy && ai.busy.to === c.u) && !ai.ans) {
+        _lemo.say = null; say = null;
+    }
+    // The caller's client sends him home once he has had his say.
+    if (mine && !say && !ai.ans && !(ai.busy && ai.busy.to === c.u)) {
+        const asked = ai.mine && ai.mine.k === c.t0;
+        const since = now - (_lemo.saidAt || 0);
+        if ((asked && ai.mine.done && since > LEMO_LINGER_MS) || (!asked && serverNow() - c.t0 > 9000)) _lemoRelease();
+    }
+    if (say) perfWake(300);
+}
+
+// ─── The walk to the caller — steered locally, every frame ───────────────────
+function _lemoFolStart(c, t) {
+    const f = {
+        key: c.t0, x: c.x, y: c.y, fl: c.fl, face: c.f,
+        phase: 'idle', pt: 0, endV: 0,
+        path: null, d: 0, gx: 0, gy: 0, gfl: 0, planAt: 0,
+        arrived: false, arrivedAt: 0, restAt: 0,
+        wasWalking: c.w, flash: null, onStair: false,
+    };
+    // A client that only now learns of the call (it just joined, or its tab was
+    // asleep) doesn't replay the walk — he is simply there.
+    if (t - c.t0 > LEMO_LATE_MS) _lemoFolSnap(f, c, t);
+    return f;
+}
+function _lemoFolSnap(f, c, t) {
+    const tp = gameState.players[c.u];
+    if (!tp) return;
+    const sp = _lemoStandSpot(tp);
+    f.x = sp.x; f.y = sp.y; f.fl = sp.fl;
+    f.phase = 'idle'; f.pt = 0; f.path = null; f.flash = null; f.wasWalking = false;
+    f.arrived = true; f.arrivedAt = Date.now();
+}
+// → 0 no route at all · 1 a route, start walking · 2 he is already as close as the
+// floor lets him get (a seated caller's cushion is inside solid furniture).
+function _lemoFolPlan(f, tx, ty, tfl, t) {
+    f.planAt = t;
+    if (!_lemoNavBuild()) return 0;
+    // He comes to stand BESIDE them — the side he is already on — not wherever the
+    // route happens to end: stopped below a member, the bubble over his head covered
+    // the very person he was talking to. A side that isn't open floor in plain sight
+    // of them (a wall, a desk) falls back to the other, then to the old "as close as
+    // the route gets".
+    const g = _lemoNav.g[tfl];
+    const first = f.x >= tx ? 1 : -1;
+    for (const side of [first, -first]) {
+        const sx = tx + side * LEMO_CALL_STAND, sy = ty + 6;
+        if (!g[_lemoNavCell(sx, sy)] || !_lemoNavLos(sx, sy, tx + side * 44, ty, tfl)) continue;
+        const sp = _lemoNavPath(f.x, f.y, f.fl, sx, sy, tfl);
+        if (!sp) continue;
+        const spath = _lemoPathMake(sp);
+        f.gx = tx; f.gy = ty; f.gfl = tfl;
+        if (sp.length < 2 || spath.len < 22) return 2;
+        f.path = spath; f.d = 0; f.stopD = spath.len;
+        return 1;
+    }
+    const pts = _lemoNavPath(f.x, f.y, f.fl, tx, ty, tfl);
+    if (!pts) return 0;
+    const path = _lemoPathMake(pts);
+    f.gx = tx; f.gy = ty; f.gfl = tfl;
+    // Where on this route he stops: the FIRST point that is within standing distance
+    // of them (walking the route backwards from its end until it isn't). A route that
+    // never gets that close — they are seated inside furniture, or up on a table —
+    // is walked to its end, which is as near as the floor allows.
+    let stopD = path.len;
+    const P = path.pts, near = (p) => (p.fl || tfl) === tfl && Math.hypot(p.x - tx, p.y - ty) <= LEMO_CALL_STAND;
+    if (near(P[P.length - 1])) {
+        let i = P.length - 1;
+        while (i > 0 && near(P[i - 1])) i--;
+        stopD = path.cum[i];
+        if (i > 0) {
+            // …refined inside the stretch that crosses the standing distance.
+            let lo = path.cum[i - 1], hi = path.cum[i];
+            for (let k = 0; k < 7; k++) {
+                const mid = (lo + hi) / 2;
+                if (near(_lemoPathAt(path, mid))) hi = mid; else lo = mid;
+            }
+            stopD = hi;
+        }
+    }
+    if (pts.length < 2 || stopD < 22) return 2;
+    f.path = path;
+    f.d = 0;
+    f.stopD = stopD;
+    return 1;
+}
+
+function _lemoFolStep(c, f, dt, t) {
+    const V = LEMO_CALL_SPEED;
+    const fm = 1000 / (LEMO_WALK_FPS * LEMO_CALL_RATE);
+    const Ts = LEMO_WALK_START_N * fm, Tem = LEMO_WALK_END_MOVE * fm, Te = LEMO_WALK_END_N * fm;
+    const brake = 0.5 * V * Tem / 1000;
+    const tp = gameState.players[c.u];
+    const has = !!tp && tp._pendingSpawn == null;
+    let tx = f.x, ty = f.y, tfl = f.fl;
+    if (has) { const pos = getPlayerRenderPos(tp); tx = pos.x; ty = pos.y; tfl = tp.floor === 2 ? 2 : 1; }
+    const sameFl = tfl === f.fl;
+    const dist = sameFl ? Math.hypot(tx - f.x, ty - f.y) : 1e9;
+
+    // No route (the grid isn't up, or they are somewhere a path can't reach): the old
+    // flash, as the fallback — out here, in beside them.
+    if (f.flash) {
+        const fl = f.flash;
+        fl.t += dt;
+        if (fl.t < 420) { _lemoFlashOut(fl.t / 420); return; }
+        if (!fl.moved) { fl.moved = true; f.x = fl.to.x; f.y = fl.to.y; f.fl = fl.to.fl; }
+        const k = (fl.t - 520) / 460;
+        if (k < 0) { _lemo.alpha = 0; return; }
+        if (k < 1) { _lemoFlashIn(k); return; }
+        f.flash = null; f.phase = 'idle'; f.pt = 0;
+        f.arrived = true; f.arrivedAt = Date.now();
         return;
     }
-    el -= C.walk;
-    at(c.sx, c.sy, c.fl, c.face);
-    if (el < C.talk) { _lemo.talk = el + 1; return; }  // «عايز ايه؟»
-    el -= C.talk;
-    if (el < C.linger) return;
-    el -= C.linger;
-    _lemoFlashOut(Math.min(1, el / C.leave));       // flash out
+
+    if (f.phase === 'idle') {
+        f.pt += dt;
+        // Far = out of reach AND (he hasn't arrived yet, or they have moved since he did).
+        const far = has && (dist > LEMO_CALL_STAND + (f.arrived ? LEMO_CALL_SLACK : 10))
+            && (!f.arrived || tfl !== f.gfl || Math.hypot(tx - f.gx, ty - f.gy) > 34);
+        if (far && t - f.restAt > 260) {
+            const res = _lemoFolPlan(f, tx, ty, tfl, t);
+            if (res === 1) {
+                // Already rolling when he was called → straight into the cruise.
+                f.phase = f.wasWalking ? 'loop' : 'start';
+                f.pt = 0; f.arrived = false;
+            } else if (res === 2) {
+                if (!f.arrived) { f.arrived = true; f.arrivedAt = Date.now(); }
+            } else if (t - c.t0 > 500) {
+                f.gx = tx; f.gy = ty; f.gfl = tfl;
+                f.flash = { t: 0, moved: false, to: _lemoStandSpot(tp) };
+            }
+        } else if (!far && has && !f.arrived) {
+            f.gx = tx; f.gy = ty; f.gfl = tfl;
+            if (f.wasWalking) { f.phase = 'end'; f.pt = 0; f.endV = 0; }     // close already: he just stops
+            else { f.arrived = true; f.arrivedAt = Date.now(); }
+        }
+        f.wasWalking = false;
+        if (has && sameFl && Math.abs(tx - f.x) > 8) f.face = tx < f.x ? -1 : 1;
+        if (f.phase === 'idle') return;
+    }
+
+    let v = 0;
+    if (f.phase === 'start') {
+        f.pt += dt;
+        const u = Math.min(1, f.pt / Ts);
+        v = V * (3 * u * u - 2 * u * u * u);
+        if (u >= 1) { f.phase = 'loop'; f.pt = 0; }
+    } else if (f.phase === 'loop') {
+        f.pt += dt;
+        v = V;
+        // The caller moved: re-route to where they are NOW, without breaking stride.
+        // (Never mid-staircase: he finishes the steps he is on, then re-routes.)
+        if (has && !f.onStair && t - f.planAt > LEMO_REPLAN_MS && (tfl !== f.gfl || Math.hypot(tx - f.gx, ty - f.gy) > 34)) {
+            _lemoFolPlan(f, tx, ty, tfl, t);
+        }
+        // Where to stop was measured with the route (_lemoFolPlan → stopD): standing
+        // distance short of them, or the route's end when it can't get that close.
+        const toStop = f.path ? Math.max(0, (f.stopD ?? f.path.len) - f.d) : 0;
+        if (toStop <= brake) {
+            f.phase = 'end'; f.pt = 0;
+            f.endV = Math.min(V, toStop / (0.5 * Tem / 1000));
+            v = 0;
+        }
+    }
+    if (f.phase === 'end') {
+        f.pt += dt;
+        const u = Math.min(1, f.pt / Tem);
+        v = f.endV * (1 - (3 * u * u - 2 * u * u * u));
+        if (f.pt >= Te) {
+            // He has gone as far as this route goes: that IS arriving. He sets off
+            // again only when they move from where they were when it was planned.
+            f.phase = 'idle'; f.pt = 0; f.path = null; f.restAt = t;
+            if (!f.arrived) { f.arrived = true; f.arrivedAt = Date.now(); }
+        }
+    }
+    if (f.path && v > 0) {
+        f.d = Math.min(f.path.len, f.d + v * dt / 1000);
+        const p = _lemoPathAt(f.path, f.d);
+        f.x = p.x; f.y = p.y;
+        if (p.fl) f.fl = p.fl;
+        f.onStair = p.st;
+        if (p.dx < -0.12) f.face = -1; else if (p.dx > 0.12) f.face = 1;
+    } else if (!f.path) f.onStair = false;
 }
+
+// Read the follow state out as a pose (position, clip, frame).
+function _lemoFolPose(f, t) {
+    const idle = LEMO_ANIMS.Idle;
+    const fm = 1000 / (LEMO_WALK_FPS * LEMO_CALL_RATE);
+    _lemo.rx = f.x; _lemo.ry = f.y; _lemo.floor = f.fl; _lemo.faceT = f.face;
+    _lemo.onStair = !!f.onStair;
+    _lemo.bobT = f.onStair ? _lemoStairBob(f.d) : 0;
+    _lemo.idleFrame = Math.floor(((t % LEMO_IDLE_CYCLE_MS) + LEMO_IDLE_CYCLE_MS) % LEMO_IDLE_CYCLE_MS * idle.fps / 1000) % idle.frames;
+    if (f.phase === 'start') {
+        _lemo.state = 'walking'; _lemo.anim = 'Walk'; _lemo.frame = Math.min(LEMO_WALK_START_N - 1, Math.floor(f.pt / fm));
+    } else if (f.phase === 'loop') {
+        _lemo.state = 'walking'; _lemo.anim = 'Walk'; _lemo.frame = LEMO_WALK_LOOP_0 + (Math.floor(f.pt / fm) % LEMO_WALK_LOOP_N);
+    } else if (f.phase === 'end') {
+        _lemo.state = 'walking'; _lemo.anim = 'Walk';
+        _lemo.frame = Math.min(LEMO_WALK_END_0 + LEMO_WALK_END_N - 1, LEMO_WALK_END_0 + Math.floor(f.pt / fm));
+    } else {
+        _lemo.state = 'called'; _lemo.anim = 'Idle'; _lemo.frame = _lemo.idleFrame;
+    }
+}
+
+// The walk home: PURE in (ret, t) once the grid is up — the same route, the same
+// clock, on every client.
+function _lemoRetPose(d, t) {
+    const r = d.ret;
+    const idle = LEMO_ANIMS.Idle;
+    _lemo.idleFrame = Math.floor(((t % LEMO_IDLE_CYCLE_MS) + LEMO_IDLE_CYCLE_MS) % LEMO_IDLE_CYCLE_MS * idle.fps / 1000) % idle.frames;
+    if (_lemo.retKey !== r.t0 && _lemoNavBuild()) {
+        _lemo.retKey = r.t0;
+        _lemo.retPath = _lemoHomePath(r.x, r.y, r.fl, d.from >= 0 ? d.from : 0);
+        _lemo.retPlan = _lemo.retPath ? _lemoWalkPlan(_lemo.retPath.len, LEMO_RET_SPEED, LEMO_RET_RATE) : null;
+    }
+    const path = _lemo.retKey === r.t0 ? _lemo.retPath : null;
+    const el = t - r.t0;
+    if (!path || el < 0) {
+        _lemo.rx = r.x; _lemo.ry = r.y; _lemo.floor = r.fl; _lemo.faceT = r.f;
+        _lemo.state = 'idle'; _lemo.anim = 'Idle'; _lemo.frame = _lemo.idleFrame;
+        return;
+    }
+    const w = _lemoWalkAt(_lemo.retPlan, el);
+    const along = Math.min(path.len, w.d);
+    const p = _lemoPathAt(path, along);
+    _lemo.rx = p.x; _lemo.ry = p.y; _lemo.floor = p.fl || 1;
+    _lemo.onStair = p.st;
+    _lemo.bobT = p.st ? _lemoStairBob(along) : 0;
+    if (p.dx < -0.12) _lemo.faceT = -1; else if (p.dx > 0.12) _lemo.faceT = 1;
+    if (el >= _lemo.retPlan.ms) { _lemo.state = 'idle'; _lemo.anim = 'Idle'; _lemo.frame = _lemo.idleFrame; _lemo.faceT = 1; }
+    else { _lemo.state = 'walking'; _lemo.anim = 'Walk'; _lemo.frame = w.f; }
+}
+
+// ─── Pressing him: the chat box opens with his mention already typed ─────────
+function lemoWantsPress(world) {
+    if (!world || !_lemo.shown || gameState._hideLemo || (_lemo.alpha ?? 1) < 0.5) return false;
+    const vis = _meetFadeAt(_lemo.x) * (_lemo.floor === 2 ? (gameState.secondFloorVis ?? 1) : 1);
+    if (vis < 0.35) return false;
+    const sc = _lemo.sc || 1;
+    const feet = _lemo.y + (LEMO_H / 2) * sc;
+    return Math.abs(world.x - _lemo.x) <= LEMO_W * 0.56 * sc && world.y <= feet + 4 && world.y >= feet - LEMO_H * sc - 8;
+}
+function lemoPress() {
+    if (lemoIsAsleep()) { _libToast('ليمو نائم 😴 — اقترب منه ليستيقظ'); return; }
+    if (localInWorkPhase() || gameState.isLockedIn) { _libToast('لا يمكنك مناداة ليمو أثناء جلسة العمل'); return; }
+    if (!_chatUi.open) { if (!chatCanOpen()) return; openChatBox(); }
+    const input = _chatUi.input;
+    if (!input) return;
+    // His mention, then a space — the member types the question and sends.
+    if (!_chatReadInput().some(p => p.u === LEMO_UID)) {
+        input.textContent = '';
+        const pill = _chatMakePill(LEMO_UID, LEMO_NAME, LEMO_PFP);
+        const tail = document.createTextNode(' ');
+        input.append(pill, tail);
+        try {
+            const sel = window.getSelection(), rg = document.createRange();
+            rg.setStart(tail, 1);
+            rg.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(rg);
+        } catch (_) {}
+        _chatAfterInput();
+    }
+    try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.32, 0.06); } catch (_) {}
+}
+
 /* The teleport flash. It must read as a FLASH, not a fade: he turns fully white at
    full opacity first, a light bursts around him (`_lemo.glow`, see drawLemo), and
    only then does he vanish / take his colour back. */
@@ -30290,35 +31274,54 @@ function _lemoFlashIn(k) {
     _lemo.glow = k < 0.2 ? k / 0.2 : Math.max(0, 1 - (k - 0.2) / 0.8);
 }
 
-// The speech bubble over his head — canvas, like the chat's. Pops in, fades out.
-function _lemoDrawTalk(ctx, x, headY, sc, alpha) {
-    const age = _lemo.talk;
-    if (!age) return;
+// What is over his head — drawn in the on-top pass with the chat bubbles, so the
+// mezzanine art and the players never cover it. White, like he always spoke; wraps
+// like a chat bubble; a sticker when he answers with one. PURE in (say, age).
+function drawLemoSay() {
+    const say = _lemo.say;
+    if (!say || !_lemo.shown || gameState._hideLemo) return;
+    const ctx = gameState.ctx;
+    if (!ctx) return;
+    const place = _meetFadeAt(_lemo.x) * (_lemo.floor === 2 ? (gameState.secondFloorVis ?? 1) : 1) * (_lemo.alpha ?? 1);
+    if (place < 0.03) return;
+    const age = Date.now() - say.t0;
     const pop = age < 320 ? easeOutBack(Math.max(0.0001, age / 320)) : 1;
-    const fade = Math.min(1, (LEMO_CALL.talk - age) / 260);
-    const a = alpha * Math.max(0, fade);
+    const fade = say.wait ? 1 : Math.max(0, Math.min(1, (say.life - age) / 260));
+    const a = place * fade;
     if (a < 0.01) return;
+    const lsc = _lemo.sc || 1;
+    const headY = _lemo.y + (LEMO_H / 2) * lsc - LEMO_H * lsc;
+    const sc = Math.min(1.4, 1 / Math.max(0.6, gameState.zoom || 1)) * lsc;
+    const w = say.stk ? STK_BUB + 6 : say.lay.w + 8, h = say.stk ? STK_BUB + 6 : say.lay.h + 6;
+    // He stands BESIDE whoever called him, and their own bubble (the question) is over
+    // their head at the same height — so his box leans away from them, its tail still
+    // over his own head.
+    let lean = 0;
+    const call = _lemo.doc && _lemo.doc.call;
+    const who = call && gameState.players[call.u];
+    if (who && (who.floor || 1) === (_lemo.floor || 1)) {
+        const wp = getPlayerRenderPos(who);
+        if (Math.abs(wp.x - _lemo.x) < 260 && Math.abs(wp.y - _lemo.y) < 150) {
+            lean = (_lemo.x < wp.x ? -1 : 1) * Math.max(0, Math.min(w / 2 - 16, 58));
+        }
+    }
     ctx.save();
-    ctx.font = '700 15px Rubik, system-ui, sans-serif';
-    const tw = ctx.measureText(LEMO_TALK_TEXT).width;
-    const w = tw + 26, h = 34;
-    const by = headY - 12;
-    ctx.translate(x, by);
+    ctx.translate(_lemo.x, headY - 12);
     ctx.scale(pop * sc, pop * sc);
     ctx.globalAlpha = a;
-    ctx.fillStyle = 'rgba(255,255,255,0.96)';
-    _chatRoundRect(ctx, -w / 2, -h, w, h, h / 2);
+    ctx.fillStyle = '#f7f7f8';
+    _chatRoundRect(ctx, -w / 2 + lean, -h, w, h, Math.min(17, h / 2));
     ctx.fill();
     ctx.beginPath();
     ctx.moveTo(-6, -1); ctx.lineTo(6, -1); ctx.lineTo(0, 8);
     ctx.closePath();
     ctx.fill();
-    ctx.fillStyle = '#262626';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.direction = 'rtl';
-    ctx.fillText(LEMO_TALK_TEXT, 0, -h / 2 + 1);
+    ctx.translate(lean, -3);
+    if (say.stk) _stkDrawContent(ctx, say, STK_BUB, STK_BUB);
+    else _chatDrawContent(ctx, say.lay, say.lay.h, '#232326');
     ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.textBaseline = 'alphabetic';
 }
 
 // A soft burst of light + a ring, centred on his body. Only while he flashes.
@@ -30431,12 +31434,26 @@ function _lemoPick(list, x, y, spot, prevSpot, rand) {
     return pool[Math.floor(rand() * pool.length)];
 }
 
-function _lemoWalk(s, t, to) {
-    s.kind = 'walk'; s.t0 = t; s.end = t + LEMO_WALK_MS;
-    s.sx = s.x; s.sy = s.y; s.tx = to.x; s.ty = to.y;
-    // The walk art faces RIGHT, so a leftward trip mirrors him on the spot; he
-    // snaps back to the default once the animation finishes.
-    s.face = (to.x < s.x) ? -1 : 1;
+// One trip: from where he is, through `list` (one spot, or a whole route), without
+// stopping at the corners. PURE — only the points and the fixed speed go in, so the
+// length (and therefore the segment's end) is the same on every client.
+function _lemoTrip(s, t, list) {
+    const pts = [{ x: s.x, y: s.y }];
+    let D = 0;
+    for (const p of list) {
+        const a = pts[pts.length - 1];
+        D += Math.hypot(p.x - a.x, p.y - a.y);
+        pts.push(p);
+    }
+    const to = list[list.length - 1];
+    s.kind = 'walk'; s.t0 = t;
+    s.pts = pts; s.D = D; s._rp = null;
+    s.plan = _lemoWalkPlan(D, LEMO_SPEED, 1);
+    s.end = t + s.plan.ms;
+    s.tx = to.x; s.ty = to.y;
+    // The walk art faces RIGHT, so a leftward stretch mirrors him; he turns back to
+    // the default once the walk is over.
+    s.face = (list[0].x < s.x) ? -1 : 1;
     s.prevSpot = s.spot;
     s.spot = to;
 }
@@ -30448,13 +31465,20 @@ function _lemoIdle(s, t) {
 }
 
 // Advance the timeline by one segment. PURE in (seed, previous segment): no clock,
-// no player, no sheet state may be read here, or two clients would part ways.
+// no player, no sheet state, no collision grid may be read here, or two clients
+// would part ways.
 function _lemoStep(s) {
     const t = s.end;
+    if (s.kind === 'sleep') return;                       // the nap: nothing follows until he is woken
+    if (s.kind === 'liedown') { s.kind = 'sleep'; s.t0 = t; s.end = Infinity; return; }
     if (s.kind === 'walk') {
         s.x = s.tx; s.y = s.ty; s.face = 1;
-        // On a route he keeps going — no idle between hops, he's on his way somewhere.
-        if (s.queue.length) { _lemoWalk(s, t, s.queue.shift()); return; }
+        s.pts = null; s._rp = null;
+        if (s.mode === 'bed') {
+            // He is at his bed: WakeUp played backwards is him lying down.
+            s.kind = 'liedown'; s.t0 = t; s.end = t + LEMO_WAKE_MS;
+            return;
+        }
         if (s.mode === 'toMeet') {
             s.mode = 'meet';
             s.meetLeft = LEMO_MEET_MIN_WALKS + Math.floor(s.rand() * (LEMO_MEET_MAX_WALKS - LEMO_MEET_MIN_WALKS + 1));
@@ -30468,14 +31492,22 @@ function _lemoStep(s) {
     if (s.rand() < LEMO_PLAY_CHANCE) { s.kind = 'play'; s.t0 = t; s.end = t + LEMO_PLAY_MS; return; }
 
     if (s.mode === 'rest') {
+        // Very rarely, from one of the two spots beside his bed, he just goes back to
+        // sleep — until somebody walks up to him again.
+        if (LEMO_BED_SPOTS.includes(s.spot) && s.rand() < LEMO_NAP_CHANCE) {
+            s.mode = 'bed';
+            _lemoTrip(s, t, [LEMO_SPAWN]);
+            return;
+        }
         if (s.restWalks >= LEMO_REST_MIN_WALKS && s.rand() < LEMO_MEET_CHANCE) {
+            // The whole route to the meeting room as ONE walk: he rounds its corners
+            // instead of stopping dead at each of them.
             s.mode = 'toMeet';
-            s.queue = [LEMO_ROUTE[1], LEMO_ROUTE[2], LEMO_MEET_SPOTS[0]];
-            _lemoWalk(s, t, LEMO_ROUTE[0]);
+            _lemoTrip(s, t, [LEMO_ROUTE[0], LEMO_ROUTE[1], LEMO_ROUTE[2], LEMO_MEET_SPOTS[0]]);
             return;
         }
         s.restWalks++;
-        _lemoWalk(s, t, _lemoPick(LEMO_SPOTS, s.x, s.y, s.spot, s.prevSpot, s.rand));
+        _lemoTrip(s, t, [_lemoPick(LEMO_SPOTS, s.x, s.y, s.spot, s.prevSpot, s.rand)]);
         return;
     }
 
@@ -30484,14 +31516,12 @@ function _lemoStep(s) {
     if (s.meetLeft <= 0) {
         const r0 = LEMO_ROUTE[0];
         const home = _lemoPick(LEMO_SPOTS, r0.x, r0.y, null, null, s.rand);
-        const q = LEMO_MEET_HOME[i].concat([LEMO_ROUTE[2], LEMO_ROUTE[1], r0, home]);
         s.mode = 'toRest';
-        _lemoWalk(s, t, q.shift());
-        s.queue = q;
+        _lemoTrip(s, t, LEMO_MEET_HOME[i].concat([LEMO_ROUTE[2], LEMO_ROUTE[1], r0, home]));
         return;
     }
     s.meetLeft--;
-    _lemoWalk(s, t, _lemoPick(LEMO_MEET_LINKS[i].map(j => LEMO_MEET_SPOTS[j]), s.x, s.y, s.spot, s.prevSpot, s.rand));
+    _lemoTrip(s, t, [_lemoPick(LEMO_MEET_LINKS[i].map(j => LEMO_MEET_SPOTS[j]), s.x, s.y, s.spot, s.prevSpot, s.rand)]);
 }
 
 // The doc, sanitised — it's lobby data any client can write. A change rebuilds the
@@ -30502,25 +31532,34 @@ function _lemoApplyDoc(v) {
     const seed = (v && Number.isFinite(v.seed)) ? (v.seed | 0) : 0;
     _lemo.docReady = true;
     const call = (s === 'awake') ? _lemoCleanCall(v && v.call) : null;
+    const ret = (s === 'awake' && !call) ? _lemoCleanSpot(v && v.ret, 't0') : null;
     const from = (v && Number.isInteger(v.from) && v.from >= 0 && v.from < LEMO_SPOTS.length) ? v.from : -1;
-    const key = s + ':' + at + ':' + seed + ':' + (call ? call.at : '') + ':' + from;
+    const key = s + ':' + at + ':' + seed + ':' + (call ? call.t0 + call.u : '') + ':' + (ret ? ret.t0 : '') + ':' + from;
     if (key === _lemo.docKey) return;
+    const prevCall = _lemo.doc && _lemo.doc.call;
     _lemo.docKey = key;
-    _lemo.doc = { s, at, seed, call, from };
+    _lemo.doc = { s, at, seed, call, ret, from };
     _lemo.wakeReqAt = 0;
+    // A new call (or a call for someone else) starts its own walk; the same caller
+    // asking again keeps the words that are still over his head.
+    if (!call || !prevCall || prevCall.t0 !== call.t0) _lemo.fol = null;
+    if (!call || !prevCall || prevCall.u !== call.u) _lemo.say = null;
     if (s !== 'awake') { _lemo.sim = null; return; }
     const sim = {
         rand: _lemoRng(seed),
         kind: 'wake', t0: at, end: at + LEMO_WAKE_MS,
-        x: LEMO_SPAWN.x, y: LEMO_SPAWN.y, sx: 0, sy: 0, tx: 0, ty: 0, face: 1,
-        mode: 'rest', spot: null, prevSpot: null, queue: [], restWalks: 0, meetLeft: 0,
+        x: LEMO_SPAWN.x, y: LEMO_SPAWN.y, tx: 0, ty: 0, face: 1,
+        pts: null, D: 0, plan: null, _rp: null,
+        mode: 'rest', spot: null, prevSpot: null, restWalks: 0, meetLeft: 0,
     };
-    // After a call he doesn't wake up — he reappears at a break-room spot and idles.
+    // After a call he doesn't wake up — he is at a break-room spot (walked home, or
+    // flashed back if nobody released the call) and idles.
     if (from >= 0) {
         sim.spot = LEMO_SPOTS[from];
         sim.x = sim.spot.x; sim.y = sim.spot.y;
         _lemoIdle(sim, at);
-        sim.back = true;
+        sim.home = true;
+        sim.back = !!call;        // an unreleased call ends in the flash
     }
     _lemo.sim = sim;
 }
@@ -30541,6 +31580,9 @@ function _lemoMaybeReset(t) {
 
 // The local player walked up to him. The wake lands on the next sleep-loop boundary
 // (no mid-cycle cut) — computed in server time, so every client starts it together.
+// He may be asleep because the DOC says so, or because he dozed off on his own (the
+// timeline's nap — the doc still reads `awake`): in that case only the very doc whose
+// timeline put him to bed may be replaced.
 function _lemoMaybeWake() {
     const p = gameState.players[gameState.userId];
     if (!p || p.floor === 2) return;
@@ -30549,79 +31591,99 @@ function _lemoMaybeWake() {
     const now = performance.now();
     if (now - _lemo.wakeReqAt < 4000) return;        // one attempt in flight
     _lemo.wakeReqAt = now;
+    const d = _lemo.doc, sim = _lemo.sim;
+    const nap = !!(d && d.s === 'awake' && sim && sim.kind === 'sleep');
+    const napAt = nap ? d.at : 0, napSeed = nap ? d.seed : 0, napT0 = nap ? sim.t0 : 0;
     runTransaction(ref(database, lobbyPath('lemo')), (cur) => {
-        if (cur && cur.s === 'awake') return;        // someone beat us to it
-        const base = (cur && Number.isFinite(cur.at)) ? cur.at : 0;
+        if (cur && cur.s === 'awake') {
+            if (!nap || cur.call || cur.ret || cur.at !== napAt || ((cur.seed | 0) !== napSeed)) return;   // someone beat us to it
+        }
+        const base = nap ? napT0 : ((cur && Number.isFinite(cur.at)) ? cur.at : 0);
         const wakeAt = base + Math.ceil((serverNow() - base) / LEMO_SLEEP_CYCLE_MS) * LEMO_SLEEP_CYCLE_MS;
         return { s: 'awake', at: wakeAt, seed: Math.floor(Math.random() * 2147483647) };
     }).then(r => { if (r && r.snapshot) _lemoApplyDoc(r.snapshot.val()); }).catch(() => {});
 }
 
-// Where he is and what he's doing at server time t.
-function _lemoPose(t) {
-    _lemo.floor = 1; _lemo.white = 0; _lemo.alpha = 1; _lemo.talk = 0; _lemo.glow = 0;
+// Where the TIMELINE puts him at server time t. PURE in (doc, t).
+function _lemoTimePose(t) {
     const d = _lemo.doc;
-    const c = d && d.call;
-    if (c && t < d.at) {
-        if (t >= c.at) { _lemoCallPose(c, t); }
-        else {
-            // The doc arrived a hair before the call's own start: stand where he was.
-            _lemo.x = c.fx; _lemo.y = c.fy; _lemo.floor = c.f0; _lemo.face = c.ff;
-            _lemo.state = 'idle'; _lemo.anim = 'Idle'; _lemo.caughtUp = true;
-            const a = LEMO_ANIMS.Idle;
-            _lemo.frame = _lemo.idleFrame = Math.floor(((t % LEMO_IDLE_CYCLE_MS) + LEMO_IDLE_CYCLE_MS) % LEMO_IDLE_CYCLE_MS * a.fps / 1000) % a.frames;
-        }
-        if (!_lemo.sleepFreed) { _lemo.sleepFreed = true; _lemoReleaseSleepSheets(); }
-        return;
-    }
     const s = _lemo.sim;
-    // Back from a call: flash in at his spot.
+    const idle = LEMO_ANIMS.Idle;
+    _lemo.idleFrame = Math.floor(((t % LEMO_IDLE_CYCLE_MS) + LEMO_IDLE_CYCLE_MS) % LEMO_IDLE_CYCLE_MS * idle.fps / 1000) % idle.frames;
+    // Back from an unreleased call: flash in at his spot.
     if (s && s.back && t >= s.t0 - 1 && d && t - d.at < LEMO_BACK_FLASH_MS) {
         _lemoFlashIn(Math.max(0, (t - d.at) / LEMO_BACK_FLASH_MS));
     }
-    if (!s || t < s.t0) {
-        // Asleep — or woken, but finishing the loop he was in. `at` sits on the
-        // loop grid either way, so every client shows the same frame.
-        const base = s ? s.t0 : (_lemo.doc ? _lemo.doc.at : 0);
+    if (s && s.home && t < s.t0) {
+        // A doc whose call/return this client couldn't read: stand at the spot it names.
+        _lemo.rx = s.x; _lemo.ry = s.y; _lemo.faceT = 1; _lemo.floor = 1;
+        _lemo.state = 'idle'; _lemo.anim = 'Idle'; _lemo.frame = _lemo.idleFrame;
+        _lemo.caughtUp = true;
+        return;
+    }
+    const sleepAt = (base) => {
         const a = LEMO_ANIMS.Sleeping;
         const ph = (((t - base) % LEMO_SLEEP_CYCLE_MS) + LEMO_SLEEP_CYCLE_MS) % LEMO_SLEEP_CYCLE_MS;
-        _lemo.x = LEMO_SPAWN.x; _lemo.y = LEMO_SPAWN.y; _lemo.face = 1;
+        _lemo.rx = LEMO_SPAWN.x; _lemo.ry = LEMO_SPAWN.y; _lemo.faceT = 1; _lemo.floor = 1;
         _lemo.state = 'sleeping'; _lemo.anim = 'Sleeping';
         _lemo.frame = Math.min(a.frames - 1, Math.floor(ph * a.fps / 1000));
         _lemo.sleepFreed = false;
         _lemo.caughtUp = true;
         ensureLemoSheet('Sleeping');
         ensureLemoSheet('WakeUp');
+    };
+    if (!s || t < s.t0) {
+        // Asleep — or woken, but finishing the loop he was in. `at` sits on the
+        // loop grid either way, so every client shows the same frame.
+        sleepAt(s ? s.t0 : (d ? d.at : 0));
         return;
     }
     let n = 0;
     while (t >= s.end && n++ < LEMO_STEP_BUDGET) _lemoStep(s);
     _lemo.caughtUp = t < s.end;
+    if (s.kind === 'sleep') { sleepAt(s.t0); return; }     // the nap
     const el = t - s.t0;
     const frameAt = (name, loop) => {
         const a = LEMO_ANIMS[name];
         const f = Math.floor((loop ? el % (a.frames * 1000 / a.fps) : el) * a.fps / 1000);
         return Math.max(0, Math.min(a.frames - 1, f));
     };
-    _lemo.x = s.x; _lemo.y = s.y; _lemo.face = 1;
-    _lemo.idleFrame = frameAt('Idle', true);
+    _lemo.rx = s.x; _lemo.ry = s.y; _lemo.faceT = 1; _lemo.floor = 1;
     if (s.kind === 'wake') {
         _lemo.state = 'waking'; _lemo.anim = 'WakeUp'; _lemo.frame = frameAt('WakeUp', false);
         ensureLemoSheet('Idle');    // up next — a phone doesn't hold them while he sleeps
         ensureLemoSheet('Walk');
         return;
     }
-    if (!_lemo.sleepFreed) { _lemo.sleepFreed = true; _lemoReleaseSleepSheets(); }
+    if (s.kind === 'liedown') {
+        // WakeUp, backwards: he settles into bed.
+        _lemo.state = 'sleeping'; _lemo.anim = 'WakeUp';
+        _lemo.frame = LEMO_ANIMS.WakeUp.frames - 1 - frameAt('WakeUp', false);
+        _lemo.sleepFreed = false;
+        ensureLemoSheet('WakeUp');
+        ensureLemoSheet('Sleeping');
+        return;
+    }
+    if (s.mode === 'bed') {
+        // On his way to bed: have the two sheets ready by the time he gets there.
+        _lemo.sleepFreed = false;
+        ensureLemoSheet('WakeUp');
+        ensureLemoSheet('Sleeping');
+    } else if (!_lemo.sleepFreed) { _lemo.sleepFreed = true; _lemoReleaseSleepSheets(); }
     if (s.kind === 'idle') {
         _lemo.state = 'idle'; _lemo.anim = 'Idle'; _lemo.frame = _lemo.idleFrame;
     } else if (s.kind === 'play') {
         _lemo.state = 'playing'; _lemo.anim = 'Play'; _lemo.frame = frameAt('Play', false);
     } else {
-        const e = _lemoEase(Math.min(1, el / LEMO_WALK_TRAVEL_MS));
-        _lemo.x = s.sx + (s.tx - s.sx) * e;
-        _lemo.y = s.sy + (s.ty - s.sy) * e;
-        _lemo.face = s.face;
-        _lemo.state = 'walking'; _lemo.anim = 'Walk'; _lemo.frame = frameAt('Walk', false);
+        // The rounded route is built for the segment on screen only (never while
+        // catching up), and walked by the fraction of the trip's own length.
+        if (!s._rp) s._rp = _lemoPathMake(_lemoRound(s.pts, LEMO_CORNER_R));
+        const w = _lemoWalkAt(s.plan, el);
+        const frac = s.D > 0 ? Math.min(1, w.d / s.D) : 1;
+        const p = _lemoPathAt(s._rp, frac * s._rp.len);
+        _lemo.rx = p.x; _lemo.ry = p.y;
+        _lemo.faceT = p.dx < -0.12 ? -1 : (p.dx > 0.12 ? 1 : s.face);
+        _lemo.state = 'walking'; _lemo.anim = 'Walk'; _lemo.frame = w.f;
     }
 }
 
@@ -30636,6 +31698,8 @@ function startLemo() {
         ensureLemoSheet('Idle');
         ensureLemoSheet('Walk');
     });
+    // The route grid: built once the room has settled, so the first call doesn't pay for it.
+    whenCalm(() => { _lemoNavBuild(); });
     // His face in the @ picker and on a mention pill (canvas + DOM). Tiny, after spawn.
     try {
         const pfp = new Image();
@@ -30674,19 +31738,87 @@ function updateLemo() {
         _lemo.resetChecked = true;
         _lemoMaybeReset(t);
     }
+    // Real elapsed time for the walk he steers himself (clamped: a tab coming back
+    // from the background must not fling him across the room).
+    const pn = performance.now();
+    const dt = Math.min(250, Math.max(0, _lemo.lastT ? pn - _lemo.lastT : 16));
+    const gap = _lemo.lastT ? pn - _lemo.lastT : 0;
+    _lemo.lastT = pn;
     // Hidden only hides him: his timeline is the lobby's, not ours, and picks up
     // exactly where everyone else sees him when he's shown again.
-    if (gameState._hideLemo) { _lemo.shown = false; return; }
-    _lemoPose(t);
-    _lemo.shown = _lemo.resetChecked && _lemo.caughtUp;
-    // The caller hears him arrive (a soft blip as «عايز ايه؟» pops up).
-    const c = _lemo.doc && _lemo.doc.call;
-    if (c && _lemo.talk && c.u === gameState.userId && _lemo.callCue !== c.at) {
-        _lemo.callCue = c.at;
-        try { gameState.focusAudioEngine?.playPitched('uiBlip', 1.35, 0.07); } catch (_) {}
+    if (gameState._hideLemo) { _lemo.shown = false; _lemo.fol = null; _lemo.say = null; return; }
+
+    const d = _lemo.doc;
+    const c = d && d.call, r = d && d.ret;
+    const wasMode = _lemo.mode, wasX = _lemo.x, wasY = _lemo.y, wasFl = _lemo.floor, wasShown = _lemo.shown;
+    _lemo.white = 0; _lemo.alpha = 1; _lemo.glow = 0;
+    _lemo.onStair = false; _lemo.bobT = 0;
+    let mode = 'time';
+    if (c && t < d.at) {
+        mode = 'call';
+        _lemo.caughtUp = true;
+        if (!_lemo.sleepFreed) { _lemo.sleepFreed = true; _lemoReleaseSleepSheets(); }
+        if (t < c.t0) {
+            // The doc arrived a hair before the call's own start: stand where he was.
+            const idle = LEMO_ANIMS.Idle;
+            _lemo.idleFrame = Math.floor(((t % LEMO_IDLE_CYCLE_MS) + LEMO_IDLE_CYCLE_MS) % LEMO_IDLE_CYCLE_MS * idle.fps / 1000) % idle.frames;
+            _lemo.rx = c.x; _lemo.ry = c.y; _lemo.floor = c.fl; _lemo.faceT = c.f;
+            _lemo.state = 'idle'; _lemo.anim = 'Idle'; _lemo.frame = _lemo.idleFrame;
+        } else {
+            if (!_lemo.fol || _lemo.fol.key !== c.t0) _lemo.fol = _lemoFolStart(c, t);
+            else if (gap > 3000) _lemoFolSnap(_lemo.fol, c, t);      // the tab was away
+            _lemoFolStep(c, _lemo.fol, dt, t);
+            _lemoFolPose(_lemo.fol, t);
+            // A call nobody released ends in the old flash-out.
+            if (d.at - t < LEMO_LEAVE_FLASH_MS) _lemoFlashOut(1 - Math.max(0, d.at - t) / LEMO_LEAVE_FLASH_MS);
+            _lemoTalkStep(c, _lemo.fol);
+        }
+    } else if (r && t < d.at) {
+        mode = 'ret';
+        _lemo.caughtUp = true;
+        _lemo.fol = null; _lemo.say = null;
+        _lemoRetPose(d, t);
+    } else {
+        _lemo.fol = null; _lemo.say = null;
+        _lemoTimePose(t);
     }
-    if (_lemo.white > 0 || _lemo.glow > 0 || _lemo.talk || lemoIsBusy()) perfWake(600);
-    if (_lemo.shown && _lemo.state === 'sleeping' && _lemo.doc.s !== 'awake') _lemoMaybeWake();
+    _lemo.mode = mode;
+
+    // No jump between modes: when the thing driving him changes, what is left of
+    // the difference is glided off instead of shown as a snap. (A flash is the one
+    // deliberate teleport, and a different floor can't be glided across.)
+    if (wasShown && wasMode && (mode !== wasMode || _lemo._poseKey !== _lemo.docKey)) {
+        const jx = wasX - _lemo.rx, jy = wasY - _lemo.ry;
+        const flashing = _lemo.white > 0 || _lemo.alpha < 1;
+        if (!flashing && wasFl === _lemo.floor && Math.hypot(jx, jy) < 240) { _lemo.ox = jx; _lemo.oy = jy; }
+        else { _lemo.ox = 0; _lemo.oy = 0; }
+    }
+    _lemo._poseKey = _lemo.docKey;
+    if (_lemo.ox || _lemo.oy) {
+        const L = Math.hypot(_lemo.ox, _lemo.oy);
+        // Exponential, but never faster than a brisk walk — an uncapped one sheds a
+        // big offset in its first frame, which IS the jump.
+        const step = Math.min(L, Math.max(0.2, Math.min(L * 0.14, 3.4)) * (dt / 16.667));
+        if (L - step < 0.3) { _lemo.ox = 0; _lemo.oy = 0; }
+        else { const k = (L - step) / L; _lemo.ox *= k; _lemo.oy *= k; }
+    }
+    _lemo.x = _lemo.rx + _lemo.ox;
+    _lemo.y = _lemo.ry + _lemo.oy;
+    // Size and the climbing bob ease toward what the pose asks for, so neither can pop
+    // at the foot or the head of the stairs.
+    const kE = Math.min(1, 0.22 * (dt / 16.667));
+    const scT = _lemoScaleAt(_lemo.x, _lemo.onStair, _lemo.floor);
+    _lemo.sc = Math.abs(scT - _lemo.sc) < 0.002 ? scT : _lemo.sc + (scT - _lemo.sc) * kE;
+    _lemo.bob = Math.abs(_lemo.bobT - _lemo.bob) < 0.05 ? _lemo.bobT : _lemo.bob + (_lemo.bobT - _lemo.bob) * Math.min(1, 0.4 * (dt / 16.667));
+    // A turn is a plain ±1 SNAP — no flip tween. (A flip through the middle was tried
+    // in ١.٥ and the owner asked for the snap back: don't reintroduce it.)
+    _lemo.face = _lemo.faceT;
+    _lemo.faceS = _lemo.faceT;
+
+    _lemo.shown = _lemo.resetChecked && _lemo.caughtUp;
+    if (_lemo.white > 0 || _lemo.glow > 0 || _lemo.say || mode !== 'time' || _lemo.ox || _lemo.oy
+        || _lemo.sc !== scT || _lemo.bob !== _lemo.bobT) perfWake(500);
+    if (_lemo.shown && mode === 'time' && _lemo.state === 'sleeping' && _lemo.anim === 'Sleeping') _lemoMaybeWake();
 }
 
 function drawLemo(floorPass) {
@@ -30695,13 +31827,15 @@ function drawLemo(floorPass) {
     // In the meeting room he fades with the room — hidden until you reach its door.
     // Up on the mezzanine he fades with it, like a player standing there.
     const place = _meetFadeAt(_lemo.x) * (_lemo.floor === 2 ? (gameState.secondFloorVis ?? 1) : 1);
-    const lsc = _lemo.floor === 2 ? FLOOR2_SCALE : 1;
+    const lsc = _lemo.sc || 1;
     if (_lemo.glow > 0.01 && place > 0.01) _lemoDrawGlow(gameState.ctx, lsc, _lemo.glow * place);
     const fade = place * (_lemo.alpha ?? 1);
     if (fade < 0.01) return;
     let name = _lemo.anim, frame = _lemo.frame;
     let sheet = _lemoSheet(name);
     if (!sheet && name === 'Play') { name = 'Idle'; frame = _lemo.idleFrame; sheet = _lemoSheet('Idle'); }
+    // The walk sheet hasn't landed (a phone that met him asleep): glide in Idle rather than vanish.
+    if (!sheet && name === 'Walk') { name = 'Idle'; frame = _lemo.idleFrame; sheet = _lemoSheet('Idle'); }
     if (!sheet) return;
     const ctx = gameState.ctx;
     const a = LEMO_ANIMS[name];
@@ -30720,10 +31854,11 @@ function drawLemo(floorPass) {
     const [bx0, by0, bx1, by1] = a.box;
     const col = frame % a.cols;
     const row = (frame / a.cols) | 0;
+    const fx = _lemo.face === -1 ? -1 : 1;   // the art faces RIGHT; a leftward stretch mirrors him
     ctx.save();
     if (fade < 1) ctx.globalAlpha = fade;
-    ctx.translate(_lemo.x, _lemo.y + (LEMO_H / 2) * (lsc - 1));
-    ctx.scale(_lemo.face * lsc, lsc);   // mirrors around his own anchor
+    ctx.translate(_lemo.x, _lemo.y + (LEMO_H / 2) * (lsc - 1) - (_lemo.bob || 0) * lsc);
+    ctx.scale(fx * lsc, lsc);   // mirrors around his own anchor
     // Drop shadow, matching the avatars' (drawPlayers uses the same values on the
     // ring). installLowGfxShadowGuard zeroes shadowBlur on the reduced tiers, so
     // this costs nothing on mobile — same as every other shadow in the world pass.
@@ -30743,10 +31878,6 @@ function drawLemo(floorPass) {
         (by1 - by0) * LEMO_SCALE
     );
     ctx.restore();
-    if (_lemo.talk) {
-        const headY = _lemo.y + (LEMO_H / 2) * lsc - LEMO_H * lsc;
-        _lemoDrawTalk(ctx, _lemo.x, headY, Math.min(1.4, 1 / Math.max(0.6, gameState.zoom || 1)) * lsc, fade);
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -30918,7 +32049,7 @@ const _libDueOf       = t => (t.due == null ? Infinity : Number(t.due));
 const _libSortByDue   = list => list.slice().sort((a, b) => { const x = _libDueOf(a), y = _libDueOf(b); return x < y ? -1 : x > y ? 1 : 0; });
 
 /* ── the toast ───────────────────────────────────────────────────────────── */
-function _libToast(msg) {
+function _libToast(msg, ms) {
     const el = document.getElementById('lib-toast');
     if (!el) return;
     clearTimeout(_lib.toastTimer);
@@ -30928,7 +32059,7 @@ function _libToast(msg) {
     _lib.toastTimer = setTimeout(() => {
         el.classList.remove('show');
         setTimeout(() => { el.hidden = true; }, 300);
-    }, 3400);
+    }, ms || 3400);
 }
 
 /* ── who is on the task — TWO pill shapes, by head-count ──────────────────────
@@ -33729,8 +34860,11 @@ function setupWorkChallenge() {
 
 const JUMP_MS           = 560;   // crouch → air → landing squash, all of it
 const JUMP_COOLDOWN_MS  = 430;   // a second press before this is ignored, not queued
-const JUMP_DBL_TAP_MS   = 340;   // two presses inside this = a jump
-const JUMP_DBL_TAP_PX   = 46;    // …landing this close together (anywhere, on a phone)
+const JUMP_DBL_TAP_MS   = 450;   // two presses inside this = a jump (was 340 — too tight on a phone)
+const JUMP_DBL_TAP_PX   = 90;    // …landing this close together (anywhere, on a phone; was 46)
+const JUMP_FLICK_MS     = 320;   // a phone: a flick UP this quick…
+const JUMP_FLICK_PX     = 38;    // …and at least this long = a jump
+const JUMP_HINT_KEY     = 'mdwnh_jump_hint_15';   // the one-time «how to jump» toast
 let _selfTapAt = 0;
 let _anyTap = { t: 0, x: 0, y: 0 };
 
@@ -34251,11 +35385,37 @@ function selfDoubleTapJump(world) {
 // — a first tap that sat you down or opened something must not turn the second into
 // a jump. `sx/sy` are screen coords, so "the same place" doesn't depend on the zoom.
 function jumpNoteFreeTap(sx, sy) { _anyTap = { t: Date.now(), x: sx, y: sy }; }
+// A phone, WALKING (a thumb on the joystick): one free tap with the other hand is the
+// jump — no double tap. That is the case the double tap was worst at, and the one a
+// travelling jump (onto a table, off the mezzanine) needs.
+function jumpTapWhileMoving() {
+    const j = gameState.joystick;
+    if (!j || !j.active || !(j.magnitude > 0.08)) return false;
+    if (!triggerJump()) return false;
+    jumpHintDone();
+    return true;
+}
+// The one-time hint: nobody discovers a gesture that has no button. Shown once per
+// device, a few seconds after the entrance, and never again once they have jumped
+// with either gesture.
+function jumpHintDone() { try { localStorage.setItem(JUMP_HINT_KEY, '1'); } catch (_) {} }
+// → true once there is nothing left to ask (shown, already known, or not a phone), so
+// the caller stops polling — this reads localStorage and must not run all session.
+function jumpMaybeHint() {
+    if (!isTouchDevice() || !isMobile()) return true;
+    try { if (localStorage.getItem(JUMP_HINT_KEY)) return true; } catch (_) { return true; }
+    if (sceneBusy() || !canJump() || localInWorkPhase()) return false;
+    jumpHintDone();
+    _libToast('للقفز: اسحب إصبعك للأعلى بسرعة — أو انقر في أي مكان وأنت تمشي', 7000);
+    return true;
+}
 function anyDoubleTapJump(sx, sy) {
     const dbl = Date.now() - _anyTap.t < JUMP_DBL_TAP_MS && Math.hypot(sx - _anyTap.x, sy - _anyTap.y) < JUMP_DBL_TAP_PX;
     if (!dbl) return false;
     _anyTap = { t: 0, x: 0, y: 0 };
-    return triggerJump();
+    if (!triggerJump()) return false;
+    jumpHintDone();
+    return true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -34390,6 +35550,8 @@ const _chatUi = {
     cl: 0, ct: 0,   // cached canvas rect origin — see updateChatInputPos
     toastTimer: 0, refuseTimer: 0,
     typPingAt: 0,   // last «يكتب الآن» re-assert — see updateChatSystem
+    docked: false,  // a phone: the box is a bar pinned to the keyboard, not over my head
+    camLift: 0,     // …and the camera lifts me this many SCREEN px into the clear part
 };
 
 // The @ picker, and MY OWN ping history (for the cooldown and the step).
@@ -34654,6 +35816,7 @@ function receiveChatMessage(player, raw, segs) {
         forMe: !!mine && !fromMe,
         accent: mens.length ? _chatMenColor(mens[0].u) : null,
     });
+    _histPush(player, list[list.length - 1]);   // kept for the tap-to-see-what-I-missed fan (see peek)
     while (list.length > CHAT_STACK_MAX) list.shift();
     _meetOnChat(player, text, parts);   // the same line over their seat at the meeting table
     // Only someone ELSE's message makes a sound. My own needs no cue — I pressed send.
@@ -34778,7 +35941,7 @@ function _chatWorldVisible() {
     if (typeof document !== 'undefined' && document.hidden) return false;
     if (gameState.azkar.active || gameState.prayer.isOverlayActive) return false;
     if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen()
-        || adminPanelIsOpen() || meetingIsOpen() || isMinigameOverlayOpen()) return false;
+        || adminPanelIsOpen() || meetingIsOpen() || isMinigameOverlayOpen() || dmIsModal()) return false;
     if (gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active) return false;
     return true;
 }
@@ -35124,11 +36287,30 @@ function _chatSend() {
     const now = Date.now();
     // نداء ليمو — checked first: a refusal holds the whole message, like a cooldown.
     const callsLemo = parts.some(p => p.u === LEMO_UID);
+    // What is being asked: the message without his own mention (another member's
+    // mention reads as their name). He must be given something to answer.
+    const lemoQ = callsLemo
+        ? _chatClean(parts.filter(p => p.u !== LEMO_UID).map(p => (p.u ? p.n : p.t)).join(' '))
+        : '';
     if (callsLemo) {
         let why = '';
+        const busyFor = lemoBusyFor();
         if (localInWorkPhase() || gameState.isLockedIn) why = 'لا يمكنك مناداة ليمو أثناء جلسة العمل';
         else if (lemoIsAsleep()) why = 'ليمو نائم 😴 — أيقظه أولًا من غرفة الاستراحة';
-        else if (lemoIsBusy() || _lemo.summoning) why = 'ليمو مشغول الآن — انتظر حتى يعود';
+        else if (lemoQ.length < 2) why = 'اكتب سؤالك لليمو بعد اسمه، ثم أرسل';
+        else if (_lemo.summoning || busyFor) {
+            why = (busyFor && busyFor !== gameState.userId) ? 'ليمو يفكّر في ردٍّ لغيرك — لحظة' : 'ليمو يفكّر في ردّك — لحظة';
+        }
+        else if (now < _lemo.ai.myNextAt) {
+            // The four seconds after he answers ME: the gap someone else needs.
+            const at = _lemo.ai.myNextAt;
+            _chatRefuse();
+            _chatToast(() => {
+                const left = Math.max(0, at - Date.now());
+                return left > 0 ? `انتظر ${_chatArNum((left / 1000).toFixed(1))} ث — دع غيرك يكلّم ليمو` : 'يمكنك مناداته الآن';
+            }, Math.max(900, at - now + 500));
+            return;
+        }
         if (why) {
             _chatRefuse();
             _chatToast(() => why, 2600);
@@ -35161,13 +36343,7 @@ function _chatSend() {
     }
     for (const p of parts) if (p.u) p.l = _chatMen.last[p.u] ? _chatMen.last[p.u].lv : 1;
     _chatUi.lastSentAt = now;
-    if (callsLemo) {
-        lemoSummon().then(r => {
-            if (r === 'sleep') _libToast('ليمو نام قبل أن يسمعك — أيقظه أولًا');
-            else if (r === 'busy') _libToast('ليمو مشغول الآن مع غيرك');
-            else if (r === 'fail') _libToast('لم يصل النداء إلى ليمو، حاول مجددًا');
-        });
-    }
+    if (callsLemo) lemoAsk(lemoQ);
     closeChatBox(true);   // the message ends the typing bubble — see closeChatBox
     const me = gameState.players[gameState.userId];
     if (me) receiveChatMessage(me, null, parts.map(p => ({ ...p })));   // show it locally at once — no round trip
@@ -35452,7 +36628,7 @@ function _chatMenCandidates(q) {
     if (!localInWorkPhase() && !gameState.isLockedIn) {
         const lemoHit = !qn || ['ليمو', 'lemo', 'limo', 'الروبوت'].some(k => _chatMenNorm(k).includes(qn));
         if (lemoHit) {
-            const sub = lemoIsAsleep() ? 'نائم — أيقظه أولًا' : lemoIsBusy() ? 'مشغول الآن' : 'الروبوت — سيأتي إليك';
+            const sub = lemoIsAsleep() ? 'نائم — أيقظه أولًا' : lemoIsBusy() ? 'يفكّر في ردّ الآن' : 'اسأله — سيأتي إليك ويجيب';
             out.push({ uid: LEMO_UID, name: LEMO_NAME, sub, d: Infinity, avatar: LEMO_PFP, lemo: true });
         }
     }
@@ -35670,7 +36846,7 @@ function chatCanOpen() {
 function _chatMustClose() {
     return gameState.azkar.active || gameState.prayer.isOverlayActive
         || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen()
-        || libPanelIsOpen() || chalModalIsOpen() || readingEndCardOpen() || settingsIsOpen()
+        || libPanelIsOpen() || chalModalIsOpen() || readingEndCardOpen() || settingsIsOpen() || dmIsModal()
         || isMinigameOverlayOpen()
         || gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active
         || gameState.anim.active
@@ -35713,6 +36889,14 @@ function openChatBox() {
     _chatToastHide();
     _chatUi.box?.classList.remove('refuse');
     _chatRefreshCount();
+    // A phone: a slim bar pinned to the top of the keyboard instead of a box over my
+    // head — the box sat exactly where the people next to me stand, and with half the
+    // screen under the keyboard there was nothing left to see them in. (The meeting
+    // overlay keeps its own placement, over my seat.)
+    _chatUi.docked = isMobile() && !meetingIsOpen();
+    _chatUi.wrap.classList.toggle('docked', _chatUi.docked);
+    if (!_chatUi.docked) _chatUi.wrap.style.width = '';
+    _chatUi.camLift = 0;
     // Measured on open; after that only an input that changes the line count
     // re-measures (_chatRemeasure), so the per-frame positioner stays free of layout
     // reads.
@@ -35735,7 +36919,12 @@ function openChatBox() {
 function closeChatBox(keepTyping) {
     if (!_chatUi.open) return;
     _chatUi.open = false;
-    if (!keepTyping) sendTypingWS(false);
+    _chatUi.camLift = 0;             // the camera eases back down on its own
+    if (!keepTyping) {
+        sendTypingWS(false);
+        const _me = gameState.players[gameState.userId];
+        if (_me && _me._typing) { _me._typing.on = false; _me._typing.at = Date.now(); }
+    }
     _chatMenClose();
     _stkClose();
     _emoClose();
@@ -35776,6 +36965,7 @@ function _chatRefreshCount() {
     const left = CHAT_MAX_LEN - parts.reduce((s, p) => s + _chatPartLen(p), 0);
     _chatUi.count.textContent = String(left);
     _chatUi.count.classList.toggle('low', left <= 8);
+    _chatUi.count.classList.toggle('near', left <= 20);   // the docked bar shows it only now
     const empty = !parts.some(p => p.u || p.t);
     if (empty && _chatUi.input.firstChild && !_chatUi.composing) _chatUi.input.textContent = '';
     _chatUi.input.classList.toggle('is-empty', empty);
@@ -35799,6 +36989,31 @@ function updateChatInputPos(force) {
     if (!force && Date.now() - _chatUi.openedAt > 500) return;
     const dpr = gameState.dpr || 1;
     const W = canvas.width / dpr, H = canvas.height / dpr;
+    // Docked (a phone): pinned to the bottom of the VISUAL viewport — i.e. the top of
+    // the keyboard — full width. Written only when the viewport itself changed
+    // (`force`: open, keyboard up/down, rotation), never per frame: rewriting the
+    // position of the element holding the focused input is what makes a mobile
+    // keyboard pack up. The camera then lifts my avatar into the middle of what is
+    // left above the bar (see updateCamera), so the people around me stay in view.
+    if (_chatUi.docked) {
+        if (!force) return;
+        const r = canvas.getBoundingClientRect();
+        _chatUi.cl = r.left; _chatUi.ct = r.top;
+        const vv = window.visualViewport;
+        const vL = vv ? vv.offsetLeft : 0, vT = vv ? vv.offsetTop : 0;
+        const vW = vv ? vv.width : window.innerWidth;
+        const vH = vv ? vv.height : window.innerHeight;
+        const w = Math.round(Math.min(560, vW - 16));
+        _chatUi.wrap.style.width = w + 'px';
+        const sx = vL + vW / 2, sy = vT + vH - 8;
+        _chatUi.lastX = sx; _chatUi.lastY = sy;
+        _chatUi.wrap.style.left = sx.toFixed(1) + 'px';
+        _chatUi.wrap.style.top  = sy.toFixed(1) + 'px';
+        const top = Math.max(r.top, vT);
+        const clear = Math.max(60, sy - (_chatUi.h || 54) - top);
+        _chatUi.camLift = Math.max(0, (r.top + H / 2) - (top + clear * 0.56));
+        return;
+    }
     // The canvas rect is re-measured only on `force` (open / viewport resize). Reading
     // it every frame right before writing left/top would dirty layout and re-read it
     // on the next frame — a layout thrash for an origin that never moves.
@@ -35840,6 +37055,15 @@ function updateChatSystem() {
                 _chatUi.typPingAt = Date.now();
                 sendTypingWS(true);
             }
+            // Docked, nothing floats over my head any more — so I get the same three
+            // dots everyone else sees over it (and the same melt into my message).
+            if (_chatUi.docked) {
+                const _me = gameState.players[gameState.userId];
+                if (_me) {
+                    if (_me._typing && _me._typing.on) _me._typing.at = Date.now();
+                    else if (!_me._typing) _me._typing = { on: true, at: Date.now(), sc: 0.4, scV: 0, a: 0 };
+                }
+            }
         }
     }
 
@@ -35850,7 +37074,7 @@ function updateChatSystem() {
     // settle back down when it closes. The box is a fixed number of SCREEN pixels
     // tall, so the world-space lift has to be divided by the zoom or it would clear
     // the box zoomed out and sit far too high zoomed in.
-    const liftTarget = _chatUi.open ? ((_chatUi.h + 14) / Math.max(0.2, gameState.zoom)) : 0;
+    const liftTarget = (_chatUi.open && !_chatUi.docked) ? ((_chatUi.h + 14) / Math.max(0.2, gameState.zoom)) : 0;
     _chatSelfLift += (liftTarget - _chatSelfLift) * 0.18 * dt;
     if (Math.abs(liftTarget - _chatSelfLift) < 0.05) _chatSelfLift = liftTarget;
 
@@ -35976,7 +37200,7 @@ function _chatDrawPill(ctx, it, cx, cy, rtl) {
 // Lines are centred; inside a line the pieces run in the message's own direction.
 // Each text piece is one logical run drawn centred in the width it was measured at,
 // so the browser still shapes and orders the letters inside it.
-function _chatDrawContent(ctx, L, h) {
+function _chatDrawContent(ctx, L, h, col) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     try { ctx.direction = L.rtl ? 'rtl' : 'ltr'; } catch (_) {}
@@ -35988,7 +37212,7 @@ function _chatDrawContent(ctx, L, h) {
             if (it.pill) _chatDrawPill(ctx, it, cx, y, L.rtl);
             else {
                 ctx.font = CHAT_FONT;
-                ctx.fillStyle = '#f3f3f3';
+                ctx.fillStyle = col || '#f3f3f3';
                 ctx.fillText(it.t, cx, y);
             }
             x += L.rtl ? -it.w : it.w;
@@ -36304,6 +37528,9 @@ function setupChatUI() {
     // The keyboard opening/closing resizes the visual viewport, not the layout one.
     // Both paths pass force:true so the cached canvas rect is re-measured.
     window.visualViewport?.addEventListener('resize', () => { if (_chatUi.open) updateChatInputPos(true); });
+    // iOS slides the visual viewport (it doesn't resize the page) when the keyboard
+    // comes up — the docked bar has to follow that too.
+    window.visualViewport?.addEventListener('scroll', () => { if (_chatUi.open && _chatUi.docked) updateChatInputPos(true); });
     window.addEventListener('resize', () => { if (_chatUi.open) updateChatInputPos(true); });
 
     _stkSetupUI();
@@ -36618,6 +37845,7 @@ function receiveSticker(player, name) {
         sc: morph ? 1 : 0.4, scV: 0,
         morph, a: 1, loud: 0, forMe: false, accent: null,
     });
+    _histPush(player, list[list.length - 1]);
     while (list.length > CHAT_STACK_MAX) list.shift();
     _meetOnChat(player, '', null, name);
     if (!fromMe) _chatArrivalCue(player);
@@ -36639,9 +37867,9 @@ function _stkDrawContent(ctx, b, w, h) {
     }
 }
 // The one content call drawChatBubbles makes: text, or a sticker.
-function _chatDrawBody(ctx, b, w, h) {
+function _chatDrawBody(ctx, b, w, h, col) {
     if (b.stk) _stkDrawContent(ctx, b, w, h);
-    else _chatDrawContent(ctx, b.lay, h);
+    else _chatDrawContent(ctx, b.lay, h, col);
 }
 
 // ─── The emoji picker ────────────────────────────────────────────────────────
@@ -39775,8 +41003,14 @@ function meetReact(k) {
 }
 function receiveMeetReaction(player, r) {
     const def = MEET_REACT_BY_KEY[r];
-    if (!def || !player || !_meetSeated(player)) return;   // only someone at the table reacts
-    player._react = { k: def.k, e: def.e, t0: performance.now() };
+    if (!def || !player) return;
+    const now = performance.now();
+    // Relayed data: one reaction per sender per beat, whatever their client sends.
+    if (player._react && now - player._react.t0 < 400) return;
+    player._react = { k: def.k, e: def.e, t0: now };
+    // Anyone, anywhere, reacts now (keys 1–6 / the hold ring — see التفاعلات); the
+    // table's own extras (the lit state, the overlay's seat) stay for someone seated.
+    if (!_meetSeated(player)) { _chatArrivalCue(player); return; }
     _meetLight(player, MEET_REACT_MS + MEET_LIT_AFTER_REACT_MS);
     if (_meet.open) { _meetPlayReactDom(player.userId, def.k); _meetBlip(1.1, 0.03); }
 }
@@ -40271,6 +41505,10 @@ function _memReleaseIdle() {
     // Stickers — up to ~38 MB decoded once they've all been drawn; re-fetched on return.
     _stkRelease();
 
+    // الرسائل الخاصة: pictures held in memory (up to ~14 MB of strings). The Cache API
+    // still has every one of them, so a thread re-fills without touching Firebase.
+    _dm.media.clear();
+
     // Ambient-sound buffers the member has switched OFF (~20 MB of PCM each for the
     // long ones). An active sound keeps its buffer — it is playing. A switched-off
     // one re-decodes if it's turned on again (the item pulses «loading» meanwhile).
@@ -40390,4 +41628,1753 @@ if (isTouchDevice()) {
     setInterval(() => {
         _keepAliveSet(!gameState._dupSessionDetected && !!(gameState.pomodoro.active || gameState.freeMode.active));
     }, 5000);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  مقر ١.٥ — التفاعلات في العالم، و«ماذا فاتني؟»
+//  ---------------------------------------------------------------------------
+//  TWO small things that make the room talk back, both ZERO Firebase:
+//
+//  1. التفاعلات — the meeting table's six reactions, anywhere. Keys 1–6 on a PC, or
+//     HOLD your own character (a quick press still opens the chat box): a ring of six
+//     pops out around you, slide to one, let go. It rides the event the table already
+//     uses ({t:'react',uid,r}); the avatar motion + rising emoji are `_meetReactFx`,
+//     unchanged. Nothing is on screen until you hold — that is the whole anti-clutter
+//     design. A member in a work session sees it and hears nothing (_chatArrivalCue).
+//
+//  2. «ماذا فاتني؟» — press ANOTHER member: the last five things they said bud out
+//     above them one after another (each bubble grows out of the one below it and
+//     springs into place — motion, not blur: there is no backdrop-filter and no
+//     shadow in it, so بطاطس runs the same thing), dashed and dimmer than a live
+//     bubble so it reads as the past, each with how long ago. Under them, a
+//     «رسالة خاصة» pill that opens the private chat (see الرسائل الخاصة).
+//     The history is what THIS client heard while it was here — the relay keeps
+//     nothing, so a late joiner starts empty. Memory only; gone with the tab.
+//
+//  Both are pure functions of their own age where they draw, so the PiP pass can
+//  draw the fan without advancing anything (the Lemo / hat-chain rule).
+//  Grep anchors: RX_, _rx, reactNow, rxHoldArm, drawReactRing, PEEK_, _peek,
+//  peekCanvasPress, drawPeek, _histPush, updateSocial.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const RX_HOLD_MS  = 340;     // a press held this long on yourself opens the ring
+const RX_R        = 94;      // screen px, avatar centre → each emoji
+const RX_ITEM     = 42;      // an emoji's disc, screen px
+const RX_PAD      = 0.30;    // rad — how far the arc's two ends sit above the horizontal
+const RX_STAG_MS  = 26;      // each disc leaves the centre this long after the last
+const RX_IN_MS    = 300;
+const RX_OUT_MS   = 150;
+const RX_EMOJI_FONT = '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif';
+
+const _rx = {
+    arm: null,               // a press that may become a hold: { sx, sy, mouse, timer }
+    open: false, t0: 0, out: 0,
+    sel: -1, picked: -1,
+    mouse: false,
+    ox: 0, oy: 0,            // the canvas origin in client px, measured when the ring opens
+    lastAt: 0,
+    sc: [1, 1, 1, 1, 1, 1],  // each disc's selection scale, eased where it is drawn
+};
+
+function reactCan() {
+    const me = gameState.players[gameState.userId];
+    if (!me || me._pendingSpawn != null) return false;
+    if (JUICE_ENTRANCE && _entrance.active) return false;
+    if (_chatMustClose()) return false;
+    return true;
+}
+
+// One reaction, now. At the meeting table it is the table's own (its overlay seat and
+// its "lit" state ride on it); everywhere else it is the world one.
+function reactNow(k) {
+    const def = MEET_REACT_BY_KEY[k];
+    const me = gameState.players[gameState.userId];
+    if (!def || !me) return false;
+    if (_meetSeated(me)) { meetReact(k); return true; }
+    if (!reactCan()) return false;
+    const now = performance.now();
+    if (now - _rx.lastAt < MEET_REACT_COOLDOWN_MS) return false;
+    _rx.lastAt = now;
+    me._react = { k: def.k, e: def.e, t0: now };
+    _meetBlip(1.25, 0.05);
+    sendMeetReactWS(def.k);
+    perfWake(MEET_REACT_MS + 300);
+    return true;
+}
+
+// The arc runs over the head from RIGHT to left — the first reaction on the right,
+// like everything else in an RTL interface.
+function _rxAngle(i) {
+    return -RX_PAD - i * ((Math.PI - 2 * RX_PAD) / (MEET_REACTIONS.length - 1));
+}
+
+// A press that MAY turn into a hold. Touch: only a finger that landed on my own
+// character (the tap chain still opens the chat box on a quick release). Mouse: the
+// caller already knows the press is on me, and the chat box opens on release instead
+// (rxMouseUp) — unless the hold got there first.
+function rxHoldArm(sx, sy, mouse) {
+    rxHoldCancel();
+    if (_rx.open) return;
+    if (!mouse) {
+        if (chatIsOpen() || !reactCan()) return;
+        if (!_pressIsOnMe(screenToWorld(sx, sy))) return;
+    }
+    const arm = { sx, sy, mouse: !!mouse, timer: 0 };
+    arm.timer = setTimeout(() => { if (_rx.arm === arm) _rxOpen(arm); }, RX_HOLD_MS);
+    _rx.arm = arm;
+}
+function rxHoldCancel() {
+    if (_rx.arm) { clearTimeout(_rx.arm.timer); _rx.arm = null; }
+}
+function rxRingIsOpen() { return _rx.open; }
+
+function _rxOpen(arm) {
+    _rx.arm = null;
+    if (chatIsOpen() || !reactCan() || !gameState.canvas) return;
+    const r = gameState.canvas.getBoundingClientRect();
+    _rx.ox = r.left; _rx.oy = r.top;
+    _rx.open = true; _rx.out = 0; _rx.t0 = performance.now();
+    _rx.sel = -1; _rx.picked = -1; _rx.mouse = arm.mouse;
+    _rx.sc.fill(1);
+    try { if (!arm.mouse && navigator.vibrate) navigator.vibrate(10); } catch (_) {}
+    _meetBlip(0.9, 0.035);
+    perfWake(700);
+}
+
+// The pointer moved while the ring is up: which disc is it reaching for?
+function rxRingPoint(sx, sy) {
+    if (!_rx.open) return;
+    const me = gameState.players[gameState.userId];
+    const sp = me && _chatScreenPos(me);
+    if (!sp) return;
+    const dx = sx - _rx.ox - sp.x, dy = sy - _rx.oy - sp.y;
+    const d = Math.hypot(dx, dy);
+    let sel = -1;
+    if (d > 30 && d < RX_R + 90 && dy < 20) {
+        const a = Math.atan2(dy, dx);
+        const step = (Math.PI - 2 * RX_PAD) / (MEET_REACTIONS.length - 1);
+        let best = 9;
+        for (let i = 0; i < MEET_REACTIONS.length; i++) {
+            const th = _rxAngle(i);
+            const diff = Math.abs(Math.atan2(Math.sin(a - th), Math.cos(a - th)));
+            if (diff < best) { best = diff; sel = i; }
+        }
+        if (best > step * 0.8) sel = -1;
+    }
+    if (sel !== _rx.sel) {
+        _rx.sel = sel;
+        if (sel >= 0) {
+            _meetBlip(1.35 + sel * 0.06, 0.022);
+            try { if (!_rx.mouse && navigator.vibrate) navigator.vibrate(6); } catch (_) {}
+        }
+    }
+    perfWake(300);
+}
+
+function rxRingRelease() {
+    if (!_rx.open) return;
+    const sel = _rx.sel;
+    _rx.open = false; _rx.out = performance.now(); _rx.picked = sel;
+    if (sel >= 0) reactNow(MEET_REACTIONS[sel].k);
+    perfWake(400);
+}
+
+// Desktop: the release of a press on myself. A hold → the ring's pick; a quick press
+// → the chat box (which used to open on the press itself).
+function rxMouseUp() {
+    if (_rx.open) { rxRingRelease(); return; }
+    const arm = _rx.arm;
+    if (!arm) return;
+    rxHoldCancel();
+    if (arm.mouse && !_chatUi.open && chatCanOpen()) openChatBox();
+}
+
+// Screen space (the caller has only the DPR scale applied). Drawn by render() alone —
+// never the PiP pass — so easing the selection scale here advances it once a frame.
+function drawReactRing(W, H) {
+    if (!_rx.open && !_rx.out) return;
+    const now = performance.now();
+    let outK = 0;
+    if (!_rx.open) {
+        outK = (now - _rx.out) / RX_OUT_MS;
+        if (outK >= 1) { _rx.out = 0; return; }
+    }
+    const me = gameState.players[gameState.userId];
+    const sp = me && _chatScreenPos(me);
+    const ctx = gameState.ctx;
+    if (!sp || !ctx) return;
+    const age = now - _rx.t0;
+    const cur = _rx.open ? _rx.sel : _rx.picked;
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // The drop they all bud out of: it shrinks away as the discs leave it.
+    const seedK = Math.min(1, age / (RX_IN_MS + RX_STAG_MS * 5));
+    if (seedK < 1 && !outK) {
+        ctx.globalAlpha = 0.9 * (1 - seedK);
+        ctx.fillStyle = '#141416';
+        ctx.beginPath();
+        ctx.arc(sp.x, sp.y - 20, 15 * (1 - seedK * 0.7), 0, Math.PI * 2);
+        ctx.fill();
+    }
+    for (let i = 0; i < MEET_REACTIONS.length; i++) {
+        const k = Math.max(0, Math.min(1, (age - i * RX_STAG_MS) / RX_IN_MS));
+        if (k <= 0) continue;
+        const e = easeOutBack(k);
+        const sel = cur === i;
+        _rx.sc[i] += ((sel ? 1.34 : 1) - _rx.sc[i]) * 0.3;
+        const a = _rxAngle(i);
+        const rr = RX_R * e + (_rx.sc[i] - 1) * 36;
+        const x = sp.x + Math.cos(a) * rr, y = sp.y + Math.sin(a) * rr;
+        let s = Math.max(0.01, e * _rx.sc[i]), al = Math.min(1, k * 3);
+        if (outK) {
+            if (sel) s *= 1 + outK * 0.45; else s *= 1 - outK;
+            al *= 1 - outK;
+        }
+        const R = (RX_ITEM / 2) * s;
+        ctx.globalAlpha = al;
+        ctx.beginPath();
+        ctx.arc(x, y, R, 0, Math.PI * 2);
+        ctx.fillStyle = sel ? '#f4f4f5' : '#17171a';
+        ctx.fill();
+        ctx.lineWidth = 1;
+        ctx.strokeStyle = sel ? '#ffffff' : '#34343a';
+        ctx.stroke();
+        ctx.font = `${Math.max(6, Math.round(22 * s))}px ${RX_EMOJI_FONT}`;
+        ctx.fillText(MEET_REACTIONS[i].e, x, y + 1);
+        // With a mouse, each disc wears its key — the hold is also how a PC user
+        // learns that 1–6 do this without holding anything.
+        if (_rx.mouse && !outK && k >= 1) {
+            const ny = y + R + 4;
+            ctx.beginPath();
+            ctx.arc(x, ny, 8, 0, Math.PI * 2);
+            ctx.fillStyle = '#26262b';
+            ctx.fill();
+            ctx.font = 'bold 10px Rubik';
+            ctx.fillStyle = '#d7d7da';
+            ctx.fillText(String(i + 1), x, ny + 0.5);
+        }
+    }
+    // The name of the one being reached for.
+    if (cur >= 0 && !outK) {
+        const label = MEET_REACTIONS[cur].n;
+        ctx.globalAlpha = 1;
+        ctx.font = 'bold 12px Rubik';
+        try { ctx.direction = 'rtl'; } catch (_) {}
+        const tw = ctx.measureText(label).width + 20;
+        const ly = sp.y - RX_R - RX_ITEM / 2 - 22;
+        ctx.fillStyle = '#17171a';
+        _chatRoundRect(ctx, sp.x - tw / 2, ly - 11, tw, 22, 11);
+        ctx.fill();
+        ctx.fillStyle = '#f3f3f3';
+        ctx.fillText(label, sp.x, ly + 0.5);
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.textBaseline = 'alphabetic';
+}
+
+// ─── «ماذا فاتني؟» — the tapped member's last messages ─────────────────────────
+const PEEK_MAX      = 5;
+const PEEK_LIFE_MS  = 9000;   // it puts itself away after this
+const PEEK_STAG_MS  = 85;     // each bubble buds this long after the one under it
+const PEEK_IN_MS    = 540;
+const PEEK_OUT_MS   = 220;
+const PEEK_STK      = 54;     // a sticker in the fan: smaller than a live one (84)
+const PEEK_GAP      = 6;
+const PEEK_TEXT_COL = '#d3d4da';   // SOLID, dimmer than a live bubble's #f3f3f3 (invariant 33)
+const PEEK_PILL_TEXT = 'رسالة خاصة';
+
+const _peek = { uid: '', t0: 0, out: 0, items: [], canDm: false, pill: null, pillW: 0 };
+
+// Every bubble a member says is also remembered here, on the player object — the
+// last PEEK_MAX of them, for as long as this tab knows the member.
+function _histPush(player, b) {
+    if (!player || !b) return;
+    const h = player._hist || (player._hist = []);
+    h.push({
+        ref: b, parts: b.parts, stk: b.stk || '',
+        lay: b.stk ? { rtl: true, lines: [], w: PEEK_STK, h: PEEK_STK } : b.lay,
+        at: Date.now(), ago: '', agoAt: 0, agoW: 0,
+    });
+    while (h.length > PEEK_MAX) h.shift();
+}
+
+function _peekAgo(it, now) {
+    // Re-worded at most once every ten seconds — a measured label, not a per-frame one.
+    if (it.ago && now - it.agoAt < 10000) return;
+    const s = Math.max(0, now - it.at) / 1000;
+    it.ago = s < 45 ? 'الآن'
+           : s < 3600 ? `قبل ${_chatArNum(Math.max(1, Math.round(s / 60)))} د`
+           : `قبل ${_chatArNum(Math.round(s / 3600))} س`;
+    it.agoAt = now;
+    const m = _chatMCtx();
+    if (m) { m.font = 'bold 9px Rubik'; it.agoW = Math.ceil(m.measureText(it.ago).width) + 10; }
+    else it.agoW = it.ago.length * 6 + 10;
+}
+
+// The member under a press, or null. Never me; never someone I can't actually see
+// (a faded mezzanine, the hidden meeting room).
+function _peekHitPlayer(world) {
+    const me = gameState.players[gameState.userId];
+    let best = null, bestD = 1e9;
+    for (const p of Object.values(gameState.players)) {
+        if (p === me || p._pendingSpawn != null || p._exitT != null) continue;
+        const fl = p.floor || 1;
+        const vis = ((fl === 2) ? (gameState.secondFloorVis ?? 1) : 1) * _meetFadeAt(p.renderX ?? p.x ?? 0);
+        if (vis < 0.35) continue;
+        const pos = getPlayerRenderPos(p);
+        const d = Math.hypot(world.x - pos.x, world.y - pos.y);
+        if (d > PLAYER_SIZE * 0.66 * (p.renderScale || 1)) continue;
+        // Two avatars stacked across floors: the one on MY floor is the one I mean.
+        const bias = (me && fl === (me.floor || 1)) ? 0 : 40;
+        if (d + bias < bestD) { bestD = d + bias; best = p; }
+    }
+    return best;
+}
+
+function peekOpen(player) {
+    const live = player._chat || [];
+    const items = (player._hist || []).filter(h => !live.includes(h.ref)).slice(-PEEK_MAX).reverse();
+    if (!items.length && !live.length) {
+        const parts = [{ t: 'لم يكتب شيئًا بعد' }];
+        items.push({ ref: null, parts, stk: '', lay: _chatLayout(parts), at: 0, ago: '', agoAt: 0, agoW: 0, empty: true });
+    }
+    _peek.uid = player.userId;
+    _peek.t0 = Date.now();
+    _peek.out = 0;
+    _peek.items = items;
+    _peek.canDm = dmCanMessage(player.userId);
+    _peek.pill = null;
+    // The cascade's own rising blips — one per bubble, deep → high (the house style).
+    const base = 0.84 + Math.random() * 0.1;
+    items.forEach((_, j) => setTimeout(() => {
+        if (_peek.uid === player.userId && !_peek.out) _meetBlip(base + j * 0.075, 0.03);
+    }, j * PEEK_STAG_MS));
+    perfWake(PEEK_IN_MS + items.length * PEEK_STAG_MS + 300);
+}
+function peekClose() {
+    if (!_peek.uid || _peek.out) return;
+    _peek.out = Date.now();
+    perfWake(PEEK_OUT_MS + 200);
+}
+function peekIsOpen() { return !!_peek.uid && !_peek.out; }
+
+// One press on the world, asked BEFORE the room's own interactions: the pill, then a
+// member. Returns true when it took the press. A press anywhere else puts an open fan
+// away and returns false — that press still does whatever it was going to do.
+function peekCanvasPress(world) {
+    if (!world || _chatMustClose() || isMinigameActive()) return false;
+    if (peekIsOpen() && _peek.pill && _peek.canDm) {
+        const r = _peek.pill;
+        if (Math.abs(world.x - r.x) <= r.w / 2 + 8 && Math.abs(world.y - r.y) <= r.h / 2 + 8) {
+            const uid = _peek.uid;
+            peekClose();
+            dmOpenWith(uid);
+            return true;
+        }
+    }
+    const hit = _peekHitPlayer(world);
+    if (hit) {
+        if (_peek.uid === hit.userId && !_peek.out) peekClose();
+        else peekOpen(hit);
+        return true;
+    }
+    peekClose();
+    return false;
+}
+
+// World space (called inside _drawChatBubblesOnTop's transform, after the live
+// bubbles). PURE in (items, age): the PiP pass draws it without advancing anything.
+function drawPeek() {
+    if (!_peek.uid) return;
+    const player = gameState.players[_peek.uid];
+    const ctx = gameState.ctx;
+    if (!player || !ctx || player._pendingSpawn != null) return;
+    const now = Date.now();
+    const outK = _peek.out ? Math.min(1, (now - _peek.out) / PEEK_OUT_MS) : 0;
+    if (outK >= 1) return;
+    const pFloor = player.floor || 1;
+    const vis = ((pFloor === 2) ? (gameState.secondFloorVis ?? 1) : 1) * _meetFadeAt(player.renderX ?? player.x ?? 0);
+    if (vis < 0.05) return;
+    const rScale = player.renderScale || 1;
+    const pos = getPlayerRenderPos(player);
+    const outE = outK * outK * outK;
+
+    // The fan starts above whatever they are saying right now.
+    let baseY = pos.y - (player.bobOffset || 0) - (PLAYER_SIZE / 2) * rScale - CHAT_HEAD_GAP;
+    const live = player._chat;
+    let liveN = 0;
+    if (live) for (const b of live) { baseY -= (b.lay.h + CHAT_BUB_GAP) * Math.min(1, b.a); liveN++; }
+    const ty = player._typing;
+    if (ty && ty.a > 0.02) baseY -= (CHAT_TYP_H + CHAT_BUB_GAP) * Math.min(1, ty.a);
+    if (liveN) baseY -= 3;
+
+    const FILL = 'rgba(46, 48, 57, 0.84)';   // a touch see-through (a SHAPE, not text): the past, not the present
+    ctx.save();
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    let slot = 0, prevSlot = -16, prevH = 0;
+    for (let j = 0; j < _peek.items.length; j++) {
+        const it = _peek.items[j];
+        const L = it.lay;
+        const from = prevSlot;                 // it buds out of the bubble under it
+        const mySlot = slot;
+        prevSlot = slot; slot += L.h + PEEK_GAP;
+        const k = Math.max(0, Math.min(1, (now - _peek.t0 - j * PEEK_STAG_MS) / PEEK_IN_MS));
+        if (k <= 0) { prevH = L.h; continue; }
+        // A damped spring to its slot: one small overshoot, then rest — the "liquid".
+        const p = k >= 1 ? 1 : 1 - Math.exp(-6.5 * k) * Math.cos(7.5 * k);
+        let off = from + (mySlot - from) * p;
+        const kw = easeOutBack(Math.min(1, k / 0.62));
+        const kh = easeOutBack(Math.max(0, Math.min(1, (k - 0.1) / 0.7)));
+        const w0 = Math.min(L.w, 46), h0 = Math.min(L.h, 24);
+        const w = w0 + (L.w - w0) * kw, h = Math.max(8, h0 + (L.h - h0) * kh);
+        // Stretched tall while it travels, settling as it lands.
+        const st = Math.sin(Math.PI * Math.min(1, k / 0.6)) * (1 - k) * 0.22;
+        let sx = 1 - st * 0.6, sy = 1 + st;
+        let al = Math.min(1, k * 4) * vis * 0.94;
+        if (outK) { off *= 1 - outE; sx *= 1 - 0.35 * outE; sy *= 1 - 0.35 * outE; al *= 1 - outK; }
+        if (al <= 0.02) { prevH = L.h; continue; }
+
+        // The neck: a drop of the same glass joining it to the bubble it left, thinning
+        // to nothing as they part.
+        if (k < 0.62 && !outK) {
+            const nw = 20 * Math.pow(1 - k / 0.62, 1.4);
+            const y1 = baseY - from - (j ? prevH * 0.5 : 0), y2 = baseY - off - h * 0.5;
+            if (nw > 1 && y1 - y2 > 2) {
+                ctx.globalAlpha = al;
+                ctx.fillStyle = FILL;
+                _chatRoundRect(ctx, pos.x - nw / 2, y2, nw, y1 - y2, nw / 2);
+                ctx.fill();
+            }
+        }
+
+        ctx.save();
+        ctx.translate(pos.x, baseY - off);
+        ctx.scale(sx, sy);
+        ctx.globalAlpha = al;
+        const r = Math.min(15, h / 2);
+        ctx.fillStyle = FILL;
+        _chatRoundRect(ctx, -w / 2, -h, w, h, r);
+        ctx.fill();
+        // Dashed, not solid: the outline is what says "this was said earlier".
+        ctx.setLineDash([4, 3]);
+        ctx.strokeStyle = '#6d7080';
+        ctx.lineWidth = 1;
+        _chatRoundRect(ctx, -w / 2, -h, w, h, r);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        if (k > 0.4) {
+            ctx.save();
+            _chatRoundRect(ctx, -w / 2, -h, w, h, r);
+            ctx.clip();
+            ctx.globalAlpha = al * Math.min(1, (k - 0.4) / 0.35);
+            _chatDrawBody(ctx, it, w, h, it.empty ? '#9c9eaa' : PEEK_TEXT_COL);
+            ctx.restore();
+        }
+        // How long ago — a small tab riding the top edge.
+        if (!it.empty && k > 0.72) {
+            _peekAgo(it, now);
+            const cw = it.agoW, ch = 14;
+            const cx = -w / 2 + cw / 2 + 7, cy = -h - 1;
+            ctx.globalAlpha = al * Math.min(1, (k - 0.72) / 0.2);
+            ctx.fillStyle = '#434655';
+            _chatRoundRect(ctx, cx - cw / 2, cy - ch / 2, cw, ch, ch / 2);
+            ctx.fill();
+            ctx.font = 'bold 9px Rubik';
+            ctx.fillStyle = '#c9cbd6';
+            try { ctx.direction = 'rtl'; } catch (_) {}
+            ctx.fillText(it.ago, cx, cy + 0.5);
+        }
+        ctx.restore();
+        prevH = L.h;
+    }
+
+    // «رسالة خاصة» — under the name. Sized against the zoom so it stays pressable
+    // zoomed out; its world rect is kept for peekCanvasPress.
+    if (_peek.canDm) {
+        const k = Math.max(0, Math.min(1, (now - _peek.t0 - 140) / 380));
+        if (k > 0) {
+            if (!_peek.pillW) {
+                const m = _chatMCtx();
+                if (m) m.font = 'bold 12px Rubik';
+                _peek.pillW = Math.ceil((m ? m.measureText(PEEK_PILL_TEXT).width : 70)) + 46;
+            }
+            const zs = Math.min(1.5, 1 / Math.max(0.6, gameState.zoom || 1));
+            const s = Math.max(0.01, easeOutBack(k)) * zs * (1 - 0.4 * outE);
+            const pw = _peek.pillW, ph = 28;
+            const py = pos.y + (PLAYER_SIZE / 2) * rScale + 34 + 26 * zs;
+            _peek.pill = { x: pos.x, y: py, w: pw * zs, h: ph * zs };
+            ctx.save();
+            ctx.translate(pos.x, py);
+            ctx.scale(s, s);
+            ctx.globalAlpha = Math.min(1, k * 3) * vis * (1 - outK);
+            ctx.fillStyle = '#f4f4f5';
+            _chatRoundRect(ctx, -pw / 2, -ph / 2, pw, ph, ph / 2);
+            ctx.fill();
+            try { ctx.direction = 'rtl'; } catch (_) {}
+            ctx.font = `14px ${RX_EMOJI_FONT}`;
+            ctx.fillText('💬', pw / 2 - 19, 1);
+            ctx.font = 'bold 12px Rubik';
+            ctx.fillStyle = '#17171a';
+            ctx.fillText(PEEK_PILL_TEXT, -11, 0.5);
+            ctx.restore();
+        }
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
+    ctx.textBaseline = 'alphabetic';
+}
+
+// ─── Per frame (gameLoop only) ───────────────────────────────────────────────
+const _social = { hintAt: 0, hintDone: false };
+function updateSocial() {
+    if (_rx.open) {
+        // The ring belongs to a world I can press: anything that takes the screen
+        // closes it without picking.
+        if (!reactCan() || chatIsOpen()) { _rx.open = false; _rx.out = 0; }
+        else perfWake(160);
+    } else if (_rx.out) perfWake(160);
+
+    if (_peek.uid) {
+        const now = Date.now();
+        const pl = gameState.players[_peek.uid];
+        if (!pl || _chatMustClose()) { _peek.uid = ''; _peek.items = []; }
+        else if (_peek.out) { if (now - _peek.out > PEEK_OUT_MS) { _peek.uid = ''; _peek.items = []; } else perfWake(120); }
+        else if (now - _peek.t0 > PEEK_LIFE_MS) peekClose();
+        else if (now - _peek.t0 < PEEK_IN_MS + PEEK_MAX * PEEK_STAG_MS + 120) perfWake(120);
+    }
+
+    // The one-time «how to jump» hint, once the room has been still for a moment.
+    if (!_social.hintDone) {
+        const t = performance.now();
+        if (t - _social.hintAt > 2500) {
+            _social.hintAt = t;
+            if (_boot.gateOpen && gameState.userId) _social.hintDone = jumpMaybeHint();
+        }
+    }
+    dmUpdate();
+}
+
+function setupSocialUI() {
+    // Desktop: the release half of a press on my own character (see rxMouseUp), and
+    // the pointer while the ring is up. Both are cheap no-ops the rest of the time.
+    window.addEventListener('mouseup', () => rxMouseUp());
+    window.addEventListener('mousemove', (e) => { if (_rx.open && _rx.mouse) rxRingPoint(e.clientX, e.clientY); }, { passive: true });
+    window.addEventListener('blur', () => { rxHoldCancel(); if (_rx.open) { _rx.sel = -1; rxRingRelease(); } });
+    window.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape') return;
+        if (_rx.open) { _rx.sel = -1; rxRingRelease(); }
+        if (peekIsOpen()) peekClose();
+    });
+    setupDmUI();
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  الرسائل الخاصة — private messages (مقر ١.٥)
+//  ---------------------------------------------------------------------------
+//  A Telegram-style conversation between two members: it is SAVED, and you come back
+//  to it whenever you like. Opened from the HUD's chat button, or from the «رسالة
+//  خاصة» pill under a member you pressed. Text, emoji and stickers.
+//
+//  WHERE IT LIVES — and why that is what keeps it cheap and the lobbies apart:
+//
+//    lobbies/{lobby}/dm/inbox/{me}/{peer}  = { t, m, f, n, pn, pa }   one row per conversation
+//    lobbies/{lobby}/dm/threads/{a~b}/{key} = { f, t, m | k }         the messages
+//
+//   • Everything is under lobbyPath(): a brother's client only ever reads and writes
+//     lobbies/male/dm, a sister's only lobbies/female/dm. The two can not reach each
+//     other BY STRUCTURE — there is no path one could type that lands in the other's
+//     inbox — and on top of that the people list is filtered by the roster's `gender`.
+//   • ONE live listener per client, on its OWN inbox node: a handful of ~150-byte
+//     rows. Nobody else listens there, so a message's fan-out is exactly two clients.
+//   • A thread is listened to ONLY while it is open on screen, on its newest page
+//     (`limitToLast`), and re-opened from where the cache stopped (`startAt`). Older
+//     pages are one-shot get()s on «رسائل أقدم». Nothing here is polled.
+//   • A message is ~150 bytes, downloaded once by two people. Ten thousand of them a
+//     month is ~3 MB against the 10 GB cap. (Images / GIFs are deliberately NOT here
+//     yet — a picture is thousands of messages' worth of bytes and needs its own
+//     lazy-loaded node, like the invoice photos.)
+//
+//  IDENTITY: a member id is the roster's PRIMARY Discord id (`_dmCanon`), so a member
+//  with two accounts (أبو بندر) has one inbox whichever he logs in from. A guest the
+//  roster doesn't know uses their raw id. A سراج ghost may only message other ghosts
+//  that are online, and everything it wrote is removed on disconnect — a test account
+//  never lands in a real member's inbox.
+//
+//  PRIVACY, stated honestly: the site signs in to Firebase anonymously, so the rules
+//  can not tie a row to a person. "Private" means hidden by the app — not encrypted,
+//  and readable by anyone with database access. Don't describe it as more.
+//
+//  Grep anchors: DM_, _dm, dmOpen, dmOpenWith, dmCanMessage, _dmOnInbox, _dmSend,
+//  _dmAttachThread, _dmRenderList, _dmRenderThread, dmUpdate, setupDmUI.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const DM_MAX_LEN        = 500;
+const DM_PAGE           = 40;      // messages per page (the open thread's first load, and each older page)
+const DM_PREVIEW        = 70;      // characters of the last message kept on the inbox row
+const DM_COOLDOWN_MS    = 450;
+const DM_ROSTER_WAIT_MS = 4000;    // how long the start waits for the roster before using raw ids
+const DM_RESUME_BACK_MS = 10000;   // re-opening a cached thread re-reads this far back (clock skew between two senders)
+const DM_GROUP_MS       = 3 * 60000;
+const DM_STK_LABEL      = 'ملصق';
+const DM_IMG_LABEL      = '📷 صورة';
+const DM_TOAST_MS       = 5200;
+// الصور — see «الصور» below. Every number here is a line of the Firebase budget.
+const DM_IMG_SIDE       = 1100;            // the long side a picture is scaled down to
+const DM_IMG_QUALITY    = 0.74;
+const DM_IMG_MAX_CHARS  = 340 * 1024;      // the encoded picture may not exceed this (≈250 KB of JPEG)
+const DM_GIF_MAX_BYTES  = 2 * 1024 * 1024; // a GIF up to this is sent AS IT IS, so it still moves; a bigger one goes as a still
+const DM_MEDIA_MAX_CHARS = 2900000;        // the largest stored picture this client will accept (a 2 MB GIF, base64)
+const DM_FILE_MAX_BYTES = 15 * 1024 * 1024;
+const DM_MEDIA_CACHE    = 'maqr-dm-media-v1';   // Cache API — sw.js leaves `maqr-dm-…` alone
+const DM_MEDIA_MEM_MAX  = 40;
+const DM_MEDIA_MEM_CHARS = 14 * 1024 * 1024;   // …and at most this much of them held in memory
+
+const _dm = {
+    wired: false, started: false,
+    me: '', base: '',
+    inbox: {}, inboxAt: 0, unsubInbox: null,
+    open: false, canvasOff: false, offT: 0,
+    view: 'list', peer: '',
+    threads: {},                 // peer → { msgs: [], keys: Set, more, loaded, loading, lastTs }
+    unsubThread: null, unsubOnce: null,
+    unread: 0, lastSentAt: 0,
+    els: null, pop: '',
+    toastT: 0, toastPeer: '',
+    ghostArmed: {},
+    att: null,                   // a picture waiting to be sent: { url, w, h, gif }
+    attBusy: false,
+    media: new Map(),            // pair/key → data URL (the newest DM_MEDIA_MEM_MAX)
+    io: null,                    // IntersectionObserver that lazy-loads pictures in the open thread
+};
+
+function dmIsOpen() { return !!_dm.open; }
+// A phone: the panel is the whole screen, so it owns everything (like the settings).
+// A PC: it is a drawer on the right third and the room stays playable beside it —
+// it takes the keyboard ONLY while one of its own text fields has the focus.
+function dmIsModal() { return !!_dm.open && isMobile(); }
+function dmHoldsInput() {
+    if (!_dm.open) return false;
+    if (isMobile()) return true;
+    const ae = document.activeElement;
+    return !!(ae && _dm.els && _dm.els.panel.contains(ae) && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT'));
+}
+// Typing starts: a key still held (W mid-walk) would stay "down" forever, and the
+// walk cycle would keep playing on a standing avatar — same as openChatBox.
+function _dmStopWalk() {
+    const me = gameState.players[gameState.userId];
+    gameState.keys = {};
+    if (!me) return;
+    me._vx = 0; me._vy = 0;
+    if (me.isMoving) {
+        me.isMoving = false; me.isSprinting = false;
+        sendPositionWS(me.x, me.y, true);
+        updatePlayerPosition(me.x, me.y);
+    }
+}
+
+// ─── Identity ────────────────────────────────────────────────────────────────
+function _dmCanon(uid) {
+    uid = String(uid || '');
+    const m = MDWNH_ROSTER.byDiscord[uid];
+    return (m && m.discordId) ? String(m.discordId) : uid;
+}
+function _dmIsGhost(id) { return String(id).startsWith('siraj_'); }
+function _dmGender() { return gameState.selectedLobby === 'female' ? 'f' : 'm'; }
+function _dmPair(peer) { return [_dm.me, peer].sort().join('~'); }
+function _dmKeyOk(id) { return typeof id === 'string' && id.length > 0 && id.length <= 64 && !/[.#$\[\]\/~\u0000-\u001f]/.test(id); }
+
+// The player object of a member who is here right now (under any of their accounts).
+function _dmPlayerOf(mid) {
+    const p = gameState.players[mid];
+    if (p) return p;
+    const m = MDWNH_ROSTER.byDiscord[mid];
+    if (m) for (const alt of (m.altDiscordIds || [])) {
+        const q = gameState.players[String(alt)];
+        if (q) return q;
+    }
+    return null;
+}
+
+// May I write to this member? The ONE rule every entry point asks.
+function dmCanMessage(uid) {
+    if (!_dm.started || !_dm.me) return false;
+    const mid = _dmCanon(uid);
+    if (!_dmKeyOk(mid) || mid === _dm.me || mid === LEMO_UID) return false;
+    const meGhost = _dmIsGhost(_dm.me), themGhost = _dmIsGhost(mid);
+    // A test ghost: only another ghost, and only while it is here.
+    if (meGhost || themGhost) return meGhost && themGhost && !!gameState.players[mid];
+    const m = MDWNH_ROSTER.byDiscord[mid];
+    // The roster knows them: its `gender` decides — a brother never lists a sister.
+    if (m) return !m.dummy && m.active !== false && m.gender === _dmGender();
+    // A guest: only someone standing in MY lobby right now, or a thread I already have.
+    return !!gameState.players[mid] || !!_dm.inbox[mid];
+}
+
+function _dmSafeAvatar(url) {
+    return (typeof url === 'string' && /^https:\/\//.test(url) && url.length < 300) ? url : '';
+}
+function _dmPeerInfo(mid) {
+    const pl = _dmPlayerOf(mid);
+    const m = MDWNH_ROSTER.byDiscord[mid];
+    const row = _dm.inbox[mid];
+    const name = (pl && pl.username) || (m && m.name) || (row && row.pn) || 'عضو';
+    let avatar = (pl && typeof pl.avatar === 'string' && pl.avatar) || '';
+    if (!avatar && m && m.slug) avatar = _libAvatar(m.slug);
+    if (!avatar && row) avatar = row.pa || '';
+    return { name: _chatClean(name).slice(0, 40) || 'عضو', avatar, online: !!pl, pl, m };
+}
+
+// Control and bidi-override characters out, runs of blanks collapsed, newlines kept
+// (two in a row at most). Applied to what I send AND to everything read back.
+const _DM_STRIP_RE = /[\u0000-\u0009\u000b-\u001f\u007f\u200b-\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/g;
+function _dmCleanText(t, max) {
+    return String(t == null ? '' : t)
+        .replace(/\r\n?/g, '\n')
+        .replace(_DM_STRIP_RE, ' ')
+        .replace(/[^\S\n]+/g, ' ')
+        .replace(/ ?\n ?/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+        .slice(0, max);
+}
+
+// ─── Start / stop ────────────────────────────────────────────────────────────
+function dmStart() {
+    if (_dm.started || !gameState.userId || !gameState.selectedLobby) return;
+    _dm.started = true;
+    const go = () => {
+        if (!gameState.userId || _dm.unsubInbox) return;
+        _dm.me = _dmCanon(gameState.userId);
+        if (!_dmKeyOk(_dm.me)) { _dm.me = ''; return; }
+        _dm.base = lobbyPath('dm');
+        if (_dmIsGhost(_dm.me)) {
+            try { onDisconnect(ref(database, `${_dm.base}/inbox/${_dm.me}`)).remove(); } catch (_) {}
+        }
+        _dm.unsubInbox = onValue(ref(database, `${_dm.base}/inbox/${_dm.me}`),
+            (snap) => { try { _dmOnInbox(snap.val()); } catch (e) { console.error('[dm inbox]', e); } },
+            () => {});
+    };
+    // The roster decides my member id (a second account shares the first one's inbox),
+    // so it is waited for — bounded, and off the login path (whenCalm, after spawn).
+    Promise.race([_mdwnhRosterReady, new Promise(r => setTimeout(r, DM_ROSTER_WAIT_MS))])
+        .then(() => authReady).then(go, go);
+}
+function dmStop() {
+    if (_dm.unsubInbox) { try { _dm.unsubInbox(); } catch (_) {} _dm.unsubInbox = null; }
+    _dmDetachThread();
+}
+
+// ─── The inbox ───────────────────────────────────────────────────────────────
+function _dmOnInbox(val) {
+    const prev = _dm.inbox, first = !_dm.inboxAt;
+    const next = {};
+    if (val && typeof val === 'object') {
+        for (const [peer, r] of Object.entries(val)) {
+            if (!r || typeof r !== 'object' || !_dmKeyOk(peer)) continue;
+            const t = Number(r.t) || 0;
+            if (!t) continue;
+            next[peer] = {
+                t,
+                m: _dmCleanText(r.m, DM_PREVIEW).replace(/\n/g, ' '),
+                f: String(r.f || '').slice(0, 64),
+                n: Math.max(0, Math.min(999, Math.round(+r.n) || 0)),
+                pn: _chatClean(r.pn).slice(0, 40),
+                pa: _dmSafeAvatar(r.pa),
+            };
+        }
+    }
+    _dm.inbox = next;
+    _dm.inboxAt = Date.now();
+    let u = 0;
+    for (const r of Object.values(next)) u += r.n;
+    _dm.unread = u;
+    _dmPaintBadge();
+    if (!first) {
+        for (const [peer, r] of Object.entries(next)) {
+            const old = prev[peer];
+            if (r.f !== _dm.me && r.n > 0 && (!old || r.t > old.t)) _dmOnIncoming(peer, r);
+        }
+    }
+    if (_dm.open) {
+        if (_dm.view === 'list') _dmRenderList(false);
+        else _dmMarkRead();
+    }
+}
+
+function _dmPaintBadge() {
+    const b = document.getElementById('dm-badge');
+    if (!b) return;
+    const n = _dm.unread;
+    b.hidden = !(n > 0);
+    b.textContent = n > 99 ? '+٩٩' : _chatArNum(n);
+}
+
+// Something new, for me. A member in a work session (or behind azkar / prayer / a
+// minigame) gets the badge and nothing else — a private message must not be able to
+// do what the room's chat is forbidden to do.
+function _dmOnIncoming(peer, r) {
+    if (_dm.open && _dm.view === 'thread' && _dm.peer === peer && !document.hidden) return;
+    const quiet = localInWorkPhase() || gameState.azkar.active || gameState.prayer.isOverlayActive || isMinigameActive();
+    if (!quiet) {
+        _meetBlip(1.18, 0.05);
+        setTimeout(() => _meetBlip(1.56, 0.045), 95);
+        _dmToast(peer, r);
+    }
+    _dmNotify(peer, r);
+}
+
+function _dmToast(peer, r) {
+    const el = document.getElementById('dm-toast');
+    if (!el) return;
+    const info = _dmPeerInfo(peer);
+    _chatSetAvatar(el.querySelector('.dm-toast-av'), info.avatar, info.name);
+    el.querySelector('.dm-toast-name').textContent = info.name;
+    el.querySelector('.dm-toast-text').textContent = r.m || DM_STK_LABEL;
+    _dm.toastPeer = peer;
+    el.classList.add('show');
+    clearTimeout(_dm.toastT);
+    _dm.toastT = setTimeout(() => el.classList.remove('show'), DM_TOAST_MS);
+}
+
+// The system notification — only when the tab isn't what they're looking at, and only
+// with a permission that was already granted (this never asks). Same shape as the
+// mention's (_chatMentionNotify).
+function _dmNotify(peer, r) {
+    try {
+        if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+        if (!document.hidden && document.hasFocus()) return;
+        const info = _dmPeerInfo(peer);
+        const title = `رسالة خاصة من ${info.name}`;
+        const icon = /^https:\/\//.test(info.avatar) ? info.avatar : 'favicon-128.png';
+        const opts = { body: r.m || DM_STK_LABEL, icon, badge: 'favicon-128.png', tag: 'maqr-dm-' + peer, renotify: true };
+        try {
+            const n = new Notification(title, opts);
+            n.onclick = () => { try { window.focus(); } catch (_) {} n.close(); };
+        } catch (_) {
+            navigator.serviceWorker?.getRegistration?.()
+                .then(reg => reg && reg.showNotification(title, opts))
+                .catch(() => {});
+        }
+    } catch (_) {}
+}
+
+// ─── Open / close ────────────────────────────────────────────────────────────
+function _dmBlocked() {
+    if (gameState.azkar.active || gameState.prayer.isOverlayActive || isMinigameActive()
+        || isMinigameOverlayOpen() || gameState._dupSessionDetected
+        || (JUICE_ENTRANCE && _entrance.active)) return true;
+    // Full-screen on a phone, so the kidnap into a session has to put it away; on a
+    // PC it is a side drawer and the session starts beside it.
+    return isMobile() && gameState.anim.active;
+}
+
+function dmOpen(peer) {
+    const E = _dm.els;
+    if (!E) return;
+    if (!_dm.started || !_dm.me) { dmStart(); _libToast('الرسائل تُحمَّل… حاول بعد لحظة'); return; }
+    if (_dmBlocked()) return;
+    if (!_dm.open) {
+        _dm.open = true;
+        peekClose();
+        // A phone: it takes the whole screen, so the walk stops here (handleMovement
+        // returns before the branch that clears isMoving — same as openChatBox). A PC
+        // keeps walking; the walk stops only when a text field takes the focus.
+        if (isMobile()) { closeChatBox(); _dmStopWalk(); }
+        document.getElementById('dm-toast')?.classList.remove('show');
+        E.panel.setAttribute('aria-hidden', 'false');
+        E.btn?.classList.add('active');
+        _dmFitViewport();
+        // display can't transition: always laid out, `.active` after a double rAF.
+        requestAnimationFrame(() => requestAnimationFrame(() => { if (_dm.open) E.panel.classList.add('active'); }));
+        // On a phone the panel is opaque and full-screen: the world pass stops once
+        // the fade-in is over (see _worldCanvasHidden), never on frame one.
+        clearTimeout(_dm.offT);
+        if (isMobile()) _dm.offT = setTimeout(() => { if (_dm.open && isMobile()) _dm.canvasOff = true; }, 340);
+    }
+    if (peer) _dmShowThread(peer); else _dmShowList();
+}
+function dmOpenWith(uid) {
+    const mid = _dmCanon(uid);
+    if (!dmCanMessage(mid)) { _libToast('لا يمكن مراسلة هذا العضو'); return; }
+    dmOpen(mid);
+}
+function dmClose() {
+    if (!_dm.open) return;
+    const E = _dm.els;
+    _dm.open = false;
+    _dm.canvasOff = false;          // the world draws again BEFORE the panel fades
+    clearTimeout(_dm.offT);
+    perfWake();
+    _dmDetachThread();
+    _dmPop('');
+    _dmZoom('');
+    _dmSetAttachment(null);
+    try { E.input.blur(); E.search.blur(); } catch (_) {}
+    E.panel.classList.remove('active');
+    E.panel.setAttribute('aria-hidden', 'true');
+    E.btn?.classList.remove('active');
+}
+
+// A phone's keyboard shrinks the VISUAL viewport, not the page: the panel is pinned to
+// what is actually visible, or the compose bar would sit under the keyboard.
+function _dmFitViewport() {
+    const E = _dm.els;
+    if (!E || !_dm.open) return;
+    const vv = window.visualViewport;
+    if (vv && isMobile()) {
+        E.panel.style.top = vv.offsetTop + 'px';
+        E.panel.style.height = vv.height + 'px';
+    } else {
+        E.panel.style.top = '';
+        E.panel.style.height = '';
+    }
+}
+
+// ─── The list: my conversations, then everyone I may write to ────────────────
+function _dmShortTime(t) {
+    const d = new Date(t), now = new Date();
+    const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diff = Math.round((day(now) - day(d)) / 864e5);
+    try {
+        if (diff === 0) return d.toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' });
+        if (diff === 1) return 'أمس';
+        if (diff < 7) return d.toLocaleDateString('ar-EG', { weekday: 'long' });
+        return d.toLocaleDateString('ar-EG', { day: 'numeric', month: 'numeric' });
+    } catch (_) { return ''; }
+}
+
+function _dmPeopleIds() {
+    const out = new Set();
+    const g = _dmGender();
+    if (!_dmIsGhost(_dm.me)) {
+        for (const m of MDWNH_ROSTER.list) {
+            if (!m.discordId || m.dummy || m.active === false || m.gender !== g) continue;
+            out.add(String(m.discordId));
+        }
+    }
+    for (const uid of Object.keys(gameState.players)) {
+        const mid = _dmCanon(uid);
+        if (dmCanMessage(mid)) out.add(mid);
+    }
+    out.delete(_dm.me);
+    return out;
+}
+
+function _dmRow(mid, row) {
+    const info = _dmPeerInfo(mid);
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'dm-row' + (row && row.n > 0 ? ' unread' : '');
+    b.dataset.peer = mid;
+    const av = document.createElement('span');
+    av.className = 'dm-av' + (info.online ? ' on' : '');
+    _chatSetAvatar(av, info.avatar, info.name);
+    const body = document.createElement('span');
+    body.className = 'dm-row-body';
+    const nm = document.createElement('b');
+    nm.textContent = info.name;
+    const sub = document.createElement('small');
+    if (row) sub.textContent = (row.f === _dm.me ? 'أنت: ' : '') + (row.m || DM_STK_LABEL);
+    else sub.textContent = info.online ? 'في المقر الآن' : 'غير متصل';
+    if (!row && info.online) sub.classList.add('on');
+    body.append(nm, sub);
+    b.append(av, body);
+    if (row) {
+        const side = document.createElement('span');
+        side.className = 'dm-row-side';
+        const tm = document.createElement('time');
+        tm.textContent = _dmShortTime(row.t);
+        side.appendChild(tm);
+        if (row.n > 0) {
+            const chip = document.createElement('i');
+            chip.className = 'dm-unread';
+            chip.textContent = row.n > 99 ? '+٩٩' : _chatArNum(row.n);
+            side.appendChild(chip);
+        }
+        b.appendChild(side);
+    }
+    return b;
+}
+
+function _dmRenderList(animate) {
+    const E = _dm.els;
+    if (!E) return;
+    const q = _fireNormName(E.search.value || '');
+    const hit = (mid) => {
+        if (!q) return true;
+        const info = _dmPeerInfo(mid);
+        const m = info.m;
+        return [info.name, m && m.name, m && m.dbKey, m && m.telegramName, m && m.slug]
+            .some(x => x && _fireNormName(String(x)).includes(q));
+    };
+    const conv = Object.entries(_dm.inbox).sort((a, b) => b[1].t - a[1].t).filter(([mid]) => hit(mid));
+    const inConv = new Set(Object.keys(_dm.inbox));
+    const people = [..._dmPeopleIds()].filter(mid => !inConv.has(mid) && hit(mid))
+        .map(mid => ({ mid, info: _dmPeerInfo(mid) }))
+        .sort((a, b) => (Number(b.info.online) - Number(a.info.online)) || a.info.name.localeCompare(b.info.name, 'ar'));
+
+    const frag = document.createDocumentFragment();
+    let i = 0;
+    const head = (txt) => {
+        const h = document.createElement('div');
+        h.className = 'dm-sec';
+        h.textContent = txt;
+        frag.appendChild(h);
+    };
+    const add = (el) => {
+        if (animate) { el.classList.add('in'); el.style.animationDelay = (Math.min(i, 12) * 26) + 'ms'; }
+        i++;
+        frag.appendChild(el);
+    };
+    if (conv.length) {
+        head('المحادثات');
+        for (const [mid, row] of conv) add(_dmRow(mid, row));
+    }
+    if (people.length) {
+        head(conv.length ? 'كل الأعضاء' : 'ابدأ محادثة');
+        for (const p of people) add(_dmRow(p.mid, null));
+    }
+    if (!conv.length && !people.length) {
+        const p = document.createElement('p');
+        p.className = 'dm-empty';
+        p.textContent = q ? 'لا أحد بهذا الاسم.' : (_dm.inboxAt ? 'لا يوجد أعضاء لمراسلتهم الآن.' : 'جارٍ التحميل…');
+        frag.appendChild(p);
+    }
+    const top = E.list.scrollTop;
+    E.list.textContent = '';
+    E.list.appendChild(frag);
+    E.list.scrollTop = animate ? 0 : top;
+}
+
+function _dmShowList() {
+    const E = _dm.els;
+    _dmDetachThread();
+    _dmPop('');
+    _dm.view = 'list';
+    _dm.peer = '';
+    E.viewThread.hidden = true;
+    E.viewList.hidden = false;
+    E.search.value = '';
+    _dmRenderList(true);
+    // The roster may still be in flight on a fast open — fill the list when it lands.
+    _mdwnhRosterReady.then(() => { if (_dm.open && _dm.view === 'list') _dmRenderList(false); });
+}
+
+// ─── A thread ────────────────────────────────────────────────────────────────
+function _dmThread(peer) {
+    return _dm.threads[peer] || (_dm.threads[peer] = { msgs: [], keys: new Set(), more: true, loaded: false, loading: false, lastTs: 0 });
+}
+
+function _dmDetachThread() {
+    if (_dm.unsubThread) { try { _dm.unsubThread(); } catch (_) {} _dm.unsubThread = null; }
+    if (_dm.unsubOnce) { try { _dm.unsubOnce(); } catch (_) {} _dm.unsubOnce = null; }
+    if (_dm.io) { try { _dm.io.disconnect(); } catch (_) {} _dm.io = null; }
+}
+
+function _dmAttachThread(peer) {
+    _dmDetachThread();
+    const th = _dmThread(peer);
+    const node = ref(database, `${_dm.base}/threads/${_dmPair(peer)}`);
+    // First open: the newest page. Re-open: only what was written since the cache
+    // stopped (a little earlier, for two senders whose clocks disagree) — de-duped by key.
+    const q = (th.loaded && th.lastTs)
+        ? query(node, orderByKey(), startAt(String(Math.max(0, th.lastTs - DM_RESUME_BACK_MS))))
+        : query(node, orderByKey(), limitToLast(DM_PAGE));
+    _dm.unsubThread = onChildAdded(q,
+        (snap) => { try { _dmOnMsg(peer, snap.key, snap.val()); } catch (e) { console.error('[dm msg]', e); } },
+        () => {});
+    if (!th.loaded) {
+        // `value` fires once, after the initial page's child_added events.
+        _dm.unsubOnce = onValue(q, () => {
+            th.loaded = true;
+            th.more = th.msgs.length >= DM_PAGE;
+            if (_dm.open && _dm.peer === peer) _dmPaintThreadState();
+        }, () => {}, { onlyOnce: true });
+    }
+}
+
+// A stored record → a message, every field re-checked (it is another client's data).
+// null when there is nothing in it to show.
+function _dmParseMsg(key, v) {
+    if (!v || typeof v !== 'object' || typeof key !== 'string') return null;
+    const msg = {
+        k: key,
+        f: String(v.f || '').slice(0, 64),
+        t: Number(v.t) || parseInt(key.slice(0, 13), 10) || 0,
+        m: typeof v.m === 'string' ? _dmCleanText(v.m, DM_MAX_LEN) : '',
+        s: (typeof v.k === 'string' && _stkSafeName(v.k)) ? v.k : '',
+        i: null,
+    };
+    if (v.i && typeof v.i === 'object') {
+        const w = Math.round(+v.i.w), h = Math.round(+v.i.h);
+        if (w >= 1 && h >= 1 && w <= 6000 && h <= 6000) msg.i = { w, h };
+    }
+    return (msg.m || msg.s || msg.i) ? msg : null;
+}
+
+function _dmOnMsg(peer, key, v) {
+    const th = _dmThread(peer);
+    if (typeof key !== 'string' || th.keys.has(key)) return;
+    const msg = _dmParseMsg(key, v);
+    if (!msg) return;
+    th.keys.add(key);
+    const atEnd = !th.msgs.length || key > th.msgs[th.msgs.length - 1].k;
+    if (atEnd) th.msgs.push(msg);
+    else { th.msgs.push(msg); th.msgs.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0)); }
+    if (msg.t > th.lastTs) th.lastTs = msg.t;
+    if (!(_dm.open && _dm.view === 'thread' && _dm.peer === peer)) return;
+    const E = _dm.els;
+    if (atEnd) {
+        const box = E.msgs;
+        const near = box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+        _dmPaintThreadState();
+        box.appendChild(_dmMsgNode(msg, th.msgs[th.msgs.length - 2] || null, true));
+        if (near || msg.f === _dm.me) box.scrollTop = box.scrollHeight;
+    } else {
+        _dmRenderThread();
+    }
+    if (msg.f !== _dm.me) _dmMarkRead();
+}
+
+const _DM_EMOJI_ONLY = /^(?:\p{Extended_Pictographic}|[\u200d\ufe0f\u{1f3fb}-\u{1f3ff}]|\s)+$/u;
+
+function _dmDayLabel(t) {
+    const d = new Date(t), now = new Date();
+    const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diff = Math.round((day(now) - day(d)) / 864e5);
+    if (diff === 0) return 'اليوم';
+    if (diff === 1) return 'أمس';
+    try { return d.toLocaleDateString('ar-EG', { weekday: 'long', day: 'numeric', month: 'long' }); } catch (_) { return ''; }
+}
+function _dmSameDay(a, b) {
+    const x = new Date(a), y = new Date(b);
+    return x.getFullYear() === y.getFullYear() && x.getMonth() === y.getMonth() && x.getDate() === y.getDate();
+}
+
+// One message → its DOM (a day divider first, when the day turned). Text goes in by
+// textContent only — it is another member's data.
+function _dmMsgNode(msg, prev, fresh) {
+    const frag = document.createDocumentFragment();
+    if (!prev || !_dmSameDay(prev.t, msg.t)) {
+        const d = document.createElement('div');
+        d.className = 'dm-day';
+        d.textContent = _dmDayLabel(msg.t);
+        frag.appendChild(d);
+        prev = null;
+    }
+    const mine = msg.f === _dm.me;
+    const row = document.createElement('div');
+    row.className = 'dm-msg' + (mine ? ' mine' : '') + (fresh ? ' fresh' : '')
+        + ((prev && prev.f === msg.f && msg.t - prev.t < DM_GROUP_MS) ? ' cont' : '');
+    row.dataset.k = msg.k;
+    const bub = document.createElement('div');
+    if (msg.i) {
+        // The frame is sized from the record, so nothing jumps when the bytes land;
+        // the bytes themselves are fetched only when it scrolls into view.
+        bub.className = 'dm-bub img';
+        const frame = document.createElement('button');
+        frame.type = 'button';
+        frame.className = 'dm-pic';
+        frame.style.aspectRatio = msg.i.w + ' / ' + msg.i.h;
+        frame.style.width = Math.round(Math.min(260, Math.max(120, 220 * Math.sqrt(msg.i.w / msg.i.h)))) + 'px';
+        frame.dataset.pic = msg.k;
+        frame.setAttribute('aria-label', 'صورة — اضغط لتكبيرها');
+        bub.appendChild(frame);
+        if (msg.m) {
+            const cap = document.createElement('div');
+            cap.className = 'dm-cap';
+            cap.dir = 'auto';
+            cap.textContent = msg.m;
+            bub.appendChild(cap);
+        }
+        _dmWatchPic(frame);
+    } else if (msg.s) {
+        bub.className = 'dm-bub stk';
+        const img = document.createElement('img');
+        img.alt = msg.s;
+        img.loading = 'lazy';
+        img.decoding = 'async';
+        img.src = _stkUrl(msg.s);
+        bub.appendChild(img);
+    } else {
+        const big = msg.m.length <= 12 && _DM_EMOJI_ONLY.test(msg.m);
+        bub.className = 'dm-bub' + (big ? ' big' : '');
+        bub.dir = 'auto';
+        bub.textContent = msg.m;
+    }
+    const tm = document.createElement('time');
+    try { tm.textContent = new Date(msg.t).toLocaleTimeString('ar-EG', { hour: 'numeric', minute: '2-digit' }); } catch (_) {}
+    row.append(bub, tm);
+    frag.appendChild(row);
+    return frag;
+}
+
+function _dmPaintThreadState() {
+    const E = _dm.els;
+    const th = _dmThread(_dm.peer);
+    let st = E.msgs.querySelector('.dm-state');
+    const want = !th.loaded ? 'جارٍ التحميل…'
+        : !th.msgs.length ? 'لا رسائل بعد — ابدأ المحادثة 👋'
+        : th.more ? 'رسائل أقدم' : '';
+    if (!want) { if (st) st.remove(); return; }
+    if (!st) {
+        st = document.createElement('button');
+        st.type = 'button';
+        st.className = 'dm-state';
+        E.msgs.prepend(st);
+    }
+    st.textContent = th.loading ? 'جارٍ التحميل…' : want;
+    st.classList.toggle('more', want === 'رسائل أقدم');
+}
+
+function _dmRenderThread() {
+    const E = _dm.els;
+    const th = _dmThread(_dm.peer);
+    const frag = document.createDocumentFragment();
+    let prev = null;
+    for (const m of th.msgs) { frag.appendChild(_dmMsgNode(m, prev, false)); prev = m; }
+    E.msgs.textContent = '';
+    E.msgs.appendChild(frag);
+    _dmPaintThreadState();
+}
+
+function _dmLoadOlder() {
+    const peer = _dm.peer;
+    const th = _dmThread(peer);
+    if (!th.more || th.loading || !th.msgs.length) return;
+    th.loading = true;
+    _dmPaintThreadState();
+    const oldest = th.msgs[0].k;
+    const node = ref(database, `${_dm.base}/threads/${_dmPair(peer)}`);
+    get(query(node, orderByKey(), endAt(oldest), limitToLast(DM_PAGE + 1))).then((snap) => {
+        let added = 0;
+        snap.forEach((c) => {
+            const key = c.key;
+            if (th.keys.has(key)) return;
+            const msg = _dmParseMsg(key, c.val());
+            if (!msg) return;
+            th.keys.add(key);
+            th.msgs.push(msg);
+            added++;
+        });
+        th.msgs.sort((a, b) => (a.k < b.k ? -1 : a.k > b.k ? 1 : 0));
+        th.more = added >= DM_PAGE;
+        th.loading = false;
+        if (_dm.open && _dm.view === 'thread' && _dm.peer === peer) {
+            // Keep what the reader was looking at in place while the page grows above it.
+            const box = _dm.els.msgs;
+            const before = box.scrollHeight - box.scrollTop;
+            _dmRenderThread();
+            box.scrollTop = box.scrollHeight - before;
+        }
+    }).catch(() => { th.loading = false; if (_dm.open && _dm.peer === peer) _dmPaintThreadState(); });
+}
+
+function _dmPaintPeerHead() {
+    const E = _dm.els;
+    if (!E || _dm.view !== 'thread' || !_dm.peer) return;
+    const info = _dmPeerInfo(_dm.peer);
+    const pl = info.pl;
+    const sub = !info.online ? 'غير متصل'
+        : (pl && pl.isWorking && !pl.isOnBreak) ? 'في جلسة عمل الآن' : 'في المقر الآن';
+    const key = info.name + '|' + info.avatar + '|' + sub;
+    if (E.peerKey === key) return;
+    E.peerKey = key;
+    _chatSetAvatar(E.peerAv, info.avatar, info.name);
+    E.peerAv.classList.toggle('on', info.online);
+    E.peerName.textContent = info.name;
+    E.peerSub.textContent = sub;
+    E.peerSub.classList.toggle('on', info.online);
+}
+
+function _dmShowThread(peer) {
+    const E = _dm.els;
+    _dmPop('');
+    _dm.view = 'thread';
+    _dm.peer = peer;
+    E.viewList.hidden = true;
+    E.viewThread.hidden = false;
+    E.peerKey = '';
+    _dmPaintPeerHead();
+    const can = dmCanMessage(peer);
+    E.compose.classList.toggle('is-off', !can);
+    E.note.hidden = can;
+    if (!can) E.note.textContent = 'لا يمكن مراسلة هذا العضو الآن.';
+    E.input.value = '';
+    _dmSetAttachment(null);
+    _dmAutosize();
+    _dmRenderThread();
+    E.msgs.scrollTop = E.msgs.scrollHeight;
+    _dmAttachThread(peer);
+    _dmMarkRead();
+    // A PC gets the caret at once; a phone waits for a tap (focusing here would throw
+    // the keyboard up over a thread nobody has read yet).
+    if (can && !isMobile()) { try { E.input.focus({ preventScroll: true }); } catch (_) {} }
+}
+
+function _dmMarkRead() {
+    if (!_dm.open || _dm.view !== 'thread' || !_dm.peer || document.hidden) return;
+    const row = _dm.inbox[_dm.peer];
+    if (!row || !(row.n > 0)) return;
+    _dm.unread = Math.max(0, _dm.unread - row.n);
+    row.n = 0;
+    _dmPaintBadge();
+    update(ref(database), { [`${_dm.base}/inbox/${_dm.me}/${_dm.peer}/n`]: 0 }).catch(() => {});
+}
+
+// ─── Sending ─────────────────────────────────────────────────────────────────
+// A ghost's side of a conversation is removed with it (set once per peer).
+function _dmGhostArm(peer) {
+    if (!_dmIsGhost(_dm.me) || _dm.ghostArmed[peer]) return;
+    _dm.ghostArmed[peer] = true;
+    try {
+        onDisconnect(ref(database, `${_dm.base}/threads/${_dmPair(peer)}`)).remove();
+        onDisconnect(ref(database, `${_dm.base}/media/${_dmPair(peer)}`)).remove();
+        onDisconnect(ref(database, `${_dm.base}/inbox/${peer}/${_dm.me}`)).remove();
+    } catch (_) {}
+}
+
+function _dmSend(text, stk, att) {
+    const peer = _dm.peer;
+    if (!_dm.open || _dm.view !== 'thread' || !peer) return false;
+    if (!dmCanMessage(peer)) { _libToast('لا يمكن مراسلة هذا العضو الآن'); return false; }
+    const m = stk ? '' : _dmCleanText(text, DM_MAX_LEN);
+    if (!stk && !m && !att) return false;
+    const now = Date.now();
+    if (now - _dm.lastSentAt < DM_COOLDOWN_MS) return false;
+    _dm.lastSentAt = now;
+    const t = Math.round(serverNow());
+    const key = String(t).padStart(13, '0') + Math.random().toString(36).slice(2, 6).padEnd(4, '0');
+    const msg = { f: _dm.me, t };
+    if (stk) msg.k = stk; else if (m) msg.m = m;
+    if (att) msg.i = { w: att.w, h: att.h };
+    const preview = stk ? DM_STK_LABEL
+        : att ? (DM_IMG_LABEL + (m ? ' ' + m.replace(/\s+/g, ' ') : '')).slice(0, DM_PREVIEW)
+        : m.replace(/\s+/g, ' ').slice(0, DM_PREVIEW);
+    const info = _dmPeerInfo(peer);
+    const meP = gameState.players[gameState.userId];
+    const myName = _chatClean(meP && meP.username).slice(0, 40) || 'عضو';
+    const myAv = _dmSafeAvatar(meP && meP.avatar);
+    _dmGhostArm(peer);
+    // The message + MY row in one multi-path write (and the picture's bytes with them,
+    // in their own node — so a thread's listener never carries a picture).
+    const up = {
+        [`${_dm.base}/threads/${_dmPair(peer)}/${key}`]: msg,
+        [`${_dm.base}/inbox/${_dm.me}/${peer}`]: { t, m: preview, f: _dm.me, n: 0, pn: info.name, pa: _dmSafeAvatar(info.avatar) },
+    };
+    if (att) {
+        up[`${_dm.base}/media/${_dmPair(peer)}/${key}`] = att.url;
+        _dmMediaRemember(_dmPair(peer) + '/' + key, att.url, true);    // mine shows at once, and is never re-downloaded
+    }
+    update(ref(database), up).catch(() => {
+        const el = _dm.els && _dm.els.msgs.querySelector(`.dm-msg[data-k="${key}"]`);
+        if (el) el.classList.add('failed');
+    });
+    // …and THEIR row by transaction, because its unread count is theirs to reset.
+    runTransaction(ref(database, `${_dm.base}/inbox/${peer}/${_dm.me}`), (cur) => ({
+        t, m: preview, f: _dm.me,
+        n: Math.min(999, ((cur && Math.round(+cur.n)) || 0) + 1),
+        pn: myName, pa: myAv,
+    })).catch(() => {});
+    _dmOnMsg(peer, key, msg);       // shown at once — the listener's own copy is de-duped by key
+    _dm.inbox[peer] = { t, m: preview, f: _dm.me, n: 0, pn: info.name, pa: _dmSafeAvatar(info.avatar) };
+    return true;
+}
+
+function _dmAutosize() {
+    const ta = _dm.els.input;
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(112, Math.max(36, ta.scrollHeight)) + 'px';
+}
+function _dmSubmit() {
+    const E = _dm.els;
+    if (_dm.attBusy) return;                    // the picture is still being prepared
+    if (_dmSend(E.input.value, '', _dm.att)) {
+        E.input.value = '';
+        _dmAutosize();
+        _dmPop('');
+        _dmSetAttachment(null);
+    }
+}
+
+// ─── الصور — pictures ────────────────────────────────────────────────────────
+// A picture is the one thing here that could actually dent the Firebase budget, so:
+//   • it is SHRUNK before it leaves the device (long side DM_IMG_SIDE, JPEG) — a
+//     12 MB phone photo goes out as ~100–200 KB. A small GIF is kept as it is, so it
+//     still moves; a big one is sent as a still.
+//   • its bytes live in their OWN node (`dm/media/{pair}/{key}`), never in the
+//     message record — a thread's listener and its pages carry `{w, h}` only.
+//   • it is fetched with a one-shot get() ONLY when its bubble scrolls into view,
+//     kept in memory, and kept in the browser's Cache API — so each of the two
+//     people downloads it exactly once, ever, on that device.
+//   At ~150 KB a picture, the 10 GB monthly cap is ~30,000 pictures viewed. The
+//   database's 1 GB of STORAGE is the nearer limit (~7,000 pictures kept) — worth a
+//   retention rule if the team ever gets close.
+const _DM_MEDIA_RE = /^data:image\/(?:jpeg|png|gif|webp);base64,[A-Za-z0-9+/=]+$/;
+
+function _dmMediaRemember(id, url, persist) {
+    const mem = _dm.media;
+    mem.delete(id);
+    mem.set(id, url);
+    // Bounded by SIZE as well as by count (invariant 25 — forty 2 MB GIFs would be
+    // 100 MB of strings): the oldest go first; the Cache API still has them.
+    let total = 0;
+    for (const v of mem.values()) total += v.length;
+    while (mem.size > 1 && (mem.size > DM_MEDIA_MEM_MAX || total > DM_MEDIA_MEM_CHARS)) {
+        const k = mem.keys().next().value;
+        total -= mem.get(k).length;
+        mem.delete(k);
+    }
+    if (!persist || typeof caches === 'undefined') return;
+    try {
+        caches.open(DM_MEDIA_CACHE)
+            .then(c => c.put(location.origin + '/__dm_media__/' + encodeURIComponent(id), new Response(url, { headers: { 'content-type': 'text/plain' } })))
+            .catch(() => {});
+    } catch (_) {}
+}
+// → Promise<data URL | null>: memory, then this device's cache, then ONE Firebase get().
+function _dmLoadMedia(pair, key) {
+    const id = pair + '/' + key;
+    const hit = _dm.media.get(id);
+    if (hit) return Promise.resolve(hit);
+    const fromCache = (typeof caches === 'undefined') ? Promise.resolve(null)
+        : caches.open(DM_MEDIA_CACHE)
+            .then(c => c.match(location.origin + '/__dm_media__/' + encodeURIComponent(id)))
+            .then(r => (r ? r.text() : null))
+            .catch(() => null);
+    return fromCache.then((cached) => {
+        if (cached && _DM_MEDIA_RE.test(cached)) { _dmMediaRemember(id, cached, false); return cached; }
+        return get(ref(database, `${_dm.base}/media/${pair}/${key}`)).then((snap) => {
+            const v = snap.val();
+            if (typeof v !== 'string' || v.length > DM_MEDIA_MAX_CHARS || !_DM_MEDIA_RE.test(v)) return null;
+            _dmMediaRemember(id, v, true);
+            return v;
+        });
+    }).catch(() => null);
+}
+
+// A picture's frame asks for its bytes when it comes into view.
+function _dmWatchPic(frame) {
+    if (!_dm.io) {
+        if (typeof IntersectionObserver === 'undefined') { setTimeout(() => _dmFillPic(frame), 0); return; }
+        _dm.io = new IntersectionObserver((entries) => {
+            for (const en of entries) {
+                if (!en.isIntersecting) continue;
+                _dm.io.unobserve(en.target);
+                _dmFillPic(en.target);
+            }
+        }, { root: _dm.els.msgs, rootMargin: '240px 0px' });
+    }
+    // Observed on the next turn: the node isn't in the document yet (it is still in
+    // the fragment _dmMsgNode returns).
+    setTimeout(() => { if (frame.isConnected && _dm.io) _dm.io.observe(frame); }, 0);
+}
+function _dmFillPic(frame) {
+    const key = frame.dataset.pic, peer = _dm.peer;
+    if (!key || !peer || frame.dataset.done) return;
+    frame.dataset.done = '1';
+    _dmLoadMedia(_dmPair(peer), key).then((url) => {
+        if (!frame.isConnected) return;
+        if (!url) { frame.classList.add('gone'); frame.textContent = 'تعذّر تحميل الصورة'; return; }
+        const img = document.createElement('img');
+        img.alt = '';
+        img.decoding = 'async';
+        img.src = url;
+        frame.appendChild(img);
+        frame.classList.add('ready');
+    });
+}
+
+function _dmSetAttachment(att) {
+    const E = _dm.els;
+    _dm.att = att;
+    E.attach.hidden = !att;
+    E.attachImg.src = att ? att.url : '';
+    if (att) E.attachInfo.textContent = att.gif ? 'صورة متحركة — أضف تعليقًا أو أرسلها كما هي' : 'صورة — أضف تعليقًا أو أرسلها كما هي';
+    if (att && !isMobile()) { try { E.input.focus({ preventScroll: true }); } catch (_) {} }
+}
+
+// A file from the picker, a drop or a paste → a picture ready to send.
+function _dmPickFile(file) {
+    const E = _dm.els;
+    if (!file || !E || _dm.attBusy) return;
+    if (!_dm.open || _dm.view !== 'thread' || !dmCanMessage(_dm.peer)) { _libToast('افتح محادثة أولًا لإرسال صورة'); return; }
+    // Pictures and GIFs only — by type, or by extension when the system gives no type.
+    // (A video dropped or picked here is refused; the picker itself only lists these.)
+    const _okType = /^image\/(png|jpe?g|webp|gif)$/i.test(file.type || '')
+        || (!file.type && /\.(png|jpe?g|webp|gif)$/i.test(file.name || ''));
+    if (!_okType) { _libToast('الصور والصور المتحركة (GIF) فقط'); return; }
+    if (file.size > DM_FILE_MAX_BYTES) { _libToast('الصورة كبيرة جدًا'); return; }
+    _dm.attBusy = true;
+    E.compose.classList.add('is-busy');
+    const fail = () => _libToast('تعذّرت قراءة الصورة');
+    const done = () => { _dm.attBusy = false; E.compose.classList.remove('is-busy'); };
+    const readUrl = () => new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result || ''));
+        fr.onerror = rej;
+        fr.readAsDataURL(file);
+    });
+    const loadImg = (src) => new Promise((res, rej) => {
+        const im = new Image();
+        im.onload = () => res(im);
+        im.onerror = rej;
+        im.src = src;
+    });
+    const isGif = /gif$/i.test(file.type) || (!file.type && /\.gif$/i.test(file.name || ''));
+    readUrl().then(loadImg).then((im) => {
+        const w0 = im.naturalWidth, h0 = im.naturalHeight;
+        if (!w0 || !h0) throw new Error('empty');
+        // A small GIF goes out untouched, so it keeps moving.
+        if (isGif && file.size <= DM_GIF_MAX_BYTES && _DM_MEDIA_RE.test(im.src)) {
+            return { url: im.src, w: w0, h: h0, gif: true };
+        }
+        // Everything else is redrawn smaller as a JPEG; if it is still too heavy the
+        // quality and then the size come down until it fits.
+        let side = DM_IMG_SIDE, q = DM_IMG_QUALITY, out = null;
+        for (let pass = 0; pass < 5; pass++) {
+            const k = Math.min(1, side / Math.max(w0, h0));
+            const w = Math.max(1, Math.round(w0 * k)), h = Math.max(1, Math.round(h0 * k));
+            const cv = document.createElement('canvas');
+            cv.width = w; cv.height = h;
+            const c = cv.getContext('2d');
+            c.fillStyle = '#1b1b1e';              // a transparent PNG gets the panel's own dark, not black
+            c.fillRect(0, 0, w, h);
+            c.drawImage(im, 0, 0, w, h);
+            const url = cv.toDataURL('image/jpeg', q);
+            cv.width = cv.height = 1;             // give the pixels back at once
+            out = { url, w, h, gif: false };
+            if (url.length <= DM_IMG_MAX_CHARS) break;
+            if (q > 0.5) q -= 0.14; else side = Math.round(side * 0.78);
+        }
+        if (!out || !_DM_MEDIA_RE.test(out.url) || out.url.length > DM_IMG_MAX_CHARS * 1.3) throw new Error('too big');
+        return out;
+    }).then((att) => {
+        if (isGif && !att.gif) _libToast('الصورة المتحركة أكبر من ٢ ميغابايت — ستُرسل ثابتة', 4200);
+        _dmSetAttachment(att);
+    }).catch(fail).finally(done);
+}
+
+function _dmZoom(url) {
+    const z = document.getElementById('dm-zoom');
+    if (!z) return;
+    const img = z.querySelector('img');
+    if (!url) { z.hidden = true; img.src = ''; return; }
+    img.src = url;
+    z.hidden = false;
+}
+
+// ─── Emoji / stickers ────────────────────────────────────────────────────────
+function _dmPop(kind) {
+    const E = _dm.els;
+    if (!E) return;
+    _dm.pop = kind;
+    E.emojiBtn.classList.toggle('on', kind === 'emoji');
+    E.stkBtn.classList.toggle('on', kind === 'stk');
+    E.pop.hidden = !kind;
+    E.pop.textContent = '';
+    E.pop.className = 'dm-pop' + (kind ? ' ' + kind : '');
+    if (kind === 'emoji') {
+        const frag = document.createDocumentFragment();
+        for (const e of EMO_LIST) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'dm-emo';
+            b.textContent = e;
+            frag.appendChild(b);
+        }
+        E.pop.appendChild(frag);
+    } else if (kind === 'stk') {
+        const s = document.createElement('input');
+        s.type = 'search';
+        s.className = 'dm-stk-search';
+        s.placeholder = 'ابحث عن ملصق…';
+        s.autocomplete = 'off';
+        const grid = document.createElement('div');
+        grid.className = 'dm-stk-grid';
+        const fill = () => {
+            const names = _stkSearch(s.value || '').slice(0, 60);
+            const frag = document.createDocumentFragment();
+            for (const n of names) {
+                const b = document.createElement('button');
+                b.type = 'button';
+                b.className = 'dm-stk';
+                b.dataset.stk = n;
+                b.title = n;
+                const img = document.createElement('img');
+                img.alt = n;
+                img.loading = 'lazy';
+                img.decoding = 'async';
+                img.src = _stkUrl(n);
+                b.appendChild(img);
+                frag.appendChild(b);
+            }
+            grid.textContent = '';
+            if (!names.length) {
+                const p = document.createElement('p');
+                p.className = 'dm-empty';
+                p.textContent = _stk.list.length ? 'لا ملصق بهذا الاسم.' : 'جارٍ تحميل الملصقات…';
+                grid.appendChild(p);
+            } else grid.appendChild(frag);
+        };
+        s.addEventListener('input', fill);
+        E.pop.append(s, grid);
+        fill();
+        loadStickers().then(() => { if (_dm.pop === 'stk' && E.pop.contains(grid)) fill(); });
+    }
+}
+
+// ─── Per frame (from updateSocial) — the single guard that closes it ─────────
+function dmUpdate() {
+    if (!_dm.open) return;
+    if (_dmBlocked()) { dmClose(); return; }
+    // Who is online / working changes under an open panel; the header repaints only
+    // when its own text would (keyed), so this costs nothing while nothing changed.
+    _dmPaintPeerHead();
+}
+
+function setupDmUI() {
+    if (_dm.wired) return;
+    const panel = document.getElementById('dm-panel');
+    if (!panel) return;
+    _dm.wired = true;
+    const $ = (id) => document.getElementById(id);
+    const E = _dm.els = {
+        panel, btn: $('dm-btn'),
+        viewList: $('dm-view-list'), viewThread: $('dm-view-thread'),
+        search: $('dm-search'), list: $('dm-list'),
+        msgs: $('dm-msgs'), pop: $('dm-pop'), note: $('dm-note'),
+        card: panel.querySelector('.dm-card'), drop: $('dm-drop'),
+        attach: $('dm-attach'), attachImg: $('dm-attach-img'), attachInfo: $('dm-attach-info'),
+        file: $('dm-file'),
+        compose: $('dm-compose'), input: $('dm-input'),
+        emojiBtn: $('dm-emoji-btn'), stkBtn: $('dm-stk-btn'),
+        peerAv: $('dm-peer-av'), peerName: $('dm-peer-name'), peerSub: $('dm-peer-sub'),
+        peerKey: '',
+    };
+    E.btn?.addEventListener('click', (e) => { e.stopPropagation(); if (_dm.open) dmClose(); else dmOpen(); });
+    $('dm-close')?.addEventListener('click', dmClose);
+    $('dm-close2')?.addEventListener('click', dmClose);
+    $('dm-back')?.addEventListener('click', _dmShowList);
+    panel.querySelector('.dm-scrim')?.addEventListener('click', dmClose);
+    E.search.addEventListener('input', () => _dmRenderList(false));
+    E.list.addEventListener('click', (e) => {
+        const row = e.target.closest && e.target.closest('.dm-row');
+        if (row && row.dataset.peer) _dmShowThread(row.dataset.peer);
+    });
+    E.msgs.addEventListener('click', (e) => {
+        if (e.target.closest && e.target.closest('.dm-state.more')) { _dmLoadOlder(); return; }
+        const pic = e.target.closest && e.target.closest('.dm-pic.ready');
+        if (pic) { const im = pic.querySelector('img'); if (im) _dmZoom(im.src); }
+    });
+    // ── Pictures: the button, a drop anywhere on the drawer, a paste ──
+    $('dm-img-btn')?.addEventListener('click', () => { if (!_dm.attBusy) E.file.click(); });
+    E.file.addEventListener('change', () => {
+        const f = E.file.files && E.file.files[0];
+        E.file.value = '';                        // the same file can be picked again
+        if (f) _dmPickFile(f);
+    });
+    $('dm-attach-x')?.addEventListener('click', () => _dmSetAttachment(null));
+    document.getElementById('dm-zoom')?.addEventListener('click', () => _dmZoom(''));
+    const hasFiles = (e) => !!(e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files'));
+    let dragDepth = 0;
+    const dropShow = (on) => { E.drop.hidden = !on; };
+    E.card.addEventListener('dragenter', (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        dragDepth++;
+        if (_dm.view === 'thread') dropShow(true);
+    });
+    E.card.addEventListener('dragover', (e) => { if (hasFiles(e)) { e.preventDefault(); try { e.dataTransfer.dropEffect = 'copy'; } catch (_) {} } });
+    E.card.addEventListener('dragleave', (e) => {
+        if (!hasFiles(e)) return;
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (!dragDepth) dropShow(false);
+    });
+    E.card.addEventListener('drop', (e) => {
+        if (!hasFiles(e)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        dragDepth = 0;
+        dropShow(false);
+        const f = (e.dataTransfer.files || [])[0];
+        if (f) _dmPickFile(f);
+    });
+    // A file dropped beside the drawer would otherwise make the browser LEAVE the page
+    // to show it — and take the session with it.
+    window.addEventListener('dragover', (e) => { if (_dm.open && hasFiles(e)) e.preventDefault(); });
+    window.addEventListener('drop', (e) => { if (_dm.open && hasFiles(e)) { e.preventDefault(); dragDepth = 0; dropShow(false); } });
+    E.input.addEventListener('paste', (e) => {
+        const items = (e.clipboardData && e.clipboardData.items) || [];
+        for (const it of items) {
+            if (it.kind === 'file' && /^image\//i.test(it.type)) {
+                const f = it.getAsFile();
+                if (f) { e.preventDefault(); _dmPickFile(f); return; }
+            }
+        }
+    });
+    E.compose.addEventListener('submit', (e) => { e.preventDefault(); _dmSubmit(); });
+    E.input.addEventListener('input', _dmAutosize);
+    E.input.addEventListener('keydown', (e) => {
+        // Enter sends; Shift+Enter is a new line. An Enter that commits an IME word isn't a send.
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); _dmSubmit(); }
+    });
+    E.input.addEventListener('focus', () => { if (isMobile()) _dmPop(''); });
+    E.emojiBtn.addEventListener('click', () => _dmPop(_dm.pop === 'emoji' ? '' : 'emoji'));
+    E.stkBtn.addEventListener('click', () => _dmPop(_dm.pop === 'stk' ? '' : 'stk'));
+    // The compose buttons must not take focus off the text box (on a phone that drops
+    // the keyboard mid-message) — the sticker search field is the one exception.
+    E.compose.addEventListener('mousedown', (e) => { if (e.target !== E.input) e.preventDefault(); });
+    E.pop.addEventListener('mousedown', (e) => { if (!(e.target.closest && e.target.closest('.dm-stk-search'))) e.preventDefault(); });
+    E.pop.addEventListener('click', (e) => {
+        const emo = e.target.closest && e.target.closest('.dm-emo');
+        if (emo) {
+            const ta = E.input, v = emo.textContent;
+            if (ta.value.length + v.length > DM_MAX_LEN) return;
+            const a = ta.selectionStart ?? ta.value.length, b = ta.selectionEnd ?? a;
+            ta.setRangeText(v, a, b, 'end');
+            _dmAutosize();
+            return;
+        }
+        const st = e.target.closest && e.target.closest('.dm-stk');
+        if (st && st.dataset.stk) {
+            if (_dmSend('', st.dataset.stk)) { _stkNoteUsed(st.dataset.stk); _dmPop(''); }
+        }
+    });
+    document.getElementById('dm-toast')?.addEventListener('click', () => {
+        const peer = _dm.toastPeer;
+        document.getElementById('dm-toast').classList.remove('show');
+        if (peer) dmOpen(peer);
+    });
+    window.addEventListener('keydown', (e) => {
+        if (e.key !== 'Escape' || !_dm.open) return;
+        const zoom = document.getElementById('dm-zoom');
+        if (zoom && !zoom.hidden) { _dmZoom(''); return; }
+        if (_dm.pop) { _dmPop(''); return; }
+        // On a PC the first Escape only lets go of the text field (back to playing);
+        // the next one puts the drawer away.
+        const ae = document.activeElement;
+        if (!isMobile() && ae && panel.contains(ae) && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) { ae.blur(); return; }
+        dmClose();
+    });
+    panel.addEventListener('focusin', (e) => {
+        const t = e.target;
+        if (t && (t.tagName === 'TEXTAREA' || t.tagName === 'INPUT')) _dmStopWalk();
+    });
+    // The wheel scrolls the panel, never the world's zoom.
+    panel.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+    const fit = () => {
+        if (!_dm.open) return;
+        _dmFitViewport();
+        if (_dm.view === 'thread') E.msgs.scrollTop = E.msgs.scrollHeight;
+    };
+    window.visualViewport?.addEventListener('resize', fit);
+    window.visualViewport?.addEventListener('scroll', fit);
+    window.addEventListener('resize', fit);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) _dmMarkRead(); });
+    // The inbox listener waits for calm — never on the login / spawn path.
+    whenCalm(dmStart);
 }

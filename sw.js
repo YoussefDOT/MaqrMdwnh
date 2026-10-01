@@ -47,7 +47,9 @@ self.addEventListener('install', (e) => self.skipWaiting());
 self.addEventListener('activate', (e) => {
     e.waitUntil((async () => {
         const names = await caches.keys();
-        await Promise.all(names.filter(n => n !== CACHE_VERSION).map(n => caches.delete(n)));
+        // `maqr-dm-…` is the private-messages image cache, written by the page itself
+        // (game.js → _dmMedia). It is not a version of this cache — leave it alone.
+        await Promise.all(names.filter(n => n !== CACHE_VERSION && !n.startsWith('maqr-dm-')).map(n => caches.delete(n)));
         await self.clients.claim();
     })());
 });

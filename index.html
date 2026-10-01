@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 352 · Updated 10/1 3:38 PM</div>
+    <div id="build-number" class="build-number">Build 353 · Updated 10/1 7:51 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -272,6 +272,13 @@
                     <path d="M7.07 14.94c-1.66 0-3 1.35-3 3.02 0 1.33-1.25 1.52-1 2.02.8 1.1 2.24 2.02 3.5 2.02 2.2 0 4-1.8 4-4.04a3.01 3.01 0 0 0-3.5-3.02z"/>
                     <path d="M18.5 3.5l.9.9M4 5l.8.8M4 12l.8-.8M20 10l.8.8" stroke-width="1.3"/>
                 </svg>
+            </button>
+            <!-- الرسائل الخاصة — نقطة حمراء بعدد غير المقروء (`_dmPaintBadge`). -->
+            <button id="dm-btn" class="hud-tool-btn hud-tool-dm" type="button" aria-label="الرسائل الخاصة" title="الرسائل الخاصة">
+                <svg class="hud-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M21 11.5a8.4 8.4 0 0 1-8.5 8.3 8.9 8.9 0 0 1-3.7-.8L3 20.5l1.6-5.1a8 8 0 0 1-1.1-3.9A8.4 8.4 0 0 1 12 3.2a8.4 8.4 0 0 1 9 8.3z"/>
+                </svg>
+                <i id="dm-badge" class="dm-badge" hidden></i>
             </button>
             <button id="settings-btn" class="hud-tool-btn" type="button" aria-label="الإعدادات" title="الإعدادات">
                 <svg class="hud-tool-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -675,6 +682,95 @@
         </span>
         <span class="session-toast-text">لم يتم حفظ الجلسة لأنها أقل من ١٠ دقائق</span>
     </div>
+
+    <!-- ═══ الرسائل الخاصة (مقر ١.٥) ═══
+         محادثات خاصة بين عضوين من القسم نفسه، تُحفظ وتعود إليها متى شئت. تُفتح من زر
+         الرسائل في صندوق الأدوات، أو من «رسالة خاصة» تحت أي عضو تضغط عليه. واجهتان
+         داخل بطاقة واحدة: القائمة (محادثاتك ثم كل الأعضاء، المتصلون أولًا) والمحادثة.
+         كل المحتوى يُبنى من JS بـ textContent — لا innerHTML لنصّ عضو أبدًا. -->
+    <div id="dm-panel" class="dm-panel" aria-hidden="true" role="dialog" aria-label="الرسائل الخاصة">
+        <div class="dm-scrim"></div>
+        <div class="dm-card">
+            <section id="dm-view-list" class="dm-view">
+                <header class="dm-head">
+                    <span class="dm-head-ico" aria-hidden="true"></span>
+                    <h2>الرسائل</h2>
+                    <button id="dm-close" class="dm-x" type="button" aria-label="إغلاق">✕</button>
+                </header>
+                <div class="dm-search">
+                    <input id="dm-search" type="search" placeholder="ابحث عن عضو…" autocomplete="off"
+                           autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="ابحث عن عضو">
+                </div>
+                <div id="dm-list" class="dm-list"></div>
+            </section>
+            <section id="dm-view-thread" class="dm-view" hidden>
+                <header class="dm-head dm-head-thread">
+                    <button id="dm-back" class="dm-back" type="button" aria-label="رجوع إلى القائمة">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+                    </button>
+                    <span id="dm-peer-av" class="dm-av" aria-hidden="true"></span>
+                    <span class="dm-peer">
+                        <b id="dm-peer-name"></b>
+                        <small id="dm-peer-sub"></small>
+                    </span>
+                    <button id="dm-close2" class="dm-x" type="button" aria-label="إغلاق">✕</button>
+                </header>
+                <div id="dm-msgs" class="dm-msgs"></div>
+                <div id="dm-pop" class="dm-pop" hidden></div>
+                <div id="dm-note" class="dm-note" hidden></div>
+                <!-- صورة مُرفقة تنتظر الإرسال (زر الإرفاق، السحب والإفلات، أو اللصق) -->
+                <div id="dm-attach" class="dm-attach" hidden>
+                    <img id="dm-attach-img" alt="">
+                    <span id="dm-attach-info" class="dm-attach-info"></span>
+                    <button id="dm-attach-x" class="dm-x" type="button" aria-label="إزالة الصورة">✕</button>
+                </div>
+                <form id="dm-compose" class="dm-compose" autocomplete="off">
+                    <button id="dm-img-btn" class="dm-tool" type="button" aria-label="إرفاق صورة" title="إرفاق صورة">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <rect x="3.5" y="4.5" width="17" height="15" rx="3"/>
+                            <circle cx="9" cy="10" r="1.6"/>
+                            <path d="M20.5 15.5l-4.6-4.6a1.5 1.5 0 0 0-2.1 0L6 18.6"/>
+                        </svg>
+                    </button>
+                    <!-- الامتدادات لا أنواع MIME: نافذة اختيار الملفات على macOS تسمح بكل شيء
+                         (ومنه الفيديو) إن لم تتعرّف على نوع واحد من القائمة. -->
+                    <input id="dm-file" type="file" accept=".png,.jpg,.jpeg,.gif,.webp" hidden>
+                    <button id="dm-emoji-btn" class="dm-tool" type="button" aria-label="الرموز التعبيرية">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <circle cx="12" cy="12" r="9"/>
+                            <path d="M8.5 14.5c.9 1.3 2.1 2 3.5 2s2.6-.7 3.5-2"/>
+                            <path d="M9 9.5h.01M15 9.5h.01" stroke-width="2.6"/>
+                        </svg>
+                    </button>
+                    <button id="dm-stk-btn" class="dm-tool" type="button" aria-label="الملصقات">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M20 13V7a3 3 0 0 0-3-3H7a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h6z"/>
+                            <path d="M13 20v-4a3 3 0 0 1 3-3h4"/>
+                        </svg>
+                    </button>
+                    <textarea id="dm-input" class="dm-input" rows="1" maxlength="500" placeholder="اكتب رسالة…"
+                              enterkeyhint="send" autocapitalize="off" aria-label="اكتب رسالة خاصة"></textarea>
+                    <button id="dm-send" class="dm-send" type="submit" aria-label="إرسال">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                            <path d="M20 12L4 5l3 7-3 7z"/>
+                        </svg>
+                    </button>
+                </form>
+                <div id="dm-drop" class="dm-drop" hidden><span>أفلِت الصورة هنا</span></div>
+            </section>
+        </div>
+    </div>
+    <!-- عرض صورة من محادثة خاصة بالحجم الكامل -->
+    <div id="dm-zoom" class="dm-zoom" hidden><img alt=""></div>
+
+    <!-- إشعار رسالة خاصة جديدة — يُضغط فيفتح المحادثة. لا يظهر أثناء جلسة العمل. -->
+    <button id="dm-toast" class="dm-toast" type="button" aria-live="polite">
+        <span class="dm-toast-av" aria-hidden="true"></span>
+        <span class="dm-toast-body">
+            <b class="dm-toast-name"></b>
+            <span class="dm-toast-text"></span>
+        </span>
+    </button>
 
     <!-- شريط الإشارة: «فلان أشار إليك». يرافقه قوس على حافة الشاشة في اتجاه المُشير
          (يُرسم على الكانفس، انظر drawChatBeacons). لا يستقبل ضغطًا أبدًا حتى لا يبتلع
@@ -2366,8 +2462,8 @@
              firebase-config.js: the import failed and the boot screen hung forever.
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
-        <link rel="modulepreload" href="firebase-config.js?v=3">
-        <script type="module" src="game.js?v=330"></script>
+        <link rel="modulepreload" href="firebase-config.js?v=4">
+        <script type="module" src="game.js?v=331"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

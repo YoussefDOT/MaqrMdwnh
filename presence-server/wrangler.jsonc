@@ -4,6 +4,18 @@
   "main": "src/index.js",
   "compatibility_date": "2026-01-01",
 
+  // ليمو (مقر ١.٥). The API key is NOT here — it is a secret:
+  //   npx wrangler secret put OPENAI_API_KEY
+  // These are plain settings; change a number and `npx wrangler deploy`.
+  "vars": {
+    "LEMO_MODEL": "gpt-6-luna",
+    "LEMO_DAILY_USD": "0.10",     // spend cap PER LOBBY per day (~500 answers)
+    "LEMO_USER_DAILY": "40",      // questions one member may ask per day
+    "LEMO_PRICE_IN": "0.10",      // $ per million input tokens (for the cap's arithmetic)
+    "LEMO_PRICE_OUT": "0.50",     // $ per million output tokens
+    "SITE_BASE": "https://youssefdot.github.io/MaqrMdwnh"   // where patch-notes.json is read from
+  },
+
   // Bind the Durable Object class so the Worker can reach it.
   "durable_objects": {
     "bindings": [
