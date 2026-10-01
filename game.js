@@ -30832,70 +30832,6 @@ const LIB_ICON = {
     eye:   '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5C7.9 5 4.7 8.7 3.6 11.3a1.3 1.3 0 0 0 0 1.1C4.7 15.3 7.9 19 12 19s7.3-3.7 8.4-6.3a1.3 1.3 0 0 0 0-1.1C19.3 8.7 16.1 5 12 5z"/><circle cx="12" cy="12" r="2.9"/></svg>',
 };
 
-// The library's nudges, verbatim. One is picked per task per panel session (see
-// `_libQuoteFor`) — drawing a new one on every render shuffled the quotes under
-// the reader every time the list refreshed.
-const LIB_NUDGE_CALM = [
-    'لا تتكاسل في أداء هذه المهمة!!',
-    'المهمة لن تُنجز نفسها… جرّبنا، لم تفعل.',
-    'بركة العمل في أوّله، فابدأ الآن.',
-    'من جدّ وجد، ومن كسل… رأى هذا الإشعار مرّة أخرى.',
-    'اجعل نيّتك خالصة، وأتقن عملك.',
-    'التسويف لصٌّ يسرق وقتك بهدوء.',
-    'خطوة صغيرة اليوم خير من قفزة مؤجّلة.',
-    'الإتقان عبادة، فأتقنها.',
-    'لو أنجزتها الآن لارتحت، ولو أجّلتها لطاردتك في المنام.',
-    'الوقت كالسيف… وأنت تمسكه من طرفه الحاد.',
-    'توكّل، وابدأ، والبقيّة تأتي.',
-    'المهمة تنظر إليك الآن. لا تتجاهلها.',
-    'أجرك على قدر نصبك، فلا تبخل على نفسك.',
-    'أنجزها ثم استرح مطمئنًا.',
-    'قليل دائم خير من كثير منقطع.',
-    'المسوّفون يجتمعون في آخر يوم… لا تكن منهم.',
-    'اعمل بإحسان، فالعين التي لا تنام تراك.',
-    'ابدأ بسم الله، وستجد الأمر أهون مما تظن.',
-    'الهمّة العالية لا تعرف كلمة «غدًا».',
-    'لو كانت المهام تُنجز بالتفكير فيها لأنجزتَ ألفًا.',
-    'رتّب وقتك يرتّب الله أمرك.',
-    'لا تجعل مهمتك تصل إلى مجموعة الحريقة 🔥',
-    'صاحب الهمّة لا ينتظر المزاج.',
-    'المهمة سهلة… الصعب أن تبدأ.',
-    'استعن بالله ولا تعجز.',
-    'أنجزها وأرِح ضميرك من ثقلها.',
-    'كل تأجيل يزيدها ثقلًا، وكل بدءٍ يخفّفها.',
-    'الفوز للمجتهد لا للمتحمّس.',
-    'لا تدع الكسل يكتب نهاية قصتك.',
-    'خير العمل أدومه وإن قلّ، فابدأ بشيء.',
-    'تذكّر: من ورائك فريق يعتمد عليك.',
-    'أنت أقرب مما تظن… افتحها وابدأ فقط.',
-    'ساعة عملٍ الآن تُغنيك عن ليلةِ ندم.',
-    'اجعل اليوم أفضل من أمسك.',
-    'الجادّون يبدؤون قبل أن يشعروا بالرغبة.',
-];
-const LIB_NUDGE_URGENT = [
-    'لم يبقَ إلا القليل… أسرِع!',
-    'الوقت ينفد والمهمة تنتظر. الآن!',
-    'غدًا لن يكون هناك غد. أنجزها اليوم.',
-    'تحذير: العدّاد يقترب من الصفر ⏳',
-    'هذه ليست مزحة، الموعد على الأبواب.',
-    'أسرِع قبل أن تصبح المهمة ذكرى مؤلمة.',
-    'بادِر! التأخير الآن لا عذر له.',
-    'آخر فرصة… استغلّها.',
-    'اترك كل شيء وأنجز هذه الآن.',
-    'المهمة في رمقها الأخير، أنقذها!',
-    'لا وقت للتسويف، بقيت ساعات.',
-    'سارِع… فالفرص لا تنتظر أحدًا.',
-    'الآن، أو تندم لاحقًا. اختر.',
-    '🔥 المهمة تحترق، أطفئها بالإنجاز.',
-    'استعجل، بارك الله في وقتك.',
-    'العدّاد لا يرحم، تحرّك!',
-    'أنجزها الآن ونم قرير العين.',
-    'المهلة تكاد تنتهي… لا تتردد.',
-    'خطوة واحدة تفصلك عن الراحة، اخطُها.',
-    'الوقت الضائع لا يُشترى. أسرِع.',
-    'انتبه! الموعد النهائي يطرق الباب.',
-];
-
 const _lib = {
     me: null,           // this player's roster member ({slug,name,dbKey,admin}) or null
     tasks: null,        // { id: task } — the whole library/tasks tree, or null
@@ -30914,7 +30850,6 @@ const _lib = {
     canvasOff: false,
     canvasTimer: 0,
     pickOpen: false,
-    quotes: new Map(),
     shut: {},           // which groups the reader collapsed — session only, like the library's
     shutKids: new Set(),// which PARENT tasks have their subtasks folded — session only, like the library's
     covers: new Map(),  // `<id>:<pic>` → the cover's data URI, read once per session (see _libCover)
@@ -30955,15 +30890,6 @@ const _libAvatar  = slug => `${MDWNH_ROSTER_BASE}/avatars/${slug}.png`;
 // drawn as a broken box — copying 2.8 MB of webp into this repo to avoid one
 // remote image would be the worse trade.
 const _libSticker = v => `${LIB_SITE_URL}/assets/points/${v}.webp`;
-
-function _libQuoteFor(t, ms) {
-    const key = t.id + (ms <= LIB_DAY_MS ? ':u' : ':c');
-    if (!_lib.quotes.has(key)) {
-        const pool = ms <= LIB_DAY_MS ? LIB_NUDGE_URGENT : LIB_NUDGE_CALM;
-        _lib.quotes.set(key, pool[Math.floor(Math.random() * pool.length)]);
-    }
-    return _lib.quotes.get(key);
-}
 
 function _libCountdown(due) {
     // no موعد: never late, never urgent — the pill prints «بلا موعد»
@@ -31013,9 +30939,9 @@ function _libToast(msg) {
    «+N» — own face first. A task carrying the whole team is «الجميع».
    Resync together. */
 const LIB_ALL_MIN = 3;
-const LIB_WHO_MAX = 5;   // a watcher's pair stack
-const LIB_ROW = 3;       // from this many people the faces are a row
 const LIB_ROW_MAX = 4;   // the row: faces before «+N»
+// which of the three house doodles a قسم wears big — «رسمات» scatters the OTHER two
+const LIB_MARK_OF = { content: 'sparkle', prod: 'burst', comm: 'spiral', coord: 'spiral' };
 
 function _libIsEveryone(list) {
     const pool = MDWNH_ROSTER.list.filter(m => !m.admin && !m.dummy && m.active !== false);
@@ -31037,36 +30963,22 @@ const _libMoreBtn = (t, over) =>
     '<button class="av more" type="button" data-libtask="' + _libEsc(t.id) + '" ' +
     'title="كل المكلَّفين" aria-label="عرض كل المكلَّفين">+' + _libAr(over) + '</button>';
 
-/* The classic stack, capped: five faces then the disc, two rows of three. */
-function _libRestHtml(t, list) {
-    const over = list.length - LIB_WHO_MAX;
-    const show = over > 0 ? list.slice(0, LIB_WHO_MAX) : list;
-    return '<span class="who-rest">' +
-        show.map(s => _libAvImg(t, s)).join('') + (over > 0 ? _libMoreBtn(t, over) : '') +
-        '</span>';
-}
-
+/* The faces, on the line under the name. ONE arrangement whatever the
+   head-count — an overlapping row, four at most, then «+N». Nothing on your own
+   solo task, nothing on a task you are neither on nor watching. Mirror of
+   `whoHtml()` in MdwnhLibrary/js/tasks.js. */
 function _libWhoHtml(t, watching) {
     const list = _libAssignees(t);
     if (!list.length) return '';
     if (_libIsEveryone(list)) return '<span class="who-all">الجميع</span>';
-
     const meSlug = _lib.me && _lib.me.slug;
     const mine = !watching && meSlug && list.indexOf(meSlug) !== -1;
-    if (list.length >= LIB_ROW && (mine || watching)) return _libWhoRow(t, watching);
-    if (mine) {
-        const others = list.filter(s => s !== meSlug);
-        if (!others.length) return '';              // solo: the pill is already yours
-        return '<span class="who pair" style="--av:32px">' +
-            _libAvImg(t, others[0]) + _libAvImg(t, meSlug, 'self') + '</span>';
-    }
-
-    if (!watching) return '';
-    if (list.length === 1) return '<span class="who solo" style="--av:38px">' + _libAvImg(t, list[0]) + '</span>';
-    return '<span class="who grid">' + _libRestHtml(t, list) + '</span>';
+    if (!mine && !watching) return '';
+    if (mine && list.length === 1) return '';       // solo: the pill is already yours
+    return _libWhoRow(t, watching);
 }
 
-/* Three or more: own face first, four faces, then the black «+N». */
+/* Own face first (rightmost, on top), so it survives the cap. */
 function _libWhoRow(t, watching) {
     const list = _libAssignees(t);
     if (!list.length) return '';
@@ -31137,15 +31049,17 @@ document.addEventListener('mouseover', (e) => {
 }, true);
 document.addEventListener('scroll', _libHideWhoPop, true);
 
-// The time left is a CHIP — the one thing on the pill you act on. ONE unit:
-// days until the last day, then hours. Late wears the same number-over-unit
-// shape in red; no موعد keeps the slot and says so.
+// The موعد is a CHIP on the line under the name — mirror of `cdChip()` in the
+// library. ONE unit: days until the last day, then hours. It is the one thing
+// on the pill that changes colour: white on the last day (`.task.urgent`),
+// black with a red dot when late, an outline when there is no موعد.
+const LIB_CLOCK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>';
 function _libCdHtml(t) {
     const c = _libCountdown(t.due);
-    if (c.none) return '<span class="pill-cd nodue"><span class="u">بلا موعد</span></span>';
-    if (c.late) return '<span class="pill-cd late">تأخّرت ' + _libAr(c.days) + ' يوم</span>';
+    if (c.none) return '<span class="pill-cd nodue">' + LIB_CLOCK + '<span class="u">بلا موعد</span></span>';
+    if (c.late) return '<span class="pill-cd late">' + (c.days >= 1 ? 'تأخّرت ' + _libAr(c.days) + ' يوم' : 'تأخّرت') + '</span>';
     const big = c.days >= 1;
-    return '<span class="pill-cd" data-due="' + (Number(t.due) || 0) + '">' +
+    return '<span class="pill-cd" data-due="' + (Number(t.due) || 0) + '">' + LIB_CLOCK +
         '<span class="n">' + _libAr(big ? c.days : c.hours) + '</span>' +
         '<span class="u">' + (big ? 'يوم' : 'ساعة') + '</span></span>';
 }
@@ -31218,8 +31132,11 @@ function _libTaskPill(t, i, opts) {
             : '<span class="task-emoji">' + _libEsc(t.emoji || '📌') + '</span>';
     // the pill's own chrome — the قسم's mark and the striped ring a PARENT wears
     const decoKey = LIB_TAG_ORDER.find(k => t.tags && t.tags[k] && LIB_TAG_ICONS[k]);
+    // `.pill-fx` is «رسمات»: the two house doodles the pill is NOT already wearing
+    // big, scattered beside it at the pill's left — drawn by CSS off `data-mark`
     const chrome =
         (decoKey ? '<img class="pill-deco" src="' + LIB_TAG_ICONS[decoKey] + '" alt="" aria-hidden="true" decoding="async">' : '') +
+        '<i class="pill-fx" data-mark="' + (LIB_MARK_OF[decoKey] || '') + '" aria-hidden="true"></i>' +
         (kidsN ? '<i class="pill-ring" aria-hidden="true"></i>' : '');
     const pts = (t.points && !done && !(watching && full))
         ? '<span class="task-pts"><img src="' + _libEsc(_libSticker(t.points)) + '" alt="' + _libAr(t.points) + ' نقطة" loading="lazy" decoding="async"></span>'
@@ -31251,16 +31168,16 @@ function _libTaskPill(t, i, opts) {
     // «تحت إشرافك»: a task in مهامي that I also supervise
     const mineSup = !watching && meSlug && t.supervisors && t.supervisors[meSlug];
     const supTag = mineSup ? '<span class="task-tag sup-tag">' + LIB_ICON.eye + 'تحت إشرافك</span>' : '';
-    const quote = '<span class="pill-quote">' + _libEsc(done ? 'أحسنت، أتممتها.' : _libQuoteFor(t, c.ms)) + '</span>';
 
-    // ONE row, whatever the head-count; the clock sits left of the faces
-    el.innerHTML = chrome + pts + media +
+    /* ONE row, two lines — the library's «حيوي»: the name, and under it WHEN,
+       then WHO, then the وسوم. No وصف and no nudge on the pill (the panel is a
+       phone's width, where those two were what squeezed the name out). A
+       parent's fold handle leads the row, the ✓ ends it. */
+    el.innerHTML = chrome + pts + _libKidsChip(t, opts) + media +
         '<span class="pill-main">' +
             '<span class="task-title">' + _libEsc(t.title) + '</span>' +
-            (t.desc ? '<span class="task-desc">' + _libEsc(t.desc) + '</span>' : '') +
-            '<span class="pill-foot">' + _libKidsChip(t, opts) + quote + _libTagsHtml(t) + supTag + '</span>' +
+            '<span class="pill-foot">' + _libCdHtml(t) + _libWhoHtml(t, watching) + _libTagsHtml(t) + supTag + '</span>' +
         '</span>' +
-        _libWhoHtml(t, watching) + _libCdHtml(t) +
         action;
     if (!t.img && t.pic) _libCover(t, el.querySelector('.task-img'));
 
@@ -31332,7 +31249,7 @@ function _libKidsChip(t, opts) {
     return '<button class="pill-kids' + (shut ? ' on' : '') + '" type="button"' +
         ' aria-expanded="' + String(!shut) + '"' +
         ' aria-label="' + (shut ? 'إظهار المهام الفرعية' : 'طي المهام الفرعية') + '">' +
-        '<i>' + LIB_ICON.tri + '</i><span>' + _libAr(n) + ' فرعية</span></button>';
+        '<span>' + _libAr(n) + '</span><i>' + LIB_ICON.tri + '</i></button>';
 }
 
 /* ── ترتيب المهام بالسحب — carried 1:1 from MdwnhLibrary/js/tasks.js ─────────
@@ -31906,6 +31823,28 @@ function _libRender(silent) {
         host.innerHTML = '<p class="empty-note">أحسنت! لا مهام مفتوحة عليك الآن.</p>';
     }
     _libPaintStamp();
+    // a frame later: on the opening render the panel has no box yet
+    requestAnimationFrame(() => _libDimFx(host));
+}
+
+/* The doodles live at the pill's physical left and the words start at its
+   right, so a long name — or a long line of chips — runs INTO them. Where it
+   does, they step back (`.fxdim`). Mirror of `dimFx()` in the library:
+   `offsetLeft`, the layout position, so a drag's transform does not move the
+   answer; reads first, writes after. A pill in a folded group has no box and
+   is left as it is. */
+const LIB_FX_ZONE = 124;
+function _libDimFx(root) {
+    if (!root) return;
+    const pills = Array.from(root.querySelectorAll('.task'));
+    const hit = pills.map(el => {
+        const t = el.querySelector('.task-title'), f = el.querySelector('.pill-foot');
+        if (!t || !el.offsetWidth) return null;
+        let x = t.offsetLeft;
+        if (f) for (const c of f.children) x = Math.min(x, c.offsetLeft);
+        return x < LIB_FX_ZONE;
+    });
+    pills.forEach((el, i) => { if (hit[i] != null) el.classList.toggle('fxdim', hit[i]); });
 }
 
 // Numbers only — no re-render, so nothing jumps under the reader. Crossing into
@@ -31922,6 +31861,9 @@ function _libTickCountdowns() {
         const n = cd.querySelector('.n'), u = cd.querySelector('.u');
         if (n) n.textContent = _libAr(big ? c.days : c.hours);
         if (u) u.textContent = big ? 'يوم' : 'ساعة';
+        // the chip turns white on the last day — a class, not a rebuild
+        const pill = cd.closest('.task');
+        if (pill && c.ms <= LIB_DAY_MS) pill.classList.add('urgent');
     });
     if (needsRebuild) _libRender(true);
 }
@@ -31962,6 +31904,7 @@ function _libRenderPicker() {
     if (a) host.appendChild(a);
     if (b) host.appendChild(b);
     if (!a && !b) host.innerHTML = '<p class="empty-note">لا مهام مفتوحة عليك الآن.</p>';
+    requestAnimationFrame(() => _libDimFx(host));
 }
 
 function _libOpenPicker() {
@@ -33189,15 +33132,14 @@ function updateWorkChallenge() {
             /* The celebration waits for a clear screen: no session, no overlay, no end
                card — so the day is judged AGAIN here. A session left running credits
                its hours live; cutting it down at «هل عملت …فعلًا؟» takes them back,
-               and the win that was queued mid-session must not survive that. */
+               and the win that was queued mid-session must not survive that.
+               NOT gated on _dutyHasPending: the win was queued on acknowledged numbers,
+               and outside a session the open-time counter queues a write every second —
+               waiting for an empty queue here meant the popup never came. */
             const key = _duty.dayKey, r = _dutyTodayRec();
-            if (r.vac || r.ms < DUTY.goalMs) {
-                _duty.pendingWin = false;
-                delete _duty.celebrated[key];   // reaching three hours for real still celebrates
-            } else if (!_dutyHasPending(key)) {
-                _duty.pendingWin = false;
-                _chalOpenModal('win');
-            }
+            _duty.pendingWin = false;
+            if (r.vac || r.ms < DUTY.goalMs) delete _duty.celebrated[key];   // reaching three hours for real still celebrates
+            else _chalOpenModal('win');
         }
     }
 

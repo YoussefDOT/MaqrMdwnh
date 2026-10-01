@@ -3978,26 +3978,26 @@ one froze the canvas while it was still fully opaque, and the old `visibility: h
 of that read as an instant black snap. On close, drawing resumes on the same frame so there
 is live content to fade back in. **Don't reintroduce `visibility: hidden` here.**
 
-### The faces cluster is CAPPED at six
-Five faces then a **«+N» disc**, two rows of three, whatever the head-count. A task carrying
-twenty-three of the twenty-eight assignable members is not «الجميع», so it drew twenty-two
-faces as eight columns and pushed the countdown and the **إتمام button out through the pill's
-own `overflow:hidden`** — the button is the only thing on that row that is not decoration.
-`LIB_WHO_MAX` / `_libRestHtml()`, mirroring the library's `WHO_MAX` / `restHtml()`.
+### The faces are ONE overlapping row, capped at four
+`_libWhoRow()`: four 24px faces then a **«+N» disc**, whatever the head-count, on the line
+under the name beside the موعد chip. It replaced a six-cell stack beside the button
+(`LIB_WHO_MAX` / `_libRestHtml`, both gone). A task carrying twenty-three of the twenty-eight
+assignable members is not «الجميع», and uncapped it pushed the **إتمام button out through the
+pill's own `overflow:hidden`** — the button is the only thing on that row that is not
+decoration.
 - The disc opens `.lib-who-pop` — every member on the task, face and name — **`position:fixed`
   on `<body>`**, because the pill is `overflow:hidden` inside a panel that scrolls.
 - **Its click listener is on the document in the CAPTURE phase.** A bubbling one runs AFTER
   the pill's own, i.e. after `window.open` has already thrown a library tab up over it.
-- The faces stay 22px. The library draws them 2.5× bigger in its read-only detail CARD, which
-  maqr has not got — in the pill they are a marker, not the row's subject.
-- `.who` is `flex:0 1 auto;min-width:0` and `.who-rest` clips: the net under the cap is that
-  the stack gives before the button does.
+- `.pill-foot` is `overflow:hidden`: whatever does not fit the line is clipped off its END,
+  never pushed out through the pill.
 
 ### المهام الفرعية — mirrored from the library
 A subtask is a whole task carrying `parent`. `_libBlock` nests each group's flat list with
 `_libNest` (mirror of `nest()`): a child whose parent is in the SAME group moves under it
 inside a `.subrow` wrapper that carries the elbow (`.sub-tee` — a wrapper because `.task` is
-`overflow:hidden`). The parent's foot gets `_libKidsChip` (count + triangle) that folds its
+`overflow:hidden`). The parent gets `_libKidsChip` — a HANDLE on its start edge, a strip the
+height of the pill with the count over the triangle — that folds its
 rows (`.subrow.hid`, `_lib.shutKids`, session-only). Counts stay FLAT. **The الحريقة / بقية المهام split is by FAMILY** (`_libFireFamilies`): a family goes to الحريقة if any member burns — splitting task by task sent a subtask due sooner than its parent into another group, where it rendered as an orphan (the library's member view has one «مهامي» list, so it never splits them). `_libDropPill` removes
 the row with its pill. Orphans render as ordinary pills.
 
@@ -4005,7 +4005,26 @@ the row with its pill. Orphans render as ordinary pills.
 `library-tasks.css` and `_libTaskPill()` are hand-copies of `MdwnhLibrary/css/tasks.css` and
 `taskPill()`. **Nothing automates the sync.** If the pill changes there, change it in both
 places here — the library's own `CLAUDE.md` carries the matching note.
-**In sync as of 2026-09-23 — ONE pill shape, whatever the head-count.** The crowd pill is
+**In sync as of 2026-10-01 — the library's «حيوي» pill.** TWO LINES: the name, and under it
+WHEN, then WHO, then the وسوم (`.pill-foot`). Row order: a parent's fold handle, the cover,
+those two lines, the ✓. What changed, all of it mirrored from `MdwnhLibrary/js/tasks.js`:
+- **No وصف and no nudge on the pill.** `_libQuoteFor` and the two `LIB_NUDGE_*` pools are
+  deleted — the library only draws the nudge on its ≥1100px dashboard, and this panel is a
+  phone's width.
+- **The موعد is a chip** (`_libCdHtml`, `.pill-cd`): a dark capsule, white on the last day
+  (`.task.urgent` — `_libTickCountdowns` adds the class in place), black with a red dot when
+  late, an outline for «بلا موعد».
+- **The faces are one 24px row** (above). **The ✓ is 40px with a halo.**
+- **«رسمات»** (`.pill-fx`, `LIB_MARK_OF`): the قسم's doodle bigger and brighter, and the other
+  two house marks beside it as stickers, off the library's deployment
+  (`assets/stickers/mark/*-w.webp`). It fills the pill's physical left, which stood empty on
+  every task you only watch. `_libDimFx()` dims them (`.fxdim`) under a name long enough to
+  reach them; it runs a frame after each render, because on the opening render the panel has
+  no box yet.
+- **NOT mirrored, on purpose:** «تذكرة» and the other decorations (choices in the library's
+  الإعدادات — maqr has none), the task wheel, the folding head.
+**As of 2026-09-23 — ONE pill shape, whatever the head-count** (superseded above where they
+differ: the faces and the countdown's place). The crowd pill is
 gone (`LIB_CROWD`, `.task.crowd`, `.pill-act`). Every pill is one row: cover | words | the
 faces | the countdown — **always on the physical LEFT of the faces**, beside the button |
 the button. Only the faces change: one or two keep the portrait / level pair
@@ -4289,7 +4308,7 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
 | A player sits at a laptop with «أعمل على» and the 🌿 free-mode emoji but **no clock**, and doesn't answer a mention | `updateFreeMode` freezes the count-up under the prayer/azkar overlay by folding the elapsed ms into `totalWorkMs` and zeroing `workStartTime`, but leaves the phase at `work` — so the 4 s heartbeat kept writing `freeWorkStartTime: 0` and observers, whose only test was `freeWorkStartTime > 0`, drew the bare-🌿 fallback. An unanswered adhan leaves that overlay up for hours, so a member who was merely praying or away looked like a half-broken ghost | Publish the freeze (`users/{uid}/freePaused`) and draw the clock **stopped** at its real value (`⏸ <time>`); publish «بعيد» (`awaySince`) for a hidden tab or an open صلاة/أذكار overlay so presence answers "can they reply", not just "is the tab open". See **Player Position Sync → «بعيد» + the paused free clock** |
 | Disconnected user never leaves — others still see their avatar forever | Ending a reading session ran `onDisconnect(ref('users/{uid}')).cancel()` to disarm its own ghost-cleanup. **`cancel()` cancels the queued ops of that location AND all its children**, so it also wiped the presence handlers armed at login (`activeInGame` → false, `activeSession` → null). That user's tab close then cleared nothing, and `listenToPlayers` (which gates purely on `activeInGame === true`) kept rendering them. Only `.info/connected` re-armed it, so it self-healed only if they later had a network blip — hence "sometimes" | Arm/cancel the reading fields **individually on their own child refs** (`armReadingDisconnect` / `cancelReadingDisconnect` + `READING_DISCONNECT_FIELDS`). **Never `onDisconnect(...).cancel()` on `users/{uid}` or any other node that has child ops armed under it** |
 | Member saw «أتممت يومك», next morning the day read as a vacation | The card was judged on the local count; attendance was sent as fire-and-forget delta transactions, lost when the app closed right after (socket still reconnecting). The server never reached 3 h and a short day auto-spends a vacation | Attendance written as retryable TOTALS (`o/{loadId}`, `s/{sessId}`), kept until acked + replayed from localStorage next visit (`_dutyReplayPending`); «أحسنت!» only on acknowledged numbers. See **حضور المقر → Where a day's time comes from** |
-| «أتممت يومك» popup after cutting a forgotten session down (1 h of 3.5) — card still shows hours left | The session clock is credited LIVE, so the forgotten hours crossed three hours mid-session and queued `pendingWin`; the popup only waits for a clear screen, and the «هل عملت …فعلًا؟» correction took the hours back without un-queuing it | `updateWorkChallenge` re-judges the day when it pops `pendingWin`: under the goal (or a vacation) → drop it and un-mark `celebrated[key]`; a write still pending → wait |
+| «أتممت يومك» popup after cutting a forgotten session down (1 h of 3.5) — card still shows hours left | The session clock is credited LIVE, so the forgotten hours crossed three hours mid-session and queued `pendingWin`; the popup only waits for a clear screen, and the «هل عملت …فعلًا؟» correction took the hours back without un-queuing it | `updateWorkChallenge` re-judges the day when it pops `pendingWin`: under the goal (or a vacation) → drop it and un-mark `celebrated[key]`. **Never gate that pop on `_dutyHasPending`** — outside a session the open-time counter queues a write every second, so it is never empty and the popup never came (shipped once) |
 | Hard workers never complete their day on mobile | Attendance came from the per-tick open-time counter, which refuses suspended stretches; the session credit only landed at the very end | Inside a work phase the session's own clock is credited LIVE (`_dutySessTrack`) and locked in at the end with the confirmed value (`_dutyFinishSession`) |
 | Hats didn't jump with the avatar | `drawPlayerHats` got `rScale × _juiceScale` but not `_jumpScale`, and the jump barely moves the anchor | Pass `_jumpScale` + the squash; `player._hatKick` shoves the chain at launch and landing |
 | **Nobody on a phone can log in; the loading screen spins forever and no refresh helps** (Sep 14 → Sep 23) | `init()` was called synchronously during module evaluation. `setMobileClass → applyGraphicsBodyClass → graphicsTier()` called `isWeakDevice()` whenever `isMobile()` was true, and that read `_weakDeviceCache` — a `let` declared ~1500 lines BELOW the init call, still in its temporal dead zone → `ReferenceError`, init aborted, the loader stayed up. Only phones (or windows < 1024px) that had never picked a graphics tier hit it, so a desktop owner never saw it | `init()` is queued as a microtask (runs after the whole module evaluated); every init step is individually try/caught; a classic-script failsafe in index.html + `_bootArmRetry` offer «إعادة المحاولة». Invariant 27 |
