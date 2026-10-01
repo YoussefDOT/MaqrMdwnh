@@ -1690,9 +1690,13 @@ home, where his seeded life carries on.
   the meantime). Settings are `vars` in `wrangler.jsonc`; the key is a **secret**
   (`npx wrangler secret put OPENAI_API_KEY --name mdwnh-presence`). **Never put the key
   in a file, and never ask for it in a chat.**
-- **What he is and what he knows** live in `lemo.js` as plain text: `PERSONA` (a cheeky
-  gen-z robot, Egyptian-ish Arabic, 😭 💀 🔥 🥀 — never 🤣 🥲; never says he is an AI;
-  answers English with «يا مستعمر»; clean humour only), `KNOWLEDGE`, and `LATEST_WORKS`
+- **What he is and what he knows** live in `lemo.js` as plain text: `PERSONA` (a cheerful,
+  POLITE robot, light Egyptian-ish Arabic; jokes WITH a member, never at them; no
+  brainrot; at most one emoji and not in every reply — 😭 💀 sometimes, never 🤣 🥲;
+  **stickers a lot** (most replies end in one, often a sticker alone), for brothers and
+  sisters alike; never says he is an AI; asks an English speaker for Arabic, «يا مستعمر»
+  with brothers only; **with a sister: full respect, no teasing**; never makes a rude
+  sound on request — a written snort «خخخ» is also dropped by `RUDE_RE` in `parseParts`), `KNOWLEDGE`, and `LATEST_WORKS`
   (**the owner fills this in** — empty, he says management hasn't told him). The member
   list + roles and the last three days of patch notes are fetched from the live sites
   (cached 30 min); `member_details` is the one tool. The page adds the context he teases

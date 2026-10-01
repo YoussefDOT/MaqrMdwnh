@@ -30724,16 +30724,16 @@ const LEMO_FREE_AFTER_MS = 4000;    // his last word gone this long and the call
                                    // home (a tab in the background): the call no longer holds him from the rest
 const LEMO_SAY_MAX       = 170;     // characters in one bubble
 // What he says when he has arrived and the answer hasn't.
-const LEMO_WAIT_LINES = ['ثانية واحدة… 🤔', 'استنى أفكّر 😭', 'لحظة، دماغي بتحمّل ⏳', 'إممم… 💀', 'استنى استنى…'];
+const LEMO_WAIT_LINES = ['ثانية واحدة… 🤔', 'لحظة أفكّر…', 'لحظة، دماغي بتحمّل ⏳', 'إممم…', 'لحظة من فضلك…'];
 // What he says when the relay answers with an error code instead of words.
 const LEMO_ERR_LINES = {
-    budget: 'مفيش ميزانية كفاية عشان أرد 😭 قولوا للأخ يوسف يصلّح الموضوع',
-    nokey:  'دماغي مش متركّب لسه 💀 قولوا للأخ يوسف يصلّح الموضوع',
+    budget: 'مفيش ميزانية كفاية عشان أرد، قولوا للأخ يوسف يصلّح الموضوع',
+    nokey:  'دماغي مش متركّب لسه، قولوا للأخ يوسف يصلّح الموضوع',
     tired:  'خلصت طاقتي النهارده 😴 كلّموني بكرة',
-    you:    'كفاية أسئلة منك النهارده 😭 سيب غيرك يسأل',
-    busy:   'واحد واحد يا جماعة 😭',
-    wait:   'استنى شوية 😭 لسه مخلّص كلام معاك',
-    err:    'دماغي هنّجت 💀 جرّب تاني كمان شوية',
+    you:    'وصلنا لحدّ أسئلة النهارده 😴 نكمّل بكرة إن شاء الله',
+    busy:   'سؤال واحد في المرة يا جماعة، لحظة',
+    wait:   'لحظة بس، لسه مخلّص كلامي',
+    err:    'دماغي هنّجت، نجرّب تاني كمان شوية',
 };
 
 // Asleep: the lobby doc says so — or he dozed off on his own (the timeline's rare
