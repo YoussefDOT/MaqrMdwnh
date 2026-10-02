@@ -44946,22 +44946,6 @@ function _dmFxpSend(id) {
 // copy, replay the effect). ONE element, moved from row to row (a child of the row it
 // is on, so it scrolls with it and the row's :hover covers it). A phone has no hover:
 // it taps the bubble, as before.
-// The message whose band holds this screen y (null in a gap, or on a day line). The
-// bar's own row is asked first — the usual case, one rect; else a binary search (the
-// list's children are in order, top to bottom).
-function _dmRowAtY(y) {
-    const E = _dm.els, H = E.hov;
-    const inBand = (el) => { const r = el.getBoundingClientRect(); return y < r.top ? -1 : y > r.bottom ? 1 : 0; };
-    if (H && H.parentNode && H.parentNode.parentNode === E.msgs && inBand(H.parentNode) === 0) return H.parentNode;
-    const kids = E.msgs.children;
-    let lo = 0, hi = kids.length - 1;
-    while (lo <= hi) {
-        const mid = (lo + hi) >> 1, c = inBand(kids[mid]);
-        if (c === 0) return kids[mid].classList.contains('dm-msg') ? kids[mid] : null;
-        if (c < 0) hi = mid - 1; else lo = mid + 1;
-    }
-    return null;
-}
 function _dmHov(row, force) {
     const E = _dm.els, H = E && E.hov;
     if (!H) return;
@@ -45195,14 +45179,19 @@ function setupDmUI() {
     // ── The quick-actions bar: a mouse over a message (see _dmHov) ──
     const hov = E.hov = document.createElement('div');
     hov.className = 'dm-hov';
-    // Its ground is the message's whole BAND, edge to edge of the list — a row is only
-    // as wide as its bubble, and a pointer that drifted off the bubble sideways used to
-    // lose the bar. So: the row under the pointer, else the row at the pointer's height.
-    // It changes only by going up or down to another message (a gap keeps the last one).
+    // It APPEARS only when the pointer is on a message itself. Once up, it STAYS while
+    // the pointer is anywhere at that message's height, edge to edge of the list — a
+    // row is only as wide as its bubble, and a pointer that drifted off it sideways
+    // used to lose the bar. It goes when the pointer leaves that band (up or down), or
+    // moves onto another message (then it is that one's).
     E.msgs.addEventListener('pointermove', (e) => {
         if (e.pointerType !== 'mouse' || isMobile() || !e.target.closest) return;
-        const row = e.target.closest('.dm-msg') || _dmRowAtY(e.clientY);
-        if (row) _dmHov(row);
+        const row = e.target.closest('.dm-msg');
+        if (row) { _dmHov(row); return; }
+        const cur = hov.parentNode;
+        if (!cur || !cur.getBoundingClientRect) return;
+        const r = cur.getBoundingClientRect();
+        if (e.clientY < r.top - 3 || e.clientY > r.bottom + 3) _dmHov(null);
     });
     E.msgs.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') _dmHov(null); });
     hov.addEventListener('mousedown', (e) => e.preventDefault());       // the caret stays in the text box

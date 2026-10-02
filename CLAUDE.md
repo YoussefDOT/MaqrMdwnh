@@ -2500,13 +2500,13 @@ Both ride the **message record itself** — no new node, no new listener, no ext
   message brings a small bar onto its top corner — three quick reactions
   (`_dmRxQuick().slice(0, 3)`), «رمز آخر», «رد», and «⋯» (the menu above). **ONE element,
   moved from row to row** (`pointermove` on the list, `pointerType === 'mouse'`): it is a
-  CHILD of the row it is on, so it scrolls with it and nothing is repositioned. **Its
-  hover ground is the message's whole BAND, edge to edge of the list** — a row is only
-  as wide as its bubble, so a pointer that drifted sideways off the bubble used to lose
-  the bar. The handler takes the row under the pointer, else the row at the pointer's
-  height (`_dmRowAtY`: the bar's own row first, then a binary search of the list's
-  children); a gap between rows keeps the last one, so it changes only by going up or
-  down. A
+  CHILD of the row it is on, so it scrolls with it and nothing is repositioned. **It
+  APPEARS only when the pointer is on a message itself, and STAYS while the pointer is
+  anywhere at that message's height, edge to edge of the list** (owner's rule) — a row
+  is only as wide as its bubble, so a pointer that drifted sideways off the bubble used
+  to lose the bar. The handler: over a row → that row's bar; over nothing → one rect
+  read of the bar's own row, and the bar goes only once the pointer's y has left it.
+  Empty space at ANOTHER message's height never summons that message's bar. A
   rebuild of the list or of that row has to put it away / move it (`_dmRenderThread`,
   `_dmRepaintMsg`). Its click `stopPropagation`s (it is not a press on the message). It
   replaced the per-row `.dm-more` button — don't bring that back.
