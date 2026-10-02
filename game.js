@@ -1199,7 +1199,24 @@ function _newsRender(days) {
             const tx = document.createElement('span');
             tx.className = 'news-text';
             tx.textContent = String(it.text);
-            li.append(chip, tx);
+            // An item may carry a picture of its own (`img`, same path rule as a
+            // feature's): it sits UNDER the line, with no heading.
+            if (typeof it.img === 'string' && /^Art\/News\/[\w.\-\/]+\.(?:webp|png|jpe?g)$/.test(it.img) && !it.img.includes('..')) {
+                const row = document.createElement('div');
+                row.className = 'news-item-row';
+                row.append(chip, tx);
+                const fig = document.createElement('figure');
+                fig.className = 'news-shot';
+                const img = document.createElement('img');
+                img.loading = 'lazy';
+                img.decoding = 'async';
+                img.alt = '';
+                img.src = it.img;
+                img.addEventListener('error', () => fig.remove(), { once: true });
+                fig.appendChild(img);
+                li.className = 'has-shot';
+                li.append(row, fig);
+            } else li.append(chip, tx);
             ul.appendChild(li);
         }
         sec.appendChild(ul);

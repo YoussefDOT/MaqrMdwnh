@@ -13057,6 +13057,10 @@ body.power-save .pip-blackout {
 }
 .news-feat.alt .news-shot::before { left: 26%; transform: rotate(3deg); background: rgba(59, 185, 171, 0.72); }
 .news-shot img { display: block; width: 100%; height: auto; border-radius: 3px; background: #1b1b1e; }
+/* لقطة تحت بند من البنود (بلا عنوان): السطر كما هو، والصورة تحته في الوسط */
+.news-items li.has-shot { display: block; }
+.news-item-row { display: flex; align-items: flex-start; gap: 8px; }
+.news-items .news-shot { width: min(calc(100% - 12px), 340px); margin: 18px auto 12px; }
 body.is-mobile .news-modal { padding: 0; align-items: flex-end; }
 body.is-mobile .news-card {
     width: 100%;

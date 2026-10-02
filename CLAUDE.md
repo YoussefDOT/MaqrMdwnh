@@ -4945,7 +4945,9 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
   made, not hand-captured: `node tools/shots.mjs` drives a headless Chrome as two سراج
   ghosts and stages each feature through the dev-only `window.__mq.x` handle, and
   `python3 tools/shots.py` turns the PNGs into the WebPs. It talks to the LIVE lobby.
-  `features` work on an ordinary day too (no `version` needed): 2026-10-03 carries one,
+  **An ordinary item can carry a picture too**: `items: [{ tag, text, img }]` puts the
+  screenshot UNDER that line, with no heading (`li.has-shot`, same path rule) — the
+  owner didn't want a feature heading on a one-picture day. 2026-10-03 carries one,
   `Art/News/2026-10-03/throw.webp`, taken with `ONLY=throw node tools/shots.mjs` (a ghost
   really thrown by ليمو, three timed frames) and cropped by hand so that no real member
   is in the picture — **check a screenshot for real members' avatars before shipping it**.
