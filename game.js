@@ -6265,7 +6265,8 @@ function localOffGround() {
 function canSit() {
     return !localOffGround() && !sessionBlocksInteraction()
         && !gameState.isLockedIn && !gameState.anim.active
-        && !gameState.isSitting && !gameState.sitAnim.active;
+        && !gameState.isSitting && !gameState.sitAnim.active
+        && !lordHolds();     // أمر القائد: a seat (the meeting table's opens an overlay) is a way out
 }
 // True while sitting on the BIG sofa specifically (Workspace_0009) — this is the
 // one that gets the work-session-style relax ambience (dark vignette, slowed wind/
@@ -10386,6 +10387,9 @@ function formatRaceTime(ms) {
 }
 
 function showLaptopModeSelect() {
+    // أمر القائد: ليمو is on his way to throw them — a session of their own, started
+    // now, would have no lock on it. He starts it.
+    if (lordHolds()) { _libToast('ليمو قادم ليرميك إلى العمل بأمر القائد'); return; }
     // Mobile ghost-click guard: the tap that opens this modal is followed ~300ms
     // later by a synthesized mouse `click` at the same screen point. If a modal
     // button happens to sit under that point it fires immediately (free mode /
@@ -11652,6 +11656,17 @@ function handleMovement() {
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)
         || readingEndCardOpen()) {
         player._vx = 0; player._vy = 0;
+        return;
+    }
+    // أمر القائد: held where they stand until ليمو has thrown them. Stops the walk
+    // cycle too (the guard above only zeroes the velocity).
+    if (lordFreezes(player)) {
+        player._vx = 0; player._vy = 0;
+        if (player.isMoving) {
+            player.isMoving = false; player.isSprinting = false;
+            sendPositionWS(player.x, player.y, true);
+            updatePlayerPosition(player.x, player.y);
+        }
         return;
     }
     let dx = 0, dy = 0;
@@ -32290,6 +32305,14 @@ function _lordOnReply(uid, k, r, w) {
 }
 
 // ── the member's side ──
+// The order holds me from the moment I hear it until it ends (thrown, or given up:
+// LORD_SUMMON_MAX_MS + LORD_WALK_MAX_MS at the very most) — no walking, jumping or
+// sitting away from him. Never on the stairs or mid-jump: he can't throw from there,
+// so freezing there would only guarantee the order fails; they freeze on stepping off.
+function lordHolds() { return !!_lord.mine; }
+function lordFreezes(player) {
+    return !!_lord.mine && !player._air && !isOnStairs(player.x, player.y);
+}
 // My report to the leader (and, for r:1, to every screen).
 function _lordReply(k, r, w) {
     const m = { t: 'lordr', uid: gameState.userId, k, r };
@@ -32308,7 +32331,7 @@ function _lordAccept(k) {
     else if (!_lthMemberOk()) why = 'no';
     if (why) { _lordReply(k, 0, why); return; }
     _lord.mine = { k, at: Date.now(), st: 'summon', tryAt: 0, busy: false };
-    _libToast('أمر من القائد: ليمو قادم ليرميك إلى العمل', 4200);
+    _libToast('أمر من القائد: قف مكانك، ليمو قادم ليرميك إلى العمل', 4200);
     _lordReply(k, 4);         // at once: he may be with someone, and the leader's client is counting
     _lordArm();
     _lordMineStep(Date.now());
@@ -32328,9 +32351,11 @@ function _lordMineStep(now) {
         _lordReply(m.k, r, w);
     };
     if (m.st === 'summon') {
+        // First, and whatever the summon is doing: the member is FROZEN while this is
+        // on, so a call that never settles must not hold them for good.
+        if (now - m.at > LORD_SUMMON_MAX_MS) { end(0, 'busy'); return; }
         if (m.busy) return;
         if (!_lthMemberOk()) { end(0, (gameState.pomodoro.active || gameState.freeMode.active) ? 'work' : 'no'); return; }
-        if (now - m.at > LORD_SUMMON_MAX_MS) { end(0, 'busy'); return; }
         // A question of my own still in the air: its answer must not land on the order.
         if (now < m.tryAt || lemoBusyFor() || (ai.mine && !ai.mine.done && now - ai.mine.at < LEMO_ANS_TIMEOUT_MS)) return;
         m.tryAt = now + 900; m.busy = true;
@@ -36057,6 +36082,7 @@ function canJump() {
     if (gameState.isSitting || gameState.sitAnim.active) return false;
     if (gameState.reading && gameState.reading.active) return false;
     if (readingEndCardOpen()) return false;
+    if (lordHolds()) return false;      // أمر القائد: no hopping away from him
     if (document.querySelector('.modal-overlay.active')) return false;
     return true;
 }

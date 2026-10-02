@@ -1668,9 +1668,17 @@ Code is the `أمر القائد` block right after `updateRemoteThrows`.
 - **Both sides tick on a 400 ms `setInterval` that exists only while an order is live**
   (`_lordArm`), not the frame loop: a leader who switched tabs must not stall the queue.
   The throw itself still needs the member's tab visible (`document.hidden` → `away`).
+- **The member is FROZEN from the moment their client hears the order until it ends**
+  (`lordHolds()` = `_lord.mine`): `handleMovement` holds them (`lordFreezes` — and stops
+  the walk cycle), `canJump` and `canSit` refuse, and `showLaptopModeSelect` refuses (a
+  session of their own would carry no lock). Owner's call: no dodging. **Not on the
+  stairs or mid-jump** — he can't throw from there, so freezing there would only
+  guarantee a failed order; they freeze on stepping off. The hold can't outlive
+  `LORD_SUMMON_MAX_MS` + `LORD_WALK_MAX_MS`: the summon's time limit is checked BEFORE
+  its "in flight" flag, so a transaction that never settles can't hold them for good.
 - **Not thrown**: already in a session, tab hidden, ليمو hidden in their settings, no
-  free laptop, reading. A member can still dodge by running for a minute or sitting
-  behind an overlay — the leader is told «أفلت … من ليمو».
+  free laptop, reading. What is left of dodging: keeping a full-screen panel open for
+  `LORD_ARM_MAX_MS`, or pacing the stairs — the leader is told «أفلت … من ليمو».
 - **The lock** (`_lordLockSession`, `lordLockLeftMs`, `lordLockRefuse`): set when the
   forced throw's `startFreeMode` succeeds (`_lth.cur.forced`), kept in localStorage
   (`LORD_LOCK_KEY`, `{u, t}`) so a reload — which restores the session — doesn't lift
