@@ -123,7 +123,7 @@ Grep anchors for the major systems (all verified to exist):
 | القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump`, `jumpTapWhileMoving`, `JUMP_FLICK_`, `jumpMaybeHint` |
 | نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
-| ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL`; review log: `_lemoAudit`, `_lemoAuditRead`, `auditAllowed`, `AUDIT_PREFIX`, `tools/lemo_log.mjs` |
+| ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`, `BOOKS_TOOL`, `booksOf`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL`; review log: `_lemoAudit`, `_lemoAuditRead`, `auditAllowed`, `AUDIT_PREFIX`, `tools/lemo_log.mjs` |
 | الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI`; reply + reactions: `_dmSetReply`, `_dmQuoteNode`, `_dmJumpTo`, `_dmReact`, `_dmPaintRx`, `_dmAct`, `_dmRxQuick`, `DM_RX_LIST`; edit + delete: `_dmStartEdit`, `_dmCommitEdit`, `_dmDelete`, `_dmApplyDeleted`, `_dmPeerRowPatch`; picker: `_dmEmojiPanel`, `_dmPop`; effects: `DM_FX`, `_dmPlayFx`, `_dmScreenFx`, `_dmFxUnread`; their picker: `_dmFxpOpen`, `_dmFxpTrack`, `_dmFxpHot`, `_dmFxpSend`; hover bar: `_dmHov`; ليمو's tips: `DM_TIPS`, `_dmPaintTip`; also `_dmFillText`, `_dmPaintDown`, `_dmFocusInput` |
 | رموز آبل التعبيرية (صور) | `_emoImgs`, `emoLoadData`, `_emoActivate`, `_emoTextNode`, `_emoParse`, `_emoDrawSlots`, `_emoKey`, `emoIsOne`, `emoRecent`, `emoNoteUsed`, `EMO_IMG_KEY`, `tools/bake_emoji.mjs` |
 | التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `_peekBody`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
@@ -1633,7 +1633,7 @@ home, where his seeded life carries on.
   a member gets there (`_lemoStairBob`, a function of distance — no state).
   **The timeline never uses any of this** (it must stay pure).
 - **His words ride the RELAY, never Firebase, and the page never sees the key.** The page
-  sends `{t:'lemoq', f, k, n, g, q, slug, near, tm, hj, st, on, men?, tk?}` (no `uid` — an old
+  sends `{t:'lemoq', f, k, n, g, q, slug, near, tm, hj, st, on, men?, tk?, bk?}` (no `uid` — an old
   client drops it); the lobby's Durable Object does NOT forward it: it asks the model
   (`presence-server/src/lemo.js`) and broadcasts `{t:'lemot', to, k}` (he is thinking —
   that is the lock) and `{t:'lemoa', to, k, p:[{m}|{s}] | e}` to everyone, the asker
@@ -1681,6 +1681,18 @@ home, where his seeded life carries on.
   task. The tasks are `tk: [{ t, d }]` from the page: `_libOpenMine()`'s first three
   (title + «غدًا»-style موعد), never the leader's, and only what the tasks panel has
   already fetched — no new read. He is told to use all of it only when needed.
+- **كتب السائل — his `my_books` tool** (`BOOKS_TOOL`, `booksOf`, `_lemoBooksReady`): the
+  relay can't read Firebase, so the PAGE sends the asker's reading shelf with the
+  question — `bk: [{ n, m, l? }]` (name, minutes read, `l: 1` = the book read last),
+  newest first, twelve at most. The relay keeps it **out of the prompt**: the context
+  only says how many books there are, and the list is handed over only if the model
+  calls `my_books` (asked about their books / reading) — a question about anything else
+  costs no extra tokens. The page's read is ONE `get()` of `dashboards/{uid}/reading`,
+  the first time that member talks to him (it fills the same `gameState._readingBooks`
+  the reading panel uses), raced against `LEMO_BOOKS_WAIT_MS` (1.5 s) so a slow read
+  never holds the question — it then goes without `bk`, and with no `bk` (an older page
+  too) the tool is not offered at all. `books: null` (not sent) ≠ `[]` (empty shelf).
+  Only the ASKER's shelf — not a mentioned member's.
 - **No long dash in his speech** («—» / «–»): a `PERSONA` rule, and `parseParts` turns
   any that slips through into «،».
 - **What he remembers** — the relay's `lemoLog` (`LOG_KEY`): his last `LEMO_HISTORY` (10)
@@ -1722,7 +1734,7 @@ home, where his seeded life carries on.
   sound on request — a written snort «خخخ» is also dropped by `RUDE_RE` in `parseParts`), `KNOWLEDGE`, and `LATEST_WORKS`
   (**the owner fills this in** — empty, he says management hasn't told him). The member
   list + roles and the last three days of patch notes are fetched from the live sites
-  (cached 30 min); `member_details` is the one tool. The page adds the context he teases
+  (cached 30 min); `member_details` and `my_books` (the asker's reading shelf) are the two tools. The page adds the context he teases
   with: who is asking and their gender (the lobby's), who is near, the local + Hijri
   date, and how long they have worked today.
 - **Pressing him also fans out his last five lines** (`lemoPress` → `peekOpen`), exactly

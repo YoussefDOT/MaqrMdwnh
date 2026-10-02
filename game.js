@@ -30942,6 +30942,20 @@ function _lemoSendQuestion(k, q, men) {
             }).filter(x => x.t);
         }
     } catch (_) {}
+    // The member's reading shelf (name, minutes read, the one read last), newest first.
+    // The relay keeps it out of what he reads and hands it over only if he asks for it
+    // (his `my_books` tool). Sent only once the shelf is known — see _lemoBooksReady.
+    let bk = null;
+    try {
+        if (gameState._readingBooks) {
+            const last = gameState._readingLastBook;
+            bk = _readingBookList().slice(0, 12).map(b => {
+                const x = { n: _chatClean(String(b.name || '')).slice(0, 60), m: Math.round((b.totalMs || 0) / 60000) };
+                if (last && b.name === last) x.l = 1;
+                return x;
+            }).filter(x => x.n);
+        }
+    } catch (_) {}
     const rec = MDWNH_ROSTER.byDiscord[String(gameState.userId)];
     const msg = {
         t: 'lemoq', f: gameState.userId, k,
@@ -30957,12 +30971,34 @@ function _lemoSendQuestion(k, q, men) {
     // Who the question points at (see _chatSend). Left out when there is nobody.
     if (men && men.length) msg.men = men;
     if (tk.length) msg.tk = tk;
+    if (bk) msg.bk = bk;
     try { ws.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
+}
+
+// The reading shelf for his `my_books` tool: ONE small get(), the first time this
+// member talks to him — the reading panel fills the same cache, and the reading module
+// keeps it current after that. Bounded: a slow read must never hold his question (the
+// question then goes without the shelf).
+const LEMO_BOOKS_WAIT_MS = 1500;
+let _lemoBooksP = null;
+function _lemoBooksReady() {
+    if (gameState._readingBooks || !gameState.userId) return Promise.resolve();
+    if (!_lemoBooksP) {
+        _lemoBooksP = get(ref(database, `dashboards/${gameState.userId}/reading`)).then(snap => {
+            const data = snap.exists() ? (snap.val() || {}) : {};
+            if (!gameState._readingBooks) {
+                gameState._readingBooks = data.books || {};
+                gameState._readingLastBook = data.lastBook || null;
+            }
+        }).catch(() => { _lemoBooksP = null; });
+    }
+    return _withTimeout(_lemoBooksP, LEMO_BOOKS_WAIT_MS).catch(() => {});
 }
 
 // Called by _chatSend once the message (with its question) is on its way.
 function lemoAsk(q, men) {
-    lemoSummon().then(r => {
+    const shelf = _lemoBooksReady();   // in step with the summon, not after it
+    lemoSummon().then(async r => {
         if (r === 'sleep') { _libToast('ليمو نام قبل أن يسمعك — أيقظه أولًا'); return; }
         if (r === 'busy')  { _libToast('ليمو مشغول الآن مع غيرك'); return; }
         if (r !== 'ok')    { _libToast('لم يصل النداء إلى ليمو، حاول مجددًا'); return; }
@@ -30972,6 +31008,7 @@ function lemoAsk(q, men) {
         // His own "thinking" state starts here, so the wait line can show even if
         // the relay's `lemot` is a moment behind.
         _lemo.ai.busy = { to: gameState.userId, k, at: Date.now() };
+        await shelf;
         if (!_lemoSendQuestion(k, q, men)) {
             _lemo.ai.busy = null;
             _lemo.ai.mine.done = true;

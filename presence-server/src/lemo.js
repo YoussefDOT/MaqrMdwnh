@@ -42,6 +42,7 @@ const MAX_Q_LEN = 140;
 const MAX_CHAT_LEN = 120;      // one overheard line of the room's chat
 const MAX_MENTIONS = 3;        // members a question may point at
 const MAX_DETAILS_LEN = 700;   // what he is told about each of them
+const MAX_BOOKS = 12;          // the asker's reading shelf, as the page listed it
 // The owner's review log (index.js → _lemoAudit): how much of what he read is kept.
 const AUDIT_TURNS = 4;         // turns before the question (overheard chat, his last exchanges)
 const AUDIT_TURN_LEN = 600;
@@ -319,6 +320,27 @@ const TOOLS = [{
     },
 }];
 
+// The asker's own reading shelf (the page sends it with the question — the relay can
+// not read Firebase). It is kept OUT of what he reads and handed over only if he asks
+// for it, so a question about anything else costs nothing extra.
+const BOOKS_TOOL = {
+    type: 'function',
+    function: {
+        name: 'my_books',
+        description: 'كتب من يكلّمك الآن على رف القراءة في المقر، ومدة قراءته لكل كتاب. استعملها فقط إذا سُئلت عن كتبه أو قراءته، أو احتجت اسم كتاب يقرؤه.',
+        parameters: { type: 'object', properties: {} },
+    },
+};
+const mins = (m) => (m >= 60 ? `${Math.floor(m / 60)} ساعة و${m % 60} دقيقة` : `${m} دقيقة`);
+function booksOf(q) {
+    if (!Array.isArray(q.books)) return 'رف قراءته غير متاح الآن.';
+    if (!q.books.length) return 'رف قراءته فارغ: لم يُضف أي كتاب بعد.';
+    return JSON.stringify(q.books.map(b => ({
+        الكتاب: b.n, 'مدة القراءة': b.m > 0 ? mins(b.m) : 'لم يبدأ قراءته بعد',
+        'آخر ما قرأ': b.last || undefined,
+    })));
+}
+
 // Parameters a model may not accept are dropped the first time it says so, and
 // remembered for the life of the isolate.
 // `reasoning_effort: 'none'` is not a nicety: gpt-6-luna REFUSES function tools on this
@@ -331,7 +353,7 @@ class LemoError extends Error {
     constructor(code, detail) { super(detail || code); this.code = code; }
 }
 
-async function callModel(env, messages, withTools) {
+async function callModel(env, messages, tools) {
     const body = {
         model: env.LEMO_MODEL || 'gpt-6-luna',
         messages,
@@ -339,7 +361,7 @@ async function callModel(env, messages, withTools) {
     };
     if (!_drop.reasoning_effort) body.reasoning_effort = 'none';
     if (!_drop.response_format) body.response_format = { type: 'json_object' };
-    if (withTools && !_drop.tools) body.tools = TOOLS;
+    if (tools && !_drop.tools) body.tools = tools;
 
     for (let attempt = 0; attempt < 3; attempt++) {
         const ctl = new AbortController();
@@ -434,20 +456,30 @@ export async function askLemo(env, q, log) {
         tokensOut += u.completion_tokens || 0;
     };
 
-    let data = await callModel(env, messages, true);
+    // His shelf is offered only when the page sent one (an older page sends none).
+    let data = await callModel(env, messages, Array.isArray(q.books) ? [...TOOLS, BOOKS_TOOL] : TOOLS);
     count(data);
     let msg = data.choices && data.choices[0] && data.choices[0].message;
-    // One round of the member lookup, at most.
+    // One round of lookups, at most.
     if (msg && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
-        messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
-        for (const tc of msg.tool_calls.slice(0, 2)) {
-            let name = '';
-            try { name = JSON.parse(tc.function.arguments || '{}').name || ''; } catch (_) {}
-            const details = memberDetails(know, name);
-            seen.tools.push({ n: clean(name, 40), d: details.slice(0, MAX_DETAILS_LEN) });
+        // Only the calls that get an answer are echoed back: the API refuses a
+        // tool call left without its result.
+        const calls = msg.tool_calls.slice(0, 2);
+        messages.push({ role: 'assistant', content: msg.content || '', tool_calls: calls });
+        for (const tc of calls) {
+            let details;
+            if (tc.function && tc.function.name === 'my_books') {
+                details = booksOf(q);
+                seen.tools.push({ n: 'my_books', d: details.slice(0, MAX_DETAILS_LEN) });
+            } else {
+                let name = '';
+                try { name = JSON.parse(tc.function.arguments || '{}').name || ''; } catch (_) {}
+                details = memberDetails(know, name);
+                seen.tools.push({ n: clean(name, 40), d: details.slice(0, MAX_DETAILS_LEN) });
+            }
             messages.push({ role: 'tool', tool_call_id: tc.id, content: details });
         }
-        data = await callModel(env, messages, false);
+        data = await callModel(env, messages, null);
         count(data);
         msg = data.choices && data.choices[0] && data.choices[0].message;
     }
@@ -484,6 +516,7 @@ export async function lemoMessages(env, q, log) {
         q.state ? `حالته الآن: ${q.state}` : '',
         q.count > 0 ? `عدد رسائله إليك في آخر ١٠ دقائق: ${q.count} (وهذه منها)` : '',
         q.tasks && q.tasks.length ? 'مهامه المفتوحة، الأقرب موعدًا أولًا (لا تذكرها إلا عند الحاجة): ' + q.tasks.map(x => `«${x.t}» (${x.d})`).join('؛ ') : '',
+        Array.isArray(q.books) ? (q.books.length ? `عدد الكتب على رف قراءته في المقر: ${q.books.length} — أسماؤها ومدة قراءتها عبر أداة my_books (لا تستعملها إلا إذا سُئلت عن كتبه أو قراءته)` : 'رف قراءته في المقر فارغ') : '',
         `حوله في المكان: ${q.near.length ? q.near.join('، ') : 'لا أحد قريب'}`,
         Number.isFinite(q.online) ? `عدد الموجودين في المقر الآن: ${q.online}` : '',
         men.length ? '[أعضاء أشار إليهم في رسالته — «@الاسم» يعني العضو نفسه]\n' + men.join('\n') : '',
@@ -532,6 +565,12 @@ export function cleanQuestion(raw) {
             .filter(x => x && typeof x === 'object')
             .map(x => ({ t: clean(x.t, 60), d: clean(x.d, 24) }))
             .filter(x => x.t),
+        // His reading shelf (name, minutes read, the one he read last), newest first.
+        // null = the page sent none, which is not the same as an empty shelf.
+        books: Array.isArray(raw.bk) ? raw.bk.slice(0, MAX_BOOKS)
+            .filter(x => x && typeof x === 'object')
+            .map(x => ({ n: clean(x.n, 60), m: Math.max(0, Math.min(600000, Math.round(Number(x.m)) || 0)), last: x.l === 1 }))
+            .filter(x => x.n) : null,
         count: 0,       // how often they spoke to him lately — set by the room (index.js)
     };
 }

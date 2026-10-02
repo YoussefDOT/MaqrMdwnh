@@ -108,7 +108,7 @@ function card(r) {
     const men = Array.isArray(r.men) && r.men.length
         ? `<details><summary>أعضاء أشار إليهم (${r.men.length}) — ما قيل لليمو عنهم</summary>${r.men.map(m => `<pre>${esc(m)}</pre>`).join('')}</details>` : '';
     const tools = Array.isArray(r.tools) && r.tools.length
-        ? `<details><summary>بحث ليمو في دليل الفريق (${r.tools.length})</summary>${r.tools.map(t => `<pre>${esc(t.n)} ← ${esc(t.d)}</pre>`).join('')}</details>` : '';
+        ? `<details><summary>ما طلبه ليمو بأدواته (${r.tools.length})</summary>${r.tools.map(t => `<pre>${esc(t.n)} ← ${esc(t.d)}</pre>`).join('')}</details>` : '';
     const hist = Array.isArray(r.hist) && r.hist.length
         ? `<details><summary>ما قرأه قبل السؤال (${r.hist.length})</summary>${r.hist.map(turnHtml).join('')}</details>` : '';
     const raw = r.raw ? `<details><summary>نص النموذج قبل التنظيف</summary><pre>${esc(r.raw)}</pre></details>` : '';
