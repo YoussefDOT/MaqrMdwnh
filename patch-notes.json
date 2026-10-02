@@ -2,6 +2,16 @@
   "_readme": "نشرة الأخبار — newest day FIRST. One entry per day; add a new day at the top on every push, never edit or remove old days. tag: new | fix | better.",
   "days": [
     {
+      "date": "2026-10-02",
+      "title": "ليمو يستعيد مشاكسته",
+      "items": [
+        {
+          "tag": "better",
+          "text": "ليمو عاد إلى مشاكسته وخفة دمه التي عرفتموها، لكن بأدب: يمازحك مزاح أصحاب دون تجريح، ويحترم الجميع، ويرد بملصق حين يناسب الكلام."
+        }
+      ]
+    },
+    {
       "date": "2026-10-01",
       "version": "١.٥",
       "title": "مقر ١.٥ — المقر صار يردّ عليك",

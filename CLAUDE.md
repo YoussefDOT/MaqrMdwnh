@@ -1690,9 +1690,11 @@ home, where his seeded life carries on.
   the meantime). Settings are `vars` in `wrangler.jsonc`; the key is a **secret**
   (`npx wrangler secret put OPENAI_API_KEY --name mdwnh-presence`). **Never put the key
   in a file, and never ask for it in a chat.**
-- **What he is and what he knows** live in `lemo.js` as plain text: `PERSONA` (a cheerful,
-  POLITE robot, light Egyptian-ish Arabic; jokes WITH a member, never at them; no
-  brainrot; at most one emoji and not in every reply — 😭 💀 sometimes, never 🤣 🥲;
+- **What he is and what he knows** live in `lemo.js` as plain text: `PERSONA` (the owner's 50/50
+  blend of the first, cheeky Lemo and the polite one: a mischievous gen-z robot with a
+  good heart, light Egyptian-ish Arabic — he teases a member like a friend and boasts,
+  but never insults or belittles, and still answers the question; a pinch of brainrot,
+  not in every reply; usually one emoji — 😭 💀 🔥 🥀 varied, never 🤣 🥲;
   **stickers whenever one fits the context** (after the line, or alone — never forced,
   not in every reply), for brothers and sisters alike; never says he is an AI; asks an English speaker for Arabic, «يا مستعمر»
   with brothers only; **with a sister: full respect, no teasing**; never makes a rude
