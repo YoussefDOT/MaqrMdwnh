@@ -3536,6 +3536,13 @@ body.is-mobile:has(#focus-sounds-panel.active) .sp-coop-tasks {
 }
 .pomo-leave-btn:hover { background: rgba(220,60,60,0.18); border-color: rgba(220,60,60,0.28); color: #e86e6e; }
 .pomo-leave-btn:active { transform: scale(0.96); }
+/* أمر القائد — the forced minute: it counts down and offers no exit (a class, never `disabled`). */
+.pomo-leave-btn.is-locked,
+.pomo-leave-btn.is-locked:hover {
+    background: rgba(18,18,18,0.80); border-color: rgba(232,180,80,0.30);
+    color: #d9b36a; cursor: not-allowed; font-variant-numeric: tabular-nums;
+}
+.pomo-leave-btn.is-locked:active { transform: none; }
 
 /* ── End-break button — only during break, not during a minigame ── */
 .end-break-btn {

@@ -11431,6 +11431,9 @@ function onPresenceMessage(data) {
     if (msg.t === 'jmp') { receiveJump(player, msg); return; }
     // رمية ليمو — he is throwing this member into a session (start / lock / called off).
     if (msg.t === 'lth') { receiveLemoThrow(player, msg); return; }
+    // أمر القائد — the leader told him to throw someone / that member's report back.
+    if (msg.t === 'lord') { onLordOrder(player, msg); return; }
+    if (msg.t === 'lordr') { onLordReply(player, msg); return; }
     // A laptop is taking this member: the line, on this screen too.
     if (msg.t === 'kid') { receiveKidnap(player, msg); return; }
     // isMoving must update before pushing the sample — interpolateRemoteFromBuffer
@@ -16978,7 +16981,7 @@ if (/^(localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.)/.test(location.hostname))
         // مقر ١.٥ — a getter, not a value: these are declared further down the module,
         // so reading them here at evaluation time would be a temporal-dead-zone throw.
         get x() {
-            return { _lemo, _lemoNav, _lemoNavBuild, _lemoNavPath, _lemoApplyDoc, onLemoRelay, lemoPress, lemoPlayThrow, lemoThrowBegin, _lth,
+            return { _lemo, _lemoNav, _lemoNavBuild, _lemoNavPath, _lemoApplyDoc, onLemoRelay, lemoPress, lemoPlayThrow, lemoThrowBegin, _lth, _lord, lemoOrderThrow, _lordParse,
                      _dm, dmOpen, dmClose, _dmPickFile, _dmSubmit, _peek, peekOpen, _rx, reactNow,
                      openChatBox, closeChatBox, _chatUi,
                      isOnStairs, checkCollision, _lemoRound, LEMO_SPOTS, LEMO_ROUTE, LEMO_MEET_SPOTS,
@@ -20716,12 +20719,15 @@ function setupPomoLeaveBtn() {
         e.stopPropagation();
         // Shared test mode: Siraj host can't end session unilaterally
         if (gameState.freeMode.active && gameState.freeMode.isShared && gameState.isSirajGhost) return;
+        // أمر القائد: a session ليمو started by order can't be ended in its first minute.
+        if (lordLockRefuse()) return;
         showConfirm1();
     });
 
     document.getElementById('plc1-yes').addEventListener('click', (e) => {
         e.stopPropagation();
         resetToBtn();
+        if (lordLockRefuse()) return;
         if (gameState.freeMode.active) {
             // Idle-protection: a long free session asks "did you really work that long?"
             // before saving, so idle browser time (and the away time a closed tab now
@@ -20771,8 +20777,12 @@ function updatePomoLeaveBtn() {
     if (!wrap || !btn) return;
 
     let newText, shouldShow;
+    let locked = false;
     if (gameState.freeMode.active) {
-        newText    = 'انهاء الجلسة';
+        // أمر القائد: the button counts the forced minute down instead of offering the exit.
+        const lockMs = lordLockLeftMs();
+        locked     = lockMs > 0;
+        newText    = locked ? `بأمر القائد · ${_chatArNum(Math.ceil(lockMs / 1000))} ث` : 'انهاء الجلسة';
         // Wait for the kidnap animation to finish (locked-in) before showing — keeps
         // it in sync with focus sounds / task box instead of popping up on select.
         shouldShow = !!(gameState.isLockedIn || gameState.freeMode.phase === 'break');
@@ -20787,6 +20797,7 @@ function updatePomoLeaveBtn() {
     if (newText !== _leaveBtnLastText) {
         btn.textContent = newText;
         _leaveBtnLastText = newText;
+        btn.classList.toggle('is-locked', locked);   // a class, never `disabled` (iOS touch leak)
     }
     if (shouldShow !== _leaveBtnLastVisible) {
         wrap.classList.toggle('leave-wrap-hidden', !shouldShow);
@@ -31218,7 +31229,9 @@ function _lemoTalkStep(c, f) {
             if (thr && _lemo.say) _lemo.say.life = LTH_STK_MS;
             if (mine) {
                 ai.myNextAt = now + LEMO_ASK_GAP_MS;
-                _lth.arm = thr ? { k: c.t0, at: now + LTH_AFTER_MS } : null;
+                // (By the leader's order he waits longer for a clear moment — see أمر القائد.)
+                _lth.arm = thr ? { k: c.t0, at: now + LTH_AFTER_MS,
+                                   max: (_lord.mine && _lord.mine.st === 'walk') ? LORD_ARM_MAX_MS : LTH_ARM_MAX_MS } : null;
             }
             say = _lemo.say;
         }
@@ -31233,7 +31246,7 @@ function _lemoTalkStep(c, f) {
     const arm = _lth.arm;
     if (arm && (!mine || arm.k !== c.t0)) _lth.arm = null;
     else if (arm && now >= arm.at) {
-        if (now - arm.at > LTH_ARM_MAX_MS || !_lthMemberOk()) _lth.arm = null;
+        if (now - arm.at > arm.max || !_lthMemberOk()) _lth.arm = null;
         else if (f && f.arrived && f.phase === 'idle' && !f.flash && lemoThrowAllowed()) { _lth.arm = null; lemoThrowBegin(); }
     }
     // The caller's client sends him home once he has had his say.
@@ -31949,7 +31962,8 @@ function lemoThrowBegin() {
         lx: Math.round(_lemo.x * 10) / 10, ly: Math.round(_lemo.y * 10) / 10,
         locked: false,
     };
-    _lth.cur = { th, lap, kid: 0 };
+    // By the leader's order (أمر القائد): the session it ends in is locked for a minute.
+    _lth.cur = { th, lap, kid: 0, forced: !!(_lord.mine && _lord.mine.st === 'walk') };
     _lthSetAct(th);
     _lthSend(th, 1);
     return true;
@@ -32032,7 +32046,7 @@ function updateLemoThrow() {
         let lap = cur.lap;
         if (lap.claimedBy && lap.claimedBy !== gameState.userId) lap = _lthFreeLaptop();
         if (lap) startFreeMode(lap.id, false);
-        if (gameState.freeMode.active) { cur.kid = 1; return; }
+        if (gameState.freeMode.active) { cur.kid = 1; if (cur.forced) _lordLockSession(); return; }
         // No laptop left to catch them: they come down where they are.
         a.active = true; a.phase = 'thrown'; a.laptop = cur.lap;
         cur.kid = 3;
@@ -32132,6 +32146,262 @@ function updateRemoteThrows() {
         }
         if (tau > th.tc + LTH_LAND_MS + 200) player._lth = null;
     }
+}
+
+/* ─── أمر القائد — the leader orders a throw ─────────────────────────────────
+   «@ليمو ارمِ @فلان @فلان إلى العمل», from نواف or a سراج ghost (adminAllowed): he goes
+   to each named member in turn and throws them — the ordinary throw — into a free
+   session they can't end for LORD_LOCK_MS.
+
+   ZERO FIREBASE of its own, and the model is never asked (so no relay change): the
+   order is read on the leader's page (_lordParse — his mention, a throw verb, at
+   least one member) and rides the relay:
+     {t:'lord',  uid:<leader>, to:<member>, k}   the leader's client, ONE member at a time
+     {t:'lordr', uid:<member>, k, r, w?}         r: 4 heard, reaching him · 1 he is on his way
+                                                 · 2 thrown · 3 it fell through · 0 can't (w = why)
+   The MEMBER's own client does the rest with what already exists: it summons him for
+   itself (lemoSummon — so every screen walks him over), hands itself the answer a
+   throw ends in (the «إلى العمل» sticker, `th`) and _lemoTalkStep arms and starts the
+   throw as ever. The leader's client only waits for the report and sends the next.
+   Both sides run on a timer, not the frame loop: a leader who switched tabs must not
+   stall the queue. A relayed order is another client's claim, like everything on the
+   relay: it is accepted only from a leader's uid, and all it can do is this. */
+const LORD_STICKER = 'إلى العمل';     // the relay's THROW_STICKER
+const LORD_MAX = 8;                   // members per order
+const LORD_LOCK_MS = 60000;           // the forced session can't be ended before this
+const LORD_ACK_MS = 7000;             // no word from the member's client by now → next
+const LORD_STEP_MAX_MS = 95000;       // …and the whole of one member, as the leader waits
+const LORD_SUMMON_MAX_MS = 25000;     // he is with someone else: the member keeps trying this long
+const LORD_WALK_MAX_MS = 62000;       // summoned, and still not thrown
+const LORD_ARM_MAX_MS = 25000;        // a forced throw waits longer for a clear moment than his own (LTH_ARM_MAX_MS)
+const LORD_LOCK_KEY = 'mdwnh_lord_lock';
+const LORD_VERB_RE = /(?:^|\s)(?:ارم|ارمي|ارمه|ارمها|ارمهم|ارموا|اقذف|اقذفهم|throw)(?=[\s،,.!؟]|$)/i;
+const _lord = { q: null, mine: null, seen: {}, timer: 0, until: 0, lockRead: false, warmAt: 0 };
+
+function _lordIsLeader(uid) {
+    uid = String(uid || '');
+    if (uid.startsWith('siraj_') || ADMIN_UIDS.has(uid)) return true;
+    const rec = MDWNH_ROSTER.byDiscord[uid];
+    return !!(rec && rec.admin);
+}
+// The message without his mention → who to throw, or null when it isn't an order.
+function _lordParse(about) {
+    const text = _fireNormName(about.filter(p => !p.u).map(p => p.t).join(' '));
+    if (!LORD_VERB_RE.test(text)) return null;
+    const seen = new Set(), list = [];
+    for (const p of about) {
+        if (!p.u || p.u === LEMO_UID || seen.has(p.u)) continue;
+        seen.add(p.u);
+        list.push({ u: p.u, n: _chatClean(p.n).slice(0, 24) || 'عضو' });
+        if (list.length >= LORD_MAX) break;
+    }
+    return list.length ? list : null;
+}
+function _lordSend(m) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try { ws.send(JSON.stringify(m)); return true; } catch (_) { return false; }
+}
+function _lordArm() {
+    if (!_lord.timer) _lord.timer = setInterval(_lordTick, 400);
+}
+function _lordStop() {
+    if (_lord.timer) { clearInterval(_lord.timer); _lord.timer = 0; }
+    _lord.q = null; _lord.mine = null;
+}
+function _lordTick() {
+    const now = Date.now();
+    _lordMineStep(now);
+    const q = _lord.q, cur = q && q.list[q.i];
+    if (cur) {
+        if (cur.u !== gameState.userId && !gameState.players[cur.u]) _lordNext(`غادر ${cur.n}`);
+        else if (q.st === 'ack' && now - q.at > LORD_ACK_MS) _lordNext(`${cur.n} لم يستجب`);
+        else if (q.st === 'go' && now - q.at > LORD_STEP_MAX_MS) _lordNext(`لم يكتمل رمي ${cur.n}`);
+    }
+    if (!_lord.q && !_lord.mine && _lord.timer) { clearInterval(_lord.timer); _lord.timer = 0; }
+}
+// The clip (21 MB decoded) is wanted on every screen that will show the throw — and
+// let go of if the throw never came.
+function _lordWarmThrow() {
+    if (document.hidden || gameState._hideLemo) return;
+    ensureLemoSheet('Throw');
+    _stkImg(LORD_STICKER);
+    const at = _lord.warmAt = Date.now();
+    setTimeout(() => {
+        if (_lord.warmAt === at && !_lemo.act && !_lth.cur && !_lth.arm && !_lord.mine) _lemoDropSheet('Throw');
+    }, LORD_STEP_MAX_MS);
+}
+
+// ── the leader's side ──
+// Called by _chatSend once the message is on its way.
+function lemoOrderThrow(list) {
+    if (!adminAllowed() || !list || !list.length || _lord.q) return false;
+    _lord.q = { k: Date.now(), list, i: -1, st: '', at: 0, ok: 0 };
+    _lordArm();
+    _lordNext('');
+    return true;
+}
+// On to the next member. `note` = what became of the last one.
+function _lordNext(note) {
+    const q = _lord.q;
+    if (!q) return;
+    const pre = note ? note + ' — ' : '';
+    for (;;) {
+        q.i++;
+        const cur = q.list[q.i];
+        if (!cur) {
+            _lord.q = null;
+            const n = q.list.length;
+            _libToast(pre + (q.ok === n ? 'نفّذ ليمو أمرك كاملًا' : `انتهى ليمو: رُمي ${_chatArNum(q.ok)} من ${_chatArNum(n)}`), 4200);
+            return;
+        }
+        const self = cur.u === gameState.userId;
+        if (!self && !gameState.players[cur.u]) continue;
+        q.st = 'ack'; q.at = Date.now();
+        const sent = _lordSend({ t: 'lord', uid: gameState.userId, to: cur.u, k: q.k });
+        if (!sent && !self) { _lord.q = null; _libToast('انقطع الاتصال — لم يصل أمرك إلى ليمو'); return; }
+        _libToast(`${pre}ليمو في طريقه إلى ${cur.n}`, 3800);
+        _lord.seen[cur.u] = { k: q.k, at: q.at };     // my own order: I don't hear it back
+        _lordWarmThrow();
+        if (self) _lordAccept(q.k);
+        return;
+    }
+}
+const _LORD_WHY = {
+    work: n => `${n} في جلسة عمل أصلًا`,
+    away: n => `${n} ليس أمام الصفحة الآن`,
+    hid:  n => `${n} أخفى ليمو من الإعدادات`,
+    full: n => `لا يوجد جهاز فارغ لـ${n}`,
+    busy: n => `ليمو مشغول، لم يصل إلى ${n}`,
+};
+function _lordOnReply(uid, k, r, w) {
+    // Every screen: he is on his way to throw this member — the sticker he raises first.
+    const seen = _lord.seen[uid];
+    if (r === 1 && uid !== gameState.userId && seen && seen.k === k && Date.now() - seen.at < LORD_STEP_MAX_MS) {
+        _lemo.ai.ans = { to: uid, k: 0, parts: [{ s: LORD_STICKER }], at: Date.now(), th: true };
+    }
+    const q = _lord.q, cur = q && q.list[q.i];
+    if (!cur || cur.u !== uid || q.k !== k) return;
+    if (r === 1 || r === 4) { q.st = 'go'; q.at = Date.now(); return; }
+    if (r === 2) { q.ok++; _lordNext(''); return; }
+    if (r === 0 && w === 'sleep') { _lord.q = null; _libToast('ليمو نائم — أيقظه أولًا من غرفة الاستراحة'); return; }
+    if (r === 0) { _lordNext((_LORD_WHY[w] || (n => `تعذّر رمي ${n}`))(cur.n)); return; }
+    _lordNext(`أفلت ${cur.n} من ليمو`);
+}
+
+// ── the member's side ──
+// My report to the leader (and, for r:1, to every screen).
+function _lordReply(k, r, w) {
+    const m = { t: 'lordr', uid: gameState.userId, k, r };
+    if (w) m.w = w;
+    _lordSend(m);
+    _lordOnReply(gameState.userId, k, r, w);      // the leader ordered HIMSELF thrown
+}
+function _lordAccept(k) {
+    if (_lord.mine) { if (_lord.mine.k !== k) _lordReply(k, 0, 'busy'); return; }
+    let why = '';
+    if (document.hidden) why = 'away';
+    else if (gameState.pomodoro.active || gameState.freeMode.active) why = 'work';
+    else if (gameState._hideLemo) why = 'hid';
+    else if (lemoIsAsleep()) why = 'sleep';
+    else if (!gameState.laptops.some(l => !l.claimedBy)) why = 'full';
+    else if (!_lthMemberOk()) why = 'no';
+    if (why) { _lordReply(k, 0, why); return; }
+    _lord.mine = { k, at: Date.now(), st: 'summon', tryAt: 0, busy: false };
+    _libToast('أمر من القائد: ليمو قادم ليرميك إلى العمل', 4200);
+    _lordReply(k, 4);         // at once: he may be with someone, and the leader's client is counting
+    _lordArm();
+    _lordMineStep(Date.now());
+}
+function _lordMineStep(now) {
+    const m = _lord.mine;
+    if (!m) return;
+    const me = gameState.userId, ai = _lemo.ai;
+    const end = (r, w) => {
+        _lord.mine = null;
+        if (r !== 2) {
+            // Nothing of the order is left hanging: no sticker due, and he goes home.
+            _lth.arm = null;
+            if (ai.ans && ai.ans.to === me && ai.ans.th) ai.ans = null;
+            if (m.st !== 'summon' && !_lemo.act && !_lth.cur) _lemoRelease();
+        }
+        _lordReply(m.k, r, w);
+    };
+    if (m.st === 'summon') {
+        if (m.busy) return;
+        if (!_lthMemberOk()) { end(0, (gameState.pomodoro.active || gameState.freeMode.active) ? 'work' : 'no'); return; }
+        if (now - m.at > LORD_SUMMON_MAX_MS) { end(0, 'busy'); return; }
+        // A question of my own still in the air: its answer must not land on the order.
+        if (now < m.tryAt || lemoBusyFor() || (ai.mine && !ai.mine.done && now - ai.mine.at < LEMO_ANS_TIMEOUT_MS)) return;
+        m.tryAt = now + 900; m.busy = true;
+        lemoSummon().then(r => {
+            if (_lord.mine !== m) return;
+            m.busy = false;
+            if (r === 'sleep') { end(0, 'sleep'); return; }
+            const c = _lemo.doc && _lemo.doc.call;
+            if (r !== 'ok' || !c || c.u !== me) return;       // he is with someone: try again
+            const t = Date.now();
+            ai.busy = null;
+            ai.mine = { k: c.t0, at: t, done: true };
+            ai.ans = { to: me, k: c.t0, parts: [{ s: LORD_STICKER }], at: t, th: true };
+            m.st = 'walk'; m.at = t;
+            _lordReply(m.k, 1);
+        });
+        return;
+    }
+    if (m.st === 'walk') {
+        if (_lth.cur) { m.st = 'throw'; return; }
+        // The sticker is still due, or he has raised it and waits for a clear moment.
+        const pending = (ai.ans && ai.ans.to === me) || _lth.arm;
+        if (!pending || now - m.at > LORD_WALK_MAX_MS) end(3);
+        return;
+    }
+    if (_lth.cur) return;
+    end(gameState.freeMode.active ? 2 : 3);
+}
+
+// `{t:'lord'}` / `{t:'lordr'}` from another client (see onPresenceMessage).
+function onLordOrder(player, msg) {
+    const to = typeof msg.to === 'string' ? msg.to.slice(0, 64) : '';
+    const k = Number(msg.k);
+    if (!to || !Number.isFinite(k) || !_lordIsLeader(player.userId)) return;
+    const now = Date.now();
+    for (const u of Object.keys(_lord.seen)) if (now - _lord.seen[u].at > LORD_STEP_MAX_MS * 2) delete _lord.seen[u];
+    _lord.seen[to] = { k, at: now };
+    _lordWarmThrow();
+    if (to === gameState.userId) _lordAccept(k);
+}
+function onLordReply(player, msg) {
+    const k = Number(msg.k), r = Number(msg.r);
+    if (!Number.isFinite(k) || !(r >= 0 && r <= 4)) return;
+    _lordOnReply(player.userId, k, r, typeof msg.w === 'string' ? msg.w.slice(0, 12) : '');
+}
+
+// ── the lock: a session he started by order can't be ended for a minute ──
+// Kept in localStorage too, so a reload (which restores the session) doesn't lift it.
+function _lordLockSession() {
+    _lord.until = Date.now() + LORD_LOCK_MS;
+    _lord.lockRead = true;
+    try { localStorage.setItem(LORD_LOCK_KEY, JSON.stringify({ u: gameState.userId, t: _lord.until })); } catch (_) {}
+    _libToast('جلسة بأمر القائد: لا يمكن إنهاؤها قبل دقيقة', 4200);
+}
+function lordLockLeftMs() {
+    if (!_lord.lockRead && gameState.userId) {
+        _lord.lockRead = true;
+        try {
+            const v = JSON.parse(localStorage.getItem(LORD_LOCK_KEY) || 'null');
+            if (v && v.u === gameState.userId && Number.isFinite(v.t)) _lord.until = v.t;
+        } catch (_) {}
+    }
+    const left = _lord.until - Date.now();
+    return (left > 0 && left <= LORD_LOCK_MS) ? left : 0;
+}
+// A press on «انهاء الجلسة» while it holds: say so, and return true.
+function lordLockRefuse() {
+    const left = lordLockLeftMs();
+    if (!left || !gameState.freeMode.active) return false;
+    _libToast(`جلسة بأمر القائد: يمكنك إنهاؤها بعد ${_chatArNum(Math.ceil(left / 1000))} ثانية`);
+    return true;
 }
 
 // mulberry32 — every client seeded from the same doc makes the same choices.
@@ -32454,6 +32724,7 @@ function startLemo() {
 
 function stopLemo() {
     if (_lemo.unsub) { try { _lemo.unsub(); } catch (_) {} _lemo.unsub = null; }
+    _lordStop();
 }
 
 function updateLemo() {
@@ -37033,7 +37304,14 @@ function _chatSend() {
         const rec = _chatMenRoster(p.u);
         return { n: p.n, slug: (rec && rec.slug) || '' };
     });
-    if (callsLemo) {
+    // أمر القائد: «@ليمو ارمِ @فلان @فلان إلى العمل» from the leader is an order, not a
+    // question — he isn't called over and the model isn't asked.
+    const lemoOrder = (callsLemo && adminAllowed()) ? _lordParse(lemoAbout) : null;
+    if (lemoOrder) {
+        const why = lemoIsAsleep() ? 'ليمو نائم 😴 — أيقظه أولًا من غرفة الاستراحة'
+                  : _lord.q ? 'ليمو ما زال ينفّذ أمرك السابق' : '';
+        if (why) { _chatRefuse(); _chatToast(() => why, 2600); return; }
+    } else if (callsLemo) {
         let why = '';
         const busyFor = lemoBusyFor();
         if (localInWorkPhase() || gameState.isLockedIn) why = 'لا يمكنك مناداة ليمو أثناء جلسة العمل';
@@ -37088,7 +37366,8 @@ function _chatSend() {
     }
     for (const p of parts) if (p.u) p.l = _chatMen.last[p.u] ? _chatMen.last[p.u].lv : 1;
     _chatUi.lastSentAt = now;
-    if (callsLemo) lemoAsk(lemoQ, lemoMen);
+    if (lemoOrder) lemoOrderThrow(lemoOrder);
+    else if (callsLemo) lemoAsk(lemoQ, lemoMen);
     closeChatBox(true);   // the message ends the typing bubble — see closeChatBox
     const me = gameState.players[gameState.userId];
     if (me) receiveChatMessage(me, null, parts.map(p => ({ ...p })));   // show it locally at once — no round trip

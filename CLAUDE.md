@@ -123,6 +123,7 @@ Grep anchors for the major systems (all verified to exist):
 | القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump`, `jumpTapWhileMoving`, `JUMP_FLICK_`, `jumpMaybeHint` |
 | نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
 | رمية ليمو (he throws a member into a session) | `LTH_`, `_lth`, `lemoThrowBegin`, `lemoThrowAllowed`, `_lthMemberOk`, `_lthLock`, `updateLemoThrow`, `_lthAt`, `_lthFx`, `_lthAbove`, `_lthLemoPose`, `_lthLemoDone`, `receiveLemoThrow`, `updateRemoteThrows`, `LTH_REL`; the clip: `LEMO_ANIMS.Throw`, `lemoPlayThrow`, `_lemoActStep`, `_lemoDropSheet`, `_lemo.act`, `SEQS` in `Art/Lemo/slice.py`; the relay: `parseThrow`, `canThrow` |
+| أمر القائد (the leader orders throws) | `LORD_`, `_lord`, `_lordParse`, `lemoOrderThrow`, `_lordNext`, `_lordOnReply`, `_lordAccept`, `_lordMineStep`, `onLordOrder`, `onLordReply`, `_lordIsLeader`, `_lordLockSession`, `lordLockLeftMs`, `lordLockRefuse` |
 | خط الخطف (the kidnap line, on every screen) | `drawKidnapLine`, `_drawKidnapLineTo`, `sendKidnapWS`, `receiveKidnap`, `drawRemoteKidnapLines`, `_kidLineLive`, `KID_` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
 | ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`, `BOOKS_TOOL`, `booksOf`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL`; review log: `_lemoAudit`, `_lemoAuditRead`, `auditAllowed`, `AUDIT_PREFIX`, `tools/lemo_log.mjs` |
@@ -353,6 +354,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar whose cells he can press to **اعتماد** a day as done (even one taken off or never opened) or **رفع الإجازة** off a past one. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. See **لوحة القائد**. |
 | **القفز** | مسافة، أو نقرتان على شخصيتك. على الجوال: سحبة سريعة للأعلى في أي مكان، أو نقرة واحدة في أي مكان وأنت تمشي (والنقرتان ما زالتا تعملان). قفزة في المكان — أو، أثناء الحركة، **على طاولة** تمشي فوقها (أكبر قليلًا)، ومنها إلى الأرض، و**من حافة الطابق الثاني** إلى الأرض بهبوط قوي: غبار وموجة وهزّة وصوت لمن حولك إلا من في جلسة عمل. صفر فايربيس. See **القفز**. |
 | **رمية ليمو** | يرمي العضو حرفيًا إلى جلسة عمل: إن أصرّ على تضييع الوقت معه، أو طلب تحفيزًا، أو طلب منه أن يبدأ له جلسة. يتراجع، يندفع، يرفعك، يرميك في الهواء، ويلتقطك أحد الأجهزة قبل الأرض فتبدأ جلسة حرة. صفر فايربيس. See **Lemo → رمية ليمو**. |
+| **أمر القائد** | نواف (أو سراج) يكتب «@ليمو ارمِ @فلان @فلان إلى العمل»: يذهب ليمو إلى كل واحد منهم بالترتيب ويرميه إلى جلسة حرة، ولا تُنهى الجلسة قبل دقيقة. صفر فايربيس، ولا يُسأل النموذج. See **Lemo → أمر القائد**. |
 | **نداء ليمو** | `@ليمو` مع سؤال (أو اضغط عليه فيُكتب اسمه): يترك ما يفعله و**يمشي** إليك — طريق حقيقي حول الأثاث، يصعد الدرج، ويلحق بك إن تحرّكت — ثم **يجيبك** (ذكاء اصطناعي يسأله المُرحِّل لا الصفحة)، وقد يرد بملصق. ثم يمشي عائدًا. لا يُنادى نائمًا ولا من جلسة عمل ولا بلا سؤال، وبعد رده عليك تنتظر ٤ ثوانٍ. See **Lemo → نداء ليمو**. |
 | **الرسائل الخاصة** | زر في صندوق الأدوات (أو «رسالة خاصة» تحت عضو تضغط عليه): محادثات محفوظة بين عضوين من القسم نفسه — نص، كل الرموز، ملصقات، صور و GIF (سحب وإفلات / لصق)، رد (بالسحب على الجوال)، تفاعل بأي رمز، تعديل («معدّلة»)، حذف بتحذير، وتأثيرات إرسال كتأثيرات iMessage (ضغطة مطوّلة على زر الإرسال ثم سحب إلى التأثير)، وشريط سريع فوق الرسالة بالفأرة، ونصيحة يومية من ليمو تحت القائمة. على الحاسوب دُرج في الثلث الأيمن واللعب مستمر بجانبه. See **الرسائل الخاصة**. |
 | **رموز آبل التعبيرية** | الرموز بالشكل نفسه على كل جهاز: صورة مكان كل رمز على غير أجهزة آبل، في الصفحة وعلى الكانفس. See **رموز آبل التعبيرية**. |
@@ -1633,6 +1635,49 @@ after `_lemoActStep`.
   throw is called off (`_lthStopAct`). Decoded after spawn with the other effects (the
   `rest` list). The kidnap's own sound still plays at the catch. No other sound design.
 - Dev: `__mq.x.lemoThrowBegin()` on localhost, standing on his floor while he is awake.
+
+### أمر القائد — the leader orders a throw
+«@ليمو ارمِ @يوسف @فرات @خالد إلى العمل» from **نواف or a سراج ghost** (`adminAllowed()`):
+he goes to each named member **one by one**, raises «إلى العمل», throws them (the ordinary
+throw above), and the free session it starts **can't be ended for `LORD_LOCK_MS` (60 s)**.
+Code is the `أمر القائد` block right after `updateRemoteThrows`.
+
+- **An order is read on the leader's page, never by the model** (`_lordParse`, from
+  `_chatSend`): his mention + a throw verb (`LORD_VERB_RE`, tested on the
+  `_fireNormName`d text between the pills: ارم / ارمي / ارمهم / اقذف / throw…) + at
+  least one online member's mention (`LORD_MAX` 8). Anything else from the leader is an
+  ordinary question. So **no relay change and no deploy**, and it costs no tokens.
+  He isn't called over to the leader; the usual "busy / wait 4 s / in a work session"
+  refusals don't apply to an order (only "asleep" and "still on my last order").
+- **Zero Firebase of its own.** Two relay events, both client-claimed like everything
+  there: `{t:'lord', uid:<leader>, to, k}` (accepted only when `_lordIsLeader(uid)`:
+  `ADMIN_UIDS`, the roster's `admin`, or a `siraj_` id) and
+  `{t:'lordr', uid:<member>, k, r, w?}` — `r`: 4 heard · 1 he is on his way · 2 thrown ·
+  3 fell through · 0 can't (`w`: work / away / hid / full / busy / sleep / no).
+- **The MEMBER's own client does the work with what already existed**
+  (`_lordAccept` → `_lordMineStep`): it summons him for itself (`lemoSummon`, retried
+  every 0.9 s for `LORD_SUMMON_MAX_MS` while he is with someone), then hands itself the
+  answer a throw ends in (`ai.mine` done + `ai.ans` = the sticker with `th`), and
+  `_lemoTalkStep` arms and starts the throw as ever (the arm waits `LORD_ARM_MAX_MS`
+  instead of `LTH_ARM_MAX_MS`). Every other screen puts the same sticker in `ai.ans` on
+  that member's `r:1` (only if it saw the leader's `lord` for them — `_lord.seen`).
+- **The leader's client is only a queue** (`_lord.q`, `_lordNext`): one member at a time,
+  the next on `r` 2 / 3 / 0, on `LORD_ACK_MS` of silence (a cached old client), on
+  `LORD_STEP_MAX_MS`, or when the member leaves. Each step is a toast for the leader.
+  Close the leader's tab and the queue stops where it is.
+- **Both sides tick on a 400 ms `setInterval` that exists only while an order is live**
+  (`_lordArm`), not the frame loop: a leader who switched tabs must not stall the queue.
+  The throw itself still needs the member's tab visible (`document.hidden` → `away`).
+- **Not thrown**: already in a session, tab hidden, ليمو hidden in their settings, no
+  free laptop, reading. A member can still dodge by running for a minute or sitting
+  behind an overlay — the leader is told «أفلت … من ليمو».
+- **The lock** (`_lordLockSession`, `lordLockLeftMs`, `lordLockRefuse`): set when the
+  forced throw's `startFreeMode` succeeds (`_lth.cur.forced`), kept in localStorage
+  (`LORD_LOCK_KEY`, `{u, t}`) so a reload — which restores the session — doesn't lift
+  it. «انهاء الجلسة» reads «بأمر القائد · ٤٥ ث» (`.is-locked`, a class, never `disabled`)
+  and a press only toasts. الخروج / closing the tab are not blocked (they stash the
+  session, they don't end it).
+- Dev: `__mq.x.lemoOrderThrow([{u, n}])` as a سراج ghost on localhost.
 
 **The clip itself:**
 - **The master was a PNG SEQUENCE on a wider canvas** (111 frames, 2777×2528), not a
