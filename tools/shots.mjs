@@ -106,7 +106,7 @@ const say = async (p, text) => {
     await sleep(1100);
 };
 
-const ONLY = process.env.ONLY || '';        // ONLY=typing re-takes just the phone picture; ONLY=hero = the announcement shot
+const ONLY = process.env.ONLY || '';        // ONLY=typing re-takes just the phone picture; ONLY=hero = the announcement shot; ONLY=throw = رمية ليمو
 
 // ── The announcement picture: ONE real frame with as much of ١.٥ in it as fits ──
 // Three ghosts, really standing where they appear (teleported + synced, not drawn
@@ -207,9 +207,53 @@ async function hero() {
     await sleep(600);
 }
 
+// ── رمية ليمو: ONLY=throw ─────────────────────────────────────────────────────
+// One ghost, really thrown (`lemoThrowBegin`), photographed three times: in his hands,
+// just after the release, and at the top. The throw is a function of server time, so
+// each picture is timed off the throw's own `at`. He is woken first if he is asleep,
+// and left alone if he is in the middle of a call with someone.
+async function throwShot() {
+    const A = await openPage(1280, 800, 1.5, false);
+    console.log('entering…');
+    await enter(A);
+    // The screen-edge blur is what headless Chrome chokes on in a full-frame capture
+    // (see hero) — off for the photograph.
+    await A.ev(`(() => { const st = document.createElement('style'); st.textContent = '#edge-bokeh{display:none!important}'; document.head.appendChild(st); })()`);
+    const awakeX = `(() => { const L = __mq.x._lemo; return !!(L.shown && L.doc && L.doc.s === 'awake' && !(L.sim && (L.sim.kind === 'sleep' || L.sim.kind === 'liedown' || L.sim.kind === 'wake'))); })()`;
+    const tp = (x, y) => A.ev(`(() => { const X = __mq.x, g = __mq.gameState, me = g.players[g.userId]; X.teleportEntity(me, ${x}, ${y}); me.renderX = ${x}; me.renderY = ${y}; me.floor = 1; X.updatePlayerPosition(${x}, ${y}); X.sendPositionWS(${x}, ${y}, true); g.camera.x = ${-x}; g.camera.y = ${-y}; g.zoom = 1.25; })()`);
+    if (!(await A.ev(awakeX))) {
+        console.log('  waking ليمو…');
+        const sp = await A.ev(`(() => ({ x: __mq.x.LEMO_SPAWN.x + 46, y: __mq.x.LEMO_SPAWN.y + 30 }))()`);
+        await tp(sp.x, sp.y);
+        for (let i = 0; i < 60 && !(await A.ev(awakeX)); i++) await sleep(500);
+    }
+    if (!(await A.ev(awakeX))) throw new Error('ليمو did not wake up');
+    for (let i = 0; i < 80 && (await A.ev(`!!(__mq.x._lemo.doc && __mq.x._lemo.doc.call)`)); i++) await sleep(500);
+    const SPOT = await A.ev(`(() => { const N = __mq.x._lemoNav, C = 16; const free = (x, y) => { const c = Math.round((x - N.x0) / C), r = Math.round((y - N.y0) / C); if (c < 1 || r < 1 || c >= N.cols - 1 || r >= N.rows - 1) return false; for (let dr = -2; dr <= 2; dr++) for (let dc = -2; dc <= 2; dc++) if (!N.g[1][(r + dr) * N.cols + (c + dc)]) return false; return true; }; for (let y = -140; y > -560; y -= 16) for (let x = 60; x < 420; x += 16) { let ok = true; for (let k = -170; k <= 20 && ok; k += 16) ok = free(x + k, y) && free(x + k, y - 60); if (ok) return { x, y }; } return { x: 165, y: -200 }; })()`);
+    console.log('spot:', SPOT);
+    await tp(SPOT.x, SPOT.y);
+    // The clip's sheet, decoded before the throw needs it.
+    await A.ev(`(() => { const X = __mq.x; X.lemoPlayThrow(); X._lemo.act = null; })()`);
+    await sleep(2500);
+    if (!(await A.ev(`__mq.x.lemoThrowBegin()`))) throw new Error('he could not throw (no free laptop, or he is on another floor)');
+    const until = async (ms) => {      // sleep until `ms` after the clip's frame 0
+        const left = await A.ev(`(() => { const c = __mq.x._lth.cur; return c ? c.th.at + ${ms} - (Date.now() + (__mq.gameState.serverTimeOffset || 0)) : 0; })()`);
+        if (left > 0) await sleep(left);
+    };
+    console.log('  thrown…');
+    const snap = (name) => Promise.race([A.shot(name), sleep(9000).then(() => console.log('  (no capture: ' + name + ')'))]);
+    await until(2750); await snap('throw-hold');
+    await until(3067 + 230); await snap('throw-air1');
+    await until(3067 + 620); await snap('throw-air2');
+    await sleep(4500);                 // the catch, and the session it starts
+    await snap('throw-seat');
+    // The ghost's session ends with it (its laptop frees on disconnect).
+}
+
 try {
     await waitForChrome();
     if (ONLY === 'hero') { await hero(); throw { done: true }; }
+    if (ONLY === 'throw') { await throwShot(); throw { done: true }; }
     let SPOT = { x: 124, y: -140 };
     if (ONLY !== 'typing') {
     const A = await openPage(1280, 800, 2, false);

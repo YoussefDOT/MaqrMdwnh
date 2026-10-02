@@ -8971,6 +8971,7 @@ function startKidnapAnimation(laptop) {
     gameState.anim.progress = 0;
     gameState.anim.laptop = laptop;
     gameState.anim.startPos = { x: player.x, y: player.y };
+    sendKidnapWS(laptop.id);     // so everyone else sees the line too
 
     // Play Sound
     if (gameState.focusAudioEngine) {
@@ -11413,6 +11414,8 @@ function onPresenceMessage(data) {
     if (msg.t === 'jmp') { receiveJump(player, msg); return; }
     // رمية ليمو — he is throwing this member into a session (start / lock / called off).
     if (msg.t === 'lth') { receiveLemoThrow(player, msg); return; }
+    // A laptop is taking this member: the line, on this screen too.
+    if (msg.t === 'kid') { receiveKidnap(player, msg); return; }
     // isMoving must update before pushing the sample — interpolateRemoteFromBuffer
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
@@ -12647,6 +12650,7 @@ function render() {
     const _kidnapLineActive = gameState.anim.active
         && (gameState.anim.phase === 'reach' || gameState.anim.phase === 'align' || gameState.anim.phase === 'pull');
     if (_kidnapLineActive && (gameState.anim.laptop.floor || 1) === 1) drawKidnapLine();
+    drawRemoteKidnapLines(1);   // …and everyone else's (see خط الخطف، لكل من يراه)
     drawJumpQuakes();           // القفز: the shock ring under the ground-floor players' heads
     drawPlayers(false, 1);      // ground-floor players (under the mezzanine)
     drawTimers(1);
@@ -12659,6 +12663,7 @@ function render() {
     drawSecondFloor();          // platform + its laptops + papers desk, at secondFloorVis
     drawLaptopLights(2, gameState.secondFloorVis ?? 1);
     if (_kidnapLineActive && (gameState.anim.laptop.floor || 1) === 2) drawKidnapLine();
+    drawRemoteKidnapLines(2);
     drawDustParticles(2);       // mezzanine dust — above the floor art, UNDER the players
     drawLemo(2);                // ليمو, when a mention called him up here
     drawPlayers(false, 2);      // players standing on the platform
@@ -15028,31 +15033,77 @@ function drawDustParticles(floorFilter) {
 let _dustBands = null;
 
 function drawKidnapLine() {
-    const ctx = gameState.ctx;
     const player = gameState.players[gameState.userId];
-    const laptop = gameState.anim.laptop;
-    const p = gameState.anim.progress;
+    _drawKidnapLineTo(gameState.anim.laptop, player,
+        gameState.anim.phase === 'reach' ? gameState.anim.progress : 1);
+}
+// The line itself: from the laptop toward the member, `p` of the way (1 = it has them).
+// It ends on the AVATAR, so a member ليمو has thrown is taken out of the air — not at
+// the spot on the floor underneath them.
+function _drawKidnapLineTo(laptop, player, p) {
+    const ctx = gameState.ctx;
+    const pos = getPlayerRenderPos(player);
+    const tf = player._lth ? _lthFx(player) : null;
+    const playerX = pos.x, playerY = pos.y - (tf ? tf.l : 0);
+    const targetX = laptop.x + (playerX - laptop.x) * p;
+    const targetY = laptop.y + (playerY - laptop.y) * p;
 
     ctx.strokeStyle = 'white';
     ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.moveTo(laptop.x, laptop.y);
-
-    const { x: playerX, y: playerY } = getPlayerRenderPos(player);
-    let targetX, targetY;
-    if (gameState.anim.phase === 'reach') {
-        targetX = laptop.x + (playerX - laptop.x) * p;
-        targetY = laptop.y + (playerY - laptop.y) * p;
-    } else {
-        targetX = playerX;
-        targetY = playerY;
-    }
-
     ctx.lineTo(targetX, targetY);
     ctx.stroke();
 
     ctx.fillStyle = 'white';
     ctx.fillRect(targetX - 4, targetY - 4, 8, 8);
+}
+
+/* ── خط الخطف، لكل من يراه ──────────────────────────────────────────────────────
+   The line was drawn only on the kidnapped member's own screen (it reads
+   gameState.anim, which is local) — everyone else saw an avatar slide to a laptop by
+   itself. The kidnap now announces itself once on the relay, `{t:'kid', uid, l}`
+   (zero Firebase, a one-off event like the sofa hop), and every screen draws the same
+   line to that member's avatar: it reaches out over KID_REACH_MS, holds on while the
+   replay drags them in, and lets go when they are in the seat (or after KID_MAX_MS,
+   whatever happens). An older client drops the message: it carries no position. */
+const KID_REACH_MS = 210;      // the local 'reach' (0.08 a frame at 60 fps)
+const KID_MAX_MS   = 3200;     // the whole kidnap plus the replay's delay, with room to spare
+const KID_SEAT_R   = 5;        // this close to the seat = it has let go
+function sendKidnapWS(laptopId) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try { ws.send(JSON.stringify({ t: 'kid', uid: gameState.userId, l: laptopId })); return true; }
+    catch (_) { return false; }
+}
+function receiveKidnap(player, msg) {
+    const lap = gameState.laptops.find(l => l.id === msg.l);
+    if (lap) player._kid = { lap, t0: performance.now() };
+}
+// Pure of the clock (the PiP pass draws it too); updateRemoteThrows clears a finished one.
+function _kidLineLive(player, now) {
+    const k = player._kid;
+    if (!k) return false;
+    const age = now - k.t0;
+    if (age > KID_MAX_MS) return false;
+    if (age < 700) return true;
+    const pos = getPlayerRenderPos(player);
+    return Math.hypot(pos.x - k.lap.sitX, pos.y - k.lap.sitY) > KID_SEAT_R;
+}
+function drawRemoteKidnapLines(floor) {
+    const now = performance.now();
+    const ctx = gameState.ctx;
+    for (const player of Object.values(gameState.players)) {
+        const k = player._kid;
+        if (!k || (k.lap.floor || 1) !== floor || player._pendingSpawn != null) continue;
+        if (!_kidLineLive(player, now)) continue;
+        const a = floor === 2 ? (gameState.secondFloorVis ?? 1) : 1;
+        if (a < 0.02) continue;
+        ctx.save();
+        ctx.globalAlpha = a;
+        _drawKidnapLineTo(k.lap, player, Math.min(1, (now - k.t0) / KID_REACH_MS));
+        ctx.restore();
+    }
 }
 
 function drawFocusMask(W, H) {
@@ -31694,17 +31745,19 @@ const LTH_REL = [
     [-180, -1284], [-190, -1278], [-211, -1266], [-262, -1236], [-409, -1150], [-465, -1118], [-491, -1102], [-507, -1093],
     [-517, -1087], [-524, -1083], [-528, -1080], [-531, -1079], [-531, -1079], [-558, -1047], [-562, -1043],
 ];
-const LTH_RISE_MS   = 1040;   // up: starts at full speed, has stopped by the top
-const LTH_FALL_MS   = 1280;   // down: from rest, gathering speed (it would touch the floor here)
+const LTH_RISE_MS   = 780;    // up: starts at full speed, has stopped by the top
+const LTH_FALL_MS   = 960;    // down: from rest, gathering speed (it would touch the floor here)
 const LTH_RISE      = 170;    // world units gained above the release height
-const LTH_CATCH_L   = 20;     // how high they still are when the line takes them…
-const LTH_CATCH_L2  = 64;     // …and for a mezzanine laptop caught from the ground floor
+const LTH_CATCH_L   = 62;     // how high they still are when the line takes them — well clear of the floor
+                              // (at 20 it read as landing first and being grabbed after)…
+const LTH_CATCH_L2  = 100;    // …and for a mezzanine laptop caught from the ground floor
 const LTH_REACH_MS  = 210;    // the kidnap's own 'reach' (0.08 a frame at 60 fps)
-const LTH_LAND_MS   = 200;    // what is left of the height goes in this, once caught
+const LTH_LAND_MS   = 300;    // what is left of the height goes in this, once caught (the line yanks them down)
 const LTH_SCALE_K   = 0.0058; // scale gained per world unit above the release height
 const LTH_TRAVEL    = 0.92;   // the flight covers this much of the way to the laptop's grab point…
 const LTH_TRAVEL_MAX = 900;   // …and never more than this (world units)
 const LTH_HEAR_R    = 520;    // who hears it, from where he stands (quieter with distance)
+const LTH_SOUND_VOL = 0.55;   // the thrown member's own level (the owner asked for it a bit lower than the other cues)
 const LTH_LEAD_MS   = 450;    // the start reaches every screen before frame 0 plays
 const LTH_STK_MS    = 1400;   // a throw's sticker is up only this long (it fades in its last 260 ms)…
 const LTH_AFTER_MS  = LTH_STK_MS + 100;   // …and he starts once it is gone, so it never sits over the clip
@@ -31810,8 +31863,8 @@ function _lthPlaySound(th) {
     const k = 1 - dist / LTH_HEAR_R;
     try {
         const fe = gameState.focusAudioEngine;
-        const h = fe ? fe.playHandled('lemoThrow', 1, 0.9 * (mine ? 1 : 0.25 + 0.6 * k)) : null;
-        if (!h && mine) playSoundRobust(gameState.sounds.lemoThrow);
+        const h = fe ? fe.playHandled('lemoThrow', 1, LTH_SOUND_VOL * (mine ? 1 : 0.25 + 0.6 * k)) : null;
+        if (!h && mine) { const el = gameState.sounds.lemoThrow; if (el) el.volume = LTH_SOUND_VOL; playSoundRobust(el); }
         return h;
     } catch (_) { return null; }
 }
@@ -32015,7 +32068,7 @@ function receiveLemoThrow(player, msg) {
     if (msg.s !== 2 || th.locked) return;
     const px = _lemoFinite(msg.px, WORLD_BOUNDS.minX, WORLD_BOUNDS.maxX), py = _lemoFinite(msg.py, WORLD_BOUNDS.minY, WORLD_BOUNDS.maxY);
     const gx = _lemoFinite(msg.gx, WORLD_BOUNDS.minX, WORLD_BOUNDS.maxX), gy = _lemoFinite(msg.gy, WORLD_BOUNDS.minY, WORLD_BOUNDS.maxY);
-    const lc = _lemoFinite(msg.lc, 0, 90);
+    const lc = _lemoFinite(msg.lc, 0, 160);
     if (px === null || py === null || gx === null || gy === null || lc === null) return;
     th.px = px; th.py = py; th.gx = gx; th.gy = gy; th.lc = lc;
     _lthDerive(th);
@@ -32027,7 +32080,13 @@ function receiveLemoThrow(player, msg) {
 // hop does. Runs before updatePlayerRenderPositions, which skips an owned avatar.
 function updateRemoteThrows() {
     let t = 0;
+    const pn = performance.now();
     for (const player of Object.values(gameState.players)) {
+        // (A kidnap line that has finished is put away here — its draw is pure.)
+        if (player._kid) {
+            if (!_kidLineLive(player, pn)) player._kid = null;
+            else perfWake(200);
+        }
         const th = player._lth;
         if (!th || player.userId === gameState.userId) continue;
         if (!t) t = serverNow();

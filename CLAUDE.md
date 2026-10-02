@@ -123,6 +123,7 @@ Grep anchors for the major systems (all verified to exist):
 | القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump`, `jumpTapWhileMoving`, `JUMP_FLICK_`, `jumpMaybeHint` |
 | نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
 | رمية ليمو (he throws a member into a session) | `LTH_`, `_lth`, `lemoThrowBegin`, `lemoThrowAllowed`, `_lthMemberOk`, `_lthLock`, `updateLemoThrow`, `_lthAt`, `_lthFx`, `_lthAbove`, `_lthLemoPose`, `_lthLemoDone`, `receiveLemoThrow`, `updateRemoteThrows`, `LTH_REL`; the clip: `LEMO_ANIMS.Throw`, `lemoPlayThrow`, `_lemoActStep`, `_lemoDropSheet`, `_lemo.act`, `SEQS` in `Art/Lemo/slice.py`; the relay: `parseThrow`, `canThrow` |
+| خط الخطف (the kidnap line, on every screen) | `drawKidnapLine`, `_drawKidnapLineTo`, `sendKidnapWS`, `receiveKidnap`, `drawRemoteKidnapLines`, `_kidLineLive`, `KID_` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
 | ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`, `BOOKS_TOOL`, `booksOf`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL`; review log: `_lemoAudit`, `_lemoAuditRead`, `auditAllowed`, `AUDIT_PREFIX`, `tools/lemo_log.mjs` |
 | الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI`; reply + reactions: `_dmSetReply`, `_dmQuoteNode`, `_dmJumpTo`, `_dmReact`, `_dmPaintRx`, `_dmAct`, `_dmRxQuick`, `DM_RX_LIST`; edit + delete: `_dmStartEdit`, `_dmCommitEdit`, `_dmDelete`, `_dmApplyDeleted`, `_dmPeerRowPatch`; picker: `_dmEmojiPanel`, `_dmPop`; effects: `DM_FX`, `_dmPlayFx`, `_dmScreenFx`, `_dmFxUnread`; their picker: `_dmFxpOpen`, `_dmFxpTrack`, `_dmFxpHot`, `_dmFxpSend`; hover bar: `_dmHov`; ليمو's tips: `DM_TIPS`, `_dmPaintTip`; also `_dmFillText`, `_dmPaintDown`, `_dmFocusInput` |
@@ -1594,8 +1595,8 @@ after `_lemoActStep`.
   catch, `updateLemoThrow` drops the lock and calls `startFreeMode(lap.id)`; the member
   keeps falling through the kidnap's `reach` and the line takes hold at the catch height.
 - **The flight** (`_lthAt`): height = ease-out QUINTIC up (`LTH_RISE_MS`, +`LTH_RISE` — a
-  long hang that still leaves his hands at full speed; the owner asked for twice the air
-  time and a far throw), then ease-in quad down (`LTH_FALL_MS`); scale follows the height above the release
+  long hang that still leaves his hands at full speed; the owner asked for a far throw
+  and 1.5× the first version's air time — 2× was too much), then ease-in quad down (`LTH_FALL_MS`); scale follows the height above the release
   (`LTH_SCALE_K`). The ground point travels `LTH_TRAVEL` of the way to the laptop's
   `intermediateX/Y` (max `LTH_TRAVEL_MAX`). Drawn through the jump's hook in `drawPlayers`
   (`_lthFx`: lift into `workBob`, scale into `_jumpScale`, `_thAirK` shrinks the contact
@@ -1617,12 +1618,17 @@ after `_lemoActStep`.
 - **After it** he stays where the throw left him (`_lthLemoDone` patches `_lemo.fol` and
   sets `fol.done`, so he doesn't walk after a caller who is now at a laptop); the caller's
   client sends him home as usual.
+- **The line takes them out of the AIR.** `_drawKidnapLineTo` ends on the avatar (ground
+  point minus the throw's lift), not on the floor under it, and the catch height is well
+  clear of the floor (`LTH_CATCH_L` 62 — at 20 it read as landing first and being grabbed
+  after; the owner's report). What is left of the height goes in `LTH_LAND_MS` as the
+  line yanks them.
 - **Called off** before the lock if the member can no longer be thrown (a session started,
   an overlay or a modal is open, a different floor, the tab was away past frame 24).
 - Sound: `Sound/lemo_throw.mp3` (`lemoThrow`, the owner's — 10 s, cut to the clip: the
   back-up, the rush, the slingshot, the release at 3.2 s, the air after it). It starts
   on frame 0 (`_lthPlaySound`, from `_lemoActStep`; never part-way in for a screen that
-  joined late), full for the thrown member, quieter with distance inside `LTH_HEAR_R`
+  joined late), at `LTH_SOUND_VOL` for the thrown member (the owner wanted it a bit low), quieter with distance inside `LTH_HEAR_R`
   for anyone else, silent for a member working or behind an overlay. Faded out if the
   throw is called off (`_lthStopAct`). Decoded after spawn with the other effects (the
   `rest` list). The kidnap's own sound still plays at the catch. No other sound design.
@@ -4939,6 +4945,10 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
   made, not hand-captured: `node tools/shots.mjs` drives a headless Chrome as two سراج
   ghosts and stages each feature through the dev-only `window.__mq.x` handle, and
   `python3 tools/shots.py` turns the PNGs into the WebPs. It talks to the LIVE lobby.
+  `features` work on an ordinary day too (no `version` needed): 2026-10-03 carries one,
+  `Art/News/2026-10-03/throw.webp`, taken with `ONLY=throw node tools/shots.mjs` (a ghost
+  really thrown by ليمو, three timed frames) and cropped by hand so that no real member
+  is in the picture — **check a screenshot for real members' avatars before shipping it**.
 - **UPDATE IT ON EVERY PUSH** (see Quick Start): add today's day at the top (or extend today's),
   member-facing Arabic, spell-checked, no jargon. **Never edit or remove an older day** — the
   file only grows; the modal scrolls.
@@ -5012,6 +5022,7 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
 | Member saw «أتممت يومك», next morning the day read as a vacation | The card was judged on the local count; attendance was sent as fire-and-forget delta transactions, lost when the app closed right after (socket still reconnecting). The server never reached 3 h and a short day auto-spends a vacation | Attendance written as retryable TOTALS (`o/{loadId}`, `s/{sessId}`), kept until acked + replayed from localStorage next visit (`_dutyReplayPending`); «أحسنت!» only on acknowledged numbers. See **حضور المقر → Where a day's time comes from** |
 | «أتممت يومك» popup after cutting a forgotten session down (1 h of 3.5) — card still shows hours left | The session clock is credited LIVE, so the forgotten hours crossed three hours mid-session and queued `pendingWin`; the popup only waits for a clear screen, and the «هل عملت …فعلًا؟» correction took the hours back without un-queuing it | `updateWorkChallenge` re-judges the day when it pops `pendingWin`: under the goal (or a vacation) → drop it and un-mark `celebrated[key]`. **Never gate that pop on `_dutyHasPending`** — outside a session the open-time counter queues a write every second, so it is never empty and the popup never came (shipped once) |
 | Hard workers never complete their day on mobile | Attendance came from the per-tick open-time counter, which refuses suspended stretches; the session credit only landed at the very end | Inside a work phase the session's own clock is credited LIVE (`_dutySessTrack`) and locked in at the end with the confirmed value (`_dutyFinishSession`) |
+| The kidnap line (laptop → member) never showed for anyone but the kidnapped member — everyone else saw an avatar slide to a laptop by itself. There from the start | `drawKidnapLine` reads `gameState.anim`, which is the LOCAL kidnap; nothing told other clients a kidnap had begun or which laptop it was | `startKidnapAnimation` sends one relay event `{t:'kid', uid, l}`; every screen draws the same line to that avatar (`drawRemoteKidnapLines`) until it is in the seat. Zero Firebase |
 | Hats didn't jump with the avatar | `drawPlayerHats` got `rScale × _juiceScale` but not `_jumpScale`, and the jump barely moves the anchor | Pass `_jumpScale` + the squash; `player._hatKick` shoves the chain at launch and landing |
 | **Nobody on a phone can log in; the loading screen spins forever and no refresh helps** (Sep 14 → Sep 23) | `init()` was called synchronously during module evaluation. `setMobileClass → applyGraphicsBodyClass → graphicsTier()` called `isWeakDevice()` whenever `isMobile()` was true, and that read `_weakDeviceCache` — a `let` declared ~1500 lines BELOW the init call, still in its temporal dead zone → `ReferenceError`, init aborted, the loader stayed up. Only phones (or windows < 1024px) that had never picked a graphics tier hit it, so a desktop owner never saw it | `init()` is queued as a microtask (runs after the whole module evaluated); every init step is individually try/caught; a classic-script failsafe in index.html + `_bootArmRetry` offer «إعادة المحاولة». Invariant 27 |
 | A returning visitor's boot hangs for up to ~10 min after a push that added an export to `firebase-config.js` | `firebase-config.js` was imported without a version, so the HTTP cache could hand the new `game.js` an old copy missing the export → the import failed and the module never ran | Versioned import `./firebase-config.js?v=N` + a matching `<link rel="modulepreload">`; bump both together |
