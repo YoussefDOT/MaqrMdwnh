@@ -30920,6 +30920,28 @@ function _lemoSendQuestion(k, q, men) {
     if (isBreakActive()) bits.push('في استراحة الآن');
     else if (gameState.isSitting) bits.push('جالس على الكنبة');
     if ((me.floor || 1) === 2) bits.push('في الطابق الثاني');
+    // حضور المقر: what is left of today's three hours — what he nudges a chatty member with.
+    try {
+        if (_duty.ready && _dutyStarted()) {
+            const r = _dutyTodayRec();
+            if (r.vac && !r.ok) bits.push('في إجازة اليوم من حضور المقر');
+            else if (r.ok || r.ms >= DUTY.goalMs) bits.push('أتمّ حضور اليوم');
+            else bits.push(`المتبقي من حضور اليوم ${Math.ceil((DUTY.goalMs - r.ms) / 60000)} دقيقة`);
+        }
+    } catch (_) {}
+    // The member's open library tasks, nearest موعد first — three at most. He reads them
+    // only when needed (asked about them, or to send a chatty member back to work).
+    // Never the leader's: he "has" every task in the library.
+    let tk = [];
+    try {
+        if (_lib.me && !_lib.me.admin && _lib.tasks) {
+            tk = _libOpenMine().slice(0, 3).map(t => {
+                const c = _libCountdown(t.due);
+                const d = c.none ? 'بلا موعد' : c.late ? 'متأخرة' : c.days >= 1 ? `بعد ${c.days} يوم` : c.hours >= 1 ? `بعد ${c.hours} ساعة` : 'خلال ساعة';
+                return { t: _chatClean(String(t.title || '')).slice(0, 60), d };
+            }).filter(x => x.t);
+        }
+    } catch (_) {}
     const rec = MDWNH_ROSTER.byDiscord[String(gameState.userId)];
     const msg = {
         t: 'lemoq', f: gameState.userId, k,
@@ -30934,6 +30956,7 @@ function _lemoSendQuestion(k, q, men) {
     };
     // Who the question points at (see _chatSend). Left out when there is nobody.
     if (men && men.length) msg.men = men;
+    if (tk.length) msg.tk = tk;
     try { ws.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
 }
 

@@ -1632,7 +1632,7 @@ home, where his seeded life carries on.
   a member gets there (`_lemoStairBob`, a function of distance — no state).
   **The timeline never uses any of this** (it must stay pure).
 - **His words ride the RELAY, never Firebase, and the page never sees the key.** The page
-  sends `{t:'lemoq', f, k, n, g, q, slug, near, tm, hj, st, on, men?}` (no `uid` — an old
+  sends `{t:'lemoq', f, k, n, g, q, slug, near, tm, hj, st, on, men?, tk?}` (no `uid` — an old
   client drops it); the lobby's Durable Object does NOT forward it: it asks the model
   (`presence-server/src/lemo.js`) and broadcasts `{t:'lemot', to, k}` (he is thinking —
   that is the lock) and `{t:'lemoa', to, k, p:[{m}|{s}] | e}` to everyone, the asker
@@ -1670,6 +1670,18 @@ home, where his seeded life carries on.
   matched there too, against every name the team uses (roster name, display, `dbKey`,
   Telegram name/handle, slug — **never the email**): that is the only way to ask about
   someone offline, since the picker offers online members only. Unknown → he is told so.
+- **Chatty members get sent back to work — for ten minutes** (the owner's rule; he
+  NEVER refuses to answer). The room counts a member's questions in `TALK_KEY`
+  (`{ uid: { s, n } }`, Durable Object storage): a window that is dropped
+  `LEMO_TALK_MS` (10 min) after its first question, so the count starts again and he
+  "forgets" they talked a lot. The count rides the question's context; from the fifth
+  on, `PERSONA` lets him SOMETIMES end with a nudge — what is left of today's حضور
+  (the page adds it to `st`), or «go work on <task>» with the member's nearest-due
+  task. The tasks are `tk: [{ t, d }]` from the page: `_libOpenMine()`'s first three
+  (title + «غدًا»-style موعد), never the leader's, and only what the tasks panel has
+  already fetched — no new read. He is told to use all of it only when needed.
+- **No long dash in his speech** («—» / «–»): a `PERSONA` rule, and `parseParts` turns
+  any that slips through into «،».
 - **What he remembers** — the relay's `lemoLog` (`LOG_KEY`): his last `LEMO_HISTORY` (10)
   messages — questions and answers — **and the room's last `LEMO_ROOM` (10) chat
   lines, which he overhears** (`_lemoHear`: a `{"t":"chat"` message is forwarded as
@@ -1690,17 +1702,22 @@ home, where his seeded life carries on.
   the meantime). Settings are `vars` in `wrangler.jsonc`; the key is a **secret**
   (`npx wrangler secret put OPENAI_API_KEY --name mdwnh-presence`). **Never put the key
   in a file, and never ask for it in a chat.**
-- **What he is and what he knows** live in `lemo.js` as plain text: `PERSONA` (the owner's 50/50
-  blend of the first, cheeky Lemo and the polite one, and it **ADAPTS to the message**:
-  a joke, a tease or a random question gets the funny Lemo (friendly teasing, a word of
-  brainrot); an ordinary or serious question gets a straight, clear answer in his light
-  Egyptian-ish Arabic with no brainrot. He never insults or belittles; boasts only when
-  the context opens the door, never a fixed title for himself (he used to shove «المدير
-  الفعلي للمقر» into everything); **no jokes about سراج**; usually one emoji — 😭 💀 🔥 🥀
-  varied, never 🤣 🥲;
-  **stickers whenever one fits the context** (after the line, or alone — never forced,
-  not in every reply), for brothers and sisters alike; never says he is an AI; asks an English speaker for Arabic, «يا مستعمر»
-  with brothers only; **with a sister: full respect, no teasing, and never «أختي» — her name or nothing**; never makes a rude
+- **What he is and what he knows** live in `lemo.js` as plain text: `PERSONA` — **a CHARACTER,
+  not an assistant** (the first, cheeky gen-z Lemo, which the members loved; two politer
+  rewrites were rejected as "generic"). Members call him to PLAY, so a message is play by
+  default: he reads satire, plays along with an impossible request (secret points → scared
+  of نواف, bargaining, a funny refusal that keeps the scene going), roasts back an «أنا
+  بكرهك», and never answers like a polite chatbot or hands out advice. A real question
+  still gets the right fact first, in his voice. The three things that were wrong with the
+  first one are their own section («لا تكن متوقَّعًا»): the «المدير الفعلي للمقر» joke is
+  rare and never repeated, replies don't all follow joke-then-emoji, and no reply ends in
+  😭 every time (at most one emoji, often none, never the same twice running). **No jokes
+  about سراج.** **Sisters get the same funny Lemo, with one red line: no pet names, no
+  endearments, no praise of her person** (he once said «يا نجمة»; «أختي» is out too) —
+  her name or nothing, and teasing is about the situation, never about her.
+  **Stickers whenever one fits the context** (after the line, or alone — never forced,
+  not in every reply); never says he is an AI; asks an English speaker for Arabic, «يا مستعمر»
+  with brothers only; never makes a rude
   sound on request — a written snort «خخخ» is also dropped by `RUDE_RE` in `parseParts`), `KNOWLEDGE`, and `LATEST_WORKS`
   (**the owner fills this in** — empty, he says management hasn't told him). The member
   list + roles and the last three days of patch notes are fetched from the live sites

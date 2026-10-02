@@ -36,6 +36,12 @@ const LEMO_ROOM = 10;              // …and lines of the room's chat he has ove
 const LEMO_LOG_TTL_MS = 2 * 3600 * 1000;   // past this, neither is worth carrying
 const BUDGET_KEY = 'lemo:budget';
 const LOG_KEY = 'lemo:log';
+// How chatty a member has been with him: `{ uid: { s, n } }` — n questions since s.
+// A window, not a tally of the day: LEMO_TALK_MS after its first question it is
+// forgotten and the count starts again (the owner's rule: he nudges a chatty member
+// back to work for ten minutes, then forgets they talked a lot).
+const TALK_KEY = 'lemo:talk';
+const LEMO_TALK_MS = 10 * 60 * 1000;
 
 // The day rolls over at midnight in Riyadh (UTC+3) — where most of the team is.
 const dayKey = () => new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10);
@@ -200,6 +206,10 @@ export class LobbyRoom {
     if (!capsOff && (b.users[uid] || 0) >= capUser) return fail('you');
     const log = await this._lemoLogGet();
     this._lemoLogTrim(log);
+    if (!this.lemoTalk) this.lemoTalk = (await this.state.storage.get(TALK_KEY)) || {};
+    const talk = this.lemoTalk;
+    for (const id of Object.keys(talk)) if (now - talk[id].s > LEMO_TALK_MS) delete talk[id];
+    q.count = ((talk[uid] && talk[uid].n) || 0) + 1;
 
     this.lemoBusyAt = now;
     this._sendAll({ t: 'lemot', to: uid, k });
@@ -214,7 +224,8 @@ export class LobbyRoom {
       const at = Date.now();
       log.push({ k: 'q', u: uid, n: q.name, m: q.text, at }, { k: 'a', p: res.parts, at });
       this._lemoLogTrim(log);
-      await this.state.storage.put({ [BUDGET_KEY]: b, [LOG_KEY]: log });
+      talk[uid] = { s: (talk[uid] && talk[uid].s) || now, n: q.count };
+      await this.state.storage.put({ [BUDGET_KEY]: b, [LOG_KEY]: log, [TALK_KEY]: talk });
       this.lemoLast.set(uid, Date.now());
       this._sendAll({ t: 'lemoa', to: uid, k, p: res.parts });
       console.log(`[lemo] ${uid} in=${res.tokensIn} out=${res.tokensOut} day=$${b.usd.toFixed(4)} :: ${said}`);

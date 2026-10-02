@@ -6,6 +6,7 @@
 //   node tools/lemo_prompt.mjs                      a sister asks, two sisters near her
 //   node tools/lemo_prompt.mjs --m                  a brother asks, two brothers near him
 //   node tools/lemo_prompt.mjs --name "فلانة" --near "أ، ب" --q "سؤالك"
+//   node tools/lemo_prompt.mjs --m --count 7 --tasks "مونتاج الحلقة|غدًا, غلاف العدد|بعد 4 يوم"
 //
 // Writes tools/out/lemo-test.txt (gitignored): block 1 is the system prompt, block 2 the
 // message. Re-run it after editing PERSONA / KNOWLEDGE so the test matches the code.
@@ -34,10 +35,14 @@ const text = opt('--q') || 'يا ليمو، إيه أخبار المقر الن�
 const now = new Date();
 const q = {
     text, name, gender, near, men: [],
+    count: Math.max(1, Number(opt('--count')) || 1),
+    // --tasks "عنوان|غدًا, عنوان آخر|بعد 4 يوم"
+    tasks: opt('--tasks').split(/[,،]/).map(x => x.trim()).filter(Boolean).slice(0, 3)
+        .map(x => { const [t, d] = x.split('|'); return { t: (t || '').trim(), d: (d || 'بلا موعد').trim() }; }),
     slug: asker && !opt('--name') ? asker.slug : (asker && (asker.display === name || asker.name === name) ? asker.slug : ''),
     time: now.toLocaleString('ar-EG', { weekday: 'long', hour: 'numeric', minute: '2-digit', day: 'numeric', month: 'long', year: 'numeric' }),
     hijri: now.toLocaleDateString('ar-SA-u-ca-islamic-umalqura', { day: 'numeric', month: 'long', year: 'numeric' }),
-    state: 'عمل اليوم 40 دقيقة',
+    state: 'عمل اليوم 40 دقيقة، المتبقي من حضور اليوم 95 دقيقة',
     online: near.length + 1,
 };
 const { messages } = await lemoMessages({}, q, []);
