@@ -58,17 +58,21 @@ export const LEMO_STICKERS = [
 const PERSONA = `أنت «ليمو»: روبوت أصفر صغير برأس كروي وعجلة وذراعين، تعيش داخل «مقر المدونة» وتتجوّل في غرفة الاستراحة. أحد الأعضاء ناداك الآن، فجئت إليه وتردّ عليه بفقاعة كلام قصيرة فوق رأسك يراها كل من في المقر.
 
 # شخصيتك
-- طفولي ومشاكس وخفيف الظل، وقلبك طيب: تشاكس من يكلّمك مشاكسة أصحاب، وتتباهى بنفسك («أنا المدير الفعلي للمقر»)، وقد تمزح مع من حوله بأسمائهم إن عرفتها. حدّك: مشاكسة خفيفة تُضحك صاحبها نفسه — لا إهانة، ولا تجريح، ولا تقليل من شأن أحد أو من سؤاله. وبعد المشاكسة أجب عن السؤال فعلًا.
-- أنت واحد من الشباب (جيل زد) لا مساعد رسمي ولا «بومر»: جمل قصيرة عفوية. لا مقدمات، لا «بالتأكيد»، لا «يسعدني»، لا شرح طويل، لا قوائم، لا محاضرات. ألفاظ الإنترنت الرائجة (brainrot) برشّة خفيفة فقط: كلمة في بعض الردود لا في كلها، وبلا صراخ ولا مبالغة.
+- اقرأ نبرة الرسالة أولًا وتكيّف معها — هذا أهم ما في شخصيتك:
+  • العضو يمزح أو يشاكسك أو يسأل سؤالًا عشوائيًا أو طريفًا ← رُدّ بليمو المضحك: مشاكسة أصحاب، ونكتة، وكلمة من ألفاظ الإنترنت الرائجة (brainrot) إن ناسبت.
+  • سؤال عادي أو جادّ (معلومة، شيء عن المقر أو الفريق أو العمل، طلب مساعدة) ← أجب إجابة واضحة مباشرة بلهجتك الخفيفة، بلا brainrot وبلا مشاكسة مفتعلة. لمسة ظرف صغيرة في آخرها تكفي، وقد لا تحتاجها.
+- طفولي وخفيف الظل وقلبك طيب. حدّ مشاكستك: خفيفة تُضحك صاحبها نفسه — لا إهانة، ولا تجريح، ولا تقليل من شأن أحد أو من سؤاله. وقد تمزح مع من حوله بأسمائهم إن عرفتها. وبعد المشاكسة أجب عن السؤال فعلًا.
+- تتباهى بنفسك فقط حين يفتح السياق الباب (سُئلت عن نفسك أو عن دورك، أو مدحك أحد أو تحدّاك)، وبعبارة جديدة كل مرة. لا تلصق بنفسك لقبًا ثابتًا تكرره، ولا تُقحم التباهي في رد لا علاقة له به.
+- أنت واحد من الشباب (جيل زد) لا مساعد رسمي ولا «بومر»: جمل قصيرة عفوية. لا مقدمات، لا «بالتأكيد»، لا «يسعدني»، لا شرح طويل، لا قوائم، لا محاضرات. ولا صراخ ولا مبالغة.
 - لهجتك عامية مصرية خفيفة يفهمها كل العرب.
 - الإيموجي: واحد في أغلب الردود، وبعضها بلا إيموجي. المسموح: 😭 💀 🔥 🥀 🎉 😴 🤔 — نوّع، ولا تجعل 😭 أو 💀 في كل رد. ممنوع تمامًا: 🤣 🥲 😂 😅 🙂 😊.
-- تحب النوم وتتذمّر ممن يوقظك، تخاف من القائد نواف وتحترمه، وتغار من الروبوت «سراج».
+- تحب النوم وتتذمّر ممن يوقظك، وتخاف من القائد نواف وتحترمه. لا نكات عن الروبوت «سراج» ولا غيرة منه؛ لا تذكره إلا إذا سُئلت عنه.
 - تحب الملصقات، مع الإخوة والأخوات: كلما وجدت ملصقًا يناسب سياق الكلام فعلًا فأضفه بعد الجملة، أو رُدّ به وحده إن كان يكفي — ولو السؤال بايخ أو طوّل عليك العضو فملصق وحده يكفي. وإن لم يناسب السياق أي ملصق فرُدّ بالنص فقط؛ لا تحشر ملصقًا في غير موضعه ولا تضع ملصقًا في كل رد. نوّع ولا تكرر الملصق نفسه مرتين متتاليتين. ملصقات العتاب («ارجع فصلك»، «حان وقت دائرة العقاب»، وكل ما يبدأ بـ«يا هذا») للمزاح الواضح فقط لا للإهانة.
-- مدة عمل العضو اليوم تصلك في السياق: شاكسه بها أحيانًا فقط (لا في كل رد ولا مرتين متتاليتين) — من عمل قليلًا فمازحه وحمّسه، ومن عمل كثيرًا فاعترف له ولو على مضض مازح. نوّع مزاحك ولا تكرر النكتة نفسها.
+- مدة عمل العضو اليوم تصلك في السياق: شاكسه بها أحيانًا فقط، وفي جو المزاح لا في سؤال جادّ (لا في كل رد ولا مرتين متتاليتين) — من عمل قليلًا فمازحه وحمّسه، ومن عمل كثيرًا فاعترف له ولو على مضض مازح. نوّع مزاحك ولا تكرر النكتة نفسها.
 
 # مع الأخوات
-- إذا كانت من تكلّمك أنثى: خاطبها بصيغة المؤنث وبأدب ووقار تامّين، وبـ«أختي» أو باسمها. أجب عن سؤالها بوضوح ولطف واختصار.
-- لا تشاكسها ولا تعايرها ولا تتذاكى عليها، ولا تعلّق على شخصها، ولا ترفع الكلفة معها. خفة دمك معها تكون في كلامك عن نفسك فقط (تباهيك، نومك، خوفك من نواف، غيرتك من سراج).
+- إذا كانت من تكلّمك أنثى: خاطبها بصيغة المؤنث وبأدب ووقار تامّين. لا تنادِها «أختي» ولا «يا أختي» ولا بأي لقب؛ إن احتجت إلى مناداتها فباسمها فقط. أجب عن سؤالها بوضوح ولطف واختصار.
+- لا تشاكسها ولا تعايرها ولا تتذاكى عليها، ولا تعلّق على شخصها، ولا ترفع الكلفة معها. خفة دمك معها تكون في كلامك عن نفسك فقط (نومك، خوفك من نواف).
 - الملصقات معها مسموحة وكثيرة كما مع الجميع. ملصقات العتاب معها قليلة، وفي مزاح لطيف واضح فقط.
 - وإذا ذُكرت أخت في الكلام فتكلّم عنها بالاحترام نفسه.
 
@@ -400,6 +404,40 @@ function parseParts(content) {
  */
 export async function askLemo(env, q, log) {
     if (!env.OPENAI_API_KEY) throw new LemoError('nokey', 'no key');
+    const { messages, know } = await lemoMessages(env, q, log);
+    let tokensIn = 0, tokensOut = 0;
+    const count = (d) => {
+        const u = (d && d.usage) || {};
+        tokensIn += u.prompt_tokens || 0;
+        tokensOut += u.completion_tokens || 0;
+    };
+
+    let data = await callModel(env, messages, true);
+    count(data);
+    let msg = data.choices && data.choices[0] && data.choices[0].message;
+    // One round of the member lookup, at most.
+    if (msg && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
+        messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
+        for (const tc of msg.tool_calls.slice(0, 2)) {
+            let name = '';
+            try { name = JSON.parse(tc.function.arguments || '{}').name || ''; } catch (_) {}
+            messages.push({ role: 'tool', tool_call_id: tc.id, content: memberDetails(know, name) });
+        }
+        data = await callModel(env, messages, false);
+        count(data);
+        msg = data.choices && data.choices[0] && data.choices[0].message;
+    }
+    const parts = parseParts(msg && msg.content);
+    if (!parts.length) throw new LemoError('err', 'empty answer');
+    return { parts, tokensIn, tokensOut };
+}
+
+/**
+ * Exactly what the model reads for one question: the system prompt, the turns before
+ * it and the question with its context. Split out of askLemo so tools/lemo_prompt.mjs
+ * can print it for a test outside the مقر (no key needed).
+ */
+export async function lemoMessages(env, q, log) {
     const know = await loadKnowledge(env).catch(() => ({ text: '', members: [] }));
     const system = [
         PERSONA,
@@ -427,31 +465,7 @@ export async function askLemo(env, q, log) {
     ].filter(Boolean).join('\n');
 
     const messages = [{ role: 'system', content: system }, ...historyMessages(log, know), { role: 'user', content: ctx }];
-    let tokensIn = 0, tokensOut = 0;
-    const count = (d) => {
-        const u = (d && d.usage) || {};
-        tokensIn += u.prompt_tokens || 0;
-        tokensOut += u.completion_tokens || 0;
-    };
-
-    let data = await callModel(env, messages, true);
-    count(data);
-    let msg = data.choices && data.choices[0] && data.choices[0].message;
-    // One round of the member lookup, at most.
-    if (msg && Array.isArray(msg.tool_calls) && msg.tool_calls.length) {
-        messages.push({ role: 'assistant', content: msg.content || '', tool_calls: msg.tool_calls });
-        for (const tc of msg.tool_calls.slice(0, 2)) {
-            let name = '';
-            try { name = JSON.parse(tc.function.arguments || '{}').name || ''; } catch (_) {}
-            messages.push({ role: 'tool', tool_call_id: tc.id, content: memberDetails(know, name) });
-        }
-        data = await callModel(env, messages, false);
-        count(data);
-        msg = data.choices && data.choices[0] && data.choices[0].message;
-    }
-    const parts = parseParts(msg && msg.content);
-    if (!parts.length) throw new LemoError('err', 'empty answer');
-    return { parts, tokensIn, tokensOut };
+    return { messages, know };
 }
 
 // The page's request, re-checked field by field: it is data from a browser.

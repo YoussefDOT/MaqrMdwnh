@@ -38,3 +38,6 @@ __pycache__/
 
 # Wrangler state when a wrangler command is run from the repo root
 .wrangler/
+
+# Output of tools/lemo_prompt.mjs (ليمو's prompt, for a test outside the مقر)
+tools/out/

@@ -1691,13 +1691,16 @@ home, where his seeded life carries on.
   (`npx wrangler secret put OPENAI_API_KEY --name mdwnh-presence`). **Never put the key
   in a file, and never ask for it in a chat.**
 - **What he is and what he knows** live in `lemo.js` as plain text: `PERSONA` (the owner's 50/50
-  blend of the first, cheeky Lemo and the polite one: a mischievous gen-z robot with a
-  good heart, light Egyptian-ish Arabic — he teases a member like a friend and boasts,
-  but never insults or belittles, and still answers the question; a pinch of brainrot,
-  not in every reply; usually one emoji — 😭 💀 🔥 🥀 varied, never 🤣 🥲;
+  blend of the first, cheeky Lemo and the polite one, and it **ADAPTS to the message**:
+  a joke, a tease or a random question gets the funny Lemo (friendly teasing, a word of
+  brainrot); an ordinary or serious question gets a straight, clear answer in his light
+  Egyptian-ish Arabic with no brainrot. He never insults or belittles; boasts only when
+  the context opens the door, never a fixed title for himself (he used to shove «المدير
+  الفعلي للمقر» into everything); **no jokes about سراج**; usually one emoji — 😭 💀 🔥 🥀
+  varied, never 🤣 🥲;
   **stickers whenever one fits the context** (after the line, or alone — never forced,
   not in every reply), for brothers and sisters alike; never says he is an AI; asks an English speaker for Arabic, «يا مستعمر»
-  with brothers only; **with a sister: full respect, no teasing**; never makes a rude
+  with brothers only; **with a sister: full respect, no teasing, and never «أختي» — her name or nothing**; never makes a rude
   sound on request — a written snort «خخخ» is also dropped by `RUDE_RE` in `parseParts`), `KNOWLEDGE`, and `LATEST_WORKS`
   (**the owner fills this in** — empty, he says management hasn't told him). The member
   list + roles and the last three days of patch notes are fetched from the live sites
@@ -1715,6 +1718,12 @@ home, where his seeded life carries on.
   (mostly the cached system prompt) + ~60 out, ~2.5 s, ~$0.0003 — a few hundred tokens
   more when the room has been talking or the question mentions members. `npx wrangler tail`
   shows every question's token count and the day's running spend (`[lemo] …`).
+- **Trying his speech outside the مقر** (as a sister, say — the owner can't enter that
+  lobby): `node tools/lemo_prompt.mjs` (`--m`, `--name`, `--near "أ، ب"`, `--q`) writes
+  `tools/out/lemo-test.txt` (gitignored): the exact system prompt and the exact message
+  the model reads, built by the same `lemoMessages()` `askLemo` uses, to paste into the
+  OpenAI Playground. It never calls the model and needs no key. Re-run it after editing
+  `PERSONA` / `KNOWLEDGE`.
 - **Testing the relay without the key**: `npx wrangler dev` in `presence-server/` with a
   `.dev.vars` (gitignored) holding a dummy key and `OPENAI_BASE_URL` pointed at a local
   stub. Delete the file afterwards.
