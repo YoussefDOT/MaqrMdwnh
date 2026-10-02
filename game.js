@@ -42684,7 +42684,9 @@ function setupEmojiImages() {
 //  the reactions: _dmSetReply, _dmQuoteNode, _dmJumpTo, _dmReact, _dmPaintRx, _dmAct,
 //  _dmRxQuick; editing and deleting: _dmStartEdit, _dmCommitEdit, _dmDelete,
 //  _dmApplyDeleted, _dmPeerRowPatch; the picker: _dmEmojiPanel, _dmPop; the effects:
-//  DM_FX, _dmPlayFx, _dmScreenFx, _dmFxUnread; also _dmFillText, _dmPaintDown, _dmFocusInput.
+//  DM_FX, _dmPlayFx, _dmScreenFx, _dmFxUnread; their picker: _dmFxpOpen, _dmFxpTrack,
+//  _dmFxpHot, _dmFxpSend; the hover bar: _dmHov; ليمو's tips: DM_TIPS, _dmPaintTip;
+//  also _dmFillText, _dmPaintDown, _dmFocusInput.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const DM_MAX_LEN        = 500;
@@ -42722,19 +42724,48 @@ const DM_DOWN_SHOW_PX   = 260;     // scrolled this far up → the «to the newe
 const DM_SEND_HOLD_MS   = 380;     // the send button held this long opens the effects
 const DM_FX_LIVE_MS     = 20000;   // a message this fresh plays its effect as it arrives
 // تأثيرات الرسائل — see «تأثيرات الرسائل» below. `scr` = it fills the drawer; otherwise it plays on the bubble.
+// `c` = its colour in the picker; `ico` = its icon there (static markup, drawn in white on
+// that colour — a small picture of what the effect does).
 const DM_FX = {
-    slam:      { n: 'صدمة',         scr: false },
-    loud:      { n: 'صاخب',         scr: false },
-    gentle:    { n: 'لطيف',         scr: false },
-    ink:       { n: 'حبر سري',      scr: false },
-    confetti:  { n: 'قصاصات ملونة', scr: true },
-    balloons:  { n: 'بالونات',      scr: true },
-    fireworks: { n: 'ألعاب نارية',  scr: true },
-    love:      { n: 'قلوب',         scr: true },
-    lasers:    { n: 'ليزر',         scr: true },
-    echo:      { n: 'صدى',          scr: true },
-    spot:      { n: 'دائرة ضوء',    scr: true },
+    slam:      { n: 'صدمة',         scr: false, c: '#F04D39',
+                 ico: '<rect x="5" y="3.5" width="14" height="9.5" rx="4.2" fill="currentColor" stroke="none"/><path d="M12 16.5v4M6.5 16l-2.2 3.4M17.5 16l2.2 3.4"/>' },
+    loud:      { n: 'صاخب',         scr: false, c: '#E0A100',
+                 ico: '<path d="M3.5 9.8v4.4h3.2l5.3 4.1V5.7L6.7 9.8z" fill="currentColor" stroke-linejoin="round"/><path d="M15.6 9a4.4 4.4 0 0 1 0 6M18.4 6.4a8.2 8.2 0 0 1 0 11.2"/>' },
+    ink:       { n: 'حبر سري',      scr: false, c: '#6f6f7a',
+                 ico: '<path d="M4 4l16 16"/><path d="M9.4 6.4A9.6 9.6 0 0 1 12 6c4.9 0 8.3 4.1 9.4 6a14 14 0 0 1-2.7 3.3M6.2 8A14.4 14.4 0 0 0 2.6 12c1.1 1.9 4.5 6 9.4 6 1.3 0 2.5-.3 3.6-.8"/><path d="M10 10.2a2.9 2.9 0 0 0 3.9 3.9"/>' },
+    confetti:  { n: 'قصاصات ملونة', scr: true,  c: '#3BB9AB',
+                 ico: '<path d="M3.6 20.4l4.3-11 6.7 6.7z" fill="currentColor" stroke-linejoin="round"/><path d="M13.5 3.6l.4 2.6M18.3 4.2l-1.7 2.9M20.4 9.6l-2.9.9M19.8 14.8l-2.3-.7"/><circle cx="15.2" cy="9.6" r="1" fill="currentColor" stroke="none"/>' },
+    balloons:  { n: 'بالونات',      scr: true,  c: '#3D7DD8',
+                 ico: '<ellipse cx="12" cy="8.8" rx="5.4" ry="6.2" fill="currentColor" stroke="none"/><path d="M12 15l-1.3 2h2.6z" fill="currentColor" stroke-linejoin="round"/><path d="M12 17c0 1.8-1.6 2.2-1.2 4.2"/>' },
+    fireworks: { n: 'ألعاب نارية',  scr: true,  c: '#8a5cf0',
+                 ico: '<path d="M12 2.8v4.4M12 16.8v4.4M2.8 12h4.4M16.8 12h4.4M5.5 5.5l3.1 3.1M15.4 15.4l3.1 3.1M18.5 5.5l-3.1 3.1M8.6 15.4l-3.1 3.1"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/>' },
+    love:      { n: 'قلوب',         scr: true,  c: '#ff3b5c',
+                 ico: '<path d="M12 20.4s-7.4-4.5-9.5-9.1C1 8 2.7 4.3 6.3 4.3c2.2 0 3.9 1.2 5.7 3.4 1.8-2.2 3.5-3.4 5.7-3.4 3.6 0 5.3 3.7 3.8 7-2.1 4.6-9.5 9.1-9.5 9.1z" fill="currentColor" stroke="none"/>' },
+    lasers:    { n: 'ليزر',         scr: true,  c: '#12a36b',
+                 ico: '<path d="M4.4 19.6L20.4 3.6M4.4 19.6l16.4-8.2M4.4 19.6l8-16.2"/><circle cx="4.4" cy="19.6" r="2" fill="currentColor" stroke="none"/>' },
+    echo:      { n: 'صدى',          scr: true,  c: '#d9643a',
+                 ico: '<rect x="9" y="3.4" width="12" height="7.4" rx="3.4" fill="currentColor" stroke="none" opacity=".4"/><rect x="6" y="8.3" width="12" height="7.4" rx="3.4" fill="currentColor" stroke="none" opacity=".68"/><rect x="3" y="13.2" width="12" height="7.4" rx="3.4" fill="currentColor" stroke="none"/>' },
+    spot:      { n: 'دائرة ضوء',    scr: true,  c: '#5b6470',
+                 ico: '<path d="M12 2.6L5.2 16.4h13.6z" fill="currentColor" stroke="none" opacity=".45"/><ellipse cx="12" cy="17.6" rx="7.4" ry="2.9" fill="currentColor" stroke="none"/>' },
 };
+// نصائح ليمو — the dock under the list of conversations. One a day, in this order
+// (day 0 = DM_TIP_DAY0); a press on the dock shows the next. `p` = a phone's wording,
+// `d` = a PC's.
+const DM_TIP_DAY0 = [2026, 9, 2];
+const DM_TIPS = [
+    { p: 'جرّب الضغط المطوّل على زر الإرسال، ثم اسحب إصبعك إلى التأثير الذي يعجبك وأفلِته.',
+      d: 'جرّب الضغط المطوّل على زر الإرسال، ثم اسحب المؤشر إلى التأثير الذي يعجبك وأفلِته.' },
+    { p: 'اسحب أي رسالة إلى الجانب لتردّ عليها.',
+      d: 'مرّر الفأرة على أي رسالة لتظهر أزرار الرد والتفاعل السريع.' },
+    { p: 'الحبر السري يُخفي رسالتك إلى أن تُلمس.',
+      d: 'الحبر السري يُخفي رسالتك إلى أن تمرّ عليها الفأرة.' },
+    { p: 'اضغط على رسالتك لتعدّلها أو تحذفها.',
+      d: 'السهم ↑ في خانة كتابة فارغة يفتح آخر رسالة أرسلتها للتعديل.' },
+    { p: 'زر الصورة بجانب خانة الكتابة يرسل صورة أو صورة متحركة.',
+      d: 'الصق صورة في خانة الكتابة أو أفلِتها على المحادثة لترسلها.' },
+    { p: 'زر «+» في صف التفاعلات يفتح كل الرموز التعبيرية.',
+      d: 'زر «+» في صف التفاعلات يفتح كل الرموز التعبيرية.' },
+];
 function _dmFxOk(x) { return typeof x === 'string' && Object.prototype.hasOwnProperty.call(DM_FX, x); }
 const _DM_KEY_RE        = /^\d{13}[a-z0-9]{4}$/;                    // a message key, as _dmSend mints it
 
@@ -42756,6 +42787,9 @@ const _dm = {
     below: 0,                    // messages that arrived while the reader was scrolled up
     fxSeen: new Set(), fxT: 0, fxClearT: 0,
     sendHoldT: 0, sendHeldAt: 0,
+    // The effects picker over the send button (see «منتقي التأثيرات»).
+    fxp: { open: false, drag: false, moved: false, hot: '', pid: -1, sx: 0, sy: 0, gx: 0, gy: 0, items: [], tickAt: 0, shutAt: 0, holdAt: 0 },
+    tipSkip: 0,                  // presses on ليمو's tip dock this session
     act: '',                     // key of the message whose menu is open
     actShut: null,               // { k, at } — the menu a press just closed (so that press doesn't reopen it)
     lastRxAt: 0, holdT: 0, holdAt: 0,
@@ -43033,6 +43067,8 @@ function dmClose() {
     perfWake();
     _dmDetachThread();
     _dmPop('');
+    _dmFxpClose();
+    _dmHov(null);
     _dmZoom('');
     _dmAct('');
     _dmStashDraft();
@@ -43188,6 +43224,8 @@ function _dmShowList() {
     _dm.edit = null;
     _dmDetachThread();
     _dmPop('');
+    _dmFxpClose();
+    _dmHov(null);
     _dmAct('');
     _dmSetReply(null);
     _dm.view = 'list';
@@ -43196,8 +43234,34 @@ function _dmShowList() {
     E.viewList.hidden = false;
     E.search.value = '';
     _dmRenderList(true);
+    _dmPaintTip(false);
     // The roster may still be in flight on a fast open — fill the list when it lands.
     _mdwnhRosterReady.then(() => { if (_dm.open && _dm.view === 'list') _dmRenderList(false); });
+}
+
+// ─── نصائح ليمو — the dock under the list ────────────────────────────────────
+// One tip a day (the same one for everyone that day), the next on a press. Purely
+// local: nothing is read or written. His picture is attached here, on the first list
+// shown — a CSS background would have fetched it at page load.
+function _dmTipIndex() {
+    const now = new Date();
+    const d0 = new Date(DM_TIP_DAY0[0], DM_TIP_DAY0[1], DM_TIP_DAY0[2]).getTime();
+    const d1 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const n = Math.round((d1 - d0) / 864e5) + _dm.tipSkip;      // rounded: a DST day is 23 or 25 hours
+    return ((n % DM_TIPS.length) + DM_TIPS.length) % DM_TIPS.length;
+}
+function _dmPaintTip(next) {
+    const E = _dm.els;
+    if (!E || !E.tip) return;
+    if (next) _dm.tipSkip++;
+    const tip = DM_TIPS[_dmTipIndex()];
+    E.tipText.textContent = isMobile() ? tip.p : tip.d;
+    if (!E.tipAv.style.backgroundImage) E.tipAv.style.backgroundImage = 'url(' + JSON.stringify(LEMO_PFP) + ')';
+    if (!next) return;
+    E.tip.classList.remove('swap');
+    void E.tip.offsetWidth;                      // restart the little hop
+    E.tip.classList.add('swap');
+    _meetBlip(1.15, 0.035);
 }
 
 // ─── A thread ────────────────────────────────────────────────────────────────
@@ -43332,6 +43396,11 @@ function _dmOnMsg(peer, key, v) {
         const near = _dmNearEnd();
         _dmPaintThreadState();
         box.appendChild(_dmMsgNode(msg, _dmPrevShown(th, th.msgs.length - 1), true));
+        // `fresh` is only the entrance. Left on, anything that swapped the row's
+        // animation for a moment (the slam's quake) REPLAYED the entrance of every
+        // message of this visit when it ended.
+        const fr = box.lastElementChild;
+        if (fr) setTimeout(() => fr.classList.remove('fresh'), 520);
         if (near || msg.f === _dm.me) box.scrollTop = box.scrollHeight;
         else if (th.loaded) { _dm.below++; _dmPaintDown(); }
         _dmFxArrived(peer, th, msg);
@@ -43456,15 +43525,11 @@ function _dmMsgNode(msg, prev, fresh) {
         _dmFillText(tx, msg.m);
         bub.appendChild(tx);
     }
-    // The bubble and, beside it, the button a mouse gets on hover (a phone taps the
-    // bubble itself — see setupDmUI).
+    // The bubble in its own line (a swipe moves the line; an effect animates it). A
+    // mouse gets the quick-actions bar on hover (_dmHov); a phone taps the bubble.
     const line = document.createElement('div');
     line.className = 'dm-line';
-    const more = document.createElement('button');
-    more.type = 'button';
-    more.className = 'dm-more';
-    more.setAttribute('aria-label', 'خيارات الرسالة');
-    line.append(bub, more);
+    line.appendChild(bub);
     row.appendChild(line);
     const rx = _dmRxNode(msg, '');
     if (rx) row.appendChild(rx);
@@ -43498,6 +43563,7 @@ function _dmRenderThread() {
     const E = _dm.els;
     const th = _dmThread(_dm.peer);
     _dmAct('');                      // its row is about to be rebuilt
+    _dmHov(null);
     const frag = document.createDocumentFragment();
     let prev = null;
     for (const m of th.msgs) {
@@ -43527,7 +43593,9 @@ function _dmRepaintMsg(peer, msg) {
     if (_dm.act === msg.k) _dmAct('');
     const nw = _dmMsgNode(msg, _dmPrevShown(th, th.msgs.indexOf(msg)), false).querySelector('.dm-msg');
     if (!nw) return;
+    const hov = _dm.els.hov && _dm.els.hov.parentNode === row;
     row.replaceWith(nw);
+    if (hov) _dmHov(nw, true);       // the bar was on the old row
     _dmRefreshQuotes(msg.k);
     if (near) E.msgs.scrollTop = E.msgs.scrollHeight;
 }
@@ -43585,6 +43653,8 @@ function _dmShowThread(peer) {
     const E = _dm.els;
     _dmStashDraft();
     _dmPop('');
+    _dmFxpClose();
+    _dmHov(null);
     _dmAct('');
     _dmConfirmClose();
     _dm.edit = null;
@@ -44164,15 +44234,25 @@ function _dmApplyDeleted(peer, msg) {
 }
 
 // ─── تأثيرات الرسائل — message effects ───────────────────────────────────────
-// A message may carry `x`, one of DM_FX: four that play on the BUBBLE (صدمة، صاخب،
-// لطيف، حبر سري) and seven that fill the drawer (قصاصات، بالونات، ألعاب نارية، قلوب،
-// ليزر، صدى، دائرة ضوء). Sent by HOLDING the send button (a right-click on a PC).
+// A message may carry `x`, one of DM_FX: three that play on the BUBBLE (صدمة، صاخب،
+// حبر سري) and seven that fill the drawer (قصاصات، بالونات، ألعاب نارية، قلوب،
+// ليزر، صدى، دائرة ضوء). Sent by HOLDING the send button and dragging to one
+// (see «منتقي التأثيرات»). An `x` this client doesn't know (the retired «لطيف») is
+// simply dropped on read — the message shows as an ordinary one.
 //   • It plays when the message arrives while the thread is open, and — for what
 //     came in while it was closed — the newest unread one plays once, on opening.
 //     «أعد التأثير» in the message's menu replays it.
 //   • Everything is CSS: elements animating transform / opacity only, built for one
 //     burst and removed after it. No timer loop, no canvas, nothing left running.
 //     `prefers-reduced-motion` gets the message without the show.
+//   • SMOOTHNESS RULES (each was a visible stutter): a keyframe's timing function
+//     applies PER SEGMENT, so a path with a middle keyframe eases to a stop there —
+//     every travel is therefore ONE segment (0% → 100%) on the outer element, and
+//     anything that sways / pops / spins rides an inner element with its own
+//     animation. And a screen effect measures the bubble a frame LATER
+//     (requestAnimationFrame): sending closes the emoji / sticker drawer in the same
+//     task, the list grows by its height, and a rect read before that put the hearts
+//     and the spotlight on a message further up.
 //   • Secret ink is a STATE, not a burst: the words stay blurred until hovered or
 //     tapped. The blur is static (invariant 12).
 function _dmFxReduced() {
@@ -44222,19 +44302,23 @@ function _dmPlayFx(msg) {
     if (kind === 'ink') { row.classList.remove('ink-open'); return; }
     if (_dmFxReduced()) return;
     if (!DM_FX[kind].scr) {
-        row.classList.remove('fx-slam', 'fx-loud', 'fx-gentle');
+        row.classList.remove('fresh', 'fx-slam', 'fx-loud');    // the effect IS its entrance
         void row.offsetWidth;                    // restart it if it is still playing
         row.classList.add('fx-' + kind);
         setTimeout(() => row.classList.remove('fx-' + kind), 2600);
+        // The others jump as it lands (DM_SLAM_HIT_MS = the keyframe where it hits).
         if (kind === 'slam') setTimeout(() => {
             if (!row.isConnected) return;
             E.msgs.classList.add('fx-quake');
-            setTimeout(() => E.msgs.classList.remove('fx-quake'), 460);
-        }, 290);
+            setTimeout(() => E.msgs.classList.remove('fx-quake'), 520);
+        }, DM_SLAM_HIT_MS);
         return;
     }
-    _dmScreenFx(kind, row, msg);
+    requestAnimationFrame(() => {
+        if (row.isConnected && _dmThreadShown(_dm.peer)) _dmScreenFx(kind, row, msg);
+    });
 }
+const DM_SLAM_HIT_MS = 235;
 const DM_FX_COLORS = ['#F04D39', '#F7B500', '#3BB9AB', '#3D7DD8', '#ff8fb1', '#ffffff'];
 function _dmFxClear() {
     const L = _dm.els && _dm.els.fx;
@@ -44262,51 +44346,69 @@ function _dmScreenFx(kind, row, msg) {
         return d;
     };
     const small = isMobile();
+    // An element, and inside it the part that moves on its own (see the smoothness rules).
+    const addIn = (cls, css, inCss) => {
+        const d = add(cls, css);
+        const i = document.createElement('i');
+        if (inCss) i.style.cssText = inCss;
+        d.appendChild(i);
+        return d;
+    };
     let ms = 3600;
     if (kind === 'confetti') {
-        for (let i = 0, n = small ? 54 : 84; i < n; i++) {
+        // One element each: it falls and tumbles in 3D in the same single segment.
+        for (let i = 0, n = small ? 48 : 80; i < n; i++) {
+            const dur = +rnd(2.3, 3.9, 2);
             add('dm-cf', `left:${rnd(0, 100, 1)}%;background:${pick(DM_FX_COLORS)};width:${rnd(6, 11)}px;height:${rnd(9, 16)}px;`
-                + `--dx:${rnd(-90, 90)}px;--dy:${Math.round(H + 70)}px;--r:${rnd(-900, 900)}deg;`
-                + `animation-duration:${rnd(2.1, 3.5, 2)}s;animation-delay:${rnd(0, 0.7, 2)}s;`);
+                + `--dx:${rnd(-110, 110)}px;--dy:${Math.round(H + 70)}px;`
+                + `--ax:${rnd(-1, 1, 2)};--ay:${rnd(-1, 1, 2)};--az:${rnd(0.15, 1, 2)};--r:${Math.round(dur * rnd(260, 520)) * (Math.random() < 0.5 ? -1 : 1)}deg;`
+                + `animation-duration:${dur}s;animation-delay:${rnd(0, 0.8, 2)}s;`);
         }
-        ms = 4500;
+        ms = 5000;
     } else if (kind === 'balloons') {
-        for (let i = 0; i < 13; i++) {
-            add('dm-bl', `left:${rnd(2, 82, 1)}%;--c:${pick(DM_FX_COLORS.slice(0, 5))};width:${rnd(44, 72)}px;`
-                + `--dy:${-Math.round(H + 240)}px;--sx:${rnd(-36, 36)}px;`
-                + `animation-duration:${rnd(3, 4.4, 2)}s;animation-delay:${rnd(0, 0.9, 2)}s;`);
+        for (let i = 0, n = small ? 10 : 13; i < n; i++) {
+            addIn('dm-bl', `left:${rnd(2, 82, 1)}%;--c:${pick(DM_FX_COLORS.slice(0, 5))};width:${rnd(44, 72)}px;`
+                + `--dy:${-Math.round(H + 260)}px;--sx:${rnd(-44, 44)}px;`
+                + `animation-duration:${rnd(3.2, 4.6, 2)}s;animation-delay:${rnd(0, 0.9, 2)}s;`,
+                `animation-duration:${rnd(1.3, 2.1, 2)}s;animation-delay:-${rnd(0, 2, 2)}s;`);
         }
-        ms = 5500;
+        ms = 5800;
     } else if (kind === 'fireworks') {
         L.classList.add('dark');
-        for (let b = 0; b < 5; b++) {
+        for (let b = 0, nb = small ? 4 : 5; b < nb; b++) {
             const cx = Math.round(W * (0.14 + Math.random() * 0.72)), cy = Math.round(H * (0.12 + Math.random() * 0.42));
-            const col = pick(DM_FX_COLORS), delay = b * 0.42 + Math.random() * 0.15, n = small ? 18 : 24;
+            const col = pick(DM_FX_COLORS), delay = (b * 0.42 + Math.random() * 0.15).toFixed(2), n = small ? 14 : 20;
+            // The burst is one box (it sinks a little as it fades — gravity, once for
+            // all its sparks), holding a flash and the sparks.
+            const g = add('dm-fwb', `left:${cx}px;top:${cy}px;--dl:${delay}s;--c:${col};`);
+            const flash = document.createElement('b');
+            g.appendChild(flash);
             for (let i = 0; i < n; i++) {
-                add('dm-fw', `left:${cx}px;top:${cy}px;background:${col};--a:${Math.round((360 / n) * i + Math.random() * 10 - 5)}deg;`
-                    + `--d:${rnd(54, 128)}px;animation-delay:${delay.toFixed(2)}s;`);
+                const sp = document.createElement('i');
+                sp.style.cssText = `--a:${Math.round((360 / n) * i + Math.random() * 10 - 5)}deg;--d:${rnd(54, 128)}px;`;
+                g.appendChild(sp);
             }
         }
-        ms = 3900;
+        ms = 4000;
     } else if (kind === 'love') {
-        add('dm-hr big', `left:${bx}px;top:${by}px;--dy:${-Math.round(by + 160)}px;--sx:${rnd(-26, 26)}px;`);
+        addIn('dm-hr big', `left:${bx}px;top:${by}px;--dy:${-Math.round(by + 170)}px;--sx:${rnd(-26, 26)}px;--dl:0s;`);
         for (let i = 0; i < 10; i++) {
-            add('dm-hr', `left:${bx + Math.round(Math.random() * 150 - 75)}px;top:${by}px;--dy:${-Math.round(by + 100 + Math.random() * 80)}px;`
-                + `--sx:${rnd(-50, 50)}px;--s:${rnd(0.35, 0.8, 2)};animation-delay:${rnd(0.25, 1.3, 2)}s;`);
+            addIn('dm-hr', `left:${bx + Math.round(Math.random() * 150 - 75)}px;top:${by}px;--dy:${-Math.round(by + 100 + Math.random() * 80)}px;`
+                + `--sx:${rnd(-50, 50)}px;--s:${rnd(0.35, 0.8, 2)};--dl:${rnd(0.25, 1.3, 2)}s;`);
         }
-        ms = 4300;
+        ms = 4600;
     } else if (kind === 'lasers') {
         L.classList.add('dark');
         for (let i = 0; i < 9; i++) {
             const a0 = Math.random() * 360;
             add('dm-lz', `left:${bx}px;top:${by}px;--c:${pick(DM_FX_COLORS.slice(0, 5))};--a0:${Math.round(a0)}deg;`
                 + `--a1:${Math.round(a0 + (Math.random() < 0.5 ? -1 : 1) * (50 + Math.random() * 90))}deg;`
-                + `animation-duration:${rnd(0.9, 1.6, 2)}s;`);
+                + `--t:${rnd(0.9, 1.6, 2)}s;`);
         }
         ms = 3300;
     } else if (kind === 'echo') {
         const text = (msg.m || '').replace(/\s+/g, ' ').slice(0, 40);
-        for (let i = 0, n = small ? 16 : 24; i < n; i++) {
+        for (let i = 0, n = small ? 14 : 22; i < n; i++) {
             const d = add('dm-ec', `left:${rnd(2, 70, 1)}%;top:${rnd(3, 88, 1)}%;--s:${rnd(0.55, 1.45, 2)};animation-delay:${rnd(0, 1.1, 2)}s;`);
             if (text) { d.dir = 'auto'; d.textContent = text; }
             else if (msg.s) {
@@ -44317,7 +44419,7 @@ function _dmScreenFx(kind, row, msg) {
                 d.appendChild(im);
             } else d.textContent = '📷';
         }
-        ms = 3500;
+        ms = 3600;
     } else if (kind === 'spot') {
         L.classList.add('spot');
         L.style.setProperty('--x', bx + 'px');
@@ -44620,25 +44722,6 @@ function _dmPop(kind, forKey) {
         };
         mount();
         if (!_emoImgs.ready) emoLoadData().then((ok) => { if (ok && _dm.pop === 'emoji') mount(); });
-    } else if (kind === 'fx') {
-        const group = (title, scr) => {
-            const h = document.createElement('h4');
-            h.textContent = title;
-            const row = document.createElement('div');
-            row.className = 'dm-fx-row';
-            for (const [id, d] of Object.entries(DM_FX)) {
-                if (d.scr !== scr) continue;
-                const b = document.createElement('button');
-                b.type = 'button';
-                b.className = 'dm-fx-chip';
-                b.dataset.fx = id;
-                b.textContent = d.n;
-                row.appendChild(b);
-            }
-            E.pop.append(h, row);
-        };
-        group('أرسلها بتأثير على الفقاعة', false);
-        group('أو بتأثير يملأ المحادثة', true);
     } else if (kind === 'stk') {
         const s = document.createElement('input');
         s.type = 'search';
@@ -44676,6 +44759,223 @@ function _dmPop(kind, forKey) {
         E.pop.append(s, grid);
         fill();
         loadStickers().then(() => { if (_dm.pop === 'stk' && E.pop.contains(grid)) fill(); });
+    }
+}
+
+// ─── منتقي التأثيرات — the effects picker over the send button ───────────────
+// HOLD the send button: a small sheet grows out of it (the phone buzzes). Still
+// holding, DRAG onto it: the effect under the finger lights up — one «lens» slides
+// between them on a spring and stretches the way it travels, a buzz and a tick per
+// step — and LETTING GO sends the message with it. Let go without moving and it stays
+// open, to be tapped (that is also what a right-click on a PC opens); let go
+// anywhere else and it closes with nothing sent.
+//   • The whole gesture is ONE pointer, captured by the send button, so the moves
+//     keep coming once the finger has left it (`touch-action: none` on the button, or
+//     the browser would take the drag for a scroll and cancel it).
+//   • What is under the finger is ARITHMETIC: every cell's box is measured once on
+//     open (offsets, so the sheet's own grow-in transform doesn't skew them) — no
+//     elementFromPoint and no layout read per move.
+//   • "Liquid glass" here is the MOTION only: springs and squash. No backdrop-filter
+//     (invariant 10) — it runs the same on every tier.
+//   • Two columns, not one long list: with the keyboard up a phone has ~350px above
+//     the compose bar; ten rows would not fit, five do (the row height shrinks to fit).
+function _dmBuzz(ms) { try { if (navigator.vibrate) navigator.vibrate(ms); } catch (_) {} }
+function _dmFxpBuild() {
+    const E = _dm.els, P = E.fxp;
+    if (!P || P.firstChild) return;
+    const title = document.createElement('div');
+    title.className = 'dm-fxp-title';
+    title.textContent = 'أرسلها بتأثير';
+    const grid = document.createElement('div');
+    grid.className = 'dm-fxp-grid';
+    const lens = document.createElement('i');
+    lens.className = 'dm-fxp-lens';
+    lens.appendChild(document.createElement('i'));
+    grid.appendChild(lens);
+    const ids = Object.keys(DM_FX), rows = Math.ceil(ids.length / 2);
+    ids.forEach((id, k) => {
+        const d = DM_FX[id];
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dm-fxp-item';
+        b.dataset.fx = id;
+        b.setAttribute('role', 'menuitem');
+        // They pop in from the send button outward: the bottom row first.
+        b.style.setProperty('--i', String((rows - 1 - Math.floor(k / 2)) * 2 + (1 - (k % 2))));
+        const ic = document.createElement('span');
+        ic.className = 'dm-fxp-ico';
+        ic.style.backgroundColor = d.c;
+        // Static markup from DM_FX above — never a member's text.
+        ic.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">' + d.ico + '</svg>';
+        const nm = document.createElement('span');
+        nm.className = 'dm-fxp-n';
+        nm.textContent = d.n;
+        b.append(ic, nm);
+        grid.appendChild(b);
+    });
+    P.append(title, grid);
+    E.fxpGrid = grid;
+    E.fxpLens = lens;
+}
+// Opens it (true), or says why not (false). `drag` = the finger is still down on the
+// send button and is about to slide onto it.
+function _dmFxpOpen(drag) {
+    const E = _dm.els, f = _dm.fxp;
+    if (!E || !E.fxp || !_dm.open || _dm.view !== 'thread') return false;
+    if (_dm.edit || _dm.attBusy || !dmCanMessage(_dm.peer)) return false;
+    if (!_dmCleanText(E.input.value, DM_MAX_LEN) && !_dm.att) { _libToast('اكتب رسالتك أولًا ثم اختر تأثيرها'); return false; }
+    _dmFxpBuild();
+    _dmAct('');
+    _dmHov(null);
+    const P = E.fxp, send = E.send, card = E.card;
+    const cr = card.getBoundingClientRect(), sr = send.getBoundingClientRect();
+    const cl = card.clientLeft, ct = card.clientTop;
+    // Five rows have to fit between the top of the drawer and the send button.
+    const room = sr.top - cr.top - 78;
+    P.style.setProperty('--fxp-row', Math.max(34, Math.min(46, Math.floor(room / 5) - 4)) + 'px');
+    const pw = P.offsetWidth;
+    let left = Math.round(sr.left - cr.left - cl - 6);
+    left = Math.max(8, Math.min(left, card.clientWidth - pw - 8));
+    P.style.left = left + 'px';
+    P.style.bottom = Math.round(card.clientHeight - (sr.top - cr.top - ct) + 10) + 'px';
+    // It grows out of the button.
+    P.style.transformOrigin = Math.round(sr.left + sr.width / 2 - cr.left - cl - left) + 'px calc(100% + 26px)';
+    // Every cell's box, in screen px, read once.
+    const G = E.fxpGrid;
+    f.gx = cr.left + cl + P.offsetLeft + P.clientLeft + G.offsetLeft;
+    f.gy = cr.top + ct + P.offsetTop + P.clientTop + G.offsetTop;
+    f.items = [];
+    for (const b of G.querySelectorAll('.dm-fxp-item')) {
+        f.items.push({ id: b.dataset.fx, el: b, x: b.offsetLeft, y: b.offsetTop, w: b.offsetWidth, h: b.offsetHeight });
+    }
+    const it0 = f.items[0];
+    if (it0) { E.fxpLens.style.width = it0.w + 'px'; E.fxpLens.style.height = it0.h + 'px'; }
+    f.open = true;
+    f.drag = !!drag;
+    f.hot = '';
+    f.moved = false;
+    E.fxpLens.classList.remove('show');
+    for (const it of f.items) it.el.classList.remove('hot');
+    P.classList.add('on');
+    P.setAttribute('aria-hidden', 'false');
+    send.classList.add('held');
+    _dmBuzz(14);
+    _meetBlip(0.9, 0.04);
+    return true;
+}
+function _dmFxpClose() {
+    const E = _dm.els, f = _dm.fxp;
+    if (!E || !E.fxp || !f.open) return;
+    f.open = false;
+    f.drag = false;
+    f.hot = '';
+    f.shutAt = Date.now();
+    E.fxp.classList.remove('on');
+    E.fxp.setAttribute('aria-hidden', 'true');
+    E.send.classList.remove('held');
+}
+// The effect the pointer is on ('' = none). The lens slides to it, stretched along
+// the way it came; the first one it lands on it simply appears at.
+function _dmFxpHot(id) {
+    const E = _dm.els, f = _dm.fxp;
+    if (!f.open || f.hot === id) return;
+    const prev = f.items.find(x => x.id === f.hot), cur = f.items.find(x => x.id === id);
+    if (prev) prev.el.classList.remove('hot');
+    f.hot = cur ? id : '';
+    const lens = E.fxpLens;
+    if (!cur) { lens.classList.remove('show'); return; }
+    cur.el.classList.add('hot');
+    const jel = lens.firstChild;
+    lens.classList.toggle('jump', !prev);       // nothing to slide from: no travel
+    lens.style.transform = 'translate(' + cur.x + 'px,' + cur.y + 'px)';
+    const side = prev && Math.abs(cur.x - prev.x) > Math.abs(cur.y - prev.y);
+    jel.style.setProperty('--sx', !prev ? '0.7' : side ? '1.16' : '0.9');
+    jel.style.setProperty('--sy', !prev ? '0.7' : side ? '0.86' : '1.2');
+    jel.style.setProperty('--rx', !prev ? '1.05' : side ? '0.96' : '1.04');
+    jel.style.setProperty('--ry', !prev ? '1.05' : side ? '1.05' : '0.95');
+    jel.classList.remove('j');
+    void jel.offsetWidth;                       // restart the wobble (once per step, never per frame)
+    jel.classList.add('j');
+    lens.classList.add('show');
+    _dmBuzz(7);
+    // A tick per step, a little higher the further up the sheet.
+    const now = performance.now();
+    if (now - f.tickAt > 45) {
+        f.tickAt = now;
+        _meetBlip(1.25 + (1 - cur.y / Math.max(1, f.items[f.items.length - 1].y + cur.h)) * 0.5, 0.03);
+    }
+}
+// The pointer, in screen px, while it is held: which cell is it on? A little slack
+// around the sheet, so a finger at its edge still holds the nearest cell.
+function _dmFxpTrack(x, y) {
+    const f = _dm.fxp;
+    if (!f.open) return;
+    if (!f.moved && Math.hypot(x - f.sx, y - f.sy) > 14) f.moved = true;
+    const lx = x - f.gx, ly = y - f.gy, M = 14;
+    let best = '', bd = Infinity;
+    for (const it of f.items) {
+        const dx = Math.max(it.x - lx, 0, lx - (it.x + it.w)), dy = Math.max(it.y - ly, 0, ly - (it.y + it.h));
+        const d = dx * dx + dy * dy;
+        if (d < bd) { bd = d; best = it.id; }
+    }
+    _dmFxpHot(bd <= M * M ? best : '');
+}
+function _dmFxpSend(id) {
+    if (!_dmFxOk(id)) return;
+    _dmFxpClose();
+    _dmBuzz(18);
+    _dmSubmit(id);
+}
+
+// ─── شريط الرسالة — quick actions on hover (a mouse only) ────────────────────
+// Like Discord: the pointer on a message brings a small bar onto its top corner —
+// three quick reactions, «any emoji», reply, and «⋯» for the full menu (edit, delete,
+// copy, replay the effect). ONE element, moved from row to row (a child of the row it
+// is on, so it scrolls with it and the row's :hover covers it). A phone has no hover:
+// it taps the bubble, as before.
+function _dmHov(row, force) {
+    const E = _dm.els, H = E && E.hov;
+    if (!H) return;
+    if (!row) { if (H.parentNode) H.remove(); return; }
+    if (H.parentNode === row && !force) return;
+    const msg = _dmFindMsg(_dmThread(_dm.peer), row.dataset.k || '');
+    const can = dmCanMessage(_dm.peer);
+    if (!msg || msg.d || row.classList.contains('failed') || row.classList.contains('out') || (!can && !msg.m)) {
+        if (H.parentNode) H.remove();
+        return;
+    }
+    H.textContent = '';
+    const btn = (what, label) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'dm-hov-btn ' + what;
+        b.dataset.do = what;
+        b.title = label;
+        b.setAttribute('aria-label', label);
+        H.appendChild(b);
+    };
+    if (can) {
+        const mine = msg.rx[_dm.me] || '';
+        for (const e of _dmRxQuick(mine).slice(0, 3)) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'dm-hov-emo' + (mine === e ? ' on' : '');
+            b.dataset.e = e;                 // never read back from its text (invariant 36)
+            b.setAttribute('aria-label', 'تفاعل بـ ' + e);
+            b.textContent = e;
+            H.appendChild(b);
+        }
+        const sep = document.createElement('i');
+        sep.className = 'dm-hov-sep';
+        H.appendChild(sep);
+        btn('rx', 'تفاعل برمز آخر');
+        btn('reply', 'رد');
+    }
+    btn('more', 'المزيد');
+    // The first row under the top edge has no room above it: the bar hangs below.
+    if (H.parentNode !== row) {
+        H.classList.toggle('low', row.getBoundingClientRect().top - E.msgs.getBoundingClientRect().top < 26);
+        row.appendChild(H);
     }
 }
 
@@ -44722,6 +45022,9 @@ function setupDmUI() {
         act: $('dm-act'),
         confirm: $('dm-confirm'), confirmText: $('dm-confirm-text'),
         fx: $('dm-fx'), down: $('dm-down'), downN: $('dm-down-n'), downKey: '',
+        fxp: $('dm-fxp'), fxpGrid: null, fxpLens: null, send: $('dm-send'),
+        tip: $('dm-tip'), tipText: $('dm-tip-text'), tipAv: $('dm-tip-av'),
+        hov: null,
         file: $('dm-file'),
         compose: $('dm-compose'), input: $('dm-input'),
         emojiBtn: $('dm-emoji-btn'), stkBtn: $('dm-stk-btn'),
@@ -44738,6 +45041,7 @@ function setupDmUI() {
         const row = e.target.closest && e.target.closest('.dm-row');
         if (row && row.dataset.peer) _dmShowThread(row.dataset.peer);
     });
+    E.tip?.addEventListener('click', () => _dmPaintTip(true));
     // Open a message's menu — unless this very press just closed it (a second press on
     // the same message puts the menu away, it doesn't bounce it).
     const actOpen = (key) => {
@@ -44757,8 +45061,6 @@ function setupDmUI() {
         if (quote) { _dmJumpTo(quote.dataset.to); return; }
         const chip = t.closest('.dm-rx-chip');
         if (chip) { _dmReact(rowKey(chip), chip.dataset.e); return; }
-        const more = t.closest('.dm-more');
-        if (more) { actOpen(rowKey(more)); return; }
         const pic = t.closest('.dm-pic.ready');
         if (pic) { const im = pic.querySelector('img'); if (im) _dmZoom(im.src); return; }
         // Secret ink: the first press on it lifts the ink for a few seconds.
@@ -44861,13 +45163,38 @@ function setupDmUI() {
     E.msgs.addEventListener('touchcancel', () => { holdEnd(); swEnd(false); }, { passive: true });
     // The menu is placed once, so anything that moves the list puts it away.
     E.msgs.addEventListener('scroll', () => { if (_dm.act) _dmAct(''); _dmPaintDown(); }, { passive: true });
+    // ── The quick-actions bar: a mouse over a message (see _dmHov) ──
+    const hov = E.hov = document.createElement('div');
+    hov.className = 'dm-hov';
+    E.msgs.addEventListener('pointerover', (e) => {
+        if (e.pointerType !== 'mouse' || isMobile() || !e.target.closest) return;
+        _dmHov(e.target.closest('.dm-msg'));
+    });
+    E.msgs.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') _dmHov(null); });
+    hov.addEventListener('mousedown', (e) => e.preventDefault());       // the caret stays in the text box
+    hov.addEventListener('click', (e) => {
+        e.stopPropagation();                    // a press on the bar is not a press on the message
+        const row = hov.parentNode;
+        const key = (row && row.dataset && row.dataset.k) || '';
+        const msg = key && _dmFindMsg(_dmThread(_dm.peer), key);
+        if (!msg || msg.d || !e.target.closest) return;
+        const emo = e.target.closest('.dm-hov-emo');
+        const b = e.target.closest('.dm-hov-btn');
+        if (emo) { _dmReact(key, emo.dataset.e); _dmHov(row, true); return; }
+        if (!b) return;
+        if (b.dataset.do === 'more') { actOpen(key); return; }
+        if (_dm.act) _dmAct('');
+        if (b.dataset.do === 'reply') _dmSetReply(msg);
+        else if (b.dataset.do === 'rx') _dmPop('emoji', key);
+    });
     E.down?.addEventListener('click', () => {
         _dm.below = 0;
         const box = E.msgs;
         try { box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' }); } catch (_) { box.scrollTop = box.scrollHeight; }
     });
-    // A press anywhere else in the drawer closes it.
+    // A press anywhere else in the drawer closes it (and the effects picker).
     E.card.addEventListener('pointerdown', (e) => {
+        if (_dm.fxp.open && !_dm.fxp.drag && !E.fxp.contains(e.target)) _dmFxpClose();
         if (!_dm.act || E.act.contains(e.target)) return;
         _dm.actShut = { k: _dm.act, at: Date.now() };
         _dmAct('');
@@ -44961,33 +45288,66 @@ function setupDmUI() {
         if (Date.now() - _dm.sendHeldAt < 700) return;      // the click a hold on the send button ends in
         _dmSubmit();
     });
-    // Holding the send button (a right-click on a PC) offers the effects.
-    const sendBtn = $('dm-send');
-    const fxOffer = () => {
-        if (_dm.edit || _dm.attBusy) return;
-        if (!_dmCleanText(E.input.value, DM_MAX_LEN) && !_dm.att) { _libToast('اكتب رسالتك أولًا ثم اختر تأثيرها'); return; }
-        _dmPop(_dm.pop === 'fx' ? '' : 'fx');
-    };
+    // Holding the send button offers the effects (see «منتقي التأثيرات»): hold, drag
+    // onto one, let go. A right-click on a PC opens the same sheet to be clicked.
+    const sendBtn = E.send, fxp = _dm.fxp;
     const sendUp = () => { clearTimeout(_dm.sendHoldT); _dm.sendHoldT = 0; };
+    // The pointer that was holding the button let go (or the browser took it away).
+    const sendRelease = (e, cancelled) => {
+        const held = !_dm.sendHoldT && fxp.open && fxp.drag && e.pointerId === fxp.pid;
+        sendUp();
+        try { sendBtn.releasePointerCapture(e.pointerId); } catch (_) {}
+        if (!held) return;
+        fxp.drag = false;
+        _dm.sendHeldAt = Date.now();            // the click this release ends in is not a send
+        if (cancelled) return;                  // it stays open: a tap picks
+        _dmFxpTrack(e.clientX, e.clientY);
+        if (fxp.hot) _dmFxpSend(fxp.hot);
+        else if (fxp.moved) _dmFxpClose();      // dragged off it and let go: nothing is sent
+    };
     if (sendBtn) {
         sendBtn.addEventListener('pointerdown', (e) => {
             if (e.button) return;
             sendUp();
+            fxp.pid = e.pointerId;
+            fxp.sx = e.clientX; fxp.sy = e.clientY;
+            // Captured: the moves keep arriving after the pointer has left the button.
+            try { sendBtn.setPointerCapture(e.pointerId); } catch (_) {}
             _dm.sendHoldT = setTimeout(() => {
                 _dm.sendHoldT = 0;
-                _dm.sendHeldAt = Date.now();
-                try { navigator.vibrate && navigator.vibrate(8); } catch (_) {}
-                fxOffer();
+                fxp.holdAt = Date.now();
+                // Only a hold that OPENED it eats the click it ends in — a hold on the
+                // ✓ of an edit (no effects there) must still save the edit.
+                if (_dmFxpOpen(true)) _dm.sendHeldAt = Date.now();
             }, DM_SEND_HOLD_MS);
         });
-        for (const ev of ['pointerup', 'pointerleave', 'pointercancel']) sendBtn.addEventListener(ev, sendUp);
+        sendBtn.addEventListener('pointermove', (e) => {
+            if (fxp.open && fxp.drag && e.pointerId === fxp.pid) _dmFxpTrack(e.clientX, e.clientY);
+        });
+        sendBtn.addEventListener('pointerup', (e) => sendRelease(e, false));
+        sendBtn.addEventListener('pointercancel', (e) => sendRelease(e, true));
         sendBtn.addEventListener('contextmenu', (e) => {
             e.preventDefault();
+            if (Date.now() - fxp.holdAt < 900 || fxp.drag) return;   // Android's long press: the hold above already handled it
             sendUp();
-            if (Date.now() - _dm.sendHeldAt < 900) return;   // Android's long press: the hold above already opened it
-            _dm.sendHeldAt = Date.now();
-            fxOffer();
+            // A second right-click puts it away (its own press has just closed it —
+            // see the card's pointerdown — so it must not open it again).
+            if (!fxp.open && Date.now() - fxp.shutAt > 400) _dmFxpOpen(false);
         });
+    }
+    if (E.fxp) {
+        E.fxp.addEventListener('mousedown', (e) => e.preventDefault());     // the caret stays in the text box
+        E.fxp.addEventListener('click', (e) => {
+            const it = e.target.closest && e.target.closest('.dm-fxp-item');
+            if (it && fxp.open) _dmFxpSend(it.dataset.fx);
+        });
+        // A mouse over the open sheet lights the cell it is on, the same way.
+        E.fxp.addEventListener('pointermove', (e) => {
+            if (e.pointerType !== 'mouse' || !fxp.open || fxp.drag || !e.target.closest) return;
+            const it = e.target.closest('.dm-fxp-item');
+            _dmFxpHot(it ? it.dataset.fx : '');
+        });
+        E.fxp.addEventListener('pointerleave', () => { if (!fxp.drag) _dmFxpHot(''); });
     }
     E.input.addEventListener('input', _dmAutosize);
     E.input.addEventListener('keydown', (e) => {
@@ -45037,8 +45397,6 @@ function setupDmUI() {
             emoNoteUsed(v);
             return;
         }
-        const fx = t.closest('.dm-fx-chip');
-        if (fx) { _dmSubmit(fx.dataset.fx); return; }
         const st = t.closest('.dm-stk');
         if (st && st.dataset.stk) {
             if (_dmSend('', st.dataset.stk)) { _stkNoteUsed(st.dataset.stk); _dmPop(''); }
@@ -45054,6 +45412,7 @@ function setupDmUI() {
         const zoom = document.getElementById('dm-zoom');
         if (zoom && !zoom.hidden) { _dmZoom(''); return; }
         if (_dm.delKey) { _dmConfirmClose(); return; }
+        if (_dm.fxp.open) { _dmFxpClose(); return; }
         if (_dm.act) { _dmAct(''); return; }
         if (_dm.pop) { _dmPop(''); return; }
         if (_dm.edit) { _dmEndEdit(true); return; }
@@ -45072,6 +45431,7 @@ function setupDmUI() {
     panel.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
     const fit = () => {
         if (!_dm.open) return;
+        _dmFxpClose();                          // it was placed for the old size
         _dmFitViewport();
         if (_dm.view === 'thread') E.msgs.scrollTop = E.msgs.scrollHeight;
     };

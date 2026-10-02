@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 359 · Updated 10/2 7:44 AM</div>
+    <div id="build-number" class="build-number">Build 360 · Updated 10/2 7:58 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -702,6 +702,15 @@
                            autocapitalize="off" autocorrect="off" spellcheck="false" aria-label="ابحث عن عضو">
                 </div>
                 <div id="dm-list" class="dm-list"></div>
+                <!-- نصائح ليمو: نصيحة كل يوم، والضغط يُظهر التالية. صورته تُحمَّل من JS عند
+                     أول فتح للقائمة (لا خلفية CSS: كانت ستُحمَّل مع الصفحة). -->
+                <button id="dm-tip" class="dm-tip" type="button" aria-label="نصيحة من ليمو — اضغط لنصيحة أخرى">
+                    <span id="dm-tip-av" class="dm-tip-av" aria-hidden="true"></span>
+                    <span class="dm-tip-bub">
+                        <b>نصيحة ليمو</b>
+                        <span id="dm-tip-text"></span>
+                    </span>
+                </button>
             </section>
             <section id="dm-view-thread" class="dm-view" hidden>
                 <header class="dm-head dm-head-thread">
@@ -779,8 +788,9 @@
                     </button>
                     <textarea id="dm-input" class="dm-input" rows="1" maxlength="500" placeholder="اكتب رسالة…"
                               enterkeyhint="send" autocapitalize="off" aria-label="اكتب رسالة خاصة"></textarea>
-                    <!-- ضغطة: إرسال (أو حفظ التعديل). ضغطة مطوّلة أو زر الفأرة الأيمن: إرسال بتأثير -->
-                    <button id="dm-send" class="dm-send" type="submit" aria-label="إرسال" title="إرسال — اضغط مطوّلًا لإرسالها بتأثير">
+                    <!-- ضغطة: إرسال (أو حفظ التعديل). ضغطة مطوّلة ثم سحب إلى تأثير وإفلات: إرسال
+                         بذلك التأثير (أو زر الفأرة الأيمن ثم نقرة). انظر #dm-fxp. -->
+                    <button id="dm-send" class="dm-send" type="submit" aria-label="إرسال" title="إرسال — اضغط مطوّلًا واسحب إلى تأثير">
                         <svg class="dm-send-go" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                             <path d="M20 12L4 5l3 7-3 7z"/>
                         </svg>
@@ -794,6 +804,9 @@
             <!-- تأثيرات الرسائل التي تملأ المحادثة (قصاصات، بالونات، ألعاب نارية…) — عناصر
                  يبنيها game.js لدفقة واحدة ثم يزيلها. لا تستقبل ضغطًا. -->
             <div id="dm-fx" class="dm-fx" aria-hidden="true"></div>
+            <!-- منتقي التأثيرات: يخرج من زر الإرسال عند الضغط المطوّل؛ يبنيه game.js
+                 (_dmFxpBuild) ويضعه فوق الزر. -->
+            <div id="dm-fxp" class="dm-fxp" role="menu" aria-label="أرسلها بتأثير" aria-hidden="true"></div>
         </div>
     </div>
     <!-- عرض صورة من محادثة خاصة بالحجم الكامل -->
@@ -2499,7 +2512,7 @@
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
         <link rel="modulepreload" href="firebase-config.js?v=4">
-        <script type="module" src="game.js?v=336"></script>
+        <script type="module" src="game.js?v=337"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

@@ -13293,6 +13293,63 @@ body.is-mobile .news-list { padding: 6px 16px 20px; }
 }
 .dm-empty { margin: 28px 16px; text-align: center; font-size: 14px; color: #8e8e8f; }
 
+/* نصائح ليمو — رصيف تحت القائمة: صورته وفقاعة كلام. الضغط يُظهر النصيحة التالية.
+   (صورته تُكتب من JS عند أول فتح، لا هنا — خلفية CSS كانت ستُحمَّل مع الصفحة.) */
+.dm-tip {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: flex-end;
+    gap: 10px;
+    margin: 0;
+    padding: 10px 14px 14px;
+    border: 0;
+    border-top: 1px solid var(--dm-line);
+    background: #19191c;
+    color: inherit;
+    font: inherit;
+    text-align: start;
+    cursor: pointer;
+}
+.dm-tip-av {
+    flex: 0 0 auto;
+    width: 46px; height: 46px;
+    border-radius: 50%;
+    background: #2a2a2e center / cover no-repeat;
+    box-shadow: 0 0 0 2px #3BB9AB;
+    transition: transform .3s var(--dm-pop);
+}
+.dm-tip-bub {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 8px 13px 9px;
+    border-radius: 18px;
+    border-end-start-radius: 6px;      /* الذيل جهة صورته */
+    background: #26262b;
+    line-height: 1.5;
+    transform-origin: right bottom;
+    transition: background .16s;
+}
+.dm-tip-bub b { font-size: 12px; font-weight: 700; color: #62d6c8; }
+.dm-tip-bub span { font-size: 14px; font-weight: 500; color: #e4e4e6; }
+.dm-tip:hover .dm-tip-bub { background: #2d2d33; }
+.dm-tip:active .dm-tip-av { transform: scale(0.9); }
+.dm-tip.swap .dm-tip-av { animation: dmTipHop .52s linear; }
+.dm-tip.swap .dm-tip-bub { animation: dmTipIn .42s cubic-bezier(0.3, 1.4, 0.5, 1) backwards; }
+@keyframes dmTipHop {
+    0%   { transform: translateY(0) rotate(0deg); animation-timing-function: cubic-bezier(0.2, 0.8, 0.4, 1); }
+    38%  { transform: translateY(-10px) rotate(-9deg); animation-timing-function: cubic-bezier(0.5, 0, 0.9, 0.5); }
+    72%  { transform: translateY(0) rotate(3deg); animation-timing-function: cubic-bezier(0.3, 0.6, 0.5, 1); }
+    100% { transform: translateY(0) rotate(0deg); }
+}
+@keyframes dmTipIn {
+    from { opacity: 0; transform: scale(0.8); }
+    to   { opacity: 1; transform: none; }
+}
+body.is-mobile .dm-tip { padding-bottom: max(14px, env(safe-area-inset-bottom)); }
+
 /* ── المحادثة ── */
 .dm-head-thread { padding: 10px 12px; gap: 10px; }
 .dm-head-thread .dm-av { width: 38px; height: 38px; font-size: 16px; }
@@ -13586,8 +13643,8 @@ body.is-mobile .news-list { padding: 6px 16px 20px; }
 .dm-zoom img { max-width: calc(100vw - 48px); max-height: calc(100dvh - 48px); border-radius: 14px; box-shadow: 0 20px 70px rgba(0, 0, 0, 0.6); }
 
 /* ── الرد والتفاعل ──
-   • `.dm-line` = الفقاعة وبجانبها زر الخيارات (يظهر بالتمرير بالفأرة فقط؛ الجوال
-     يضغط الفقاعة نفسها). رسائلي على اليسار فيُعكس الصف ليبقى الزر جهة المنتصف.
+   • `.dm-line` = الفقاعة في سطرها (السحب يحرّكه، والتأثير يحرّكه). الفأرة تُظهر
+     شريط الرسالة `.dm-hov` فوقها؛ الجوال يضغط الفقاعة نفسها.
    • الاقتباس داخل الفقاعة (وفوق الملصق، إذ لا فقاعة له). ألوان النص كلها صلبة.
    • القائمة `.dm-act` تُوضع مرة واحدة من JS (top/left) — transform لحركة الدخول فقط.
    • المداخل: التلاشي داخل الـ keyframes مع `backwards` وأساس معتم (القاعدة ٢٠). */
@@ -13595,21 +13652,53 @@ body.is-mobile .news-list { padding: 6px 16px 20px; }
 .dm-msg.mine .dm-line { flex-direction: row-reverse; }
 .dm-line .dm-bub { min-width: 0; }
 .dm-txt { white-space: pre-wrap; overflow-wrap: anywhere; }
-.dm-more {
-    flex: 0 0 auto;
-    width: 28px; height: 28px; padding: 0;
-    border: 0; border-radius: 50%;
-    background: transparent url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b8b8b9' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8.5 14.5c.9 1.3 2.1 2 3.5 2s2.6-.7 3.5-2'/%3E%3Cpath d='M9 9.5h.01M15 9.5h.01' stroke-width='2.6'/%3E%3C/svg%3E") center / 17px no-repeat;
-    opacity: 0;
-    cursor: pointer;
-    transition: opacity .14s, background-color .14s;
+/* شريط الرسالة (فأرة فقط، مثل ديسكورد): عنصر واحد ينقله JS إلى الصف الذي تحت المؤشر
+   (_dmHov) — ابن للصف، فيتحرك معه عند التمرير. يركب الزاوية العليا للفقاعة من جهة
+   المنتصف: ثلاثة تفاعلات سريعة، ثم «رمز آخر» و«رد» و«المزيد». */
+.dm-hov {
+    position: absolute;
+    top: -28px; right: 4px;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    padding: 3px;
+    direction: rtl;
+    white-space: nowrap;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 13px;
+    background: #232327;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
+    -webkit-user-select: none;
+            user-select: none;
+    animation: dmHovIn .18s cubic-bezier(0.3, 1.4, 0.5, 1) backwards;
 }
-.dm-msg:hover .dm-more, .dm-msg.act .dm-more, .dm-more:focus-visible { opacity: 1; }
-.dm-more:hover, .dm-msg.act .dm-more { background-color: rgba(255, 255, 255, 0.10); }
-.dm-msg.failed .dm-more { display: none; }
+.dm-msg.mine > .dm-hov { right: auto; left: 4px; }
+/* أول صف تحت الحافة العليا: لا مكان فوقه، فيتدلّى الشريط تحته */
+.dm-hov.low { top: auto; bottom: -26px; }
+@keyframes dmHovIn {
+    from { opacity: 0; transform: translateY(5px) scale(0.92); }
+    to   { opacity: 1; transform: none; }
+}
+.dm-hov-emo, .dm-hov-btn {
+    flex: 0 0 auto;
+    width: 30px; height: 28px; padding: 0;
+    border: 0; border-radius: 9px;
+    background: transparent center / 17px no-repeat;
+    cursor: pointer;
+    transition: background-color .12s, transform .2s var(--dm-pop);
+}
+.dm-hov-emo { font: 400 17px/1 "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif; }
+.dm-hov-emo:hover, .dm-hov-btn:hover { background-color: rgba(255, 255, 255, 0.10); }
+.dm-hov-emo:hover { transform: scale(1.18); }
+.dm-hov-emo:active, .dm-hov-btn:active { transform: scale(0.9); }
+.dm-hov-emo.on { background-color: rgba(59, 185, 171, 0.30); }
+.dm-hov-sep { flex: 0 0 auto; width: 1px; height: 18px; margin: 0 3px; background: rgba(255, 255, 255, 0.12); }
+.dm-hov-btn.rx { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23d0d0d3' stroke-width='1.9' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M13.2 4.1A8.5 8.5 0 1 0 20 10.9'/%3E%3Cpath d='M8.6 14.2c.8 1.2 2 1.9 3.4 1.9s2.6-.7 3.4-1.9'/%3E%3Cpath d='M9 9.8h.01M14.4 9.8h.01' stroke-width='2.6'/%3E%3Cpath d='M18.6 2.6v6M15.6 5.6h6'/%3E%3C/svg%3E"); }
+.dm-hov-btn.reply { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23d0d0d3' stroke-width='2.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M10 8l-5 4 5 4'/%3E%3Cpath d='M5 12h9a5 5 0 0 1 5 5v1'/%3E%3C/svg%3E"); }
+.dm-hov-btn.more { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23d0d0d3'%3E%3Ccircle cx='5' cy='12' r='1.8'/%3E%3Ccircle cx='12' cy='12' r='1.8'/%3E%3Ccircle cx='19' cy='12' r='1.8'/%3E%3C/svg%3E"); }
 /* بلا تمرير (جوال / لوحي): الضغط على الفقاعة يفتح قائمتها، فلا تحديد نص فوقها */
 @media (hover: none) {
-    .dm-more { display: none; }
     .dm-msgs { -webkit-touch-callout: none; }
     .dm-bub { -webkit-user-select: none; user-select: none; cursor: pointer; }
 }
@@ -13863,13 +13952,13 @@ body.is-mobile .dm-emo-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); 
 body.is-mobile .dm-toast { bottom: calc(96px + env(safe-area-inset-bottom)); }
 /* الجوال: الضغط على الفقاعة (أو الضغط المطوّل) يفتح قائمتها، فلا تحديد نص ولا قائمة
    النظام فوقها — النسخ من القائمة نفسها. */
-body.is-mobile .dm-more { display: none; }
 body.is-mobile .dm-msgs { -webkit-touch-callout: none; }
 body.is-mobile .dm-bub { -webkit-user-select: none; user-select: none; cursor: pointer; }
 body.is-mobile .dm-act-emo { width: 42px; height: 42px; font-size: 25px; }
 body.is-mobile .dm-act-btn { height: 38px; font-size: 14px; }
 @media (prefers-reduced-motion: reduce) {
-    .dm-row.in, .dm-msg.fresh, .dm-act, .dm-rx-chip.pop, .dm-msg.flash .dm-bub { animation: none; }
+    .dm-row.in, .dm-msg.fresh, .dm-act, .dm-rx-chip.pop, .dm-msg.flash .dm-bub, .dm-hov,
+    .dm-tip.swap .dm-tip-av, .dm-tip.swap .dm-tip-bub { animation: none; }
 }
 
 
@@ -13982,7 +14071,10 @@ img.emo {
 /* شريط التعديل: نفس شريط الرد بلون آخر، وزر الإرسال يصير علامة ✓ */
 .dm-reply.edit .dm-reply-body { border-inline-start-color: #F7B500; }
 .dm-reply.edit .dm-reply-body b { color: #ffd766; }
-.dm-send { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+/* touch-action: none — السحب من الزر إلى منتقي التأثيرات يبقى لنا (وإلا عدّه المتصفح
+   تمريرًا وألغى اللمسة). */
+.dm-send { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: none; }
+.dm-send.held, .dm-send.held:active { transform: scale(1.16); background: #62d6c8; }
 .dm-send .dm-send-ok { display: none; width: 19px; height: 19px; transform: none; }
 .dm-compose.editing .dm-send-go { display: none; }
 .dm-compose.editing .dm-send-ok { display: block; }
@@ -14030,59 +14122,207 @@ img.emo {
 .dm-confirm-btn.danger { background: #F04D39; color: #fff; }
 .dm-confirm-btn.danger:hover { background: #ff604c; }
 
-/* قائمة التأثيرات (ضغطة مطوّلة على زر الإرسال) */
-.dm-pop.fx { padding: 10px 12px 12px; }
-.dm-pop.fx h4 { margin: 2px 2px 8px; font-size: 12px; font-weight: 700; color: #8e8e8f; }
-.dm-pop.fx h4:not(:first-child) { margin-top: 12px; }
-.dm-fx-row { display: flex; flex-wrap: wrap; gap: 6px; }
-.dm-fx-chip {
-    height: 34px;
-    padding: 0 14px;
-    border: 0; border-radius: 50px;
-    background: rgba(255, 255, 255, 0.08);
-    color: #ececec;
-    font: 600 13px 'Baloo Bhaijaan 2', 'Rubik', system-ui, sans-serif;
+/* ── منتقي التأثيرات (ضغطة مطوّلة على زر الإرسال، ثم سحب وإفلات) ──
+   ورقة صغيرة تخرج من الزر. «الزجاج السائل» هنا حركة فقط — نوابض وانضغاط — بلا
+   backdrop-filter (القاعدة ١٠)، فتعمل كما هي على كل جهاز.
+   • موضعها ومنشأ تحوّلها يُكتبان من JS (_dmFxpOpen). الدخول keyframes مع `backwards`
+     فوق أساس ظاهر (القاعدة ٢٠)، والخروج transition على الأساس المخفي.
+   • «العدسة» عنصر واحد ينزلق بين الخانات بنابض (transform من JS)، وفي داخله عنصر
+     يتمدّد في اتجاه الحركة ثم يستقر (dmFxpJelly) — يُعاد تشغيله مرة لكل خانة.
+   • أيقونة الخانة المضاءة تتحرك حركة صغيرة تشبه تأثيرها — مرات معدودة، لا بلا نهاية
+     (القاعدة ٢٦: الورقة قد تبقى مفتوحة). */
+.dm-fxp {
+    position: absolute;
+    left: 8px; bottom: 60px;
+    z-index: 9;
+    width: min(312px, calc(100% - 16px));
+    padding: 10px;
+    direction: rtl;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 26px;
+    background: linear-gradient(180deg, #303037 0%, #232328 100%);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transform: scale(0.2);
+    transition: transform .22s cubic-bezier(0.5, 0, 0.9, 0.4), opacity .18s ease, visibility 0s linear .22s;
+    -webkit-user-select: none;
+            user-select: none;
+    -webkit-touch-callout: none;
+    touch-action: none;
+}
+.dm-fxp.on {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transform: none;
+    transition: none;
+    animation: dmFxpIn .5s linear backwards;
+}
+@keyframes dmFxpIn {
+    0%   { opacity: 0; transform: scale(0.2, 0.2); animation-timing-function: cubic-bezier(0.2, 0.9, 0.3, 1); }
+    45%  { opacity: 1; transform: scale(1.05, 1.07); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    72%  { transform: scale(0.985, 0.98); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    100% { transform: scale(1, 1); }
+}
+.dm-fxp-title { padding: 0 8px 8px; font-size: 12px; font-weight: 700; color: #a2a2a4; }
+.dm-fxp-grid {
+    position: relative;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 4px;
+}
+.dm-fxp-item {
+    position: relative;
+    z-index: 1;
+    min-width: 0;
+    height: var(--fxp-row, 46px);
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 16px;
+    background: transparent;
+    color: #dcdcdf;
+    font: 600 14px 'Baloo Bhaijaan 2', 'Rubik', system-ui, sans-serif;
+    text-align: start;
     cursor: pointer;
-    transition: background .14s, transform .2s var(--dm-pop);
+    touch-action: none;
+    transition: transform .36s cubic-bezier(0.3, 1.6, 0.5, 1), color .14s;
 }
-.dm-fx-chip:hover { background: rgba(59, 185, 171, 0.32); }
-.dm-fx-chip:active { transform: scale(0.94); }
+.dm-fxp.on .dm-fxp-item {
+    animation: dmFxpItemIn .46s cubic-bezier(0.3, 1.5, 0.5, 1) backwards;
+    animation-delay: calc(var(--i, 0) * 20ms + 60ms);
+}
+@keyframes dmFxpItemIn {
+    from { opacity: 0; transform: translateY(12px) scale(0.6); }
+    to   { opacity: 1; transform: none; }
+}
+.dm-fxp-item.hot { color: #ffffff; transform: scale(1.05); }
+.dm-fxp-ico {
+    flex: 0 0 auto;
+    width: min(30px, calc(var(--fxp-row, 46px) - 8px));
+    height: min(30px, calc(var(--fxp-row, 46px) - 8px));
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    color: #ffffff;
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 2px 6px rgba(0, 0, 0, 0.3);
+    transition: transform .36s cubic-bezier(0.3, 1.6, 0.5, 1);
+}
+.dm-fxp-ico svg { display: block; width: 66%; height: 66%; }
+.dm-fxp-item.hot .dm-fxp-ico { transform: scale(1.22) rotate(-6deg); }
+.dm-fxp-n { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* العدسة */
+.dm-fxp-lens {
+    position: absolute;
+    top: 0; left: 0;
+    z-index: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: transform .38s cubic-bezier(0.3, 1.5, 0.5, 1), opacity .16s ease;
+}
+.dm-fxp-lens.show { opacity: 1; }
+.dm-fxp-lens.jump { transition: opacity .16s ease; }      /* أول خانة: تظهر في مكانها، لا تنزلق إليه */
+.dm-fxp-lens > i {
+    display: block;
+    width: 100%; height: 100%;
+    border-radius: 16px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.21), rgba(255, 255, 255, 0.09));
+    box-shadow:
+        inset 0 1px 0 rgba(255, 255, 255, 0.44),
+        inset 0 -1px 0 rgba(0, 0, 0, 0.25),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+        0 8px 20px rgba(0, 0, 0, 0.38);
+}
+.dm-fxp-lens > i.j { animation: dmFxpJelly .48s linear; }
+@keyframes dmFxpJelly {
+    0%   { transform: scale(var(--sx, 1), var(--sy, 1)); animation-timing-function: cubic-bezier(0.3, 0.8, 0.4, 1); }
+    45%  { transform: scale(var(--rx, 1), var(--ry, 1)); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    100% { transform: scale(1, 1); }
+}
+/* معاينات الأيقونات */
+.dm-fxp-item.hot[data-fx="slam"] svg      { animation: dmIcoSlam .62s linear 2; }
+.dm-fxp-item.hot[data-fx="loud"] svg      { animation: dmIcoShake .16s ease-in-out 8 alternate; }
+.dm-fxp-item.hot[data-fx="ink"] svg       { animation: dmIcoBlink .9s ease-in-out 2; }
+.dm-fxp-item.hot[data-fx="confetti"] svg  { animation: dmIcoPop .5s ease-in-out 3; transform-origin: 20% 85%; }
+.dm-fxp-item.hot[data-fx="balloons"] svg  { animation: dmIcoRise .55s ease-in-out 4 alternate; }
+.dm-fxp-item.hot[data-fx="fireworks"] svg { animation: dmIcoBurst .7s cubic-bezier(0.2, 0.8, 0.3, 1) 2; }
+.dm-fxp-item.hot[data-fx="love"] svg      { animation: dmIcoBeat .8s ease-in-out 2; }
+.dm-fxp-item.hot[data-fx="lasers"] svg    { animation: dmIcoSweep .4s ease-in-out 4 alternate; transform-origin: 18% 82%; }
+.dm-fxp-item.hot[data-fx="echo"] svg      { animation: dmIcoBeat .7s ease-in-out 2; }
+.dm-fxp-item.hot[data-fx="spot"] svg      { animation: dmIcoBlink .8s ease-in-out 2; }
+@keyframes dmIcoSlam {
+    0%   { opacity: 0; transform: translateY(-7px) scale(1.6); animation-timing-function: cubic-bezier(0.6, 0, 0.9, 0.4); }
+    38%  { opacity: 1; transform: translateY(1px) scale(0.86); animation-timing-function: cubic-bezier(0.3, 0.7, 0.4, 1); }
+    62%  { transform: translateY(0) scale(1.06); }
+    100% { transform: translateY(0) scale(1); }
+}
+@keyframes dmIcoShake { from { transform: scale(1.12) rotate(-10deg); } to { transform: scale(1.12) rotate(10deg); } }
+@keyframes dmIcoBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+@keyframes dmIcoPop   { 0%, 100% { transform: rotate(0deg) scale(1); } 40% { transform: rotate(-16deg) scale(1.18); } }
+@keyframes dmIcoRise  { from { transform: translateY(2px); } to { transform: translateY(-4px); } }
+@keyframes dmIcoBurst { 0% { transform: scale(0.3) rotate(-50deg); opacity: 0.2; } 60% { transform: scale(1.2) rotate(0deg); opacity: 1; } 100% { transform: scale(1) rotate(0deg); } }
+@keyframes dmIcoBeat  { 0%, 100% { transform: scale(1); } 25% { transform: scale(1.3); } 50% { transform: scale(1); } 70% { transform: scale(1.16); } }
+@keyframes dmIcoSweep { from { transform: rotate(-12deg); } to { transform: rotate(14deg); } }
+@media (prefers-reduced-motion: reduce) {
+    .dm-fxp.on, .dm-fxp.on .dm-fxp-item, .dm-fxp-lens > i.j, .dm-fxp-item.hot svg { animation: none; }
+    .dm-fxp-lens, .dm-fxp-item, .dm-fxp-ico { transition: none; }
+}
 
-/* ── تأثيرات الفقاعة ── */
+/* ── تأثيرات الفقاعة ──
+   قاعدة النعومة (كانت كل مخالفة لها تقطيعًا ظاهرًا): دالة التوقيت تُطبَّق على كل
+   مقطع بين إطارين، فالمسار ذو الإطار الأوسط يقف عنده. لذلك لكل إطار دالته المكتوبة
+   فيه (animation-timing-function)، وكل انتقال مسافة مقطع واحد من ٠٪ إلى ١٠٠٪. */
 .dm-msg.fx-slam, .dm-msg.fx-loud { z-index: 3; }
-.dm-msg.fx-slam .dm-line { animation: dmFxSlam .62s cubic-bezier(0.2, 0.9, 0.3, 1) backwards; }
+.dm-msg.fx-slam .dm-line { animation: dmFxSlam .7s linear backwards; }
 @keyframes dmFxSlam {
-    0%   { opacity: 0; transform: scale(3.2) rotate(-7deg); }
-    42%  { opacity: 1; transform: scale(0.9) rotate(1deg); }
-    62%  { transform: scale(1.06); }
-    100% { transform: none; }
+    0%   { opacity: 0; transform: scale(3.4) rotate(-8deg); animation-timing-function: cubic-bezier(0.6, 0, 0.9, 0.4); }
+    34%  { opacity: 1; transform: scale(0.88) rotate(0.6deg); animation-timing-function: cubic-bezier(0.2, 0.8, 0.3, 1); }
+    58%  { transform: scale(1.05) rotate(0deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    80%  { transform: scale(0.985) rotate(0deg); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    100% { transform: scale(1) rotate(0deg); }
 }
-.dm-msgs.fx-quake > .dm-msg:not(.fx-slam) { animation: dmFxQuake .44s ease-out; }
+/* حلقة تخرج من الفقاعة لحظة ارتطامها (زينة: أساسها مخفي عمدًا) */
+.dm-msg.fx-slam::before {
+    content: '';
+    position: absolute;
+    inset: -2px -6px;
+    border: 2px solid #ffffff;
+    border-radius: 22px;
+    opacity: 0;
+    pointer-events: none;
+    animation: dmFxRing .55s cubic-bezier(0.1, 0.7, 0.3, 1) .23s backwards;
+}
+@keyframes dmFxRing {
+    0%   { opacity: 0; transform: scale(0.9); }
+    12%  { opacity: 0.7; }
+    100% { opacity: 0; transform: scale(1.5, 1.9); }
+}
+/* البقية تقفز معها. `.fresh` مستثناة: تبديل حركتها لحظةً يعيد حركة دخولها بعدها. */
+.dm-msgs.fx-quake > .dm-msg:not(.fx-slam):not(.fresh) { animation: dmFxQuake .5s cubic-bezier(0.4, 0, 0.6, 1); }
 @keyframes dmFxQuake {
-    0%, 100% { transform: none; }
-    20% { transform: translateY(5px); }
-    45% { transform: translateY(-3px); }
-    70% { transform: translateY(2px); }
+    0%, 100% { transform: translateY(0); }
+    18% { transform: translateY(6px); }
+    42% { transform: translateY(-3.5px); }
+    66% { transform: translateY(2px); }
+    84% { transform: translateY(-0.8px); }
 }
-.dm-msg.fx-loud .dm-line { transform-origin: right bottom; animation: dmFxLoud 1.5s ease backwards; }
+.dm-msg.fx-loud .dm-line { transform-origin: right bottom; animation: dmFxLoud 1.6s ease-in-out backwards; }
 .dm-msg.mine.fx-loud .dm-line { transform-origin: left bottom; }
 @keyframes dmFxLoud {
-    0%   { transform: scale(0.6); }
-    14%  { transform: scale(1.7) rotate(-2deg); }
-    22%  { transform: scale(1.7) rotate(2.5deg); }
-    30%  { transform: scale(1.7) rotate(-2.5deg); }
-    38%  { transform: scale(1.7) rotate(2deg); }
-    46%  { transform: scale(1.7) rotate(-1.5deg); }
-    54%  { transform: scale(1.7) rotate(1deg); }
-    72%  { transform: scale(1.7); }
-    100% { transform: none; }
-}
-.dm-msg.fx-gentle .dm-line { transform-origin: right bottom; animation: dmFxGentle 2.3s ease-out backwards; }
-.dm-msg.mine.fx-gentle .dm-line { transform-origin: left bottom; }
-@keyframes dmFxGentle {
-    0%   { opacity: 0; transform: scale(0.3); }
-    30%  { opacity: 1; transform: scale(0.46); }
-    100% { transform: none; }
+    0%   { transform: scale(0.6) rotate(0deg); animation-timing-function: cubic-bezier(0.3, 1.5, 0.5, 1); }
+    17%  { transform: scale(1.7) rotate(0deg); }
+    23%  { transform: scale(1.7) rotate(-2.6deg); }
+    31%  { transform: scale(1.7) rotate(2.6deg); }
+    39%  { transform: scale(1.7) rotate(-2.3deg); }
+    47%  { transform: scale(1.7) rotate(1.8deg); }
+    55%  { transform: scale(1.7) rotate(-1.1deg); }
+    62%  { transform: scale(1.7) rotate(0deg); }
+    72%  { transform: scale(1.7) rotate(0deg); animation-timing-function: cubic-bezier(0.5, 0, 0.2, 1); }
+    100% { transform: scale(1) rotate(0deg); }
 }
 /* الحبر السري */
 .dm-msg.fx-ink .dm-bub { position: relative; overflow: hidden; cursor: pointer; }
@@ -14116,7 +14356,9 @@ img.emo {
     .dm-msg.fx-ink .dm-bub:hover::after { opacity: 0; }
 }
 
-/* ── تأثيرات تملأ المحادثة ── */
+/* ── تأثيرات تملأ المحادثة ──
+   كل عنصر خارجي يقطع مسافته في مقطع واحد؛ ما يتمايل أو ينتفخ أو يدور فعلى عنصر
+   داخلي بحركته هو. أساس كل عنصر opacity: 0 عمدًا (زينة لا محتوى). */
 .dm-fx {
     position: absolute;
     inset: 0;
@@ -14134,7 +14376,7 @@ img.emo {
     inset: 0;
     opacity: 0;
     background: rgba(4, 4, 7, 0.66);
-    animation: dmFxDim 3.3s ease backwards;
+    animation: dmFxDim 3.3s ease-in-out backwards;
 }
 .dm-fx.spot::before {
     background: radial-gradient(circle at var(--x) var(--y),
@@ -14142,32 +14384,50 @@ img.emo {
 }
 @keyframes dmFxDim {
     0%   { opacity: 0; }
-    12%  { opacity: 1; }
-    80%  { opacity: 1; }
+    14%  { opacity: 1; }
+    78%  { opacity: 1; }
     100% { opacity: 0; }
 }
+/* قصاصات: عنصر واحد يسقط ويتقلّب في ثلاثة أبعاد في المقطع نفسه */
 .dm-cf {
     position: absolute;
     top: -24px;
     border-radius: 2px;
     opacity: 0;
-    animation: dmCf 3s cubic-bezier(0.2, 0.6, 0.4, 1) backwards;
+    animation: dmCf 3s cubic-bezier(0.3, 0.25, 0.6, 0.9) backwards;
 }
 @keyframes dmCf {
-    0%   { opacity: 1; transform: translate3d(0, 0, 0) rotate(0deg); }
-    85%  { opacity: 1; }
-    100% { opacity: 0; transform: translate3d(var(--dx), var(--dy), 0) rotate(var(--r)); }
+    0%   { opacity: 1; transform: translate3d(0, 0, 0) rotate3d(var(--ax), var(--ay), var(--az), 0deg); }
+    88%  { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(var(--dx), var(--dy), 0) rotate3d(var(--ax), var(--ay), var(--az), var(--r)); }
 }
+/* بالونات: الخارجي يصعد، والداخلي يتمايل حول خيطه */
 .dm-bl {
     position: absolute;
-    bottom: -140px;
+    bottom: -150px;
+    opacity: 0;
+    animation: dmBl 3.6s cubic-bezier(0.3, 0.1, 0.6, 0.95) backwards;
+}
+@keyframes dmBl {
+    0%   { opacity: 1; transform: translate3d(0, 0, 0); }
+    94%  { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(var(--sx), var(--dy), 0); }
+}
+.dm-bl > i {
+    position: relative;
+    display: block;
+    width: 100%;
     aspect-ratio: 0.82;
     border-radius: 50% 50% 50% 50% / 46% 46% 54% 54%;
     background: radial-gradient(circle at 32% 28%, rgba(255, 255, 255, 0.75) 0 7%, rgba(255, 255, 255, 0) 24%), var(--c);
-    opacity: 0;
-    animation: dmBl 3.6s cubic-bezier(0.3, 0.1, 0.5, 1) backwards;
+    transform-origin: 50% 175%;
+    animation: dmBlSway 1.6s ease-in-out 8 alternate;
 }
-.dm-bl::before {
+@keyframes dmBlSway {
+    from { transform: rotate(-7deg); }
+    to   { transform: rotate(7deg); }
+}
+.dm-bl > i::before {
     content: '';
     position: absolute;
     top: calc(100% - 3px); left: calc(50% - 5px);
@@ -14175,52 +14435,82 @@ img.emo {
     border-top: 0;
     border-bottom-color: var(--c);
 }
-.dm-bl::after {
+.dm-bl > i::after {
     content: '';
     position: absolute;
     top: 100%; left: 50%;
     width: 1.5px; height: 64px;
     background: rgba(255, 255, 255, 0.5);
 }
-@keyframes dmBl {
-    0%   { opacity: 1; transform: translate3d(0, 0, 0) rotate(-3deg); }
-    50%  { transform: translate3d(var(--sx), calc(var(--dy) * 0.5), 0) rotate(4deg); }
-    96%  { opacity: 1; }
-    100% { opacity: 0; transform: translate3d(0, var(--dy), 0) rotate(-2deg); }
-}
-.dm-fw {
+/* ألعاب نارية: صندوق لكل انفجار (يهبط قليلًا وهو يخبو)، فيه وميض وشرارات */
+.dm-fwb {
     position: absolute;
+    width: 0; height: 0;
+    animation: dmFwSink 1.5s cubic-bezier(0.5, 0, 0.9, 0.5) var(--dl, 0s) backwards;
+}
+@keyframes dmFwSink {
+    from { transform: translate3d(0, 0, 0); }
+    to   { transform: translate3d(0, 36px, 0); }
+}
+.dm-fwb > i {
+    position: absolute;
+    left: -2.5px; top: -2.5px;
     width: 5px; height: 5px;
-    margin: -2.5px;
     border-radius: 50%;
+    background: var(--c);
     opacity: 0;
-    animation: dmFw 1.25s cubic-bezier(0.1, 0.7, 0.3, 1) backwards;
+    animation: dmFw 1.3s cubic-bezier(0.1, 0.7, 0.3, 1) var(--dl, 0s) backwards;
 }
 @keyframes dmFw {
     0%   { opacity: 0; transform: rotate(var(--a)) translateX(0) scale(1); }
     6%   { opacity: 1; }
-    70%  { opacity: 1; }
+    60%  { opacity: 1; }
     100% { opacity: 0; transform: rotate(var(--a)) translateX(var(--d)) scale(0.3); }
 }
+.dm-fwb > b {
+    position: absolute;
+    left: -32px; top: -32px;
+    width: 64px; height: 64px;
+    border-radius: 50%;
+    background: radial-gradient(circle, #ffffff 0, var(--c) 32%, rgba(0, 0, 0, 0) 70%);
+    opacity: 0;
+    animation: dmFwFlash .55s cubic-bezier(0.1, 0.7, 0.3, 1) var(--dl, 0s) backwards;
+}
+@keyframes dmFwFlash {
+    0%   { opacity: 0; transform: scale(0.1); }
+    10%  { opacity: 0.9; }
+    100% { opacity: 0; transform: scale(1.5); }
+}
+/* قلوب: الخارجي يطير (يبدأ متمهّلًا ثم يسرع)، والداخلي ينتفخ بنابض */
 .dm-hr {
     --s: 1;
     position: absolute;
     width: 46px; height: 46px;
     margin: -23px;
     opacity: 0;
+    animation: dmHr 2.7s cubic-bezier(0.5, 0, 0.8, 0.6) var(--dl, 0s) backwards;
+}
+.dm-hr.big { width: 120px; height: 120px; margin: -60px; animation-duration: 3.4s; }
+@keyframes dmHr {
+    0%   { opacity: 1; transform: translate3d(0, 0, 0); }
+    80%  { opacity: 1; }
+    100% { opacity: 0; transform: translate3d(var(--sx), var(--dy), 0); }
+}
+.dm-hr > i {
+    display: block;
+    width: 100%; height: 100%;
     background: #ff3b5c;
     -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21s-7.5-4.6-9.6-9.2C.9 8.4 2.6 4.5 6.3 4.5c2.2 0 3.9 1.2 5.7 3.4 1.8-2.2 3.5-3.4 5.7-3.4 3.7 0 5.4 3.9 3.9 7.3C19.5 16.4 12 21 12 21z'/%3E%3C/svg%3E") center / contain no-repeat;
             mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 21s-7.5-4.6-9.6-9.2C.9 8.4 2.6 4.5 6.3 4.5c2.2 0 3.9 1.2 5.7 3.4 1.8-2.2 3.5-3.4 5.7-3.4 3.7 0 5.4 3.9 3.9 7.3C19.5 16.4 12 21 12 21z'/%3E%3C/svg%3E") center / contain no-repeat;
-    animation: dmHr 2.6s cubic-bezier(0.3, 0.6, 0.4, 1) backwards;
+    transform: scale(var(--s));
+    animation: dmHrPop .75s linear var(--dl, 0s) backwards;
 }
-.dm-hr.big { width: 120px; height: 120px; margin: -60px; animation-duration: 3.3s; }
-@keyframes dmHr {
-    0%   { opacity: 0; transform: translate3d(0, 0, 0) scale(0); }
-    18%  { opacity: 1; transform: translate3d(0, -10px, 0) scale(calc(var(--s) * 1.15)); }
-    30%  { transform: translate3d(0, -14px, 0) scale(var(--s)); }
-    80%  { opacity: 1; }
-    100% { opacity: 0; transform: translate3d(var(--sx), var(--dy), 0) scale(var(--s)); }
+@keyframes dmHrPop {
+    0%   { transform: scale(0); animation-timing-function: cubic-bezier(0.2, 0.8, 0.3, 1); }
+    55%  { transform: scale(calc(var(--s) * 1.18)); animation-timing-function: cubic-bezier(0.4, 0, 0.6, 1); }
+    100% { transform: scale(var(--s)); }
 }
+/* ليزر: المسح حركة، والظهور والخفوت حركة أخرى (خاصيتان مختلفتان، فلا تتعارضان) */
 .dm-lz {
     position: absolute;
     width: 180%; height: 3px;
@@ -14230,14 +14520,18 @@ img.emo {
     background: linear-gradient(to right, var(--c), rgba(255, 255, 255, 0) 88%);
     box-shadow: 0 0 10px 1px var(--c);
     opacity: 0;
-    animation: dmLz 1.3s ease-in-out 2 backwards;
+    transform: rotate(var(--a0));
+    animation: dmLzSweep var(--t, 1.2s) ease-in-out 4 alternate, dmLzFade 3s linear backwards;
 }
-@keyframes dmLz {
-    0%   { opacity: 0; transform: rotate(var(--a0)); }
-    10%  { opacity: 0.95; }
-    50%  { transform: rotate(var(--a1)); }
-    90%  { opacity: 0.95; }
-    100% { opacity: 0; transform: rotate(var(--a0)); }
+@keyframes dmLzSweep {
+    from { transform: rotate(var(--a0)); }
+    to   { transform: rotate(var(--a1)); }
+}
+@keyframes dmLzFade {
+    0%   { opacity: 0; }
+    9%   { opacity: 0.95; }
+    86%  { opacity: 0.95; }
+    100% { opacity: 0; }
 }
 .dm-ec {
     --s: 1;
@@ -14252,15 +14546,14 @@ img.emo {
     overflow: hidden;
     text-overflow: ellipsis;
     opacity: 0;
-    animation: dmEc 2.2s ease-out backwards;
+    animation: dmEc 2.3s linear backwards;
 }
 .dm-ec.pic { padding: 0; background: transparent; }
 .dm-ec.pic img { display: block; width: 64px; height: 64px; object-fit: contain; }
 @keyframes dmEc {
-    0%   { opacity: 0; transform: scale(calc(var(--s) * 0.3)); }
-    25%  { opacity: 0.95; transform: scale(var(--s)); }
-    70%  { opacity: 0.9; }
-    100% { opacity: 0; transform: translateY(-20px) scale(calc(var(--s) * 1.25)); }
+    0%   { opacity: 0; transform: translate3d(0, 0, 0) scale(calc(var(--s) * 0.3)); animation-timing-function: cubic-bezier(0.3, 1.5, 0.5, 1); }
+    20%  { opacity: 0.95; transform: translate3d(0, 0, 0) scale(var(--s)); animation-timing-function: cubic-bezier(0.4, 0, 0.8, 0.7); }
+    100% { opacity: 0; transform: translate3d(0, -26px, 0) scale(calc(var(--s) * 1.14)); }
 }
 
 body.is-mobile .dm-down { bottom: 12px; }

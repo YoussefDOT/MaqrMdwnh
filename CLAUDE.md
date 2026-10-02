@@ -124,7 +124,7 @@ Grep anchors for the major systems (all verified to exist):
 | نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
 | ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL` |
-| الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI`; reply + reactions: `_dmSetReply`, `_dmQuoteNode`, `_dmJumpTo`, `_dmReact`, `_dmPaintRx`, `_dmAct`, `_dmRxQuick`, `DM_RX_LIST`; edit + delete: `_dmStartEdit`, `_dmCommitEdit`, `_dmDelete`, `_dmApplyDeleted`, `_dmPeerRowPatch`; picker: `_dmEmojiPanel`, `_dmPop`; effects: `DM_FX`, `_dmPlayFx`, `_dmScreenFx`, `_dmFxUnread`; also `_dmFillText`, `_dmPaintDown`, `_dmFocusInput` |
+| الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI`; reply + reactions: `_dmSetReply`, `_dmQuoteNode`, `_dmJumpTo`, `_dmReact`, `_dmPaintRx`, `_dmAct`, `_dmRxQuick`, `DM_RX_LIST`; edit + delete: `_dmStartEdit`, `_dmCommitEdit`, `_dmDelete`, `_dmApplyDeleted`, `_dmPeerRowPatch`; picker: `_dmEmojiPanel`, `_dmPop`; effects: `DM_FX`, `_dmPlayFx`, `_dmScreenFx`, `_dmFxUnread`; their picker: `_dmFxpOpen`, `_dmFxpTrack`, `_dmFxpHot`, `_dmFxpSend`; hover bar: `_dmHov`; ليمو's tips: `DM_TIPS`, `_dmPaintTip`; also `_dmFillText`, `_dmPaintDown`, `_dmFocusInput` |
 | رموز آبل التعبيرية (صور) | `_emoImgs`, `emoLoadData`, `_emoActivate`, `_emoTextNode`, `_emoParse`, `_emoDrawSlots`, `_emoKey`, `emoIsOne`, `emoRecent`, `emoNoteUsed`, `EMO_IMG_KEY`, `tools/bake_emoji.mjs` |
 | التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `_peekBody`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad`, `tools/shots.mjs`, `tools/shots.py` |
@@ -351,7 +351,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar whose cells he can press to **اعتماد** a day as done (even one taken off or never opened) or **رفع الإجازة** off a past one. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. See **لوحة القائد**. |
 | **القفز** | مسافة، أو نقرتان على شخصيتك. على الجوال: سحبة سريعة للأعلى في أي مكان، أو نقرة واحدة في أي مكان وأنت تمشي (والنقرتان ما زالتا تعملان). قفزة في المكان — أو، أثناء الحركة، **على طاولة** تمشي فوقها (أكبر قليلًا)، ومنها إلى الأرض، و**من حافة الطابق الثاني** إلى الأرض بهبوط قوي: غبار وموجة وهزّة وصوت لمن حولك إلا من في جلسة عمل. صفر فايربيس. See **القفز**. |
 | **نداء ليمو** | `@ليمو` مع سؤال (أو اضغط عليه فيُكتب اسمه): يترك ما يفعله و**يمشي** إليك — طريق حقيقي حول الأثاث، يصعد الدرج، ويلحق بك إن تحرّكت — ثم **يجيبك** (ذكاء اصطناعي يسأله المُرحِّل لا الصفحة)، وقد يرد بملصق. ثم يمشي عائدًا. لا يُنادى نائمًا ولا من جلسة عمل ولا بلا سؤال، وبعد رده عليك تنتظر ٤ ثوانٍ. See **Lemo → نداء ليمو**. |
-| **الرسائل الخاصة** | زر في صندوق الأدوات (أو «رسالة خاصة» تحت عضو تضغط عليه): محادثات محفوظة بين عضوين من القسم نفسه — نص، كل الرموز، ملصقات، صور و GIF (سحب وإفلات / لصق)، رد (بالسحب على الجوال)، تفاعل بأي رمز، تعديل («معدّلة»)، حذف بتحذير، وتأثيرات إرسال كتأثيرات iMessage. على الحاسوب دُرج في الثلث الأيمن واللعب مستمر بجانبه. See **الرسائل الخاصة**. |
+| **الرسائل الخاصة** | زر في صندوق الأدوات (أو «رسالة خاصة» تحت عضو تضغط عليه): محادثات محفوظة بين عضوين من القسم نفسه — نص، كل الرموز، ملصقات، صور و GIF (سحب وإفلات / لصق)، رد (بالسحب على الجوال)، تفاعل بأي رمز، تعديل («معدّلة»)، حذف بتحذير، وتأثيرات إرسال كتأثيرات iMessage (ضغطة مطوّلة على زر الإرسال ثم سحب إلى التأثير)، وشريط سريع فوق الرسالة بالفأرة، ونصيحة يومية من ليمو تحت القائمة. على الحاسوب دُرج في الثلث الأيمن واللعب مستمر بجانبه. See **الرسائل الخاصة**. |
 | **رموز آبل التعبيرية** | الرموز بالشكل نفسه على كل جهاز: صورة مكان كل رمز على غير أجهزة آبل، في الصفحة وعلى الكانفس. See **رموز آبل التعبيرية**. |
 | **التفاعلات + «ماذا فاتني؟»** | تفاعلات طاولة الاجتماعات في كل مكان (١–٦، أو ضغطة مطوّلة على شخصيتك)؛ والضغط على عضو يُظهر آخر خمس رسائل كتبها. صفر فايربيس. See **التفاعلات في العالم**. |
 | **نشرة الأخبار** | A button under the login pill opens the member-facing changelog, grouped by day (`patch-notes.json`). See **نشرة الأخبار**. |
@@ -2479,7 +2479,7 @@ Both ride the **message record itself** — no new node, no new listener, no ext
   `transform` on `.dm-line`.
 - **One menu** (`#dm-act`, `_dmAct`): the reaction row + «رد» + «نسخ» + «تعديل» + «أعد
   التأثير» + «حذف» (the last three only where they apply). A PC opens it from the
-  button that appears beside a bubble on hover (`.dm-more`) or a right-click (left to
+  hover bar's «⋯» (see below) or a right-click (left to
   the browser when text is selected); a phone by **tapping the bubble** or holding it
   (`contextmenu` on Android, a `DM_HOLD_MS` passive touch timer for iOS — on the list
   itself, invariant 34). That is why a phone's bubbles are `user-select: none` and the
@@ -2487,6 +2487,14 @@ Both ride the **message record itself** — no new node, no new listener, no ext
   outside press; `_dm.actShut` stops the press that closed it from reopening it, and
   `_dm.holdAt` swallows the click a long press ends in (it would zoom a picture).
 - A member who can't be messaged (`dmCanMessage` false) gets «نسخ» only.
+- **The hover bar** (`.dm-hov`, `_dmHov` — a mouse only, like Discord): the pointer on a
+  message brings a small bar onto its top corner — three quick reactions
+  (`_dmRxQuick().slice(0, 3)`), «رمز آخر», «رد», and «⋯» (the menu above). **ONE element,
+  moved from row to row** (`pointerover` on the list, `pointerType === 'mouse'`): it is a
+  CHILD of the row it is on, so it scrolls with it and nothing is repositioned. A
+  rebuild of the list or of that row has to put it away / move it (`_dmRenderThread`,
+  `_dmRepaintMsg`). Its click `stopPropagation`s (it is not a press on the message). It
+  replaced the per-row `.dm-more` button — don't bring that back.
 
 ### التعديل والحذف — editing and deleting
 Both are changes to the message record, so they ride the `onChildChanged` the open thread
@@ -2525,11 +2533,10 @@ a jump lands where it should. Before the list has loaded it shows the old short 
 `_memReleaseIdle` when the panel is closed.
 
 ### تأثيرات الرسائل — iMessage-style effects (`DM_FX`)
-A message may carry `x`: four **bubble** effects (صدمة، صاخب، لطيف، حبر سري) and seven
+A message may carry `x`: three **bubble** effects (صدمة، صاخب، حبر سري) and seven
 that **fill the drawer** (قصاصات ملونة، بالونات، ألعاب نارية، قلوب، ليزر، صدى، دائرة ضوء).
-- **Sent by HOLDING the send button** (`DM_SEND_HOLD_MS`; a right-click on a PC): the
-  effects list opens in the pop (`_dmPop('fx')`), and choosing one sends. The click a
-  hold ends in is swallowed (`_dm.sendHeldAt`).
+«لطيف» was retired on the owner's request: `_dmFxOk` drops an unknown `x` on read, so an
+old message that carried it simply shows as an ordinary one.
 - **Plays** when the message arrives in an open, visible thread (`_dmFxArrived`, only if
   it is fresher than `DM_FX_LIVE_MS`); what arrived while the thread was closed or the
   tab hidden plays ONCE on coming back — the newest unread one (`th.fxUnread`,
@@ -2539,8 +2546,66 @@ that **fill the drawer** (قصاصات ملونة، بالونات، ألعاب 
   canvas. Their base style is `opacity: 0` ON PURPOSE — they are decoration, not content,
   so a skipped animation shows nothing (the opposite of invariant 20's case).
   `prefers-reduced-motion` gets the message without the show.
+- **Smoothness rules — each was a visible stutter, don't undo them:**
+  - **A keyframe's timing function applies PER SEGMENT.** A path with a middle keyframe
+    eases to a stop there (the balloons paused half-way up, the hearts stuttered). So
+    every *travel* is ONE segment (0% → 100%) on the outer element, and whatever sways /
+    pops / spins rides an inner element (`.dm-bl > i`, `.dm-hr > i`, `.dm-fwb > i`) with
+    its own animation; multi-stop moves (the slam, the loud shake) write an explicit
+    `animation-timing-function` INSIDE each keyframe.
+  - **A screen effect measures the bubble a frame LATER** (`requestAnimationFrame` in
+    `_dmPlayFx`). Sending closes the emoji / sticker drawer in the same task, the list
+    grows by its height, and a rect read before that put the hearts and the spotlight on
+    a message further up.
+  - **`.fresh` is removed ~½ s after a message is appended** (and excluded from the
+    quake). It is only the entrance animation; left on, the slam's quake swapped every
+    such row's `animation-name` for a moment, and swapping it back REPLAYED the entrance
+    of every message sent or received in that visit — "the effect plays on my first
+    message, not my last".
+  - Confetti is one element each (fall + a `rotate3d` tumble in the same segment) —
+    nesting it would have tripled the layer count on a phone.
 - **Secret ink is a state, not a burst**: `.dm-msg.fx-ink` blurs the words (a STATIC
   blur — invariant 12) under a dotted veil until hovered, or pressed (`.ink-open`, 6 s).
+
+### منتقي التأثيرات — hold the send button, drag, let go (`#dm-fxp`)
+**HOLD** the send button (`DM_SEND_HOLD_MS`): a small sheet grows out of it and the phone
+buzzes (`_dmBuzz` → `navigator.vibrate`, where it exists). Still holding, **DRAG** onto
+it: the effect under the finger lights up, a buzz and a tick per step. **LET GO** on one
+→ the message is sent with it (`_dmFxpSend` → `_dmSubmit(fx)`). Let go without having
+moved → it stays open to be tapped (also what a right-click on a PC opens); let go
+anywhere else → it closes and nothing is sent. Needs text or a picture first (a toast
+says so). Each cell is a coloured chip with a white **icon that pictures the effect**
+(`DM_FX[id].ico` — static SVG markup, the one `innerHTML` here) and plays a tiny version
+of it while lit.
+- **One pointer, captured** by the send button (`setPointerCapture`), so the moves keep
+  arriving after the finger has left it — and **`touch-action: none` on `.dm-send`**, or
+  the browser takes the drag for a scroll and fires `pointercancel`. A `pointercancel`
+  mid-hold leaves the sheet open for a tap rather than closing it.
+- **What is under the finger is arithmetic** (`_dmFxpTrack`): every cell's box is
+  measured ONCE on open from `offsetLeft/Top` (the sheet's own grow-in transform would
+  skew a rect) — no `elementFromPoint`, no layout read per move. `M` = the slack around
+  the sheet inside which the nearest cell still holds.
+- **"Liquid glass" is the MOTION only** — springs and squash, no `backdrop-filter`
+  (invariant 10). ONE «lens» (`.dm-fxp-lens`) slides between the cells on a spring
+  (`transform` from JS); its inner element stretches along the way it came and settles
+  (`dmFxpJelly`, restarted once per step). The first cell it lands on it appears AT
+  (`.jump`).
+- **The click a hold ends in is swallowed** — `_dm.sendHeldAt` is stamped at the
+  RELEASE, not when the hold fired (a long drag would otherwise outlast the window and
+  the release would send a second, plain message).
+- **Two columns of five**, not one list: with the keyboard up a phone has ~350px above
+  the compose bar. The row height shrinks to fit (`--fxp-row`).
+- The lit icon's preview runs a counted number of times, never `infinite` (invariant 26:
+  the sheet can stay open). Closed by: an outside press, Escape, a viewport resize, and
+  every view change.
+
+### نصائح ليمو — the dock under the list (`#dm-tip`, `DM_TIPS`)
+ليمو's picture and a speech bubble under the list of conversations: **one tip a day**
+(`_dmTipIndex`: local days since `DM_TIP_DAY0`, the same tip for everyone that day), the
+next one on a press. Each tip has a phone wording (`p`) and a PC wording (`d`). Zero
+network. His picture is attached from JS on the first list shown — a CSS background
+would have fetched it at page load. **Adding a tip = appending to `DM_TIPS`**
+(spell-checked Arabic, and true of the feature as it ships).
 
 ### Small things that make it feel finished
 - **The caret is already in the box** when a thread opens on a PC (`_dmFocusInput`). It
@@ -4753,6 +4818,7 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
 | Race + fig zones play the join sound but no panel ever appears; laptop-boss works fine | `MINIGAMES_ENABLED` was left `false` after the games table was wired. The zone press still ran `joinOrCreateMinigameLobby` (hence the sound) and wrote a lobby session to Firebase — but `listenToRace`/`listenToCoffee` were skipped, so `gameState.race.session` was never populated and `showRaceLobby` never ran. Laptop-boss was unaffected because it's solo: `openBossConfirm` opens its modal locally and needs no listener | `MINIGAMES_ENABLED = true`; the separately-dead old break-room rects moved behind `MINIGAME_LEGACY_ZONES` |
 | Faint text (every subtitle, every «muted» line) shows brighter lines between its letters — since day one, whole site | Every muted colour was `rgba(255,255,255,0.4)`-style. Arabic glyphs overlap at the joins and a translucent colour is applied per glyph, so each overlap got painted twice | Every text colour made solid (the blended colour it rendered as), `-tx` solid twins for translucent tokens, canvas text fills too. Invariant 33 |
 | Settings panel opens completely empty on Firefox | The rows sat at `opacity: 0` and relied on the `settingsRowIn` keyframe to reveal them; Firefox sometimes never triggered the sequence, so nothing was ever faded in. Same root cause as the earlier pomodoro-settings blank | Keep the fade in the keyframes, keep the base style opaque, and hide during the delay with `animation-fill-mode: backwards` — a skipped animation costs the flourish, not the content |
+| A message effect "plays on the first message I sent this visit, not the one I just sent" | Two things. (1) `.dm-msg.fresh` (the entrance animation) stayed on every row of the visit; the slam's quake swapped those rows' `animation-name` for half a second, and swapping it back replayed all their entrances. (2) Sending closed the effects drawer in the same task, the list grew by its height, and the hearts / lasers / spotlight were placed from a rect read BEFORE that — i.e. on a message further up | `.fresh` is removed ~½ s after the append and excluded from the quake; screen effects measure a frame later; the effects now open in a sheet over the send button that moves no layout |
 | «رسالة خاصة» opens the thread but the text box isn't focused — a second press needed | `_dmShowThread` focused the input while the panel was still `visibility: hidden` (`.active` lands two frames later), and a hidden element refuses the focus | `_dmFocusInput()` is called again from `dmOpen`'s double-rAF, right after `.active` is added |
 | Settings/pomodoro rows slide in at full opacity — no fade, looks wrong (every browser) | The Firefox blank-panel fix above was first done by **deleting the fade** (`transform`-only keyframes, base `opacity: 1`), which cured the blank but left the cascade fadeless | `backwards` fill mode gives both: fade restored inside the keyframes, base style still opaque |
 | Reader closes the tab mid-session → the whole reading session is lost | Reading time was only written at انتهيت (`runTransaction` on `books/{slug}/totalMs` + the leaderboard), so nothing at all existed until the session ended | `bankReadingProgress()` commits the delta since the last bank every `READING_BANK_INTERVAL_MS` (60 s); `endReadingSession` just banks the tail. `r._bankedMs` is what stops double-counting |
