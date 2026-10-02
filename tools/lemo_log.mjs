@@ -114,7 +114,7 @@ function card(r) {
     const raw = r.raw ? `<details><summary>نص النموذج قبل التنظيف</summary><pre>${esc(r.raw)}</pre></details>` : '';
     const answer = r.e
         ? `<div class="err">لم يُجب — ${esc(ERR_AR[r.e] || r.e)}${r.em ? `<small>${esc(r.em)}</small>` : ''}</div>`
-        : partsText(r.a).map(t => `<div class="a">${esc(t)}</div>`).join('');
+        : partsText(r.a).map(t => `<div class="a">${esc(t)}</div>`).join('') + (r.th ? '<div class="a">[رمية إلى جلسة عمل]</div>' : '');
     return `<article class="card" data-lobby="${esc(r.lobby)}">
   <header><span class="who">${who}</span><span class="tag ${r.lobby === 'female' ? 'f' : 'm'}">${esc(LOBBY_AR[r.lobby] || r.lobby)}</span><time>${esc(when(r.at))}</time></header>
   <p class="facts">${facts.join(' · ')}</p>

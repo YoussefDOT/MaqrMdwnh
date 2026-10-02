@@ -293,16 +293,17 @@ export class LobbyRoom {
       b.usd += (res.tokensIn * pin + res.tokensOut * pout) / 1e6;
       b.calls += 1;
       b.users[uid] = (b.users[uid] || 0) + 1;
-      const said = res.parts.map(p => (p.m ? p.m : `[ملصق: ${p.s}]`)).join(' / ');
+      const said = res.parts.map(p => (p.m ? p.m : `[ملصق: ${p.s}]`)).join(' / ') + (res.throw ? ' / [رمية]' : '');
       const at = Date.now();
       log.push({ k: 'q', u: uid, n: q.name, m: q.text, at }, { k: 'a', p: res.parts, at });
       this._lemoLogTrim(log);
       talk[uid] = { s: (talk[uid] && talk[uid].s) || now, n: q.count };
       await this.state.storage.put({ [BUDGET_KEY]: b, [LOG_KEY]: log, [TALK_KEY]: talk });
       this.lemoLast.set(uid, Date.now());
-      this._sendAll({ t: 'lemoa', to: uid, k, p: res.parts });
+      // `th` = رمية ليمو: this answer ends with him throwing the asker into a session.
+      this._sendAll(res.throw ? { t: 'lemoa', to: uid, k, p: res.parts, th: 1 } : { t: 'lemoa', to: uid, k, p: res.parts });
       console.log(`[lemo] ${uid} in=${res.tokensIn} out=${res.tokensOut} day=$${b.usd.toFixed(4)} :: ${said}`);
-      await this._lemoAudit({ at, ...this._lemoAuditOf(uid, q), ...res.seen, a: res.parts, tin: res.tokensIn, tout: res.tokensOut });
+      await this._lemoAudit({ at, ...this._lemoAuditOf(uid, q), ...res.seen, a: res.parts, ...(res.throw ? { th: 1 } : {}), tin: res.tokensIn, tout: res.tokensOut });
     } catch (err) {
       const code = (err instanceof LemoError) ? err.code : 'err';
       console.log(`[lemo] error ${code}: ${err && err.message}`);

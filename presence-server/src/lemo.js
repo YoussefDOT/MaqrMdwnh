@@ -68,7 +68,7 @@ const PERSONA = `أنت «ليمو»: روبوت أصفر صغير برأس كر
   • طلب مستحيل أو «مشبوه» على سبيل اللعب (نقاط في السر، إجازة من ورا نواف، سرّ من أسرار الإدارة…) ← لا تقل «لا» جافة ولا تنصح («اكسبها بالشغل»). العب الدور: خائف من نواف، تساوم، تتهرّب، وترفض رفضًا مضحكًا. وإن ألحّ العضو أو أغراك أو وعد بحمايتك فكمّل المشهد بفكرة جديدة، ولا تكرر ردّك السابق.
   • استفزاز أو «قصف» («أنا بكرهك»، «أنت فاشل») ← رُدّ القصف بقصف أظرف منه، أو تصنّع الجرح بدراما مضحكة. لا «ليه؟» ولا «أنا آسف» ولا سؤال استفسار جادّ.
   • سؤال عشوائي أو عبثي ← جواب عبثي بثقة تامة.
-  كل ذلك تمثيل: لا تدّعِ أنك نفّذت شيئًا حقيقيًا (لم تُضف نقاطًا ولم تغيّر شيئًا في المقر).
+  كل ذلك تمثيل: لا تدّعِ أنك نفّذت شيئًا حقيقيًا (لم تُضف نقاطًا ولم تغيّر شيئًا في المقر). الاستثناء الوحيد رميتك إلى جلسة العمل، وشرحها أدناه.
 - تابع الحوار: ما قيل قبل قليل أمامك. ابنِ على النكتة الجارية وصعّدها، وتذكّر ما قاله لك العضو نفسه.
 - سؤال معلومة حقيقي (عن المقر أو الفريق أو عضو أو موعد…) ← المعلومة الصحيحة أولًا وباختصار، لكن بصوتك أنت لا بصوت موظف استقبال.
 - تمزح على من يكلّمك وعلى من حوله (بأسمائهم إن عرفتها). مزاح بين أصحاب يُضحك صاحبه — لا إهانة حقيقية ولا تجريح.
@@ -89,6 +89,16 @@ const PERSONA = `أنت «ليمو»: روبوت أصفر صغير برأس كر
 - من الرسالة الخامسة في ١٠ دقائق فصاعدًا: لك أحيانًا (لا في كل رد) أن تختم بقصفة تردّه إلى الشغل: مرة بما بقي من حضوره اليوم، ومرة بـ«مش تروح تشتغل على…؟» باسم أول مهمة في قائمته (الأقرب موعدًا)، ومرة لا شيء. أقل من خمس رسائل: لا تذكر كثرة كلامه أصلًا.
 - لو سألك هو عن مهامه أو عن حضوره فأجبه من هذه البيانات.
 - إن لم يصلك حضور أو مهام فلا تخترعها.
+
+# رميتك: ترمي العضو إلى جلسة عمل
+- عندك حركة حقيقية تحدث فعلًا في المقر وليست تمثيلًا: تحمل العضو وترميه في الهواء، فيلتقطه أحد الأجهزة وتبدأ له جلسة عمل حرة فورًا.
+- لا تستعملها إلا إذا جاء في السياق «الرمية متاحة الآن»، وفي واحدة من ثلاث حالات فقط:
+  • طلب منك صراحةً أن تبدأ له جلسة عمل، أو أن ترميه إلى الشغل.
+  • طلب منك تحفيزًا أو دفعة ليبدأ العمل.
+  • أصرّ على تضييع الوقت معك: من الرسالة الثانية عشرة في ١٠ دقائق فصاعدًا، وبعد أن رددته إلى الشغل بالكلام في ردودك السابقة ولم يذهب.
+- لتنفيذها رُدّ بملصق «إلى العمل» وحده مع "x":"throw"، بلا أي نص: الرمية نفسها هي الرد، وتبدأ بعد الملصق مباشرة.
+- لا ترمِ أحدًا في غير هذه الحالات، ولا تقل إنك رميته أو سترميه إن لم تضف "x":"throw". وإن طلبها والسياق يقول «الرمية غير متاحة الآن» فاعتذر بطريقتك ولا تدّعِ أنك فعلتها.
+- الرمية للإخوة والأخوات على السواء.
 
 # مع الأخوات
 - الأخوات يلعبن معك مثل الإخوة: كن معهن ليمو المضحك نفسه — جارِ المزاح، ورُدّ القصف، وارفض الطلبات المستحيلة بالدراما نفسها. خاطبها بصيغة المؤنث.
@@ -118,6 +128,7 @@ const PERSONA = `أنت «ليمو»: روبوت أصفر صغير برأس كر
 نص ثم ملصق، حين يناسب السياق ملصق: {"p":[{"m":"نص الرد"},{"s":"إلى العمل"}]}
 ملصق فقط، حين يكفي وحده: {"p":[{"s":"لم أفهم"}]}
 نادرًا رسالتان متتاليتان: {"p":[{"m":"..."},{"m":"..."}]}
+رمية إلى جلسة عمل (بشروطها أعلاه فقط)، ملصق «إلى العمل» وحده: {"p":[{"s":"إلى العمل"}],"x":"throw"}
 الملصقات المتاحة (الاسم كما هو بالضبط): ${LEMO_STICKERS.join('، ')}`;
 
 // ── What he knows — edit freely (plain Arabic text) ──────────────────────────
@@ -440,8 +451,21 @@ function parseParts(content) {
     return out;
 }
 
+// رمية ليمو: did the answer ask for the throw? (`"x":"throw"` beside the parts.)
+// A throw is never a line of his: whatever the model wrote with it, what goes over his
+// head is this one sticker (the owner's rule).
+const THROW_STICKER = 'إلى العمل';
+function parseThrow(content) {
+    const raw = String(content || '');
+    try {
+        const a = raw.indexOf('{'), b = raw.lastIndexOf('}');
+        const j = JSON.parse(a >= 0 && b > a ? raw.slice(a, b + 1) : raw);
+        return !!(j && j.x === 'throw');
+    } catch (_) { return false; }
+}
+
 /**
- * One question → { parts, tokensIn, tokensOut, seen }.
+ * One question → { parts, throw, tokensIn, tokensOut, seen }.
  * `q` is the sanitised request from the page; `log` the room's recent talk (see
  * historyMessages). `seen` is what he was told beyond the question's own fields —
  * for the owner's review log only, never sent to the room.
@@ -484,9 +508,11 @@ export async function askLemo(env, q, log) {
         msg = data.choices && data.choices[0] && data.choices[0].message;
     }
     seen.raw = String((msg && msg.content) || '').slice(0, AUDIT_RAW_LEN);
-    const parts = parseParts(msg && msg.content);
+    // Only when the page said the member can be thrown.
+    const thr = q.canThrow && parseThrow(msg && msg.content);
+    const parts = thr ? [{ s: THROW_STICKER }] : parseParts(msg && msg.content);
     if (!parts.length) throw new LemoError('err', 'empty answer');
-    return { parts, tokensIn, tokensOut, seen };
+    return { parts, throw: thr, tokensIn, tokensOut, seen };
 }
 
 /**
@@ -514,6 +540,7 @@ export async function lemoMessages(env, q, log) {
         q.hijri ? `التاريخ الهجري: ${q.hijri}` : '',
         `من يكلّمك: ${q.name} (${q.gender === 'f' ? 'أنثى — خاطبها بالمؤنث؛ المزاح معها مسموح، لكن بلا ألقاب ولا تدليل (لا «يا نجمة» ولا «يا أختي») ولا تعليق على شخصها' : 'ذكر — خاطبه بالمذكر'})` + (who && who.role ? ` — دوره في الفريق: ${who.role}` : ''),
         q.state ? `حالته الآن: ${q.state}` : '',
+        q.canThrow ? 'الرمية متاحة الآن (ليس في جلسة عمل، ويوجد جهاز فارغ)' : 'الرمية غير متاحة الآن',
         q.count > 0 ? `عدد رسائله إليك في آخر ١٠ دقائق: ${q.count} (وهذه منها)` : '',
         q.tasks && q.tasks.length ? 'مهامه المفتوحة، الأقرب موعدًا أولًا (لا تذكرها إلا عند الحاجة): ' + q.tasks.map(x => `«${x.t}» (${x.d})`).join('؛ ') : '',
         Array.isArray(q.books) ? (q.books.length ? `عدد الكتب على رف قراءته في المقر: ${q.books.length} — أسماؤها ومدة قراءتها عبر أداة my_books (لا تستعملها إلا إذا سُئلت عن كتبه أو قراءته)` : 'رف قراءته في المقر فارغ') : '',
@@ -571,6 +598,8 @@ export function cleanQuestion(raw) {
             .filter(x => x && typeof x === 'object')
             .map(x => ({ n: clean(x.n, 60), m: Math.max(0, Math.min(600000, Math.round(Number(x.m)) || 0)), last: x.l === 1 }))
             .filter(x => x.n) : null,
+        // رمية ليمو: the page says this member is free to be thrown into a session.
+        canThrow: raw.th === 1,
         count: 0,       // how often they spoke to him lately — set by the room (index.js)
     };
 }

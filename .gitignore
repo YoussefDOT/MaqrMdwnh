@@ -9,6 +9,9 @@ presence-server/.wrangler/
 Art/Lemo/*.png
 # reff.png is small and is where the spawn/wander coords were measured — keep it.
 !Art/Lemo/reff.png
+# A PNG-sequence master (the Throw clip's 111 frames, 115 MB) — slice.py bakes it
+# into Art/Lemo/Sheets/Throw.webp; the frames never ship.
+Art/Lemo/throw/
 
 # Fireplace fire source spritesheet (4x8 grid of 1500x1920 cells, ~12 MB) — only the
 # sliced Art/Fire/fire_NN.png sequence (~890 KB) ships. Keep the master out of git.

@@ -122,6 +122,7 @@ Grep anchors for the major systems (all verified to exist):
 | «يكتب الآن» + الانصهار | `CHAT_TYP_`, `CHAT_MORPH_MS`, `sendTypingWS`, `_chatSetTyping`, `_chatMorphFx`, `_chatDrawTyping` |
 | القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump`, `jumpTapWhileMoving`, `JUMP_FLICK_`, `jumpMaybeHint` |
 | نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
+| رمية ليمو (he throws a member into a session) | `LTH_`, `_lth`, `lemoThrowBegin`, `lemoThrowAllowed`, `_lthMemberOk`, `_lthLock`, `updateLemoThrow`, `_lthAt`, `_lthFx`, `_lthAbove`, `_lthLemoPose`, `_lthLemoDone`, `receiveLemoThrow`, `updateRemoteThrows`, `LTH_REL`; the clip: `LEMO_ANIMS.Throw`, `lemoPlayThrow`, `_lemoActStep`, `_lemoDropSheet`, `_lemo.act`, `SEQS` in `Art/Lemo/slice.py`; the relay: `parseThrow`, `canThrow` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
 | ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`, `BOOKS_TOOL`, `booksOf`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL`; review log: `_lemoAudit`, `_lemoAuditRead`, `auditAllowed`, `AUDIT_PREFIX`, `tools/lemo_log.mjs` |
 | الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI`; reply + reactions: `_dmSetReply`, `_dmQuoteNode`, `_dmJumpTo`, `_dmReact`, `_dmPaintRx`, `_dmAct`, `_dmRxQuick`, `DM_RX_LIST`; edit + delete: `_dmStartEdit`, `_dmCommitEdit`, `_dmDelete`, `_dmApplyDeleted`, `_dmPeerRowPatch`; picker: `_dmEmojiPanel`, `_dmPop`; effects: `DM_FX`, `_dmPlayFx`, `_dmScreenFx`, `_dmFxUnread`; their picker: `_dmFxpOpen`, `_dmFxpTrack`, `_dmFxpHot`, `_dmFxpSend`; hover bar: `_dmHov`; ليمو's tips: `DM_TIPS`, `_dmPaintTip`; also `_dmFillText`, `_dmPaintDown`, `_dmFocusInput` |
@@ -350,6 +351,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **رف الجوائز** | Three trophies (and four hidden, blacked-out ones) on two planks in the break room. Walk up → a lit display case; each trophy fills with gold as you approach its condition. Claiming runs a spotlight-and-collision ceremony and pays out through the library's claim handshake. See **رف الجوائز**. |
 | **لوحة القائد** | نواف and a سراج ghost only. A crown in the HUD tools opens a panel of every member — roster faces, a name search — a **حضور اليوم** bar that counts and filters who met today's three hours / is on vacation / hasn't, seven duty dots per row, and one press shows **exactly how long they worked**: this week, last week, twelve weeks back, lifetime — plus a six-week duty calendar whose cells he can press to **اعتماد** a day as done (even one taken off or never opened) or **رفع الإجازة** off a past one. The list fills itself on open; all of it is derived from the session log the dashboard has been writing all along. See **لوحة القائد**. |
 | **القفز** | مسافة، أو نقرتان على شخصيتك. على الجوال: سحبة سريعة للأعلى في أي مكان، أو نقرة واحدة في أي مكان وأنت تمشي (والنقرتان ما زالتا تعملان). قفزة في المكان — أو، أثناء الحركة، **على طاولة** تمشي فوقها (أكبر قليلًا)، ومنها إلى الأرض، و**من حافة الطابق الثاني** إلى الأرض بهبوط قوي: غبار وموجة وهزّة وصوت لمن حولك إلا من في جلسة عمل. صفر فايربيس. See **القفز**. |
+| **رمية ليمو** | يرمي العضو حرفيًا إلى جلسة عمل: إن أصرّ على تضييع الوقت معه، أو طلب تحفيزًا، أو طلب منه أن يبدأ له جلسة. يتراجع، يندفع، يرفعك، يرميك في الهواء، ويلتقطك أحد الأجهزة قبل الأرض فتبدأ جلسة حرة. صفر فايربيس. See **Lemo → رمية ليمو**. |
 | **نداء ليمو** | `@ليمو` مع سؤال (أو اضغط عليه فيُكتب اسمه): يترك ما يفعله و**يمشي** إليك — طريق حقيقي حول الأثاث، يصعد الدرج، ويلحق بك إن تحرّكت — ثم **يجيبك** (ذكاء اصطناعي يسأله المُرحِّل لا الصفحة)، وقد يرد بملصق. ثم يمشي عائدًا. لا يُنادى نائمًا ولا من جلسة عمل ولا بلا سؤال، وبعد رده عليك تنتظر ٤ ثوانٍ. See **Lemo → نداء ليمو**. |
 | **الرسائل الخاصة** | زر في صندوق الأدوات (أو «رسالة خاصة» تحت عضو تضغط عليه): محادثات محفوظة بين عضوين من القسم نفسه — نص، كل الرموز، ملصقات، صور و GIF (سحب وإفلات / لصق)، رد (بالسحب على الجوال)، تفاعل بأي رمز، تعديل («معدّلة»)، حذف بتحذير، وتأثيرات إرسال كتأثيرات iMessage (ضغطة مطوّلة على زر الإرسال ثم سحب إلى التأثير)، وشريط سريع فوق الرسالة بالفأرة، ونصيحة يومية من ليمو تحت القائمة. على الحاسوب دُرج في الثلث الأيمن واللعب مستمر بجانبه. See **الرسائل الخاصة**. |
 | **رموز آبل التعبيرية** | الرموز بالشكل نفسه على كل جهاز: صورة مكان كل رمز على غير أجهزة آبل، في الصفحة وعلى الكانفس. See **رموز آبل التعبيرية**. |
@@ -1555,6 +1557,104 @@ game.js must mirror**. Four decisions worth keeping:
   palette bands the head badly (1530 → 54 unique colours) and lossless PNG is ~3.3× the
   bytes for no visible gain. `.webp` is already in `sw.js`'s `MEDIA_EXT`.
 
+### رمية ليمو — he throws a member into a work session
+His answer can end in a throw: he walks up (the ordinary call), says his line, then plays
+the Throw clip — backs up, crosses to the member in three frames, lifts them over his
+head, pulls back for the slingshot and throws. The member rises fast and grows, slows to
+the top, falls, and just before the floor a free laptop's kidnap line takes them: an
+ordinary **free session** starts (`startFreeMode`). Code is the `رمية ليمو` block right
+after `_lemoActStep`.
+
+- **When** (the model decides, `PERSONA` → «رميتك»): the member asked him to start a
+  session / throw them, asked for motivation, or kept wasting his time (twelfth message
+  in ten minutes, after being told off). Brothers and sisters alike. **A throw is never
+  a line of his**: the relay replaces whatever came with `"x":"throw"` by the «إلى العمل»
+  sticker alone (`THROW_STICKER`). The page sends `th: 1` with the question when
+  the member CAN be thrown (`_lthMemberOk`: no session of any kind, not reading, a free
+  laptop exists) → the context says «الرمية متاحة الآن»; the model answers
+  `{"p":[…],"x":"throw"}`; the relay (`parseThrow`, only if `canThrow`) adds `th: 1` to
+  `lemoa`. **Needs the relay deployed** (`cd presence-server && npx wrangler deploy`).
+- **The page then** arms it (`_lth.arm`, in `_lemoTalkStep`). The sticker is a cue, not a
+  speech: its life is cut to `LTH_STK_MS` on every screen so it is gone before the clip
+  (it must never sit over the animation). `LTH_AFTER_MS` after it
+  appears, once he is standing beside them (`f.arrived`, phase idle) and
+  `lemoThrowAllowed()` — else it is dropped after `LTH_ARM_MAX_MS`. He is not sent home
+  while a throw is armed or playing.
+- **The frames** (15 fps, the owner's breakdown): 0–19 warm-up, member free · **20** the
+  member is locked · 20–22 he crosses to them, any distance (`_lthLemoPose`) · 24–46 the
+  member rides his hands — **`LTH_REL`**, the member's centre relative to his anchor per
+  frame, tracked off the owner's guide video (a blue circle the size of an avatar),
+  stepped at 15 fps like the hands · **46** the release.
+- **The lock IS the kidnap's lock**: `gameState.anim.active = true`, phase **`'thrown'`**,
+  `anim.laptop` = the laptop chosen at the start. Every guard that steps aside for a
+  kidnap (movement, sit, jump, prompts, chat, the mezzanine fade) does so here for free.
+  Three things know the phase by name: `updateAnimation` (no drag dust under someone in
+  the air), `updateFloorsAndScales` (`deferringFlip` — the laptop's floor must not be
+  taken yet) and the kidnap-line draw (only reach/align/pull). `LTH_REACH_MS` before the
+  catch, `updateLemoThrow` drops the lock and calls `startFreeMode(lap.id)`; the member
+  keeps falling through the kidnap's `reach` and the line takes hold at the catch height.
+- **The flight** (`_lthAt`): height = ease-out QUINTIC up (`LTH_RISE_MS`, +`LTH_RISE` — a
+  long hang that still leaves his hands at full speed; the owner asked for twice the air
+  time and a far throw), then ease-in quad down (`LTH_FALL_MS`); scale follows the height above the release
+  (`LTH_SCALE_K`). The ground point travels `LTH_TRAVEL` of the way to the laptop's
+  `intermediateX/Y` (max `LTH_TRAVEL_MAX`). Drawn through the jump's hook in `drawPlayers`
+  (`_lthFx`: lift into `workBob`, scale into `_jumpScale`, `_thAirK` shrinks the contact
+  shadow, which stays on the floor) and — while in the air — in the floor-2 pass at full
+  opacity (`_lthAbove`), over the mezzanine.
+- **Laptop**: random free one on the ground floor; a mezzanine one only when the ground
+  floor has none. From the ground floor to a mezzanine laptop the catch is **earlier and
+  higher** (`LTH_CATCH_L2` vs `LTH_CATCH_L`) and the landing point is pulled back until it
+  is outside the platform's footprint. Taken meanwhile → another free one; none → they
+  come down where they are (`kid: 3`) and are unstuck.
+- **Everyone sees the same throw, and it costs zero Firebase.** `{t:'lth', uid, s, at, …}`
+  on the relay: `s:1` at the start (his clip, from server time `at`, `LTH_LEAD_MS` ahead),
+  `s:2` at the lock (where the member stood, where they come down, the catch height),
+  `s:0` called off. Each screen then computes both of them from `(th, serverNow())` —
+  nothing is streamed. A remote avatar is OWNED from the lock to the catch
+  (`updateRemoteThrows`, `th.own` — `updatePlayerRenderPositions` skips it, exactly like a
+  relayed sofa hop) and handed back to the position replay for the drag to the seat. Only
+  the thrower's client knows the real catch moment (`th.end`); the others use `th.tc`.
+- **After it** he stays where the throw left him (`_lthLemoDone` patches `_lemo.fol` and
+  sets `fol.done`, so he doesn't walk after a caller who is now at a laptop); the caller's
+  client sends him home as usual.
+- **Called off** before the lock if the member can no longer be thrown (a session started,
+  an overlay or a modal is open, a different floor, the tab was away past frame 24).
+- Sound: `Sound/lemo_throw.mp3` (`lemoThrow`, the owner's — 10 s, cut to the clip: the
+  back-up, the rush, the slingshot, the release at 3.2 s, the air after it). It starts
+  on frame 0 (`_lthPlaySound`, from `_lemoActStep`; never part-way in for a screen that
+  joined late), full for the thrown member, quieter with distance inside `LTH_HEAR_R`
+  for anyone else, silent for a member working or behind an overlay. Faded out if the
+  throw is called off (`_lthStopAct`). Decoded after spawn with the other effects (the
+  `rest` list). The kidnap's own sound still plays at the catch. No other sound design.
+- Dev: `__mq.x.lemoThrowBegin()` on localhost, standing on his floor while he is awake.
+
+**The clip itself:**
+- **The master was a PNG SEQUENCE on a wider canvas** (111 frames, 2777×2528), not a
+  2048² sheet. `slice.py` takes those through `SEQS`: `off` = where the 2048 cell sits on
+  that canvas — **(365, 240)**, found by matching frame 0 against Idle (it IS Idle's
+  frame 23, same scale) — and everything after is done in cell space. So the box is
+  `[-59, 189, 1887, 1868]` (a negative x: he backs up past the old cell's edge) and the
+  ONE anchor places it like every other sheet. Never hand-shift it in draw code.
+- **68 frames, 15 fps (4.5 s).** Export frames 68–110 are him standing in Idle's pose
+  with one blink — trimmed; Idle carries on. Its first and last frames sit on Idle.
+- **`res: 0.16`, not 0.20, and 8 columns**: the box holds him backing up on one side and
+  the throw on the other; at 0.20 it is 34 MB decoded, at 0.16 it is 21. It is lit at
+  0.20 and then brought down, so the rim is the same thickness as the other sheets.
+- **`root`** (in `meta.json`, mirrored in `LEMO_ANIMS.Throw`): he TRAVELS inside the clip
+  while his anchor stays put — back ~390 source px by frame 11, half-way in (−200) for
+  the hold (frames 26–45, crouched under the weight), home on the throw (46–52). The
+  contact shadow slides by it (`drawLemo`). It is the head's centroid, found by colour.
+- **Playback**: `lemoPlayThrow(at, face)` sets `_lemo.act`; `_lemoActStep(t)` (from
+  `updateLemo`, after the pose) lays the clip's frame over whatever pose he is in — a
+  pure function of `(t0, serverNow())`, so a relayed `at` starts it on the same frame
+  everywhere; no `at` = start when the sheet has decoded. An act with `th` also moves
+  his anchor. **Fetched when an answer with `th` arrives (every screen) and dropped
+  after the clip** (`_lemoDropSheet`) — never warm it. Refused while he sleeps.
+  Dev: `__mq.x.lemoPlayThrow()` plays the clip alone.
+- **The frame masters are not on disk** (owner's call, 115 MB): re-baking Throw needs a
+  fresh export into `Art/Lemo/throw/` (gitignored). `slice.py` skips a missing master
+  and keeps its meta; `python3 Art/Lemo/slice.py Throw` bakes that one alone.
+
 ### Geometry
 One anchor: `LEMO_ANCHOR_SX/SY` = the idle body's centre-x and feet-y **in source-cell
 px**, mapping to `(lemo.x, lemo.y + LEMO_H/2)` — the same centre-origin,
@@ -1572,7 +1672,7 @@ shown again he's wherever everyone else sees him. A hidden Lemo can't be woken b
 Firebase: one ~60-byte doc per lobby, written on wake / empty-lobby reset only, one
 listener per client (unsub'd in `doLogout` via `stopLemo`). No rules change — it lives
 under `lobbies`.
-~2.4 MB over 5 sheets, all lazy (`ensureLemoSheet`) and never on the login path; a
+~2.4 MB over 5 sheets (+ Throw, 680 KB, on demand only), all lazy (`ensureLemoSheet`) and never on the login path; a
 missing sheet just skips a frame of drawing. **Sleeping + WakeUp are freed the moment
 he's up** (`_lemoReleaseSleepSheets` — ~19 MB of decoded frames; same reason the world
 frees its layers). He can go back to bed now, so they're **dropped, not tombstoned** —

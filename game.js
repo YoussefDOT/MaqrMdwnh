@@ -1423,6 +1423,7 @@ class FocusAudioEngine {
             sofaStand: null,
             jumpStart: null,
             jumpLand: null,
+            lemoThrow: null,   // رمية ليمو — the whole throw, cut to the clip
             // الدردشة القريبة — mentions. Web Audio so a ping sounds in a background tab.
             chatMention: null,
             mentionPing: null,
@@ -1560,6 +1561,7 @@ class FocusAudioEngine {
             ['mentionAlarm', 'Sound/mention_alarm.mp3'],
             ['sofaSit', 'Sound/Sofa_Sit.mp3'], ['sofaStand', 'Sound/Sofa_Stand.mp3'],
             ['jumpStart', 'Sound/Jump_Start.mp3'], ['jumpLand', 'Sound/Jump_Land.mp3'],
+            ['lemoThrow', 'Sound/lemo_throw.mp3'],
             ['paperIntro', 'Sound/Paper_Intro.mp3'], ['paperSwipe', 'Sound/Paper_Swipe.mp3'],
             ['paperDaysSwap', 'Sound/Paper_DaysSwap.mp3'], ['paperExit', 'Sound/Paper_Exit.mp3'],
             ['paperTaskComplete', 'Sound/Paper_Task_Complete.mp3'],
@@ -2966,6 +2968,7 @@ const gameState = {
         sofaStand:               _lazyAudio('Sound/Sofa_Stand.mp3'),
         jumpStart:               _lazyAudio('Sound/Jump_Start.mp3'),
         jumpLand:                _lazyAudio('Sound/Jump_Land.mp3'),
+        lemoThrow:               _lazyAudio('Sound/lemo_throw.mp3'),   // رمية ليمو
         // الدردشة القريبة — mention cues (HTMLAudio fallback until the buffers decode)
         chatMention:             _lazyAudio('Sound/chat_mention.mp3'),
         mentionPing:             _lazyAudio('Sound/mention_ping.mp3'),
@@ -4110,6 +4113,8 @@ function updatePlayerRenderPositions() {
         // A relayed sofa hop owns this avatar outright for its ~0.6s (see
         // updateRemoteSitAnims, which already wrote renderX/renderY this frame).
         if (player._sitAnim && player._sitAnim.active) continue;
+        // …and so does a throw, from his grab to the laptop's (updateRemoteThrows).
+        if (player._lth && player._lth.own) continue;
         // Remote players: smooth snapshot interpolation from the position buffer
         // (fed by both the WebSocket relay and Firebase). Fall back to the plain
         // catch-up lerp until the first sample arrives.
@@ -6690,8 +6695,9 @@ function updateFloorsAndScales() {
         // the 'reach'/'align' phases of an active kidnap, the flip is deferred to
         // the 'pull' phase's start (see updateAnimation) so a cross-floor grab
         // transitions scale/opacity at the animation's midpoint, not instantly.
+        // ('thrown' = held / thrown by ليمو: the laptop is only where they are headed.)
         const deferringFlip = gameState.anim.active
-            && (gameState.anim.phase === 'reach' || gameState.anim.phase === 'align');
+            && (gameState.anim.phase === 'reach' || gameState.anim.phase === 'align' || gameState.anim.phase === 'thrown');
         if (!deferringFlip && (gameState.isLockedIn || gameState.anim.active)) {
             const lap = _activeLaptopForFloor();
             if (lap) local.floor = lap.floor || 1;
@@ -11405,6 +11411,8 @@ function onPresenceMessage(data) {
     // القفزة — one-off and half a second long, so it plays on arrival rather than
     // being queued onto the replay timeline the way the sofa hop is.
     if (msg.t === 'jmp') { receiveJump(player, msg); return; }
+    // رمية ليمو — he is throwing this member into a session (start / lock / called off).
+    if (msg.t === 'lth') { receiveLemoThrow(player, msg); return; }
     // isMoving must update before pushing the sample — interpolateRemoteFromBuffer
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
@@ -12005,8 +12013,11 @@ function updateAnimation() {
     const laptop = gameState.anim.laptop;
     if (!player || !laptop) return;
 
-    // Heavy dust during the entire kidnap animation sequence
-    spawnDust(player.x, player.y, Math.ceil(3 * gameState.dtFactor), true);
+    // Heavy dust during the entire kidnap animation sequence — but not under a member
+    // ليمو is holding up or has just thrown: they are not on the floor to raise any.
+    if (gameState.anim.phase !== 'thrown' && !_lthAbove(player)) {
+        spawnDust(player.x, player.y, Math.ceil(3 * gameState.dtFactor), true);
+    }
 
     // The drag runs on REAL elapsed time. dtFactor is clamped at 2 (one 30 fps
     // frame), so on a capped phone every frame that ran long slowed the drag down
@@ -12519,10 +12530,12 @@ function gameLoop(timestamp) {
         }
 
         handleMovement();
+        updateLemoThrow();           // رمية ليمو: my own avatar in his hands / in the air
         updateAnimation();
         updateLemo();                // the robot — the lobby's shared timeline (see Lemo)
         updateSitAnimation();        // sofa sit-in / stand-up tween (local)
         updateRemoteSitAnims();      // ...and the same hop for everyone else's
+        updateRemoteThrows();        // ...and a throw, for whoever he is throwing
         updateFloorsAndScales();     // per-player floor + dynamic stair scale
         updateSecondFloorFade();     // fade the second floor when a ground player is under it
         updateSecondFloorFog();      // height fog while on the second floor
@@ -16447,8 +16460,11 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
         // Floor split: draw ground players below the mezzanine, platform players above
         // it. Platform players fade together with the second-floor art.
         const pFloor = player.floor || 1;
-        if (floorFilter && pFloor !== floorFilter) continue;
-        let floorVis = (pFloor === 2) ? (gameState.secondFloorVis ?? 1) : 1;
+        // رمية ليمو: a thrown member is up in the air — over the mezzanine and everyone
+        // on it, and never faded with it.
+        const _thAir = player._lth ? _lthAbove(player) : false;
+        if (floorFilter && (_thAir ? 2 : pFloor) !== floorFilter) continue;
+        let floorVis = (pFloor === 2 && !_thAir) ? (gameState.secondFloorVis ?? 1) : 1;
         if (floorVis < 0.02) continue;
         const rScale = player.renderScale || 1;   // second-floor / stair scale (1.0 → 1.25)
         // Held invisible until their join position settles (see SPAWN_SETTLE_MS).
@@ -16556,6 +16572,18 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             const qb = !tpData ? _jumpQuakeBounce(player, Date.now()) : null;
             if (qb) { workBob += qb.dy; workScaleX *= qb.sx; workScaleY *= qb.sy; }
         }
+        // رمية ليمو: in his hands, then in the air — the same kind of pure function.
+        // `_thAirK` (0…1) tells the contact shadow how far off the floor they are.
+        let _thAirK = 0;
+        if (player._lth && !tpData) {
+            const tf = _lthFx(player);
+            if (tf) {
+                workBob -= tf.l;
+                workScaleX *= tf.sx; workScaleY *= tf.sy;
+                _jumpScale *= tf.s;
+                _thAirK = Math.min(1, tf.l / 150);
+            }
+        }
 
         // Coop animation: read lerped blend values computed in updateCoopAnimation
         const sp = gameState.sharedPomo;
@@ -16643,13 +16671,13 @@ function drawPlayers(onlyLocal = false, floorFilter = null) {
             // JUICE: the shadow stretches along the ground with speed and lags a hair
             // behind the direction of travel — reads as motion.
             const spdN = Math.min(1, (player._rspeedSm || 0) / (MOVE_SPEED * 1.8));
-            const base = (PLAYER_SIZE * 0.46) * (1 - liftN * 0.32) * rScale;
+            const base = (PLAYER_SIZE * 0.46) * (1 - liftN * 0.32) * (1 - _thAirK * 0.3) * rScale;
             const shW = base * (1 + spdN * 0.22);
             const shH = base * 0.32 * (1 - spdN * 0.18);
             const shLag = Math.max(-8, Math.min(8, -(player._rvxSm || 0) * 0.9)) * spdN;
             const shGroundY = renderY + (PLAYER_SIZE / 2) * rScale - 2;
             ctx.save();
-            ctx.globalAlpha = (0.28 - liftN * 0.14) * (tpData ? (1 - tpFadeOut) : 1) * floorVis;
+            ctx.globalAlpha = (0.28 - liftN * 0.14) * (1 - _thAirK * 0.45) * (tpData ? (1 - tpFadeOut) : 1) * floorVis;
             ctx.fillStyle = '#000';
             ctx.beginPath();
             ctx.ellipse(screenX + coopDX + shLag, shGroundY, shW, shH, 0, 0, Math.PI * 2);
@@ -16882,7 +16910,7 @@ if (/^(localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.)/.test(location.hostname))
         // مقر ١.٥ — a getter, not a value: these are declared further down the module,
         // so reading them here at evaluation time would be a temporal-dead-zone throw.
         get x() {
-            return { _lemo, _lemoNav, _lemoNavBuild, _lemoNavPath, _lemoApplyDoc, onLemoRelay, lemoPress,
+            return { _lemo, _lemoNav, _lemoNavBuild, _lemoNavPath, _lemoApplyDoc, onLemoRelay, lemoPress, lemoPlayThrow, lemoThrowBegin, _lth,
                      _dm, dmOpen, dmClose, _dmPickFile, _dmSubmit, _peek, peekOpen, _rx, reactNow,
                      openChatBox, closeChatBox, _chatUi,
                      isOnStairs, checkCollision, _lemoRound, LEMO_SPOTS, LEMO_ROUTE, LEMO_MEET_SPOTS,
@@ -30103,6 +30131,19 @@ const LEMO_ANIMS = {
     Idle:     { frames: 24, cols: 4, fw: 206, fh: 280, box: [486, 369, 1512, 1771], fps: 8,  loop: true  },
     Walk:     { frames: 60, cols: 4, fw: 210, fh: 298, box: [485, 368, 1537, 1860], fps: 10, loop: false },
     Play:     { frames: 52, cols: 4, fw: 342, fh: 338, box: [137, 26, 1847, 1719], fps: 8,  loop: false },
+    // رمية ليمو. Drawn on a WIDER canvas than the others (2777×2528: the 2048 cell plus
+    // room on every side), so slice.py bakes it back into the same source-cell space —
+    // which is why its box starts at a NEGATIVE x: he backs up past the old cell's edge.
+    // Nothing here needs to know; the one anchor places it like every other sheet, and
+    // its first and last frames sit exactly on Idle. `root` = how far he has travelled
+    // INSIDE the clip, per frame, in source-cell px (his anchor stays put in the world):
+    // the contact shadow slides by it. 21 MB decoded, so it is fetched for a throw and
+    // dropped after it (lemoPlayThrow) — never warmed.
+    Throw:    { frames: 68, cols: 8, fw: 312, fh: 268, box: [-59, 189, 1887, 1868], fps: 15, loop: false,
+                root: [0, -97, -215, -276, -315, -341, -359, -372, -380, -386, -389, -390, -390, -390, -390, -391, -391,
+                       -391, -387, -370, -293, -197, -177, -180, -202, -235, -235, -235, -233, -229, -226, -221, -217, -212,
+                       -207, -202, -203, -202, -202, -202, -202, -203, -203, -203, -203, -203, -124, -106, -28, 13, 24,
+                       22, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
 };
 
 // ── The walk — three clips in one sheet (مقر ١.٥) ───────────────────────────────
@@ -30368,6 +30409,8 @@ const _lemo = {
     saidAt: 0, saidKey: 0,        // when his last word went away, and for which call (its t0)
     hist: [],                     // his last PEEK_MAX lines — the fan a press on him opens (_lemoHistPush)
     ai: { busy: null, ans: null, mine: null, myNextAt: 0 },
+    act: null,                    // a one-shot clip played over his pose: { name, t0, face, th? } (lemoPlayThrow / رمية ليمو)
+    _actEnded: false,             // …it ended this frame: any jump back to his own pose is glided
 };
 
 /* ── طريق ليمو — a walkable grid and A* over it (مقر ١.٥) ───────────────────────
@@ -30970,6 +31013,8 @@ function _lemoSendQuestion(k, q, men) {
     };
     // Who the question points at (see _chatSend). Left out when there is nobody.
     if (men && men.length) msg.men = men;
+    // رمية ليمو: he may throw this member into a session (free, and a laptop is too).
+    if (_lthMemberOk()) msg.th = 1;
     if (tk.length) msg.tk = tk;
     if (bk) msg.bk = bk;
     try { ws.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
@@ -31031,7 +31076,16 @@ function onLemoRelay(msg) {
     if (!(e === 'busy' || e === 'wait') || (ai.busy && ai.busy.to === to)) ai.busy = null;
     let parts = _lemoCleanParts(msg.p);
     if (!parts.length) parts = [{ m: LEMO_ERR_LINES[e] || LEMO_ERR_LINES.err }];
-    ai.ans = { to, k, parts, at: Date.now() };
+    // رمية ليمو: this answer ends in a throw. The clip is fetched now, on every screen
+    // that will show it, so it has landed by the time he has walked over and said it.
+    const th = !e && msg.th === 1;
+    if (th && !document.hidden && !gameState._hideLemo) {
+        ensureLemoSheet('Throw');
+        for (const it of parts) if (it.s) _stkImg(it.s);      // its sticker is up for a moment only: have it ready
+        // …and let go of it if the throw never came (he couldn't, in the end): 21 MB.
+        setTimeout(() => { if (!_lemo.act && !_lth.cur && !_lth.arm) _lemoDropSheet('Throw'); }, 45000);
+    }
+    ai.ans = { to, k, parts, at: Date.now(), th };
     if (to === gameState.userId && ai.mine) ai.mine.done = true;
 }
 
@@ -31089,10 +31143,15 @@ function _lemoTalkStep(c, f) {
     const arrived = !!(f && (f.arrived || f.phase === 'end'));
     if (ai.ans && ai.ans.to === c.u && (!say || say.wait)) {
         if (arrived || now - ai.ans.at > LEMO_SAY_HOLD_MS) {
-            const parts = ai.ans.parts;
+            const parts = ai.ans.parts, thr = ai.ans.th;
             ai.ans = null;
             _lemoSay(parts, 0, false);
-            if (mine) ai.myNextAt = now + LEMO_ASK_GAP_MS;
+            // رمية ليمو: the «إلى العمل» sticker is a cue, not a speech — gone before he moves.
+            if (thr && _lemo.say) _lemo.say.life = LTH_STK_MS;
+            if (mine) {
+                ai.myNextAt = now + LEMO_ASK_GAP_MS;
+                _lth.arm = thr ? { k: c.t0, at: now + LTH_AFTER_MS } : null;
+            }
             say = _lemo.say;
         }
     } else if (!say && arrived && ai.busy && ai.busy.to === c.u && now - f.arrivedAt > 420) {
@@ -31102,8 +31161,15 @@ function _lemoTalkStep(c, f) {
     } else if (say && say.wait && !(ai.busy && ai.busy.to === c.u) && !ai.ans) {
         _lemo.say = null; say = null;
     }
+    // رمية ليمو: he has said it — once he is standing beside them, he starts.
+    const arm = _lth.arm;
+    if (arm && (!mine || arm.k !== c.t0)) _lth.arm = null;
+    else if (arm && now >= arm.at) {
+        if (now - arm.at > LTH_ARM_MAX_MS || !_lthMemberOk()) _lth.arm = null;
+        else if (f && f.arrived && f.phase === 'idle' && !f.flash && lemoThrowAllowed()) { _lth.arm = null; lemoThrowBegin(); }
+    }
     // The caller's client sends him home once he has had his say.
-    if (mine && !say && !ai.ans && !(ai.busy && ai.busy.to === c.u)) {
+    if (mine && !say && !ai.ans && !(ai.busy && ai.busy.to === c.u) && !_lth.arm && !_lth.cur && !_lemo.act) {
         const asked = ai.mine && ai.mine.k === c.t0;
         const since = now - (_lemo.saidAt || 0);
         if ((asked && ai.mine.done && since > LEMO_LINGER_MS) || (!asked && serverNow() - c.t0 > 9000)) _lemoRelease();
@@ -31544,6 +31610,454 @@ function _lemoReleaseSleepSheets() {
     }
 }
 
+function _lemoDropSheet(name) {
+    const s = _lemo.sheets[name];
+    if (s && s.img) { try { s.img.src = ''; } catch (_) {} }
+    delete _lemo.sheets[name];
+}
+
+// رمية ليمو — plays the Throw clip where he stands, over whatever pose he is in.
+// `at` is SERVER time, so a throw that arrives over the relay starts on the same frame
+// on every screen; with no `at` it starts the moment its sheet has decoded. `face`
+// (1 / -1) turns him for the length of the clip. The clip is a pure function of
+// (t0, now), so nothing has to tick it.
+function lemoPlayThrow(at, face) {
+    if (gameState._hideLemo || lemoIsAsleep()) return false;
+    ensureLemoSheet('Throw');
+    _lemo.act = { name: 'Throw', t0: at > 0 ? at : 0, face: face === -1 ? -1 : (face === 1 ? 1 : 0) };
+    perfWake(1500);
+    return true;
+}
+
+// The clip's frame at server time t, laid over the pose updateLemo just worked out.
+function _lemoActStep(t) {
+    const act = _lemo.act;
+    if (!act) return;
+    const a = LEMO_ANIMS[act.name];
+    const sheet = _lemoSheet(act.name);
+    if (!act.t0) { if (!sheet) return; act.t0 = t; }          // waiting for its sheet
+    const f = Math.floor((t - act.t0) * a.fps / 1000);
+    if (f >= a.frames) {
+        _lemo.act = null; _lemoDropSheet(act.name);
+        if (act.th) _lthLemoDone(act.th);
+        _lemo._actEnded = true;
+        return;
+    }
+    // A throw moves HIM too (the rush) — sheet or no sheet. Its sound was cut to the
+    // clip, so it starts on frame 0 (never part-way in, for a screen that joined late).
+    if (act.th) {
+        _lthLemoPose(act.th, t, f);
+        if (f >= 0 && !act.sndDone) { act.sndDone = true; if (t - act.t0 < 500) act.snd = _lthPlaySound(act.th); }
+    }
+    if (act.face) _lemo.faceT = act.face;
+    // Not decoded yet (or not due yet): he stands in his own pose rather than vanish.
+    if (f < 0 || !sheet) return;
+    _lemo.state = 'acting'; _lemo.anim = act.name; _lemo.frame = f;
+}
+
+/* ── رمية ليمو — he throws a member into a work session ─────────────────────────
+   When a member keeps wasting time with him, asks for motivation, or asks him to
+   start a session, his answer comes back from the relay with `th: 1`. He walks up
+   (the ordinary call), says his line, and then:
+
+     frames 0–19   he warms up — backs away. The member is still free.
+     frame  20     the member is LOCKED (gameState.anim, phase 'thrown').
+     frames 20–22  he crosses to them — however far — and is beside them by 23.
+     frames 24–46  the member rides his hands: up over his head, then back for the
+                   slingshot. Their place is LTH_REL, tracked frame by frame off the
+                   owner's guide (a circle the size of an avatar), so it is stepped at
+                   the clip's 15 fps exactly like the hands that carry it.
+     frame  46     the release: up very fast, slowing to the top, then gravity. The
+                   ground point arcs toward a free laptop (a ground-floor one if there
+                   is one), and just before the floor the kidnap's line takes them —
+                   the ordinary free session starts from there (startFreeMode).
+
+   A mezzanine laptop caught from the ground floor is taken EARLIER and higher
+   (LTH_CATCH_L2), and never from under the platform.
+
+   ZERO FIREBASE of its own. It rides the relay as `{t:'lth', uid, s, at, …}` — s:1 at
+   the start (his clip, on everyone's screen, from server time `at`), s:2 at the lock
+   (where the member stood, where they come down), s:0 = called off. Everything after
+   that is a PURE function of (th, serverNow()) — _lthAt for the member, _lthLemoPose
+   for him — so every screen plays the same throw and the PiP pass draws it without
+   advancing anything. The session it ends in is the ordinary one, with its ordinary
+   writes. A relayed `lth` is another client's data: every field is re-checked, and
+   all it can do is move that member's avatar and his pose on this screen. */
+const LTH_FPS      = 15;
+const LTH_LOCK_F   = 20;      // the member can't move from this frame on
+const LTH_RUSH_F1  = 23;      // …and he is beside them by this one (frames 20–22)
+const LTH_HOLD_F0  = 24;      // LTH_REL[0] is this frame — still standing on the floor
+const LTH_THROW_F  = 46;      // the release
+// The member's centre relative to his anchor, in source-cell px, frames 24…46.
+const LTH_REL = [
+    [391, -692], [101, -997], [-49, -1155], [-117, -1227], [-153, -1264], [-170, -1283], [-175, -1287], [-176, -1287],
+    [-180, -1284], [-190, -1278], [-211, -1266], [-262, -1236], [-409, -1150], [-465, -1118], [-491, -1102], [-507, -1093],
+    [-517, -1087], [-524, -1083], [-528, -1080], [-531, -1079], [-531, -1079], [-558, -1047], [-562, -1043],
+];
+const LTH_RISE_MS   = 1040;   // up: starts at full speed, has stopped by the top
+const LTH_FALL_MS   = 1280;   // down: from rest, gathering speed (it would touch the floor here)
+const LTH_RISE      = 170;    // world units gained above the release height
+const LTH_CATCH_L   = 20;     // how high they still are when the line takes them…
+const LTH_CATCH_L2  = 64;     // …and for a mezzanine laptop caught from the ground floor
+const LTH_REACH_MS  = 210;    // the kidnap's own 'reach' (0.08 a frame at 60 fps)
+const LTH_LAND_MS   = 200;    // what is left of the height goes in this, once caught
+const LTH_SCALE_K   = 0.0058; // scale gained per world unit above the release height
+const LTH_TRAVEL    = 0.92;   // the flight covers this much of the way to the laptop's grab point…
+const LTH_TRAVEL_MAX = 900;   // …and never more than this (world units)
+const LTH_HEAR_R    = 520;    // who hears it, from where he stands (quieter with distance)
+const LTH_LEAD_MS   = 450;    // the start reaches every screen before frame 0 plays
+const LTH_STK_MS    = 1400;   // a throw's sticker is up only this long (it fades in its last 260 ms)…
+const LTH_AFTER_MS  = LTH_STK_MS + 100;   // …and he starts once it is gone, so it never sits over the clip
+const LTH_ARM_MAX_MS = 12000; // …and if he still can't by then, he lets it go
+
+const _lth = { cur: null, arm: null };
+const _lthOut = { x: 0, y: 0, l: 0, s: 1, sx: 1, sy: 1 };
+const _lthRelMs = (t, th) => (t - th.at) - LTH_THROW_F * 1000 / LTH_FPS;   // ms since the release
+
+// Everything that follows from where the member stood (px, py).
+function _lthDerive(th) {
+    const S = LEMO_SCALE * th.sc, last = LTH_REL[LTH_REL.length - 1];
+    // His anchor once he is beside them: the guide's circle sits on the member.
+    th.ax = th.px - th.f * LTH_REL[0][0] * S;
+    th.ay = th.py - LTH_REL[0][1] * S - LEMO_H * th.sc + LEMO_H / 2;
+    th.x0 = th.ax + th.f * last[0] * S;                  // the ground point at the release…
+    th.l0 = (LTH_REL[0][1] - last[1]) * S;               // …and the height
+    th.top = th.l0 + LTH_RISE;
+    th.tc = LTH_RISE_MS + LTH_FALL_MS * Math.sqrt(Math.max(0, 1 - th.lc / th.top));   // the catch, ms after the release
+}
+
+// The member at server time t: ground point (x, y), height l, and the scale / stretch
+// that go with it. PURE.
+function _lthAt(th, t, out) {
+    const fr = (t - th.at) * LTH_FPS / 1000;
+    out.x = th.px; out.y = th.py; out.l = 0; out.s = 1; out.sx = 1; out.sy = 1;
+    if (fr < LTH_HOLD_F0) return out;
+    if (fr < LTH_THROW_F) {
+        const r = LTH_REL[Math.floor(fr) - LTH_HOLD_F0], S = LEMO_SCALE * th.sc;
+        out.x = th.ax + th.f * r[0] * S;
+        out.l = (LTH_REL[0][1] - r[1]) * S;
+        return out;
+    }
+    const tau = _lthRelMs(t, th);
+    const end = th.end != null ? th.end : th.tc;         // caught here (the thrower's own client knows exactly)
+    const tt = Math.min(tau, end);
+    let l;
+    // Quintic on the way up: a long hang, yet it still leaves his hands at full speed.
+    if (tt < LTH_RISE_MS) { const u = 1 - tt / LTH_RISE_MS; l = th.top - (th.top - th.l0) * u * u * u * u * u; }
+    else { const v = Math.min(1, (tt - LTH_RISE_MS) / LTH_FALL_MS); l = th.top * (1 - v * v); }
+    if (tau > end) { const k = Math.max(0, 1 - (tau - end) / LTH_LAND_MS); l *= k * k; }
+    out.l = l;
+    out.s = 1 + Math.max(0, l - th.l0) * LTH_SCALE_K;
+    const e = 1 - Math.pow(1 - Math.min(1, tau / th.tc), 1.6);
+    out.x = th.x0 + (th.gx - th.x0) * e;
+    out.y = th.py + (th.gy - th.py) * e;
+    const st = tau < 260 ? 1 - tau / 260 : 0;            // stretched along the launch
+    out.sy = 1 + 0.16 * st; out.sx = 1 - 0.10 * st;
+    return out;
+}
+
+// For drawPlayers: this frame's lift / scale, or null. Pure of the clock.
+function _lthFx(player) {
+    const th = player._lth;
+    if (!th || !th.locked) return null;
+    const o = _lthAt(th, serverNow(), _lthOut);
+    return (o.l > 0.01 || o.s !== 1) ? o : null;
+}
+// In the air after the release: drawn over everything, whatever floor they are on.
+function _lthAbove(player) {
+    const th = player._lth;
+    if (!th || !th.locked) return false;
+    const tau = _lthRelMs(serverNow(), th);
+    return tau >= 0 && tau < (th.end != null ? th.end : th.tc) + LTH_LAND_MS;
+}
+
+// Where HE is during the clip: his own spot through the warm-up, then across to the
+// member in frames 20–22. Pure.
+function _lthLemoPose(th, t, f) {
+    let x = th.lx, y = th.ly;
+    if (th.locked) {
+        const fr = (t - th.at) * LTH_FPS / 1000;
+        const u = Math.max(0, Math.min(1, (fr - LTH_LOCK_F) / (LTH_RUSH_F1 - LTH_LOCK_F)));
+        x += (th.ax - th.lx) * u; y += (th.ay - th.ly) * u;
+        if (u >= 1 && !th.dust) {
+            th.dust = true;
+            if (f < LTH_HOLD_F0 + 4) spawnDust(th.ax, th.ay + LEMO_H * th.sc - LEMO_H / 2 - PLAYER_SIZE / 2, 9, true, th.fl);
+        }
+    }
+    _lemo.rx = x; _lemo.ry = y; _lemo.floor = th.fl;
+    _lemo.onStair = false; _lemo.bobT = 0;
+}
+// The clip is over: he stays where the throw left him, and stops following a caller
+// who is now across the room at a laptop (the caller's client sends him home).
+function _lthLemoDone(th) {
+    if (!th.locked) return;
+    _lemo.rx = th.ax; _lemo.ry = th.ay; _lemo.floor = th.fl;
+    const fo = _lemo.fol, c = _lemo.doc && _lemo.doc.call;
+    if (fo && c && c.u === th.uid) {
+        fo.x = th.ax; fo.y = th.ay; fo.fl = th.fl; fo.face = th.f;
+        fo.phase = 'idle'; fo.pt = 0; fo.path = null; fo.flash = null; fo.onStair = false;
+        fo.arrived = true; fo.done = true;
+    }
+}
+// lemo_throw.mp3 — the whole throw in one file (the back-up, the rush, the slingshot,
+// the release and the air after it). The thrown member hears it in full; anyone near
+// hears it quieter with distance; nobody working or behind an overlay hears it at all.
+function _lthPlaySound(th) {
+    const mine = th.uid === gameState.userId;
+    const me = gameState.players[gameState.userId];
+    const dist = mine ? 0 : (me ? Math.hypot(me.x - th.lx, me.y - th.ly) : Infinity);
+    if (!mine && (dist >= LTH_HEAR_R || localInWorkPhase() || gameState.isLockedIn || _chatMustClose())) return null;
+    const k = 1 - dist / LTH_HEAR_R;
+    try {
+        const fe = gameState.focusAudioEngine;
+        const h = fe ? fe.playHandled('lemoThrow', 1, 0.9 * (mine ? 1 : 0.25 + 0.6 * k)) : null;
+        if (!h && mine) playSoundRobust(gameState.sounds.lemoThrow);
+        return h;
+    } catch (_) { return null; }
+}
+// The throw was called off: his clip stops, and its sound with it.
+function _lthStopAct(uid) {
+    const act = _lemo.act;
+    if (!act || !act.th || act.th.uid !== uid) return;
+    try { if (act.snd) gameState.focusAudioEngine?.fadeOutHandle(act.snd, 0.25); } catch (_) {}
+    _lemo.act = null; _lemo._actEnded = true;
+    _lemoDropSheet('Throw');
+}
+function _lthSetAct(th) {
+    if (gameState._hideLemo) return;
+    ensureLemoSheet('Throw');
+    _lemo.act = { name: 'Throw', t0: th.at, face: th.f, th };
+    perfWake(1500);
+}
+
+// Is this member free to be thrown into a session at all? (Sent with the question, so
+// he knows whether the move is on the table.)
+function _lthMemberOk() {
+    const me = gameState.players[gameState.userId];
+    if (!me || gameState._dupSessionDetected) return false;
+    if (gameState.pomodoro.active || gameState.freeMode.active) return false;
+    if (gameState.sharedPomo && gameState.sharedPomo.phase && gameState.sharedPomo.phase !== 'idle') return false;
+    if (gameState.isLockedIn || gameState.anim.active) return false;
+    if (gameState.reading && gameState.reading.active) return false;
+    return gameState.laptops.some(l => !l.claimedBy);
+}
+// …and right now, by him, from where both of them stand?
+function lemoThrowAllowed() {
+    if (!_lthMemberOk() || gameState._hideLemo || !_lemo.shown || lemoIsAsleep()) return false;
+    if (_chatMustClose() || (JUICE_ENTRANCE && _entrance.active)) return false;
+    const me = gameState.players[gameState.userId];
+    return (me.floor || 1) === (_lemo.floor || 1) && !isOnStairs(me.x, me.y);
+}
+// A free laptop, at random — the ground floor's first; the mezzanine's only when the
+// ground floor has none.
+function _lthFreeLaptop() {
+    const free = gameState.laptops.filter(l => !l.claimedBy);
+    const f1 = free.filter(l => (l.floor || 1) === 1);
+    const pool = f1.length ? f1 : free;
+    return pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+}
+
+function _lthSend(th, s) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    const m = { t: 'lth', uid: th.uid, s, at: Math.round(th.at) };
+    if (s) { m.lx = th.lx; m.ly = th.ly; m.fl = th.fl; m.f = th.f; }
+    if (s === 2) { m.px = th.px; m.py = th.py; m.gx = th.gx; m.gy = th.gy; m.lc = th.lc; }
+    try { ws.send(JSON.stringify(m)); return true; } catch (_) { return false; }
+}
+
+// Start one on MY avatar. From his answer (_lemoTalkStep), or `__mq.x.lemoThrowBegin()`.
+function lemoThrowBegin() {
+    if (_lth.cur || _lemo.act || !lemoThrowAllowed()) return false;
+    const me = gameState.players[gameState.userId];
+    const lap = _lthFreeLaptop();
+    if (!lap) return false;
+    const fl = (me.floor || 1) === 2 ? 2 : 1;
+    const th = {
+        uid: gameState.userId, at: serverNow() + LTH_LEAD_MS,
+        f: me.x >= _lemo.x ? 1 : -1, fl, sc: fl === 2 ? FLOOR2_SCALE : 1,
+        lx: Math.round(_lemo.x * 10) / 10, ly: Math.round(_lemo.y * 10) / 10,
+        locked: false,
+    };
+    _lth.cur = { th, lap, kid: 0 };
+    _lthSetAct(th);
+    _lthSend(th, 1);
+    return true;
+}
+
+// Frame 20: the member is his.
+function _lthLock(cur, me) {
+    const th = cur.th, lap = cur.lap;
+    if (gameState.isSitting) standUp(true);
+    if (chatIsOpen()) closeChatBox();
+    gameState.keys = {};
+    me.isMoving = false; me.isSprinting = false;
+    me._vx = 0; me._vy = 0; me.bobOffset = 0; me.bobTime = 0; me._stopSquashT = null;
+    me._jump = null; me._air = false;
+    th.px = Math.round(me.x * 10) / 10; th.py = Math.round(me.y * 10) / 10;
+    const up = (lap.floor || 1) === 2 && th.fl === 1;
+    th.lc = up ? LTH_CATCH_L2 : LTH_CATCH_L;
+    _lthDerive(th);
+    // Where they come down: toward the laptop's grab point, part of the way.
+    const dx = lap.intermediateX - th.x0, dy = lap.intermediateY - th.py;
+    const D = Math.hypot(dx, dy) || 1;
+    let trav = Math.min(D * LTH_TRAVEL, LTH_TRAVEL_MAX);
+    // A mezzanine laptop: the line takes them out in the open, never from under the platform.
+    const under = (x, y) => x > PLAT_X0 - 40 && x < PLAT_X1 + 60 && y > PLAT_Y0 - 40 && y < PLAT_Y1 + 60;
+    if (up) while (trav > 0 && under(th.x0 + dx / D * trav, th.py + dy / D * trav)) trav -= 12;
+    trav = Math.max(0, trav);
+    th.gx = Math.round(Math.max(WORLD_BOUNDS.minX, Math.min(WORLD_BOUNDS.maxX, th.x0 + dx / D * trav)));
+    th.gy = Math.round(Math.max(WORLD_BOUNDS.minY, Math.min(WORLD_BOUNDS.maxY, th.py + dy / D * trav)));
+    th.locked = true;
+    // On this client the catch is whenever the line really takes hold (set then) —
+    // until it does they simply keep falling. Everyone else uses the nominal th.tc.
+    th.end = 1e9;
+    // The kidnap's own lock: every guard in the game already steps aside for it.
+    const a = gameState.anim;
+    a.active = true; a.phase = 'thrown'; a.progress = 0; a.laptop = lap;
+    me._lth = th;
+    sendPositionWS(me.x, me.y, true);
+    updatePlayerPosition(me.x, me.y);
+    _lthSend(th, 2);
+}
+
+// Called off before the lock: he simply stops.
+function _lthCancel() {
+    const cur = _lth.cur;
+    _lth.cur = null;
+    if (!cur) return;
+    _lthStopAct(cur.th.uid);
+    _lthSend(cur.th, 0);
+}
+// Something else took the member mid-throw (a session restore, a forced exit): let go.
+function _lthDrop(cur, me) {
+    _lth.cur = null;
+    me._lth = null;
+    _lthSend(cur.th, 0);
+    _unstickLocalPlayer();
+}
+
+// The thrower's own client drives its member. From gameLoop, before updateAnimation.
+function updateLemoThrow() {
+    const cur = _lth.cur;
+    if (!cur) return;
+    const th = cur.th, me = gameState.players[gameState.userId];
+    if (!me) { _lth.cur = null; return; }
+    const t = serverNow();
+    const fr = (t - th.at) * LTH_FPS / 1000;
+    if (!th.locked) {
+        if (fr < LTH_LOCK_F) return;
+        // Too late to lock (the tab was away), or they can no longer be thrown.
+        if (fr > LTH_HOLD_F0 || !lemoThrowAllowed() || document.querySelector('.modal-overlay.active')) { _lthCancel(); return; }
+        _lthLock(cur, me);
+    }
+    const a = gameState.anim, tau = _lthRelMs(t, th);
+    if (cur.kid === 0) {
+        if (!a.active || a.phase !== 'thrown') { _lthDrop(cur, me); return; }
+        const o = _lthAt(th, t, _lthOut);
+        me.x = o.x; me.y = o.y;
+        if (tau < th.tc - LTH_REACH_MS) return;
+        // The line sets off now, so that it arrives as they come down to the catch height.
+        a.active = false; a.phase = 'none';
+        let lap = cur.lap;
+        if (lap.claimedBy && lap.claimedBy !== gameState.userId) lap = _lthFreeLaptop();
+        if (lap) startFreeMode(lap.id, false);
+        if (gameState.freeMode.active) { cur.kid = 1; return; }
+        // No laptop left to catch them: they come down where they are.
+        a.active = true; a.phase = 'thrown'; a.laptop = cur.lap;
+        cur.kid = 3;
+        return;
+    }
+    if (cur.kid === 1) {
+        // Still falling until the line takes hold.
+        if (a.active && a.phase === 'reach') { const o = _lthAt(th, t, _lthOut); me.x = o.x; me.y = o.y; return; }
+        th.end = Math.max(0, tau);
+        cur.kid = 2;
+    }
+    if (cur.kid === 3) {
+        const o = _lthAt(th, t, _lthOut);
+        me.x = o.x; me.y = o.y;
+        if (tau < LTH_RISE_MS + LTH_FALL_MS) return;
+        th.end = tau;
+        cur.kid = 2;
+        if (a.active && a.phase === 'thrown') { a.active = false; a.phase = 'none'; }
+        me._stopSquashT = performance.now();
+        spawnDust(me.x, me.y, 10, true);
+        _unstickLocalPlayer();
+        sendPositionWS(me.x, me.y, true);
+        updatePlayerPosition(me.x, me.y);
+    }
+    // Caught (or landed): what is left of the height plays out, and that is the throw.
+    if (tau > th.end + LTH_LAND_MS + 80) { me._lth = null; _lth.cur = null; }
+}
+
+// `{t:'lth'}` from another member's client.
+function receiveLemoThrow(player, msg) {
+    const at = Number(msg.at);
+    if (!Number.isFinite(at) || Math.abs(at - serverNow()) > 20000) return;
+    let th = (player._lth && player._lth.at === at) ? player._lth : null;
+    if (msg.s === 0) {
+        _lthStopAct(player.userId);
+        if (th && th.own) player._netBuf = null;
+        player._lth = null;
+        return;
+    }
+    if (msg.s !== 1 && msg.s !== 2) return;
+    if (!th) {
+        const lx = _lemoFinite(msg.lx, WORLD_BOUNDS.minX, WORLD_BOUNDS.maxX);
+        const ly = _lemoFinite(msg.ly, WORLD_BOUNDS.minY, WORLD_BOUNDS.maxY);
+        if (lx === null || ly === null) return;
+        const fl = msg.fl === 2 ? 2 : 1;
+        th = { uid: player.userId, at, f: msg.f === -1 ? -1 : 1, fl, sc: fl === 2 ? FLOOR2_SCALE : 1, lx, ly, locked: false, own: false };
+        player._lth = th;
+        _lthSetAct(th);
+    }
+    if (msg.s !== 2 || th.locked) return;
+    const px = _lemoFinite(msg.px, WORLD_BOUNDS.minX, WORLD_BOUNDS.maxX), py = _lemoFinite(msg.py, WORLD_BOUNDS.minY, WORLD_BOUNDS.maxY);
+    const gx = _lemoFinite(msg.gx, WORLD_BOUNDS.minX, WORLD_BOUNDS.maxX), gy = _lemoFinite(msg.gy, WORLD_BOUNDS.minY, WORLD_BOUNDS.maxY);
+    const lc = _lemoFinite(msg.lc, 0, 90);
+    if (px === null || py === null || gx === null || gy === null || lc === null) return;
+    th.px = px; th.py = py; th.gx = gx; th.gy = gy; th.lc = lc;
+    _lthDerive(th);
+    th.locked = true;
+}
+
+// Everyone else's thrown member: this screen plays the same throw from the same
+// numbers, and owns that avatar from the lock to the catch — the way a relayed sofa
+// hop does. Runs before updatePlayerRenderPositions, which skips an owned avatar.
+function updateRemoteThrows() {
+    let t = 0;
+    for (const player of Object.values(gameState.players)) {
+        const th = player._lth;
+        if (!th || player.userId === gameState.userId) continue;
+        if (!t) t = serverNow();
+        const ms = t - th.at;
+        if (!th.locked) { if (ms > 6000) player._lth = null; continue; }
+        const tau = _lthRelMs(t, th);
+        if (tau < th.tc) {
+            if (ms < LTH_LOCK_F * 1000 / LTH_FPS) continue;
+            if (!th.own) {
+                th.own = true;
+                player._netBuf = null;
+                player.isMoving = false; player.isSprinting = false;
+            }
+            const o = _lthAt(th, t, _lthOut);
+            player.renderX = player.x = o.x;
+            player.renderY = player.y = o.y;
+            continue;
+        }
+        if (th.own) {
+            // Hand back to the replay: the drag to the seat is already arriving as
+            // ordinary position packets (see updateRemoteSitAnims for the seam).
+            th.own = false;
+            const n = player._netClock;
+            if (player._netBuf && player._netBuf.length && n) { n.playing = true; n.resync = true; n.starved = false; }
+            else player._netBuf = null;
+        }
+        if (tau > th.tc + LTH_LAND_MS + 200) player._lth = null;
+    }
+}
+
 // mulberry32 — every client seeded from the same doc makes the same choices.
 function _lemoRng(seed) {
     let a = seed >>> 0;
@@ -31903,8 +32417,10 @@ function updateLemo() {
             _lemo.state = 'idle'; _lemo.anim = 'Idle'; _lemo.frame = _lemo.idleFrame;
         } else {
             if (!_lemo.fol || _lemo.fol.key !== c.t0) _lemo.fol = _lemoFolStart(c, t);
-            else if (gap > 3000) _lemoFolSnap(_lemo.fol, c, t);      // the tab was away
-            _lemoFolStep(c, _lemo.fol, dt, t);
+            else if (gap > 3000 && !_lemo.fol.done) _lemoFolSnap(_lemo.fol, c, t);      // the tab was away
+            // رمية ليمو: the clip owns him while it plays, and after it he stays put —
+            // the member he threw is across the room by then (see _lthLemoDone).
+            if (!_lemo.fol.done && !(_lemo.act && _lemo.act.th)) _lemoFolStep(c, _lemo.fol, dt, t);
             _lemoFolPose(_lemo.fol, t);
             // A call nobody released ends in the old flash-out.
             if (d.at - t < LEMO_LEAVE_FLASH_MS) _lemoFlashOut(1 - Math.max(0, d.at - t) / LEMO_LEAVE_FLASH_MS);
@@ -31920,11 +32436,14 @@ function updateLemo() {
         _lemoTimePose(t);
     }
     _lemo.mode = mode;
+    _lemoActStep(t);
+    const actEnded = _lemo._actEnded;
+    _lemo._actEnded = false;
 
     // No jump between modes: when the thing driving him changes, what is left of
     // the difference is glided off instead of shown as a snap. (A flash is the one
     // deliberate teleport, and a different floor can't be glided across.)
-    if (wasShown && wasMode && (mode !== wasMode || _lemo._poseKey !== _lemo.docKey)) {
+    if (wasShown && wasMode && (mode !== wasMode || _lemo._poseKey !== _lemo.docKey || actEnded)) {
         const jx = wasX - _lemo.rx, jy = wasY - _lemo.ry;
         const flashing = _lemo.white > 0 || _lemo.alpha < 1;
         if (!flashing && wasFl === _lemo.floor && Math.hypot(jx, jy) < 240) { _lemo.ox = jx; _lemo.oy = jy; }
@@ -31953,7 +32472,7 @@ function updateLemo() {
     _lemo.faceS = _lemo.faceT;
 
     _lemo.shown = _lemo.resetChecked && _lemo.caughtUp;
-    if (_lemo.white > 0 || _lemo.glow > 0 || _lemo.say || mode !== 'time' || _lemo.ox || _lemo.oy
+    if (_lemo.white > 0 || _lemo.glow > 0 || _lemo.say || _lemo.act || mode !== 'time' || _lemo.ox || _lemo.oy
         || _lemo.sc !== scT || _lemo.bob !== _lemo.bobT) perfWake(500);
     if (_lemo.shown && mode === 'time' && _lemo.state === 'sleeping' && _lemo.anim === 'Sleeping') _lemoMaybeWake();
 }
@@ -31973,25 +32492,28 @@ function drawLemo(floorPass) {
     if (!sheet && name === 'Play') { name = 'Idle'; frame = _lemo.idleFrame; sheet = _lemoSheet('Idle'); }
     // The walk sheet hasn't landed (a phone that met him asleep): glide in Idle rather than vanish.
     if (!sheet && name === 'Walk') { name = 'Idle'; frame = _lemo.idleFrame; sheet = _lemoSheet('Idle'); }
+    if (!sheet && name === 'Throw') { name = 'Idle'; frame = _lemo.idleFrame; sheet = _lemoSheet('Idle'); }
     if (!sheet) return;
     const ctx = gameState.ctx;
     const a = LEMO_ANIMS[name];
 
     // Soft contact shadow on the floor — the same ellipse the avatars get, but
     // tighter than theirs: he stands on small feet, not a full body footprint.
+    const fx = _lemo.face === -1 ? -1 : 1;   // the art faces RIGHT; a leftward stretch mirrors him
     const shW = LEMO_W * 0.30 * lsc;
+    // A clip he travels inside (Throw) carries its own root offset: the shadow goes with him.
+    const shX = a.root ? (a.root[frame] || 0) * LEMO_SCALE * lsc * fx : 0;
     ctx.save();
     ctx.globalAlpha = 0.28 * fade;
     ctx.fillStyle = '#000';
     ctx.beginPath();
-    ctx.ellipse(_lemo.x, _lemo.y + (LEMO_H / 2) * lsc - 2, shW, shW * 0.32, 0, 0, Math.PI * 2);
+    ctx.ellipse(_lemo.x + shX, _lemo.y + (LEMO_H / 2) * lsc - 2, shW, shW * 0.32, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
 
     const [bx0, by0, bx1, by1] = a.box;
     const col = frame % a.cols;
     const row = (frame / a.cols) | 0;
-    const fx = _lemo.face === -1 ? -1 : 1;   // the art faces RIGHT; a leftward stretch mirrors him
     ctx.save();
     if (fade < 1) ctx.globalAlpha = fade;
     ctx.translate(_lemo.x, _lemo.y + (LEMO_H / 2) * (lsc - 1) - (_lemo.bob || 0) * lsc);
