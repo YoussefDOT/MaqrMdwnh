@@ -2499,8 +2499,14 @@ Both ride the **message record itself** — no new node, no new listener, no ext
 - **The hover bar** (`.dm-hov`, `_dmHov` — a mouse only, like Discord): the pointer on a
   message brings a small bar onto its top corner — three quick reactions
   (`_dmRxQuick().slice(0, 3)`), «رمز آخر», «رد», and «⋯» (the menu above). **ONE element,
-  moved from row to row** (`pointerover` on the list, `pointerType === 'mouse'`): it is a
-  CHILD of the row it is on, so it scrolls with it and nothing is repositioned. A
+  moved from row to row** (`pointermove` on the list, `pointerType === 'mouse'`): it is a
+  CHILD of the row it is on, so it scrolls with it and nothing is repositioned. **Its
+  hover ground is the message's whole BAND, edge to edge of the list** — a row is only
+  as wide as its bubble, so a pointer that drifted sideways off the bubble used to lose
+  the bar. The handler takes the row under the pointer, else the row at the pointer's
+  height (`_dmRowAtY`: the bar's own row first, then a binary search of the list's
+  children); a gap between rows keeps the last one, so it changes only by going up or
+  down. A
   rebuild of the list or of that row has to put it away / move it (`_dmRenderThread`,
   `_dmRepaintMsg`). Its click `stopPropagation`s (it is not a press on the message). It
   replaced the per-row `.dm-more` button — don't bring that back.
@@ -2590,6 +2596,17 @@ of it while lit.
   arriving after the finger has left it — and **`touch-action: none` on `.dm-send`**, or
   the browser takes the drag for a scroll and fires `pointercancel`. A `pointercancel`
   mid-hold leaves the sheet open for a tap rather than closing it.
+- **The keyboard has to survive the hold — three layers, all load-bearing.** Android
+  moves the FOCUS to whatever a long press lands on, with no `mousedown` to cancel: the
+  text box blurred, the keyboard dropped, the viewport resized, and the sheet (which
+  used to close on a resize) vanished — "nothing happens and the keyboard disappears".
+  (1) the send button's `pointerdown` is `preventDefault`ed **for touch only** — that
+  suppresses the compatibility mouse events and the long-press focus move; the `click`
+  still arrives. A mouse must keep its `mousedown` (the compose bar cancels that one to
+  keep the caret). (2) a `blur` on the text box while a finger is on the send button
+  (`fxp.down`), or while the sheet is up on a phone, takes the focus straight back —
+  at most three times per press. (3) a viewport change **re-places** the open sheet
+  (`_dmFxpPlace`, also what open calls) instead of closing it.
 - **What is under the finger is arithmetic** (`_dmFxpTrack`): every cell's box is
   measured ONCE on open from `offsetLeft/Top` (the sheet's own grow-in transform would
   skew a rect) — no `elementFromPoint`, no layout read per move. `M` = the slack around
@@ -2605,8 +2622,7 @@ of it while lit.
 - **Two columns of five**, not one list: with the keyboard up a phone has ~350px above
   the compose bar. The row height shrinks to fit (`--fxp-row`).
 - The lit icon's preview runs a counted number of times, never `infinite` (invariant 26:
-  the sheet can stay open). Closed by: an outside press, Escape, a viewport resize, and
-  every view change.
+  the sheet can stay open). Closed by: an outside press, Escape, and every view change.
 
 ### نصائح ليمو — the dock under the list (`#dm-tip`, `DM_TIPS`)
 ليمو's picture and a speech bubble under the list of conversations: **one tip a day**
@@ -4828,6 +4844,7 @@ A red dot on the button = a day newer than the last one opened (`mdwnh_news_seen
 | Faint text (every subtitle, every «muted» line) shows brighter lines between its letters — since day one, whole site | Every muted colour was `rgba(255,255,255,0.4)`-style. Arabic glyphs overlap at the joins and a translucent colour is applied per glyph, so each overlap got painted twice | Every text colour made solid (the blended colour it rendered as), `-tx` solid twins for translucent tokens, canvas text fills too. Invariant 33 |
 | Settings panel opens completely empty on Firefox | The rows sat at `opacity: 0` and relied on the `settingsRowIn` keyframe to reveal them; Firefox sometimes never triggered the sequence, so nothing was ever faded in. Same root cause as the earlier pomodoro-settings blank | Keep the fade in the keyframes, keep the base style opaque, and hide during the delay with `animation-fill-mode: backwards` — a skipped animation costs the flourish, not the content |
 | A message effect "plays on the first message I sent this visit, not the one I just sent" | Two things. (1) `.dm-msg.fresh` (the entrance animation) stayed on every row of the visit; the slam's quake swapped those rows' `animation-name` for half a second, and swapping it back replayed all their entrances. (2) Sending closed the effects drawer in the same task, the list grew by its height, and the hearts / lasers / spotlight were placed from a rect read BEFORE that — i.e. on a message further up | `.fresh` is removed ~½ s after the append and excluded from the quake; screen effects measure a frame later; the effects now open in a sheet over the send button that moves no layout |
+| Holding send for the effects on a phone with the keyboard up: nothing happens and the keyboard drops | Android moves focus to the element under a LONG PRESS (no `mousedown` fires, so nothing could cancel it) → the text box blurred → keyboard hid → viewport resized → `fit` closed the sheet | `preventDefault` on the button's touch `pointerdown`, a bounded refocus on `blur` while the finger is down, and a resize re-places the sheet (`_dmFxpPlace`) instead of closing it |
 | «رسالة خاصة» opens the thread but the text box isn't focused — a second press needed | `_dmShowThread` focused the input while the panel was still `visibility: hidden` (`.active` lands two frames later), and a hidden element refuses the focus | `_dmFocusInput()` is called again from `dmOpen`'s double-rAF, right after `.active` is added |
 | Settings/pomodoro rows slide in at full opacity — no fade, looks wrong (every browser) | The Firefox blank-panel fix above was first done by **deleting the fade** (`transform`-only keyframes, base `opacity: 1`), which cured the blank but left the cascade fadeless | `backwards` fill mode gives both: fade restored inside the keyframes, base style still opaque |
 | Reader closes the tab mid-session → the whole reading session is lost | Reading time was only written at انتهيت (`runTransaction` on `books/{slug}/totalMs` + the leaderboard), so nothing at all existed until the session ended | `bankReadingProgress()` commits the delta since the last bank every `READING_BANK_INTERVAL_MS` (60 s); `endReadingSession` just banks the tail. `r._bankedMs` is what stops double-counting |

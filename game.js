@@ -42788,7 +42788,7 @@ const _dm = {
     fxSeen: new Set(), fxT: 0, fxClearT: 0,
     sendHoldT: 0, sendHeldAt: 0,
     // The effects picker over the send button (see «منتقي التأثيرات»).
-    fxp: { open: false, drag: false, moved: false, hot: '', pid: -1, sx: 0, sy: 0, gx: 0, gy: 0, items: [], tickAt: 0, shutAt: 0, holdAt: 0 },
+    fxp: { open: false, drag: false, moved: false, hot: '', pid: -1, sx: 0, sy: 0, gx: 0, gy: 0, items: [], tickAt: 0, shutAt: 0, holdAt: 0, down: false, refocus: 0 },
     tipSkip: 0,                  // presses on ليمو's tip dock this session
     act: '',                     // key of the message whose menu is open
     actShut: null,               // { k, at } — the menu a press just closed (so that press doesn't reopen it)
@@ -44827,6 +44827,25 @@ function _dmFxpOpen(drag) {
     _dmFxpBuild();
     _dmAct('');
     _dmHov(null);
+    _dmFxpPlace();
+    f.open = true;
+    f.drag = !!drag;
+    f.hot = '';
+    f.moved = false;
+    E.fxpLens.classList.remove('show');
+    for (const it of f.items) it.el.classList.remove('hot');
+    E.fxp.classList.add('on');
+    E.fxp.setAttribute('aria-hidden', 'false');
+    E.send.classList.add('held');
+    _dmBuzz(14);
+    _meetBlip(0.9, 0.04);
+    return true;
+}
+// Where it sits (over the send button) and where each cell is. Run on open, and
+// again whenever the drawer changes size under it — a phone's keyboard coming or
+// going must MOVE the sheet, never close it mid-hold.
+function _dmFxpPlace() {
+    const E = _dm.els, f = _dm.fxp;
     const P = E.fxp, send = E.send, card = E.card;
     const cr = card.getBoundingClientRect(), sr = send.getBoundingClientRect();
     const cl = card.clientLeft, ct = card.clientTop;
@@ -44850,18 +44869,12 @@ function _dmFxpOpen(drag) {
     }
     const it0 = f.items[0];
     if (it0) { E.fxpLens.style.width = it0.w + 'px'; E.fxpLens.style.height = it0.h + 'px'; }
-    f.open = true;
-    f.drag = !!drag;
-    f.hot = '';
-    f.moved = false;
-    E.fxpLens.classList.remove('show');
-    for (const it of f.items) it.el.classList.remove('hot');
-    P.classList.add('on');
-    P.setAttribute('aria-hidden', 'false');
-    send.classList.add('held');
-    _dmBuzz(14);
-    _meetBlip(0.9, 0.04);
-    return true;
+    // Re-placed while a cell is lit: the lens goes to where that cell is now.
+    const cur = f.hot && f.items.find(x => x.id === f.hot);
+    if (cur) {
+        E.fxpLens.classList.add('jump');
+        E.fxpLens.style.transform = 'translate(' + cur.x + 'px,' + cur.y + 'px)';
+    }
 }
 function _dmFxpClose() {
     const E = _dm.els, f = _dm.fxp;
@@ -44933,6 +44946,22 @@ function _dmFxpSend(id) {
 // copy, replay the effect). ONE element, moved from row to row (a child of the row it
 // is on, so it scrolls with it and the row's :hover covers it). A phone has no hover:
 // it taps the bubble, as before.
+// The message whose band holds this screen y (null in a gap, or on a day line). The
+// bar's own row is asked first — the usual case, one rect; else a binary search (the
+// list's children are in order, top to bottom).
+function _dmRowAtY(y) {
+    const E = _dm.els, H = E.hov;
+    const inBand = (el) => { const r = el.getBoundingClientRect(); return y < r.top ? -1 : y > r.bottom ? 1 : 0; };
+    if (H && H.parentNode && H.parentNode.parentNode === E.msgs && inBand(H.parentNode) === 0) return H.parentNode;
+    const kids = E.msgs.children;
+    let lo = 0, hi = kids.length - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1, c = inBand(kids[mid]);
+        if (c === 0) return kids[mid].classList.contains('dm-msg') ? kids[mid] : null;
+        if (c < 0) hi = mid - 1; else lo = mid + 1;
+    }
+    return null;
+}
 function _dmHov(row, force) {
     const E = _dm.els, H = E && E.hov;
     if (!H) return;
@@ -45166,9 +45195,14 @@ function setupDmUI() {
     // ── The quick-actions bar: a mouse over a message (see _dmHov) ──
     const hov = E.hov = document.createElement('div');
     hov.className = 'dm-hov';
-    E.msgs.addEventListener('pointerover', (e) => {
+    // Its ground is the message's whole BAND, edge to edge of the list — a row is only
+    // as wide as its bubble, and a pointer that drifted off the bubble sideways used to
+    // lose the bar. So: the row under the pointer, else the row at the pointer's height.
+    // It changes only by going up or down to another message (a gap keeps the last one).
+    E.msgs.addEventListener('pointermove', (e) => {
         if (e.pointerType !== 'mouse' || isMobile() || !e.target.closest) return;
-        _dmHov(e.target.closest('.dm-msg'));
+        const row = e.target.closest('.dm-msg') || _dmRowAtY(e.clientY);
+        if (row) _dmHov(row);
     });
     E.msgs.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse') _dmHov(null); });
     hov.addEventListener('mousedown', (e) => e.preventDefault());       // the caret stays in the text box
@@ -45295,6 +45329,7 @@ function setupDmUI() {
     // The pointer that was holding the button let go (or the browser took it away).
     const sendRelease = (e, cancelled) => {
         const held = !_dm.sendHoldT && fxp.open && fxp.drag && e.pointerId === fxp.pid;
+        fxp.down = false;
         sendUp();
         try { sendBtn.releasePointerCapture(e.pointerId); } catch (_) {}
         if (!held) return;
@@ -45308,7 +45343,15 @@ function setupDmUI() {
     if (sendBtn) {
         sendBtn.addEventListener('pointerdown', (e) => {
             if (e.button) return;
+            // A finger: no compatibility mouse events for this touch. Android moves the
+            // FOCUS to whatever a long press lands on (with no mousedown to cancel), so
+            // holding this button blurred the text box, the keyboard dropped, and the
+            // sheet went with it. The click itself still arrives. (A mouse keeps its
+            // mousedown — the compose bar cancels that one to keep the caret.)
+            if (e.pointerType === 'touch') e.preventDefault();
             sendUp();
+            fxp.down = true;
+            fxp.refocus = 0;
             fxp.pid = e.pointerId;
             fxp.sx = e.clientX; fxp.sy = e.clientY;
             // Captured: the moves keep arriving after the pointer has left the button.
@@ -45326,6 +45369,7 @@ function setupDmUI() {
         });
         sendBtn.addEventListener('pointerup', (e) => sendRelease(e, false));
         sendBtn.addEventListener('pointercancel', (e) => sendRelease(e, true));
+        sendBtn.addEventListener('lostpointercapture', () => { fxp.down = false; });   // never left "down" by a release that didn't arrive
         sendBtn.addEventListener('contextmenu', (e) => {
             e.preventDefault();
             if (Date.now() - fxp.holdAt < 900 || fxp.drag) return;   // Android's long press: the hold above already handled it
@@ -45335,6 +45379,15 @@ function setupDmUI() {
             if (!fxp.open && Date.now() - fxp.shutAt > 400) _dmFxpOpen(false);
         });
     }
+    // The net under that: if the text box still loses the focus while a finger is on
+    // the send button (or, on a phone, while the sheet is up), it takes it straight
+    // back so the keyboard stays. Bounded per press — a device that refuses can't spin.
+    E.input.addEventListener('blur', () => {
+        if (!_dm.open || !(fxp.down || (fxp.open && isMobile()))) return;
+        if (fxp.refocus >= 3) return;
+        fxp.refocus++;
+        try { E.input.focus({ preventScroll: true }); } catch (_) {}
+    });
     if (E.fxp) {
         E.fxp.addEventListener('mousedown', (e) => e.preventDefault());     // the caret stays in the text box
         E.fxp.addEventListener('click', (e) => {
@@ -45431,9 +45484,9 @@ function setupDmUI() {
     panel.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
     const fit = () => {
         if (!_dm.open) return;
-        _dmFxpClose();                          // it was placed for the old size
         _dmFitViewport();
         if (_dm.view === 'thread') E.msgs.scrollTop = E.msgs.scrollHeight;
+        if (_dm.fxp.open) _dmFxpPlace();        // it was placed for the old size
     };
     window.visualViewport?.addEventListener('resize', fit);
     window.visualViewport?.addEventListener('scroll', fit);
