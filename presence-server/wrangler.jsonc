@@ -16,6 +16,10 @@
     "LEMO_CAPS_OFF_UNTIL": "2026-10-07",
     "LEMO_PRICE_IN": "0.10",      // $ per million input tokens (for the cap's arithmetic)
     "LEMO_PRICE_OUT": "0.50",     // $ per million output tokens
+    // The owner's review log of his answers: how many days a row is kept ("0" = no log).
+    // Reading it needs a second secret — npx wrangler secret put LEMO_AUDIT_KEY — and
+    // `node tools/lemo_log.mjs` (see CLAUDE.md → سجل مراجعة ليمو).
+    "LEMO_AUDIT_DAYS": "30",
     "SITE_BASE": "https://youssefdot.github.io/MaqrMdwnh"   // where patch-notes.json is read from
   },
 

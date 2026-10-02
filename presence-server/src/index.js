@@ -23,6 +23,13 @@
 // room's last LEMO_ROOM lines, nothing older than LEMO_LOG_TTL_MS. It is stored, not
 // just held in memory, because a quiet room hibernates within seconds and wakes with
 // its memory empty — he used to forget the conversation between two questions.
+//
+// THE REVIEW LOG (for the owner only): every question he answered is also kept —
+// who asked, what he was told, what he said — for LEMO_AUDIT_DAYS, so his answers can
+// be checked for made-up facts or rudeness. It is never sent to the room. The one way
+// to read it is `GET /lemo-log/<lobby>` with the LEMO_AUDIT_KEY secret in the
+// Authorization header (tools/lemo_log.mjs does that); with no secret set, that door
+// does not exist.
 // -----------------------------------------------------------------------------
 
 import { askLemo, cleanQuestion, cleanChat, LemoError } from './lemo.js';
@@ -42,6 +49,27 @@ const LOG_KEY = 'lemo:log';
 // back to work for ten minutes, then forgets they talked a lot).
 const TALK_KEY = 'lemo:talk';
 const LEMO_TALK_MS = 10 * 60 * 1000;
+// The review log: one stored row per question, keyed by time (13 digits, so the keys
+// sort chronologically and a reader can ask for "everything since").
+const AUDIT_PREFIX = 'lemo:audit:';
+const AUDIT_PATH = '/__lemo-audit';       // the room's own door; only the Worker below sends here
+const AUDIT_DAYS = 30;                    // default for LEMO_AUDIT_DAYS ("0" = keep no log)
+const AUDIT_PAGE = 400;                   // rows per read
+const AUDIT_MIN_KEY = 16;                 // a shorter secret is treated as no secret at all
+const auditKeyOf = (ms) => AUDIT_PREFIX + String(Math.max(0, Math.floor(ms) || 0)).padStart(13, '0');
+
+// Is this request allowed to read the review log? Only with the secret, sent as
+// `Authorization: Bearer <LEMO_AUDIT_KEY>` — never in the URL, which ends up in logs.
+function auditAllowed(request, env) {
+  const key = String((env && env.LEMO_AUDIT_KEY) || '');
+  if (key.length < AUDIT_MIN_KEY) return false;
+  const got = String(request.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
+  const a = new TextEncoder().encode(got), b = new TextEncoder().encode(key);
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i];   // every byte compared, match or not
+  return diff === 0;
+}
 
 // The day rolls over at midnight in Riyadh (UTC+3) — where most of the team is.
 const dayKey = () => new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10);
@@ -50,6 +78,13 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     const parts = url.pathname.split('/').filter(Boolean); // e.g. ["lobby","male"]
+
+    // The owner's review log of ليمو's answers. Without the secret this path looks
+    // exactly like any other unknown one.
+    if (parts[0] === 'lemo-log' && /^[a-z0-9_-]{1,32}$/.test(parts[1] || '') && auditAllowed(request, env)) {
+      const room = env.LOBBY.get(env.LOBBY.idFromName(parts[1]));
+      return room.fetch(new Request('https://room' + AUDIT_PATH + url.search, { headers: request.headers }));
+    }
 
     // Health check / friendly root so you can see it's alive in a browser.
     if (parts[0] !== 'lobby' || !parts[1]) {
@@ -87,6 +122,7 @@ export class LobbyRoom {
 
   async fetch(request) {
     const url = new URL(request.url);
+    if (url.pathname === AUDIT_PATH) return this._lemoAuditRead(request, url);
     const uid = url.searchParams.get('uid') || crypto.randomUUID();
 
     const pair = new WebSocketPair();
@@ -154,6 +190,43 @@ export class LobbyRoom {
     log.push({ k: 'c', u: uid, ...line, at: Date.now() });
     this._lemoLogTrim(log);
     await this.state.storage.put(LOG_KEY, log);
+  }
+
+  // The review log. What the page said about the question itself; the caller adds
+  // what he read (`seen`, from lemo.js) and what he answered.
+  _lemoAuditOf(uid, q) {
+    return { u: uid, n: q.name, g: q.gender, q: q.text, tm: q.time, st: q.state, cnt: q.count, on: q.online, near: q.near, tk: q.tasks };
+  }
+
+  // One row per question, and anything past its keep-by date goes. Never allowed to
+  // break an answer: a failed write is only logged.
+  async _lemoAudit(row) {
+    try {
+      const set = String(this.env.LEMO_AUDIT_DAYS == null ? '' : this.env.LEMO_AUDIT_DAYS).trim();
+      const days = set !== '' && Number.isFinite(Number(set)) ? Number(set) : AUDIT_DAYS;
+      if (days <= 0) return;
+      // The time is the key, so two rows may never share a millisecond.
+      if (row.at <= (this.auditLast || 0)) row.at = this.auditLast + 1;
+      this.auditLast = row.at;
+      await this.state.storage.put(auditKeyOf(row.at), row);
+      const old = await this.state.storage.list({ prefix: AUDIT_PREFIX, end: auditKeyOf(row.at - days * 86400000), limit: 64 });
+      if (old.size) await this.state.storage.delete([...old.keys()]);
+    } catch (err) {
+      console.log(`[lemo] audit not saved: ${err && err.message}`);
+    }
+  }
+
+  // `?since=<ms>` → the rows from that moment on, oldest first, AUDIT_PAGE at a time
+  // (`more` says there are further ones: ask again from the last row's `at` + 1).
+  async _lemoAuditRead(request, url) {
+    if (!auditAllowed(request, this.env)) return new Response('Mdwnh presence relay is running.', { status: 200 });
+    const since = Number(url.searchParams.get('since')) || 0;
+    const got = await this.state.storage.list({ prefix: AUDIT_PREFIX, start: auditKeyOf(since), limit: AUDIT_PAGE });
+    const rows = [...got.values()];
+    return new Response(JSON.stringify({ rows, more: rows.length >= AUDIT_PAGE }), {
+      status: 200,
+      headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+    });
   }
 
   // A player disconnected — tell everyone so they can drop the avatar at once
@@ -229,10 +302,12 @@ export class LobbyRoom {
       this.lemoLast.set(uid, Date.now());
       this._sendAll({ t: 'lemoa', to: uid, k, p: res.parts });
       console.log(`[lemo] ${uid} in=${res.tokensIn} out=${res.tokensOut} day=$${b.usd.toFixed(4)} :: ${said}`);
+      await this._lemoAudit({ at, ...this._lemoAuditOf(uid, q), ...res.seen, a: res.parts, tin: res.tokensIn, tout: res.tokensOut });
     } catch (err) {
       const code = (err instanceof LemoError) ? err.code : 'err';
       console.log(`[lemo] error ${code}: ${err && err.message}`);
       fail(code);
+      await this._lemoAudit({ at: Date.now(), ...this._lemoAuditOf(uid, q), e: code, em: String((err && err.message) || '').slice(0, 200) });
     } finally {
       this.lemoBusyAt = 0;
     }

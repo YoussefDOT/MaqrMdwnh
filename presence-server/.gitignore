@@ -4,3 +4,5 @@ node_modules/
 .DS_Store
 # local secrets for `wrangler dev` — never commit
 .dev.vars
+# the review log's key, for tools/lemo_log.mjs — never commit
+.audit-key

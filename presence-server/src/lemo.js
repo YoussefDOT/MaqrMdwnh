@@ -42,6 +42,10 @@ const MAX_Q_LEN = 140;
 const MAX_CHAT_LEN = 120;      // one overheard line of the room's chat
 const MAX_MENTIONS = 3;        // members a question may point at
 const MAX_DETAILS_LEN = 700;   // what he is told about each of them
+// The owner's review log (index.js → _lemoAudit): how much of what he read is kept.
+const AUDIT_TURNS = 4;         // turns before the question (overheard chat, his last exchanges)
+const AUDIT_TURN_LEN = 600;
+const AUDIT_RAW_LEN = 500;     // the model's own text, before parseParts tidied it
 
 // The stickers he may answer with — a curated slice of the مقر's pack (the exact
 // file names; the page drops any name it doesn't have).
@@ -415,13 +419,14 @@ function parseParts(content) {
 }
 
 /**
- * One question → { parts, tokensIn, tokensOut }.
+ * One question → { parts, tokensIn, tokensOut, seen }.
  * `q` is the sanitised request from the page; `log` the room's recent talk (see
- * historyMessages).
+ * historyMessages). `seen` is what he was told beyond the question's own fields —
+ * for the owner's review log only, never sent to the room.
  */
 export async function askLemo(env, q, log) {
     if (!env.OPENAI_API_KEY) throw new LemoError('nokey', 'no key');
-    const { messages, know } = await lemoMessages(env, q, log);
+    const { messages, know, seen } = await lemoMessages(env, q, log);
     let tokensIn = 0, tokensOut = 0;
     const count = (d) => {
         const u = (d && d.usage) || {};
@@ -438,15 +443,18 @@ export async function askLemo(env, q, log) {
         for (const tc of msg.tool_calls.slice(0, 2)) {
             let name = '';
             try { name = JSON.parse(tc.function.arguments || '{}').name || ''; } catch (_) {}
-            messages.push({ role: 'tool', tool_call_id: tc.id, content: memberDetails(know, name) });
+            const details = memberDetails(know, name);
+            seen.tools.push({ n: clean(name, 40), d: details.slice(0, MAX_DETAILS_LEN) });
+            messages.push({ role: 'tool', tool_call_id: tc.id, content: details });
         }
         data = await callModel(env, messages, false);
         count(data);
         msg = data.choices && data.choices[0] && data.choices[0].message;
     }
+    seen.raw = String((msg && msg.content) || '').slice(0, AUDIT_RAW_LEN);
     const parts = parseParts(msg && msg.content);
     if (!parts.length) throw new LemoError('err', 'empty answer');
-    return { parts, tokensIn, tokensOut };
+    return { parts, tokensIn, tokensOut, seen };
 }
 
 /**
@@ -483,8 +491,19 @@ export async function lemoMessages(env, q, log) {
         q.text,
     ].filter(Boolean).join('\n');
 
-    const messages = [{ role: 'system', content: system }, ...historyMessages(log, know), { role: 'user', content: ctx }];
-    return { messages, know };
+    const before = historyMessages(log, know);
+    const messages = [{ role: 'system', content: system }, ...before, { role: 'user', content: ctx }];
+    // For the review log: who the roster says is asking, the members the message pointed
+    // at (as he was told about them) and the last turns he read before the question.
+    const seen = {
+        who: (who && who.name) || '',
+        role: (who && who.role) || '',
+        men,
+        hist: before.slice(-AUDIT_TURNS).map(m => ({ r: m.role === 'assistant' ? 'a' : 'u', c: String(m.content).slice(0, AUDIT_TURN_LEN) })),
+        tools: [],
+        raw: '',
+    };
+    return { messages, know, seen };
 }
 
 // The page's request, re-checked field by field: it is data from a browser.

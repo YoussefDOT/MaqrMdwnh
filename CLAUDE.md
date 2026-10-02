@@ -123,7 +123,7 @@ Grep anchors for the major systems (all verified to exist):
 | القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump`, `jumpTapWhileMoving`, `JUMP_FLICK_`, `jumpMaybeHint` |
 | نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
-| ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL` |
+| ليمو's brain (the relay) | `presence-server/src/lemo.js` → `askLemo`, `PERSONA`, `KNOWLEDGE`, `LATEST_WORKS`, `mentionedMembers`, `historyMessages`, `cleanChat`; `index.js` → `_lemoAsk`, `_lemoHear`, `BUDGET_KEY`, `LOG_KEY`, `LEMO_CAPS_OFF_UNTIL`; review log: `_lemoAudit`, `_lemoAuditRead`, `auditAllowed`, `AUDIT_PREFIX`, `tools/lemo_log.mjs` |
 | الرسائل الخاصة | `DM_`, `_dm`, `dmOpen`, `dmOpenWith`, `dmCanMessage`, `dmHoldsInput`, `_dmOnInbox`, `_dmSend`, `_dmAttachThread`, `_dmPickFile`, `_dmLoadMedia`, `setupDmUI`; reply + reactions: `_dmSetReply`, `_dmQuoteNode`, `_dmJumpTo`, `_dmReact`, `_dmPaintRx`, `_dmAct`, `_dmRxQuick`, `DM_RX_LIST`; edit + delete: `_dmStartEdit`, `_dmCommitEdit`, `_dmDelete`, `_dmApplyDeleted`, `_dmPeerRowPatch`; picker: `_dmEmojiPanel`, `_dmPop`; effects: `DM_FX`, `_dmPlayFx`, `_dmScreenFx`, `_dmFxUnread`; their picker: `_dmFxpOpen`, `_dmFxpTrack`, `_dmFxpHot`, `_dmFxpSend`; hover bar: `_dmHov`; ليمو's tips: `DM_TIPS`, `_dmPaintTip`; also `_dmFillText`, `_dmPaintDown`, `_dmFocusInput` |
 | رموز آبل التعبيرية (صور) | `_emoImgs`, `emoLoadData`, `_emoActivate`, `_emoTextNode`, `_emoParse`, `_emoDrawSlots`, `_emoKey`, `emoIsOne`, `emoRecent`, `emoNoteUsed`, `EMO_IMG_KEY`, `tools/bake_emoji.mjs` |
 | التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `_peekBody`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
@@ -395,6 +395,7 @@ tools/shots.mjs, shots.py    — headless-Chrome screenshots of the features, fo
 presence-server/src/index.js — the relay (Cloudflare Worker + Durable Object): positions, events, ليمو's questions
 presence-server/src/lemo.js  — ليمو's brain: persona, what he knows, the model call, the answer's shape
 LemoPFP.jpg                  — ليمو's face in the @ picker / mention pills
+tools/lemo_log.mjs           — exports ليمو's review log (who asked, what he read, what he said) to tools/out/
 Emoji/                       — Apple's emoji as 72 px WebPs (3,482 of them, ~7 MB) + emoji.json,
                                the picker's list. Baked from the Mac's own font by
                                tools/bake_emoji.mjs (+ tools/emoji_apple.swift). See رموز آبل التعبيرية.
@@ -1744,6 +1745,31 @@ home, where his seeded life carries on.
 - **Testing the relay without the key**: `npx wrangler dev` in `presence-server/` with a
   `.dev.vars` (gitignored) holding a dummy key and `OPENAI_BASE_URL` pointed at a local
   stub. Delete the file afterwards.
+- **سجل مراجعة ليمو — the owner's review log** (`_lemoAudit`, `_lemoAuditRead`,
+  `auditAllowed`, `tools/lemo_log.mjs`): every question that reached the model is kept
+  as one row in the lobby's Durable Object storage (`lemo:audit:<13-digit ms>`), for
+  `LEMO_AUDIT_DAYS` (30; `"0"` = keep nothing) — so his answers can be checked for
+  made-up facts or rudeness. A row = who asked (`u`, `n`, the roster's `who` / `role`),
+  the question, what the page said around it (`near`, `st`, `cnt`, `on`, `tk`), and
+  `seen` from `askLemo`: the mentioned members as he was told about them (`men`), any
+  `member_details` lookup (`tools`), the last `AUDIT_TURNS` turns he read (`hist` — the
+  overheard chat and his previous exchanges), the model's own text before `parseParts`
+  (`raw`), then the answer (`a`) or the error (`e`, `em`). `busy` / `wait` / cap
+  refusals never reach the model and are not logged.
+  - **Never sent to the room, never in Firebase, not member-facing** → no patch-notes
+    entry (the لوحة القائد rule).
+  - **One door, one key**: `GET /lemo-log/<lobby>?since=<ms>` with
+    `Authorization: Bearer <LEMO_AUDIT_KEY>` (a Worker secret, ≥ 16 characters; with
+    none set, or a wrong one, the path answers exactly like any unknown path). The key
+    goes in the header, never the URL. `node tools/lemo_log.mjs` (`--days N`, `--all`,
+    `--lobby female`) reads the key from `presence-server/.audit-key` (gitignored) and
+    writes `tools/out/lemo-log.html` + `.json` (gitignored) on the owner's machine.
+    **Never put the key in a file that ships, and never ask for it in a chat.**
+  - It holds what members said to him AND the room lines he overheard, **both lobbies**
+    — it is the owner's file; it is not to be published or shared.
+  - The time is the storage key (it sorts, and `since` is a range), so `_lemoAudit`
+    never lets two rows share a millisecond; a failed write is logged and never breaks
+    an answer.
 
 ---
 
@@ -3327,7 +3353,7 @@ When a panel's elements animate in **one-by-one** (a staggered/sequenced entranc
 ### Live movement runs over a WebSocket relay (not Firebase)
 High-frequency walking used to write `x/y` to Firebase **every animation frame** — wasteful (counts against the 10GB/month download cap) and laggy with several players. Live positions now go over a tiny **Cloudflare Worker + Durable Object** relay instead; Firebase stays the source of truth for everything that must persist.
 
-- **Server**: [`presence-server/`](presence-server/) — a stateless relay. One Durable Object = one lobby room (keyed by `gameState.selectedLobby`, so male/female never mix). It forwards each position payload to the other sockets in the room and stores nothing but ليمو's daily spend and his short memory of the room (see **نداء ليمو**); on disconnect it sends `{t:'bye',uid}`. Deploy with `npx wrangler deploy`. URL: `wss://mdwnh-presence.yosefbore3y.workers.dev/lobby/<lobby>?uid=<uid>`. Free tier bills incoming WS messages 20:1 → ~2M msgs/day free.
+- **Server**: [`presence-server/`](presence-server/) — a stateless relay. One Durable Object = one lobby room (keyed by `gameState.selectedLobby`, so male/female never mix). It forwards each position payload to the other sockets in the room and stores nothing but ليمو's daily spend, his short memory of the room and the owner's review log of his answers (see **نداء ليمو**); on disconnect it sends `{t:'bye',uid}`. Deploy with `npx wrangler deploy`. URL: `wss://mdwnh-presence.yosefbore3y.workers.dev/lobby/<lobby>?uid=<uid>`. Free tier bills incoming WS messages 20:1 → ~2M msgs/day free.
 - **Client** (`game.js`, the "Live position relay" block above `updatePlayerPosition`): `ensurePresenceSocket()` opens/heals the socket (called from `startGame`, the 10s presence heartbeat, and `_resyncPresence`). `sendPositionWS(x,y,force)` sends `{uid,x,y,m,s,fl,w}` throttled to ~11/sec (`w` = the **sender's own `performance.now()`** — see the jitter buffer below; it also force-sends on a movement **start**, on a **stop**, and on a **heading change >≈37°**, so a turn isn't corner-cut across a whole interval). `onPresenceMessage()` feeds others' positions into a per-player **interpolation buffer** (`pushNetSample`). `disconnectPresenceSocket()` on logout. Auto-reconnects on close (2s backoff).
 - **Smooth movement = a jitter buffer, built the way competitive shooters build one** (`pushNetSample` / `interpolateRemoteFromBuffer`, in the entity-helpers block; per-player state on `player._netBuf` + `player._netClock`). Each remote player is rendered `delay` ms **in the past**, gliding between the two buffered samples bracketing that render time. Three things make it hold up on a bad link, and all three are load-bearing:
   1. **Samples are stamped with the SENDER's clock (`w`), never with arrival time.** Each packet carries the sender's `performance.now()`; the receiver keeps a per-player offset (sender clock → local clock) estimated by a **minimum filter** — the fastest packet seen defines the true send time, later ones are simply late (a faster path snaps the offset down instantly, otherwise it creeps at `NET_OFF_CREEP` to follow drift). Samples are therefore spaced by when they were **sent** — a clean, even 90 ms — so jitter can no longer deform the replayed motion. `w` is monotonic with an **arbitrary per-tab epoch**; the offset absorbs the epoch, so this needs no wall clock, no `serverNow()`, and **no server change** (the Worker forwards raw bytes). Arrival-stamping is what the old version did, and it fed jitter straight into the timeline: a burst of three packets 5 ms apart replayed as the avatar sprinting, then stalling. Measured in a replay harness, 5–250 ms of jitter made the old buffer render **30 world units per frame on average (6× true walk speed) with single-frame jumps of 648**; sender-stamped it is **5.00/frame, max 5.43** — i.e. exact.
