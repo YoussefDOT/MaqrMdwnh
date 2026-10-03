@@ -46573,6 +46573,7 @@ const _hall = {
     bot: { at: 0, ids: new Set(), sp: new Set(), talk: new Map() },
     share: null,             // { uid, sid, at, sfu, mine }
     cast: null,              // my own share: { stream, track, sid, at, pcs, sfu }
+    pop: null,               // نافذة المحادثة: { win, list, empty }
     view: null,              // what I am watching: { sid, pc, got, timer }
     sfuOk: false,
     fx: true, glowTimer: 0, glowCv: null, glow: '',
@@ -47283,6 +47284,7 @@ function _hallRefreshDock() {
     E.share.textContent = mine ? 'إيقاف المشاركة' : 'مشاركة الشاشة';
     E.share.classList.toggle('on', mine);
     E.kill.hidden = !(mod && sh && !sh.mine);
+    _hallPopPaintBtn();
     E.focusBtn.hidden = !mod;
     E.focusBtn.textContent = (_hall.doc && _hall.doc.focus) ? 'إلغاء وضع التركيز' : 'وضع التركيز';
     E.focusBtn.classList.toggle('on', !!(_hall.doc && _hall.doc.focus));
@@ -47418,6 +47420,7 @@ function _hallExit(why, prev) {
     _hall.canvasOff = false;
     perfWake(1500);
     try { _hallCastStop(true); } catch (_) {}
+    _hallPopClose();
     _hallViewStop();
     _hall.share = null;
     clearInterval(_hall.tick5); _hall.tick5 = 0;
@@ -47946,6 +47949,7 @@ function _hallLogReset(id) {
     if (L.id === id) return;                         // a rejoin of the same meeting keeps its log
     L.id = id; L.n = 0; L.unread = 0; L.lastUid = ''; L.lastAt = 0;
     if (E && E.logList) { E.logList.textContent = ''; E.logEmpty.hidden = false; }
+    _hallPopSync();
     _hallLogBadge();
 }
 function _hallLogBadge() {
@@ -47997,6 +48001,7 @@ function _hallLogPush(p, text, stk, forMe) {
         if (list.firstChild) list.firstChild.classList.remove('cont');   // the new first row needs its name
     }
     E.logEmpty.hidden = true;
+    _hallPopAdd(row);
     if (L.open) { if (stick) list.scrollTop = list.scrollHeight; }
     else if (p.uid !== gameState.userId) { L.unread++; _hallLogBadge(); }
 }
@@ -48009,6 +48014,117 @@ function _hallLogSet(open, save) {
     if (L.open) { L.unread = 0; _hallLogBadge(); E.logList.scrollTop = E.logList.scrollHeight; }
     if (save) { try { localStorage.setItem(HALL_LOG_KEY, L.open ? '1' : '0'); } catch (_) {} }
     _hall.layoutDirty = true;                        // on a wide screen the panel takes room from the seats
+}
+// نافذة المحادثة — the same log in a small window of its own, for whoever is presenting:
+// while they share a screen they are looking at another window, and the comments have to
+// follow them there. Chrome / Edge: a Document Picture-in-Picture window (always on top).
+// Elsewhere: an ordinary popup (not on top — no web API allows that there). Read-only, a
+// COPY of the rows the log already built: nothing is relayed, read or written for it.
+const HALL_POP_CSS = `
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:#101116;color:#d9dae0;font-family:'Rubik',system-ui,sans-serif}
+body{display:flex;flex-direction:column}
+.hp-head{flex:0 0 auto;padding:10px 14px;font-size:.86rem;font-weight:800;color:#f1f1f3;border-bottom:1px solid #23252e}
+.hp-note{flex:0 0 auto;padding:6px 14px;font-size:.7rem;font-weight:600;line-height:1.6;color:#9a9ca8;background:#16171d}
+.hp-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding:6px 12px 14px}
+.hp-empty{margin:auto;padding:18px;text-align:center;font-size:.8rem;font-weight:600;line-height:1.7;color:#8b8d99}
+.hall-log-row{position:relative;padding:10px 44px 0 0}
+.hall-log-row.cont{padding-top:2px}
+.hall-log-av{position:absolute;top:12px;right:0;width:34px;height:34px;border-radius:50%;background:#2a2c34 center/cover no-repeat;display:grid;place-items:center;font-size:.82rem;font-weight:800;color:#e8e8ea}
+.hall-log-who{display:flex;align-items:baseline;gap:8px}
+.hall-log-who b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.84rem;font-weight:800;color:#f1f1f3}
+.hall-log-who time{flex:0 0 auto;font-size:.68rem;font-weight:600;color:#8b8d99}
+.hall-log-text{font-size:.9rem;font-weight:600;line-height:1.55;color:#d9dae0;overflow-wrap:anywhere;text-align:start}
+.hall-log-row.men .hall-log-text{margin:0 -6px;padding:2px 6px;border-radius:8px;background:#2b2410;color:#f6e7a8}
+.hall-log-stk{display:block;width:84px;height:84px;object-fit:contain;margin-top:2px}
+img.emo{width:1.25em;height:1.25em;vertical-align:-0.25em}
+`;
+function _hallPopSupported() {
+    return !isMobile() && (('documentPictureInPicture' in window) || typeof window.open === 'function');
+}
+function _hallPopPaintBtn() {
+    const E = _hall.E;
+    if (!E || !E.popBtn) return;
+    E.popBtn.hidden = !_hallPopSupported();
+    E.popBtn.classList.toggle('on', !!_hall.pop);
+}
+// A row built for the page, copied into the window's own document.
+function _hallPopRow(pop, row) {
+    const c = pop.win.document.importNode(row, true);
+    c.querySelectorAll('img').forEach(img => img.removeAttribute('loading'));
+    return c;
+}
+function _hallPopAdd(row) {
+    const pop = _hall.pop;
+    if (!pop) return;
+    try {
+        if (pop.win.closed) { _hallPopClose(); return; }
+        const list = pop.list;
+        const stick = list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+        list.appendChild(_hallPopRow(pop, row));
+        while (list.childElementCount > HALL_LOG_MAX) list.firstChild.remove();
+        if (list.firstChild) list.firstChild.classList.remove('cont');
+        pop.empty.hidden = true;
+        if (stick) list.scrollTop = list.scrollHeight;
+    } catch (_) { _hallPopClose(); }
+}
+// Refill the window from the page's log (on open, and when a new meeting clears it).
+function _hallPopSync() {
+    const pop = _hall.pop, E = _hall.E;
+    if (!pop || !E || !E.logList) return;
+    try {
+        pop.list.textContent = '';
+        for (const row of E.logList.children) pop.list.appendChild(_hallPopRow(pop, row));
+        pop.empty.hidden = pop.list.childElementCount > 0;
+        pop.list.scrollTop = pop.list.scrollHeight;
+    } catch (_) { _hallPopClose(); }
+}
+function _hallPopBuild(win, onTop) {
+    const doc = win.document;
+    doc.head.textContent = ''; doc.body.textContent = '';
+    doc.documentElement.dir = 'rtl'; doc.documentElement.lang = 'ar';
+    doc.title = 'محادثة الاجتماع';
+    const base = doc.createElement('base');
+    base.href = location.href;                       // relative sticker / avatar URLs resolve as on the page
+    const st = doc.createElement('style');
+    st.textContent = HALL_POP_CSS;
+    doc.head.append(base, st);
+    document.querySelectorAll('link[rel="stylesheet"][href*="family=Rubik"]').forEach(l => doc.head.appendChild(doc.importNode(l, true)));
+    const mk = (cls, text) => { const d = doc.createElement('div'); d.className = cls; if (text) d.textContent = text; return d; };
+    const head = mk('hp-head', (_hall.doc && _hall.doc.title) ? `محادثة الاجتماع · ${_hall.doc.title}` : 'محادثة الاجتماع');
+    const list = mk('hp-list');
+    const empty = mk('hp-empty', 'لا تعليقات بعد — ما يُكتب في الاجتماع يظهر هنا.');
+    doc.body.append(head);
+    if (!onTop) doc.body.append(mk('hp-note', 'هذا المتصفح لا يُبقي النافذة فوق غيرها — في كروم أو إيدج تبقى ظاهرة دائمًا.'));
+    doc.body.append(list, empty);
+    const pop = _hall.pop = { win, list, empty };
+    win.addEventListener('pagehide', () => { if (_hall.pop === pop) { _hall.pop = null; _hallPopPaintBtn(); } });
+    _hallPopSync();
+    _hallPopPaintBtn();
+}
+function _hallPopClose() {
+    const pop = _hall.pop;
+    if (!pop) return;
+    _hall.pop = null;
+    try { pop.win.close(); } catch (_) {}
+    _hallPopPaintBtn();
+}
+async function _hallPopToggle() {
+    if (_hall.pop) { _hallPopClose(); return; }
+    if (!_hall.in || _hall.popOpening) return;
+    let win = null, onTop = false;
+    _hall.popOpening = true;
+    try {
+        // requestWindow needs the press itself — nothing may be awaited before it.
+        if ('documentPictureInPicture' in window && !documentPictureInPicture.window) {
+            try { win = await documentPictureInPicture.requestWindow({ width: 340, height: 480 }); onTop = true; } catch (_) {}
+        }
+        if (!win) { try { win = window.open('', 'maqr_hall_chat', 'popup=yes,width=340,height=480'); } catch (_) {} }
+    } finally { _hall.popOpening = false; }
+    if (!win) { _libToast('تعذّر فتح النافذة — اسمح بالنوافذ المنبثقة لهذا الموقع'); return; }
+    if (!_hall.in) { try { win.close(); } catch (_) {} return; }
+    try { _hallPopBuild(win, onTop); }
+    catch (e) { console.warn('[hall] chat window failed', e); _hall.pop = null; try { win.close(); } catch (_) {} _hallPopPaintBtn(); }
 }
 function _hallComposeSend() {
     const E = _hall.E, c = _hall.cmp;
@@ -48147,6 +48263,8 @@ async function _hallCastStart() {
     }
     if (_hall.cast !== cast) return;
     _hallSend({ t: 'hs', k: 'on', uid: gameState.userId, ..._hallCastInfo() });
+    // The sharer is looking at another window now, so the comments have to follow them.
+    if (!_hall.pop && _hallPopSupported()) _libToast('افتح «نافذة المحادثة» لتقرأ التعليقات وأنت تشارك شاشتك', 5200);
 }
 function _hallCastStop(silent) {
     const cast = _hall.cast;
@@ -48668,7 +48786,7 @@ function setupHallUI() {
         leave: $('hall-leave'), end: $('hall-end'),
         compose: $('hall-compose'), input: $('hall-input'), send: $('hall-send'), men: $('hall-men'),
         stk: $('hall-stk'), stkCap: $('hall-stk-cap'), stkGrid: $('hall-stk-grid'),
-        log: $('hall-log'), logList: $('hall-log-list'), logEmpty: $('hall-log-empty'), logBtn: $('hall-log-btn'), logN: $('hall-log-n'), logClose: $('hall-log-close'),
+        log: $('hall-log'), logList: $('hall-log-list'), logEmpty: $('hall-log-empty'), logBtn: $('hall-log-btn'), popBtn: $('hall-pop-btn'), logN: $('hall-log-n'), logClose: $('hall-log-close'),
         confirm: $('hall-confirm'), confirmHead: $('hall-confirm-head'), confirmText: $('hall-confirm-text'),
         confirmYes: $('hall-confirm-yes'), confirmNo: $('hall-confirm-no'),
         call: $('hall-call'), callWho: $('hall-call-who'), callTitle: $('hall-call-title'),
@@ -48730,6 +48848,7 @@ function setupHallUI() {
     });
     E.logBtn.addEventListener('click', () => _hallLogSet(!_hall.log.open, true));
     E.logClose.addEventListener('click', () => _hallLogSet(false, true));
+    if (E.popBtn) E.popBtn.addEventListener('click', _hallPopToggle);
     // My own seat is the comment button too, like my character is in the world.
     root.addEventListener('click', (e) => {
         if (e.target.closest('.hall-seat.me .hall-av') && !_hall.cmp.open) _hallComposeOpen();

@@ -2488,6 +2488,14 @@ hidden tab is pulled in when it is looked at again.
   heard, capped at `HALL_LOG_MAX`, kept across a rejoin of the same meeting id. Open
   state per device (`HALL_LOG_KEY`; never auto-open on a phone). ≥ 900px wide the room
   gets `padding-right: 320px` (then `layoutDirty`); narrower it lies over the room.
+- **نافذة المحادثة** (`#hall-pop-btn`, `_hallPopToggle`, `_hallPopBuild`, `_hallPopAdd`,
+  `_hallPopSync`, `_hallPopClose`, `HALL_POP_CSS`): the log in a small window of its own, for
+  whoever is sharing a screen (they are looking at another window). Chrome / Edge: Document
+  PiP (always on top; `requestWindow` must be the first thing the press does). Elsewhere: a
+  popup, with a line saying it won't stay on top. Desktop only. Read-only COPIES
+  (`importNode`) of the rows `_hallLogPush` already built — zero network. A `<base>` makes
+  relative sticker / avatar URLs resolve. Closed by `_hallExit`. Starting a share toasts a
+  pointer to it. Shared as "entire screen", the window is in the picture.
 - **The fireplace crackle is silent in the hall** (`updateFireplaceAmbient` checks
   `_hall.in / entering`; `_hallEnter` zeroes it at once).
 - **Reactions**: the table's six (`MEET_REACTIONS`, keys 1–6), the avatar animation
