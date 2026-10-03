@@ -15257,3 +15257,14 @@ body.is-mobile .hall-card { bottom: max(18px, env(safe-area-inset-bottom)); }
 .hall-paper-count.need { color: #c9372a; font-weight: 800; }
 @keyframes hallNeedShake { 0%, 100% { transform: none; } 20% { transform: translateX(-7px); } 45% { transform: translateX(6px); } 70% { transform: translateX(-4px); } 88% { transform: translateX(2px); } }
 .hall-paper-input.shake, .hall-paper-count.shake { animation: hallNeedShake 0.42s ease; }
+/* القاعة — the invite panel in two numbered steps, with a rule between them. */
+.hall-paper-input { text-align: right; }
+.hall-paper-step {
+    display: flex; align-items: center; gap: 8px; margin-bottom: -4px;
+    font-size: 0.86rem; font-weight: 800; color: var(--cd-ink-tx);
+}
+.hall-paper-step b {
+    display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%;
+    background: #262626; color: #faf9f7; font-size: 0.74rem; font-weight: 800;
+}
+.hall-paper-sep { flex: 0 0 auto; height: 0; margin: 6px 0 2px; border-top: 2px dashed var(--cd-ink-12); }

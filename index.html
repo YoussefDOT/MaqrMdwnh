@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 374 · Updated 10/3 9:01 AM</div>
+    <div id="build-number" class="build-number">Build 375 · Updated 10/3 9:01 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -2011,7 +2011,7 @@
         </div>
         <div id="hall-compose" class="hall-compose">
             <div id="hall-men" class="hall-men" role="listbox"></div>
-            <input id="hall-input" class="hall-input" type="text" maxlength="100" dir="auto" autocomplete="off" enterkeyhint="send" placeholder="اكتب تعليقًا… (@ للإشارة إلى عضو)">
+            <input id="hall-input" class="hall-input" type="text" maxlength="100" dir="rtl" autocomplete="off" enterkeyhint="send" placeholder="اكتب تعليقًا… (@ للإشارة إلى عضو)">
             <button id="hall-send" class="hall-send" type="button" aria-label="إرسال">
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
@@ -2061,8 +2061,11 @@
             <button id="hall-pick-close" class="hall-paper-close" type="button" aria-label="إغلاق">✕</button>
             <h3 id="hall-pick-head" class="hall-paper-head">دعوة إلى <em>اجتماع</em></h3>
             <p class="hall-paper-sub">اختر المدعوّين واكتب عنوان الاجتماع. من كان خارج الموقع يدخل الاجتماع فور دخوله.</p>
-            <input id="hall-pick-title" class="hall-paper-input big" type="text" maxlength="60" dir="auto" autocomplete="off" placeholder="عنوان الاجتماع">
-            <input id="hall-pick-search" class="hall-paper-input" type="text" maxlength="30" dir="auto" autocomplete="off" placeholder="ابحث عن عضو…">
+            <label class="hall-paper-step" for="hall-pick-title"><b>١</b>عنوان الاجتماع</label>
+            <input id="hall-pick-title" class="hall-paper-input big" type="text" maxlength="60" dir="rtl" autocomplete="off" placeholder="اكتب عنوان الاجتماع هنا">
+            <div class="hall-paper-sep" aria-hidden="true"></div>
+            <label class="hall-paper-step" for="hall-pick-search"><b>٢</b>المدعوّون</label>
+            <input id="hall-pick-search" class="hall-paper-input" type="text" maxlength="30" dir="rtl" autocomplete="off" placeholder="ابحث عن عضو…">
             <div id="hall-pick-body" class="hall-paper-body"></div>
             <div class="hall-paper-foot">
                 <span id="hall-pick-count" class="hall-paper-count"></span>
