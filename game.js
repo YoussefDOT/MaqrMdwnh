@@ -46635,6 +46635,9 @@ async function hallCallCommand() {
                 [`${HALL_PATH}/meeting/out/${me}`]: null,
             }).catch(() => _libToast('تعذّر الدخول إلى الاجتماع'));
             _hall.rejoin = true;
+            // Already invited and not out: that write changes nothing, so no listener
+            // event comes back to ask for the pull-in — ask for it here.
+            if (d.who[me] && !d.out[me]) { _hall.want = true; perfWake(); }
             return;
         }
     }
@@ -47717,7 +47720,7 @@ function _hallShowComment(p, text, men, stk) {
         img.draggable = false;
         img.src = _stkUrl(stk);
         b.appendChild(img);
-    } else b.textContent = text;
+    } else _hallFillText(b, text);
     const forMe = Array.isArray(men) && (men.includes(gameState.userId) || men.includes(_hallMe()));
     b.classList.toggle('men', forMe);
     // A seat at the edge of the room: nudge the bubble back onto the screen.
@@ -47754,8 +47757,9 @@ function _hallOnComment(p, m) {
 
 function _hallComposeOpen() {
     const E = _hall.E;
-    if (!_hall.in || _hall.cmp.open) return;
-    if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التعليق للمنصة فقط'); return; }
+    if (!_hall.in) return;
+    if (_hall.cmp.open) { try { E.input.focus({ preventScroll: true }); } catch (_) {} return; }
+    if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التعليق للمنصة فقط'); try { E.input.blur(); } catch (_) {} return; }
     _hall.cmp.open = true;
     _hall.cmp.mens.clear();
     E.compose.classList.add('show');
@@ -47769,6 +47773,7 @@ function _hallComposeClose() {
     _hall.cmp.open = false;
     E.compose.classList.remove('show');
     E.input.value = '';
+    _hallInputPaint();
     _hallMenList(null);
     _hall.cmp.stk.dismissed = false;
     _hallStkClose();
@@ -47778,9 +47783,66 @@ function _hallComposeClose() {
 // Keep the compose bar on top of the phone keyboard.
 function _hallComposeFit() {
     const E = _hall.E, vv = window.visualViewport;
-    if (!E || !_hall.cmp.open) return;
-    const lift = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    if (!E) return;
+    // Closed: no lift left behind — docked under the log, the bar stays on screen.
+    const lift = (_hall.cmp.open && vv) ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
     E.compose.style.bottom = lift ? (lift + 8) + 'px' : '';
+}
+// After a send. Docked under the open log the bar stays and keeps the caret (a chat
+// app's box); floating over the room it goes away, as before.
+function _hallComposeDone() {
+    const E = _hall.E, c = _hall.cmp;
+    if (!_hall.log.open || !c.open) { _hallComposeClose(); return; }
+    E.input.value = '';
+    c.mens.clear();
+    _hallInputPaint();
+    _hallMenList(null);
+    c.stk.dismissed = false;
+    _hallStkClose();
+}
+// Mentions in a line of text: every «@name» that is someone in the hall, as the picker
+// writes it (the roster's name, spaces as «_»). Found from the TEXT, on both ends, so a
+// mention typed by hand counts and the sender and the reader mark the same words.
+function _hallMenFind(text) {
+    const out = [];
+    if (!text || text.indexOf('@') < 0) return out;
+    const re = /(^|\s)@([^\s@]{1,24})/g;
+    let tags = null, m;
+    while ((m = re.exec(text))) {
+        if (!tags) {
+            tags = new Map();
+            for (const p of _hall.people.values()) if (p.n) tags.set(_hallMenName(p).replace(/\s+/g, '_'), p.uid);
+        }
+        const uid = tags.get(m[2]);
+        if (!uid) continue;
+        const s = m.index + m[1].length;
+        out.push({ s, e: s + m[2].length + 1, uid });
+    }
+    return out;
+}
+// A line of text into `el`, its mentions as tags. Nodes only — it is another client's text.
+// `raw`: keep every character as typed (the layer behind the type box must line up with it).
+function _hallFillText(el, text, raw) {
+    el.textContent = '';
+    const me = gameState.userId, me2 = _hallMe();
+    let at = 0;
+    for (const r of _hallMenFind(text)) {
+        if (r.s > at) el.appendChild(document.createTextNode(text.slice(at, r.s)));
+        const tag = document.createElement('span');
+        tag.className = 'hall-tag' + (!raw && (r.uid === me || r.uid === me2) ? ' me' : '');
+        tag.textContent = raw ? text.slice(r.s, r.e) : text.slice(r.s, r.e).replace(/_/g, ' ');
+        el.appendChild(tag);
+        at = r.e;
+    }
+    if (at < text.length) el.appendChild(document.createTextNode(text.slice(at)));
+}
+// The type box is a plain <input>, which can't style part of its text: a layer behind it
+// holds the same text, invisible, and paints only the mentions' background.
+function _hallInputPaint() {
+    const E = _hall.E;
+    if (!E || !E.hl) return;
+    _hallFillText(E.hl, E.input.value, true);
+    E.hl.scrollLeft = E.input.scrollLeft;
 }
 function _hallMenQuery() {
     const E = _hall.E, v = E.input.value, caret = E.input.selectionStart == null ? v.length : E.input.selectionStart;
@@ -47850,6 +47912,7 @@ function _hallMenPick(i) {
     const pos = q.start + name.length + 2;
     try { E.input.setSelectionRange(pos, pos); } catch (_) {}
     c.mens.set('@' + name, p.uid);
+    _hallInputPaint();
     _hallMenList(null);
 }
 function _hallComposeInput() {
@@ -47859,6 +47922,7 @@ function _hallComposeInput() {
         _hallSend({ t: 'ht', uid: gameState.userId, on: 1 });
     }
     c.sel = 0;
+    _hallInputPaint();
     _hallMenList(_hallMenQuery());
     _hallStkUpdate();
 }
@@ -47935,7 +47999,7 @@ function _hallStkSend(name) {
     _stkNoteUsed(name);
     _hall.cmp.typOn = false;
     _hallShowComment(_hall.people.get(gameState.userId), '', null, name);
-    _hallComposeClose();
+    _hallComposeDone();
 }
 
 // سجل المحادثة — every comment this client heard in this meeting, in a side panel that
@@ -47958,6 +48022,12 @@ function _hallLogBadge() {
     E.logN.hidden = !L.unread;
     E.logN.textContent = L.unread > 99 ? '+٩٩' : _libAr(L.unread);
 }
+// A colour too dark to read as text on the hall's near-black panels.
+function _hallDarkHex(hex) {
+    const n = parseInt(String(hex).slice(1), 16);
+    if (!Number.isFinite(n) || String(hex).length !== 7) return false;
+    return 0.2126 * (n >> 16 & 255) + 0.7152 * (n >> 8 & 255) + 0.0722 * (n & 255) < 90;
+}
 function _hallLogPush(p, text, stk, forMe) {
     const E = _hall.E, L = _hall.log;
     if (!E || !E.logList || !p) return;
@@ -47977,7 +48047,7 @@ function _hallLogPush(p, text, stk, forMe) {
         head.className = 'hall-log-who';
         const nm = document.createElement('b');
         nm.textContent = p.n || '';
-        if (_validHex(p.c)) nm.style.color = p.c;
+        if (_validHex(p.c) && !_hallDarkHex(p.c)) nm.style.color = p.c;   // a dark ring colour is unreadable here: the default white
         const tm = document.createElement('time');
         try { tm.textContent = new Date(now).toLocaleTimeString('ar', { hour: 'numeric', minute: '2-digit' }); } catch (_) {}
         head.append(nm, tm);
@@ -47985,14 +48055,16 @@ function _hallLogPush(p, text, stk, forMe) {
     }
     const body = document.createElement('div');
     body.className = 'hall-log-text';
-    body.dir = 'auto';
+    // Text: its own direction for the order of the words, but always on the right edge
+    // (CSS). A sticker has no direction of its own — it follows the panel's.
+    body.dir = stk ? 'rtl' : 'auto';
     if (stk) {
         const img = document.createElement('img');
         img.className = 'hall-log-stk';
         img.alt = stk; img.draggable = false; img.loading = 'lazy';
         img.src = _stkUrl(stk);
         body.appendChild(img);
-    } else body.textContent = text;
+    } else _hallFillText(body, text);
     row.appendChild(body);
     list.appendChild(row);
     L.lastUid = p.uid; L.lastAt = now;
@@ -48012,6 +48084,8 @@ function _hallLogSet(open, save) {
     E.root.classList.toggle('log-open', L.open);
     E.logBtn.classList.toggle('on', L.open);
     if (L.open) { L.unread = 0; _hallLogBadge(); E.logList.scrollTop = E.logList.scrollHeight; }
+    // Opened by a press, on a PC: the caret goes straight into the box under the log.
+    if (L.open && save && !isMobile() && _hallMaySpeak(gameState.userId)) _hallComposeOpen();
     if (save) { try { localStorage.setItem(HALL_LOG_KEY, L.open ? '1' : '0'); } catch (_) {} }
     _hall.layoutDirty = true;                        // on a wide screen the panel takes room from the seats
 }
@@ -48034,7 +48108,14 @@ body{display:flex;flex-direction:column}
 .hall-log-who{display:flex;align-items:baseline;gap:8px}
 .hall-log-who b{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.84rem;font-weight:800;color:#f1f1f3}
 .hall-log-who time{flex:0 0 auto;font-size:.68rem;font-weight:600;color:#8b8d99}
-.hall-log-text{font-size:.9rem;font-weight:600;line-height:1.55;color:#d9dae0;overflow-wrap:anywhere;text-align:start}
+.hall-log-text{font-size:.9rem;font-weight:600;line-height:1.55;color:#d9dae0;overflow-wrap:anywhere;text-align:right}
+.hall-tag{padding:0 4px;border-radius:6px;background:#2b3157;color:#c7d0ff;font-weight:700}
+.hall-tag.me{background:#4a3d10;color:#ffe58a}
+.hp-bar{flex:0 0 auto;padding:8px 10px;border-top:1px solid #23252e;background:#0c0d11}
+.hp-input{display:block;width:100%;height:36px;padding:0 14px;border:1px solid #2c2f3a;border-radius:50px;outline:0;background:#1b1d25;color:#f1f1f3;font:inherit;font-size:.9rem;font-weight:600}
+.hp-input::placeholder{color:#74767e}
+.hp-input:focus{border-color:#4a4f63}
+.hp-input.bad{border-color:#e5484d}
 .hall-log-row.men .hall-log-text{margin:0 -6px;padding:2px 6px;border-radius:8px;background:#2b2410;color:#f6e7a8}
 .hall-log-stk{display:block;width:84px;height:84px;object-fit:contain;margin-top:2px}
 img.emo{width:1.25em;height:1.25em;vertical-align:-0.25em}
@@ -48097,6 +48178,19 @@ function _hallPopBuild(win, onTop) {
     doc.body.append(head);
     if (!onTop) doc.body.append(mk('hp-note', 'هذا المتصفح لا يُبقي النافذة فوق غيرها — في كروم أو إيدج تبقى ظاهرة دائمًا.'));
     doc.body.append(list, empty);
+    // Its own type box: plain text, Enter sends (a mention is «@name» typed out).
+    const bar = mk('hp-bar'), inp = doc.createElement('input');
+    inp.className = 'hp-input'; inp.type = 'text'; inp.maxLength = HALL_MSG_MAX; inp.dir = 'rtl';
+    inp.autocomplete = 'off'; inp.placeholder = 'اكتب تعليقًا…';
+    inp.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' || e.isComposing) return;
+        e.preventDefault();
+        if (!_chatClean(inp.value)) return;
+        if (_hallSayText(inp.value)) inp.value = '';
+        else { inp.classList.add('bad'); setTimeout(() => { try { inp.classList.remove('bad'); } catch (_) {} }, 700); }
+    });
+    bar.appendChild(inp);
+    doc.body.append(bar);
     const pop = _hall.pop = { win, list, empty };
     win.addEventListener('pagehide', () => { if (_hall.pop === pop) { _hall.pop = null; _hallPopPaintBtn(); } });
     _hallPopSync();
@@ -48126,23 +48220,31 @@ async function _hallPopToggle() {
     try { _hallPopBuild(win, onTop); }
     catch (e) { console.warn('[hall] chat window failed', e); _hall.pop = null; try { win.close(); } catch (_) {} _hallPopPaintBtn(); }
 }
-function _hallComposeSend() {
-    const E = _hall.E, c = _hall.cmp;
-    const text = _chatClean(E.input.value).slice(0, HALL_MSG_MAX);
-    if (!text) { _hallComposeClose(); return; }
-    if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التعليق للمنصة فقط'); _hallComposeClose(); return; }
+// One comment out, from any type box (the bar, the chat window). False = not sent.
+function _hallSayText(raw) {
+    const c = _hall.cmp;
+    const text = _chatClean(raw).slice(0, HALL_MSG_MAX);
+    if (!text || !_hall.in) return false;
+    if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التعليق للمنصة فقط'); return false; }
     const now = Date.now();
-    if (now - _hall.lastMsgAt < HALL_MSG_GAP_MS) return;      // hold the text, send nothing
+    if (now - _hall.lastMsgAt < HALL_MSG_GAP_MS) return false;      // hold the text, send nothing
     _hall.lastMsgAt = now;
-    const men = [];
+    const men = [], me = gameState.userId, me2 = _hallMe();
     for (const [tag, uid] of c.mens) if (text.includes(tag) && !men.includes(uid)) men.push(uid);
+    for (const r of _hallMenFind(text)) if (r.uid !== me && r.uid !== me2 && !men.includes(r.uid)) men.push(r.uid);
     const msg = { t: 'hc', uid: gameState.userId, m: text };
     if (men.length) msg.men = men.slice(0, 8);
-    if (!_hallSend(msg)) { _libToast('الاتصال منقطع — لم تُرسل الرسالة'); return; }
+    if (!_hallSend(msg)) { _hall.lastMsgAt = 0; _libToast('الاتصال منقطع — لم تُرسل الرسالة'); return false; }
     c.typOn = false;
     _hallShowComment(_hall.people.get(gameState.userId), text, null);
     if (men.length) _chatSfx('chatMention', 1, 0.75);
-    _hallComposeClose();
+    return true;
+}
+function _hallComposeSend() {
+    const E = _hall.E;
+    if (!_chatClean(E.input.value)) { _hallComposeClose(); return; }
+    if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التعليق للمنصة فقط'); _hallComposeClose(); return; }
+    if (_hallSayText(E.input.value)) _hallComposeDone();
 }
 
 /* ── the screen ────────────────────────────────────────────────────────────── */
@@ -48784,7 +48886,7 @@ function setupHallUI() {
         reacts: $('hall-reacts'), say: $('hall-say'), share: $('hall-share'), kill: $('hall-kill'),
         focusBtn: $('hall-focus-btn'), reqBtn: $('hall-req-btn'), reqN: $('hall-req-n'), reqs: $('hall-reqs'), reqList: $('hall-req-list'),
         leave: $('hall-leave'), end: $('hall-end'),
-        compose: $('hall-compose'), input: $('hall-input'), send: $('hall-send'), men: $('hall-men'),
+        compose: $('hall-compose'), input: $('hall-input'), hl: $('hall-input-hl'), send: $('hall-send'), men: $('hall-men'),
         stk: $('hall-stk'), stkCap: $('hall-stk-cap'), stkGrid: $('hall-stk-grid'),
         log: $('hall-log'), logList: $('hall-log-list'), logEmpty: $('hall-log-empty'), logBtn: $('hall-log-btn'), popBtn: $('hall-pop-btn'), logN: $('hall-log-n'), logClose: $('hall-log-close'),
         confirm: $('hall-confirm'), confirmHead: $('hall-confirm-head'), confirmText: $('hall-confirm-text'),
@@ -48803,10 +48905,15 @@ function setupHallUI() {
         `<button type="button" class="hall-react" data-r="${r.k}" title="${r.n}" aria-label="${r.n}"><span>${r.e}</span></button>`).join('');
     E.reacts.addEventListener('click', (e) => { const b = e.target.closest('.hall-react'); if (b) hallReact(b.dataset.r); });
 
-    E.say.addEventListener('click', () => { if (_hall.cmp.open) _hallComposeClose(); else _hallComposeOpen(); });
+    E.say.addEventListener('click', () => { if (_hall.cmp.open && !_hall.log.open) _hallComposeClose(); else _hallComposeOpen(); });
     E.send.addEventListener('pointerdown', (e) => e.preventDefault());      // keep the keyboard up
     E.send.addEventListener('click', _hallComposeSend);
     E.input.addEventListener('input', _hallComposeInput);
+    // Docked under the open log the bar is always there: a press in it opens it.
+    E.input.addEventListener('focus', () => { if (_hall.in && !_hall.cmp.open) _hallComposeOpen(); });
+    // The layer behind the box follows the box's own sideways scroll.
+    const hlSync = () => { if (E.hl) E.hl.scrollLeft = E.input.scrollLeft; };
+    for (const ev of ['scroll', 'keyup', 'click', 'select']) E.input.addEventListener(ev, hlSync, { passive: true });
     E.input.addEventListener('keydown', (e) => {
         e.stopPropagation();
         const c = _hall.cmp, open = c.rows.length > 0, s = c.stk;
