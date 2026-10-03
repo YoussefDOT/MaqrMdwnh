@@ -46580,8 +46580,9 @@ const _hall = {
     sfuOk: false,
     fx: true, glowTimer: 0, glowCv: null, glow: '',
     myLeaveReq: false, lastReactAt: 0, lastMsgAt: 0,
-    cmp: { open: false, mens: new Map(), typAt: 0, sel: 0, rows: [], stk: { open: false, rows: [], sel: 0, key: '', dismissed: false } },
-    log: { id: '', n: 0, open: false, unread: 0, lastUid: '', lastAt: 0 },
+    cmp: { open: false, mens: new Map(), typAt: 0, sel: 0, rows: [], stk: { open: false, rows: [], sel: 0, key: '', dismissed: false, browse: false } },
+    ui: 1,                   // the room's scale on a big display (see _hallUiFit)
+    log: { id: '', n: 0, open: false, unread: 0, lastUid: '', lastAt: 0, w: 320 },
     pickOpen: false, pickSel: new Set(), pickQ: '',
     ptsOpen: false, pts: null, ptsPending: null,
     awardQ: [], awardSeen: new Set(),
@@ -47286,12 +47287,12 @@ function _hallRefreshDock() {
     const canCast = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);   // no phone has it
     // The screen belongs to the stage: a moderator in the seats cannot share either.
     E.share.hidden = !(mine || (stage && canCast && !sh));
-    E.share.textContent = mine ? 'إيقاف المشاركة' : 'مشاركة الشاشة';
+    _hallTip(E.share, mine ? 'إيقاف المشاركة' : 'مشاركة الشاشة');
     E.share.classList.toggle('on', mine);
     E.kill.hidden = !(mod && sh && !sh.mine);
     _hallPopPaintBtn();
     E.focusBtn.hidden = !mod;
-    E.focusBtn.textContent = (_hall.doc && _hall.doc.focus) ? 'إلغاء وضع التركيز' : 'وضع التركيز';
+    _hallTip(E.focusBtn, (_hall.doc && _hall.doc.focus) ? 'إلغاء وضع التركيز' : 'وضع التركيز');
     E.focusBtn.classList.toggle('on', !!(_hall.doc && _hall.doc.focus));
     E.end.hidden = !mod;
     E.reacts.classList.toggle('is-off', !_hallMaySpeak(me));
@@ -47301,9 +47302,32 @@ function _hallRefreshDock() {
     E.reqN.textContent = _libAr(reqs);
     if (!reqs) E.reqs.classList.remove('show');
     const free = mod || !_hallModPresent();
-    E.leave.textContent = free ? 'مغادرة' : (_hall.myLeaveReq ? 'إلغاء طلب المغادرة' : 'طلب المغادرة');
+    _hallTip(E.leave, free ? 'مغادرة' : (_hall.myLeaveReq ? 'إلغاء طلب المغادرة' : 'طلب المغادرة'));
     E.leave.classList.toggle('on', !free && _hall.myLeaveReq);
-    E.say.classList.toggle('is-off', !_hallMaySpeak(me));
+    E.compose.classList.toggle('is-off', !_hallMaySpeak(me));
+}
+// An icon button's name: the tooltip a mouse sees, and what a screen reader says.
+function _hallTip(btn, text) {
+    if (btn.dataset.tip === text) return;
+    btn.dataset.tip = text;
+    btn.setAttribute('aria-label', text);
+}
+// A big display: the room is laid out smaller and scaled up to fill the window (what the
+// browser's own zoom does), so 1080p reads like a laptop. 1 on a phone / a small window.
+// Everything measured off the screen (rects, pointer positions) is in SCREEN px, and
+// whatever is written back as a style inside the room is divided by `_hall.ui`.
+const HALL_UI_W = 1470, HALL_UI_H = 790, HALL_UI_MAX = 1.6;
+function _hallUiFit() {
+    const E = _hall.E;
+    if (!E) return;
+    let f = isMobile() ? 1 : Math.min(window.innerWidth / HALL_UI_W, window.innerHeight / HALL_UI_H);
+    f = f < 1.04 ? 1 : Math.min(HALL_UI_MAX, Math.round(f * 100) / 100);
+    if (f === _hall.ui && E.root.classList.contains('scaled') === (f !== 1)) return;
+    _hall.ui = f;
+    E.root.style.setProperty('--hall-z', String(f));
+    E.root.classList.toggle('scaled', f !== 1);
+    _hallLogWidth(_hall.log.w, false);
+    _hall.layoutDirty = true;
 }
 function _hallModPresent() {
     for (const p of _hall.people.values()) if (p.uid !== gameState.userId && _hallIsMod(p.uid)) return true;
@@ -47391,6 +47415,9 @@ function _hallOpen(d) {
     E.root.classList.remove('revealed', 'casting', 'zoomed', 'waiting');
     E.root.classList.toggle('lowfx', !_hall.fx);
     E.root.style.setProperty('--hall-glow', HALL_GLOW_IDLE);
+    _hallUiFit();
+    _hallLogWidth(_hall.log.w, false);
+    E.reacts.scrollLeft = 0;
     _hallApplyDoc(null);
     _hallScreenIdle();
     _hallLogReset(d.id);
@@ -47617,8 +47644,8 @@ function _hallFly(p, emoji) {
         f.className = 'hall-fly';
         f.dataset.e = emoji;
         f.textContent = emoji;
-        f.style.left = (r.left + r.width / 2) + 'px';
-        f.style.top = r.top + 'px';
+        f.style.left = ((r.left + r.width / 2) / _hall.ui) + 'px';
+        f.style.top = (r.top / _hall.ui) + 'px';
         f.style.setProperty('--dx', ((Math.random() - 0.5) * 120).toFixed(0) + 'px');
         f.style.setProperty('--dy', (-(140 + Math.random() * 160)).toFixed(0) + 'px');
         f.style.setProperty('--rot', ((Math.random() - 0.5) * 50).toFixed(0) + 'deg');
@@ -47632,7 +47659,7 @@ function _hallFly(p, emoji) {
 function _hallConfetti(count) {
     const layer = _hallFx();
     if (!layer || !_hall.fx || document.hidden) return;
-    const n = Math.min(count || 36, 60), W = window.innerWidth;
+    const n = Math.min(count || 36, 60), W = window.innerWidth / _hall.ui;
     for (let i = 0; i < n; i++) {
         const c = document.createElement('i');
         c.className = 'hall-conf';
@@ -47646,6 +47673,24 @@ function _hallConfetti(count) {
         setTimeout(() => c.remove(), 3200);
     }
 }
+// The hall's reactions: the table's six (keys 1–6), then more to scroll through. `a` =
+// which of the six avatar motions / voices a reaction borrows. An older page drops a key
+// it doesn't know.
+const HALL_REACTIONS = [
+    ...MEET_REACTIONS.map(r => ({ k: r.k, e: r.e, n: r.n, a: r.k })),
+    { k: 'cry',   e: '😭', n: 'بكاء',       a: 'sad' },
+    { k: 'skull', e: '💀', n: 'جمجمة',      a: 'laugh' },
+    { k: 'party', e: '🎉', n: 'احتفال',     a: 'happy' },
+    { k: 'fire',  e: '🔥', n: 'نار',        a: 'clap' },
+    { k: 'wilt',  e: '🥀', n: 'وردة ذابلة', a: 'sad' },
+    { k: 'like',  e: '👍', n: 'إعجاب',      a: 'happy' },
+    { k: 'wow',   e: '😮', n: 'دهشة',       a: 'happy' },
+    { k: 'think', e: '🤔', n: 'تفكير',      a: 'sad' },
+    { k: 'dua',   e: '🤲', n: 'دعاء',       a: 'love' },
+    { k: 'top',   e: '💯', n: 'مئة بالمئة', a: 'clap' },
+    { k: 'eyes',  e: '👀', n: 'ترقّب',      a: 'laugh' },
+];
+const HALL_RX_BY_KEY = Object.fromEntries(HALL_REACTIONS.map(r => [r.k, r]));
 // A little voice for each reaction — two notes, a different pair for each.
 const HALL_RX_NOTES = { happy: [660, 990], clap: [520, 520], laugh: [740, 880], love: [587, 880], sad: [392, 311], mad: [220, 185] };
 function _hallRxSound(k, peak) {
@@ -47669,40 +47714,40 @@ function _hallRxSound(k, peak) {
 
 /* ── reactions ─────────────────────────────────────────────────────────────── */
 function _hallPlayReact(p, k) {
-    const def = MEET_REACT_BY_KEY[k], el = p && p.el;
+    const def = HALL_RX_BY_KEY[k], el = p && p.el;
     if (!def || !el) return;
     const av = el.querySelector('.hall-av'), em = el.querySelector('.hall-emoji');
     em.textContent = def.e;
     for (const r of MEET_REACTIONS) av.classList.remove('rx-' + r.k);
     el.classList.remove('rx');
     void av.offsetWidth;
-    av.classList.add('rx-' + k);
+    av.classList.add('rx-' + def.a);
     el.classList.add('rx');
     clearTimeout(el._rxT);
-    el._rxT = setTimeout(() => { av.classList.remove('rx-' + k); el.classList.remove('rx'); }, HALL_REACT_MS + 80);
+    el._rxT = setTimeout(() => { av.classList.remove('rx-' + def.a); el.classList.remove('rx'); }, HALL_REACT_MS + 80);
     _hallFly(p, def.e);
 }
 function hallReact(k) {
-    if (!_hall.in || !MEET_REACT_BY_KEY[k]) return;
+    if (!_hall.in || !HALL_RX_BY_KEY[k]) return;
     // وضع التركيز silences reactions too — same rule as comments (moderators + the stage).
     if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التفاعلات متوقفة'); return; }
     const now = performance.now();
     if (now - _hall.lastReactAt < HALL_REACT_GAP_MS) return;
     _hall.lastReactAt = now;
     _hallPlayReact(_hall.people.get(gameState.userId), k);
-    _hallRxSound(k, 0.06);
+    _hallRxSound(HALL_RX_BY_KEY[k].a, 0.06);
     _hallSend({ t: 'hr', uid: gameState.userId, r: k });
     _hall.E.reacts.classList.add('cool');
     setTimeout(() => _hall.E && _hall.E.reacts.classList.remove('cool'), HALL_REACT_GAP_MS);
 }
 function _hallOnReact(p, r) {
-    if (!MEET_REACT_BY_KEY[r]) return;
+    if (typeof r !== 'string' || !HALL_RX_BY_KEY[r]) return;
     if (!_hallMaySpeak(p.uid)) return;               // focus mode, enforced on receive too
     const now = performance.now();
     if (p._rxAt && now - p._rxAt < 400) return;      // relayed data: one per beat
     p._rxAt = now;
     _hallPlayReact(p, r);
-    _hallRxSound(r, 0.03);
+    _hallRxSound(HALL_RX_BY_KEY[r].a, 0.03);
 }
 
 /* ── comments ──────────────────────────────────────────────────────────────── */
@@ -47732,7 +47777,7 @@ function _hallShowComment(p, text, men, stk) {
     const br = b.getBoundingClientRect(), vw = window.innerWidth;
     if (br.width) {
         const dx = br.left < 8 ? 8 - br.left : (br.right > vw - 8 ? vw - 8 - br.right : 0);
-        if (dx) b.style.setProperty('--bx', dx.toFixed(0) + 'px');
+        if (dx) b.style.setProperty('--bx', (dx / _hall.ui).toFixed(0) + 'px');
     }
     b.classList.remove('show'); void b.offsetWidth; b.classList.add('show');
     clearTimeout(el._bubT);
@@ -47762,20 +47807,19 @@ function _hallOnComment(p, m) {
 function _hallComposeOpen() {
     const E = _hall.E;
     if (!_hall.in) return;
-    if (_hall.cmp.open) { try { E.input.focus({ preventScroll: true }); } catch (_) {} return; }
+    // The box is always on screen (the dock's middle, or under the open log): "open" is
+    // "the caret is in it".
     if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التعليق للمنصة فقط'); try { E.input.blur(); } catch (_) {} return; }
-    _hall.cmp.open = true;
-    _hall.cmp.mens.clear();
-    E.compose.classList.add('show');
+    if (!_hall.cmp.open) { _hall.cmp.open = true; _hall.cmp.mens.clear(); }
+    if (document.activeElement !== E.input) {
+        try { E.input.focus({ preventScroll: true }); } catch (_) { try { E.input.focus(); } catch (__) {} }
+    }
     _hallComposeFit();
-    void E.compose.offsetHeight;                     // not still visibility:hidden when focus is asked for
-    try { E.input.focus({ preventScroll: true }); } catch (_) { try { E.input.focus(); } catch (__) {} }
 }
 function _hallComposeClose() {
     const E = _hall.E;
     if (!E || !_hall.cmp.open) return;
     _hall.cmp.open = false;
-    E.compose.classList.remove('show');
     E.input.value = '';
     _hallInputPaint();
     _hallMenList(null);
@@ -47788,15 +47832,17 @@ function _hallComposeClose() {
 function _hallComposeFit() {
     const E = _hall.E, vv = window.visualViewport;
     if (!E) return;
-    // Closed: no lift left behind — docked under the log, the bar stays on screen.
-    const lift = (_hall.cmp.open && vv) ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
-    E.compose.style.bottom = lift ? (lift + 8) + 'px' : '';
+    // Only while the caret is in the box. The dock (or the log, when the box is under it)
+    // rises by `--hall-kb`; no lift is left behind once the keyboard goes.
+    const up = vv && document.activeElement === E.input;
+    const lift = up ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    const on = lift > 40;
+    E.root.style.setProperty('--hall-kb', on ? Math.round(lift) + 'px' : '0px');
+    E.root.classList.toggle('kb', on);
 }
-// After a send. Docked under the open log the bar stays and keeps the caret (a chat
-// app's box); floating over the room it goes away, as before.
+// After a send: the box empties and keeps the caret, like a chat app's.
 function _hallComposeDone() {
     const E = _hall.E, c = _hall.cmp;
-    if (!_hall.log.open || !c.open) { _hallComposeClose(); return; }
     E.input.value = '';
     c.mens.clear();
     _hallInputPaint();
@@ -47847,6 +47893,7 @@ function _hallInputPaint() {
     if (!E || !E.hl) return;
     _hallFillText(E.hl, E.input.value, true);
     E.hl.scrollLeft = E.input.scrollLeft;
+    E.compose.classList.toggle('has-text', !!E.input.value.trim());
 }
 function _hallMenQuery() {
     const E = _hall.E, v = E.input.value, caret = E.input.selectionStart == null ? v.length : E.input.selectionStart;
@@ -47940,17 +47987,38 @@ function _hallStkQuery() {
 }
 function _hallStkClose() {
     const E = _hall.E, s = _hall.cmp.stk;
-    s.open = false; s.key = ''; s.rows = [];
+    s.open = false; s.key = ''; s.rows = []; s.browse = false;
     if (E && E.stk) E.stk.classList.remove('show');
+    if (E && E.stkBtn) E.stkBtn.classList.remove('on');
+}
+// The sticker button. On an empty box it types «/» so a name can be typed at once (again
+// takes it back); with text already in the box it opens the whole set to pick from.
+function _hallStkBtnPress() {
+    const E = _hall.E, s = _hall.cmp.stk;
+    if (!_hall.in) return;
+    if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التعليق للمنصة فقط'); return; }
+    if (s.open) {
+        const typed = _hallStkQuery() != null && !s.browse;
+        _hallStkClose();
+        if (typed) { E.input.value = ''; _hallInputPaint(); } else s.dismissed = true;
+        return;
+    }
+    _hallComposeOpen();
+    s.dismissed = false;
+    if (!E.input.value) { E.input.value = '/'; _hallComposeInput(); return; }
+    if (_hallStkQuery() == null) s.browse = true;
+    _hallStkUpdate();
 }
 function _hallStkCap() {
     const E = _hall.E, s = _hall.cmp.stk, n = s.rows[s.sel];
-    E.stkCap.textContent = n ? (_hallStkQuery() ? n + '  ·  Enter للإرسال' : 'اكتب اسم الملصق للبحث')
+    E.stkCap.textContent = n ? (s.browse ? 'اختر ملصقًا' : _hallStkQuery() ? n + '  ·  Enter للإرسال' : 'اكتب اسم الملصق للبحث')
         : (_stk.list.length ? 'لا يوجد ملصق بهذا الاسم' : 'جارٍ تحميل الملصقات…');
 }
 function _hallStkUpdate() {
     const E = _hall.E, s = _hall.cmp.stk;
-    const q = _hall.cmp.open ? _hallStkQuery() : null;
+    let q = _hall.cmp.open ? _hallStkQuery() : null;
+    if (q != null) s.browse = false;                 // a «/» typed after all: it searches
+    else if (s.browse) q = '';
     if (q == null) { s.dismissed = false; if (s.open) _hallStkClose(); return; }
     if (s.dismissed) return;
     if (!_stk.list.length) loadStickers().then(() => { if (_hall.cmp.open) _hallStkUpdate(); });
@@ -47962,7 +48030,7 @@ function _hallStkUpdate() {
     grid.textContent = '';
     rows.forEach((n, i) => {
         const tile = document.createElement('div');
-        tile.className = 'chat-stk-tile' + (i === 0 ? ' sel' : '');
+        tile.className = 'chat-stk-tile' + (i === 0 && !s.browse ? ' sel' : '');
         tile.setAttribute('role', 'option');
         tile.dataset.i = String(i);
         tile.title = n;
@@ -47976,6 +48044,7 @@ function _hallStkUpdate() {
     _hallStkCap();
     s.open = true;
     E.stk.classList.add('show');
+    if (E.stkBtn) E.stkBtn.classList.add('on');
 }
 function _hallStkMove(d) {
     const s = _hall.cmp.stk, grid = _hall.E.stkGrid, n = s.rows.length;
@@ -48003,7 +48072,8 @@ function _hallStkSend(name) {
     _stkNoteUsed(name);
     _hall.cmp.typOn = false;
     _hallShowComment(_hall.people.get(gameState.userId), '', null, name);
-    _hallComposeDone();
+    // Picked from the open set with text already typed: the text stays.
+    if (_hall.cmp.stk.browse) _hallStkClose(); else _hallComposeDone();
 }
 
 // سجل المحادثة — every comment this client heard in this meeting, in a side panel that
@@ -48086,12 +48156,60 @@ function _hallLogSet(open, save) {
     if (!E || !E.log) return;
     L.open = !!open;
     E.root.classList.toggle('log-open', L.open);
+    // The ONE type box: under the open log, else in the middle of the dock.
+    const slot = L.open ? E.logSlot : E.cmpSlot;
+    if (slot && E.compose.parentNode !== slot) {
+        const had = document.activeElement === E.input;
+        slot.appendChild(E.compose);
+        if (had) { try { E.input.focus({ preventScroll: true }); } catch (_) {} }
+    }
     E.logBtn.classList.toggle('on', L.open);
     if (L.open) { L.unread = 0; _hallLogBadge(); E.logList.scrollTop = E.logList.scrollHeight; }
     // Opened by a press, on a PC: the caret goes straight into the box under the log.
     if (L.open && save && !isMobile() && _hallMaySpeak(gameState.userId)) _hallComposeOpen();
     if (save) { try { localStorage.setItem(HALL_LOG_KEY, L.open ? '1' : '0'); } catch (_) {} }
     _hall.layoutDirty = true;                        // on a wide screen the panel takes room from the seats
+}
+// The log's width: dragged by its inner edge on a PC (like a chat app's side panel), kept
+// per device. In the room's own px (see _hallUiFit).
+const HALL_LOG_W_KEY = 'mdwnh_hall_log_w';
+const HALL_LOG_W_MIN = 280, HALL_LOG_W_DEF = 320;
+function _hallLogWidth(w, save) {
+    const E = _hall.E, L = _hall.log;
+    if (!E) return;
+    const max = Math.max(HALL_LOG_W_MIN, Math.min(720, Math.round(window.innerWidth / _hall.ui * 0.6)));
+    w = Math.max(HALL_LOG_W_MIN, Math.min(max, Math.round(Number(w) || HALL_LOG_W_DEF)));
+    L.w = w;
+    E.root.style.setProperty('--hall-log-w', w + 'px');
+    if (save) { try { localStorage.setItem(HALL_LOG_W_KEY, String(w)); } catch (_) {} }
+    _hall.layoutDirty = true;
+}
+function _hallLogGripWire(E) {
+    const grip = E.logGrip;
+    if (!grip) return;
+    let id = -1;
+    grip.addEventListener('pointerdown', (e) => {
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        id = e.pointerId;
+        try { grip.setPointerCapture(id); } catch (_) {}
+        E.root.classList.add('log-sizing');
+        e.preventDefault();
+    });
+    grip.addEventListener('pointermove', (e) => {
+        if (e.pointerId !== id) return;
+        _hallLogWidth((window.innerWidth - e.clientX) / _hall.ui, false);
+    });
+    const up = (e) => {
+        if (e.pointerId !== id) return;
+        id = -1;
+        try { grip.releasePointerCapture(e.pointerId); } catch (_) {}
+        E.root.classList.remove('log-sizing');
+        _hallLogWidth(_hall.log.w, true);
+        E.logList.scrollTop = E.logList.scrollHeight;
+    };
+    grip.addEventListener('pointerup', up);
+    grip.addEventListener('pointercancel', up);
+    grip.addEventListener('dblclick', () => _hallLogWidth(HALL_LOG_W_DEF, true));
 }
 // نافذة المحادثة — the same log in a small window of its own, for whoever is presenting:
 // while they share a screen they are looking at another window, and the comments have to
@@ -48264,7 +48382,8 @@ function _hallZoomApply() {
     const mx = (z.s - 1) * z.w / 2, my = (z.s - 1) * z.h / 2;
     z.x = Math.max(-mx, Math.min(mx, z.x));
     z.y = Math.max(-my, Math.min(my, z.y));
-    E.video.style.transform = z.s === 1 ? '' : `translate(${z.x.toFixed(1)}px, ${z.y.toFixed(1)}px) scale(${z.s.toFixed(3)})`;
+    const u = _hall.ui;                               // the gesture is in screen px, the style in the room's
+    E.video.style.transform = z.s === 1 ? '' : `translate(${(z.x / u).toFixed(1)}px, ${(z.y / u).toFixed(1)}px) scale(${z.s.toFixed(3)})`;
     E.screen.classList.toggle('zm', z.s > 1);
 }
 function _hallZoomReset() {
@@ -48969,11 +49088,12 @@ function setupHallUI() {
         wait: $('hall-wait'), caster: $('hall-caster'),
         stageRow: $('hall-stage-row'), aud: $('hall-aud'), sideM: $('hall-side-m'), sideF: $('hall-side-f'),
         countM: $('hall-count-m'), countF: $('hall-count-f'),
-        reacts: $('hall-reacts'), say: $('hall-say'), share: $('hall-share'), kill: $('hall-kill'),
+        reacts: $('hall-reacts'), rxPrev: $('hall-rx-prev'), rxNext: $('hall-rx-next'), dock: $('hall-dock'), share: $('hall-share'), kill: $('hall-kill'),
         focusBtn: $('hall-focus-btn'), reqBtn: $('hall-req-btn'), reqN: $('hall-req-n'), reqs: $('hall-reqs'), reqList: $('hall-req-list'),
         leave: $('hall-leave'), end: $('hall-end'),
         compose: $('hall-compose'), input: $('hall-input'), hl: $('hall-input-hl'), send: $('hall-send'), men: $('hall-men'),
-        stk: $('hall-stk'), stkCap: $('hall-stk-cap'), stkGrid: $('hall-stk-grid'),
+        stk: $('hall-stk'), stkCap: $('hall-stk-cap'), stkGrid: $('hall-stk-grid'), stkBtn: $('hall-stk-btn'),
+        cmpSlot: $('hall-compose-slot'), logSlot: $('hall-log-slot'), logGrip: $('hall-log-grip'),
         log: $('hall-log'), logList: $('hall-log-list'), logEmpty: $('hall-log-empty'), logBtn: $('hall-log-btn'), popBtn: $('hall-pop-btn'), logN: $('hall-log-n'), logClose: $('hall-log-close'),
         confirm: $('hall-confirm'), confirmHead: $('hall-confirm-head'), confirmText: $('hall-confirm-text'),
         confirmYes: $('hall-confirm-yes'), confirmNo: $('hall-confirm-no'),
@@ -48987,11 +49107,32 @@ function setupHallUI() {
         ptsSum: $('hall-pts-sum'), ptsGo: $('hall-pts-go'), ptsSkip: $('hall-pts-skip'), ptsLater: $('hall-pts-later'),
     };
 
-    E.reacts.innerHTML = MEET_REACTIONS.map(r =>
+    E.reacts.innerHTML = HALL_REACTIONS.map(r =>
         `<button type="button" class="hall-react" data-r="${r.k}" title="${r.n}" aria-label="${r.n}"><span>${r.e}</span></button>`).join('');
     E.reacts.addEventListener('click', (e) => { const b = e.target.closest('.hall-react'); if (b) hallReact(b.dataset.r); });
+    // The strip scrolls sideways: a finger drags it, the wheel turns it, the two arrows
+    // step it. It is RTL — "more" is to the LEFT, a negative scroll.
+    E.reacts.addEventListener('wheel', (e) => {
+        if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return;
+        e.preventDefault();
+        E.reacts.scrollLeft -= e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
+    }, { passive: false });
+    const rxStep = (dir) => { try { E.reacts.scrollBy({ left: dir * 160, behavior: 'smooth' }); } catch (_) { E.reacts.scrollLeft += dir * 160; } };
+    if (E.rxPrev) E.rxPrev.addEventListener('click', () => rxStep(1));
+    if (E.rxNext) E.rxNext.addEventListener('click', () => rxStep(-1));
 
-    E.say.addEventListener('click', () => { if (_hall.cmp.open && !_hall.log.open) _hallComposeClose(); else _hallComposeOpen(); });
+    try { _hall.log.w = Number(localStorage.getItem(HALL_LOG_W_KEY)) || HALL_LOG_W_DEF; } catch (_) {}
+    _hallLogWidth(_hall.log.w, false);
+    _hallLogGripWire(E);
+    E.stkBtn.addEventListener('pointerdown', (e) => e.preventDefault());    // keep the caret and the keyboard
+    E.stkBtn.addEventListener('click', _hallStkBtnPress);
+    E.input.addEventListener('blur', () => setTimeout(_hallComposeFit, 80));
+    // A press anywhere outside the type box puts the sticker / mention popups away.
+    root.addEventListener('pointerdown', (e) => {
+        if (e.target.closest('#hall-compose')) return;
+        if (_hall.cmp.stk.open) { _hall.cmp.stk.dismissed = !_hall.cmp.stk.browse; _hallStkClose(); }
+        if (_hall.cmp.rows.length) _hallMenList(null);
+    });
     E.send.addEventListener('pointerdown', (e) => e.preventDefault());      // keep the keyboard up
     E.send.addEventListener('click', _hallComposeSend);
     E.input.addEventListener('input', _hallComposeInput);
@@ -49003,9 +49144,11 @@ function setupHallUI() {
     E.input.addEventListener('keydown', (e) => {
         e.stopPropagation();
         const c = _hall.cmp, open = c.rows.length > 0, s = c.stk;
-        if (s.open) {
-            // The grid is RTL, four across: ← is the next sticker.
-            const step = { ArrowLeft: 1, ArrowRight: -1, ArrowDown: 4, ArrowUp: -4 }[e.key];
+        if (s.open && s.browse && e.key === 'Escape') { e.preventDefault(); _hallStkClose(); return; }
+        if (s.open && !s.browse) {
+            // The grid is RTL: ← is the next sticker; ↓ a row (four across, five in the dock).
+            const cols = E.compose.parentNode === E.cmpSlot ? 5 : 4;
+            const step = { ArrowLeft: 1, ArrowRight: -1, ArrowDown: cols, ArrowUp: -cols }[e.key];
             if (step) { e.preventDefault(); _hallStkMove(step); return; }
             if (e.key === 'Escape') { e.preventDefault(); s.dismissed = true; _hallStkClose(); return; }
             if (e.key === 'Enter' || e.key === 'Tab') {
@@ -49173,10 +49316,10 @@ function setupHallUI() {
         if (e.ctrlKey || e.metaKey || e.altKey) return;
         if (e.key === 'Enter') { e.preventDefault(); _hallComposeOpen(); return; }
         const m = /^(?:Digit|Numpad)([1-6])$/.exec(e.code || '');
-        if (m) { const r = MEET_REACTIONS[Number(m[1]) - 1]; if (r) hallReact(r.k); }
+        if (m) { const r = HALL_REACTIONS[Number(m[1]) - 1]; if (r) hallReact(r.k); }
     }, true);
     root.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
-    const relayout = () => { if (_hall.in) { _hall.layoutDirty = true; _hallComposeFit(); } };
+    const relayout = () => { if (_hall.in) { _hallUiFit(); _hallLogWidth(_hall.log.w, false); _hall.layoutDirty = true; _hallComposeFit(); } };
     window.addEventListener('resize', relayout);
     window.visualViewport?.addEventListener('resize', relayout);
     window.visualViewport?.addEventListener('scroll', () => { if (_hall.in) _hallComposeFit(); });

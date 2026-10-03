@@ -14605,6 +14605,15 @@ body.is-mobile .dm-act { max-width: calc(100% - 16px); }
     -webkit-tap-highlight-color: transparent;
 }
 .hall.active { opacity: 1; visibility: visible; transition: opacity 0.35s ease, visibility 0s; }
+/* A big display: the whole room is laid out in a smaller box and scaled up to fill the
+   window — what the browser's own zoom does — so a 1080p screen reads like a laptop's.
+   `--hall-z` comes from game.js (`_hallUiFit`); 1 on phones and small windows. */
+.hall { --hall-z: 1; --hall-log-w: 320px; --hall-kb: 0px; }
+.hall.scaled {
+    right: auto; bottom: auto;
+    width: calc(100% / var(--hall-z)); height: calc(100% / var(--hall-z));
+    transform: scale(var(--hall-z)); transform-origin: 0 0;
+}
 .hall [hidden] { display: none !important; }
 
 /* The room: the screen's light, falling off into the dark. A flat colour under a
@@ -14662,7 +14671,7 @@ body.is-mobile .dm-act { max-width: calc(100% - 16px); }
 .hall-front { position: relative; flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; width: 100%; }
 .hall-screen {
     position: relative;
-    height: min(48dvh, calc((100vw - 28px) * 0.5625));
+    height: min(calc(48dvh / var(--hall-z)), calc((100vw / var(--hall-z) - 28px) * 0.5625));
     aspect-ratio: 16 / 9;
     max-width: 100%;
     border-radius: 14px;
@@ -14907,27 +14916,90 @@ body.is-mobile .dm-act { max-width: calc(100% - 16px); }
 @keyframes hallDot { 0%, 60%, 100% { transform: none; opacity: 0.45; } 30% { transform: translateY(-4px); opacity: 1; } }
 body.power-save .hall-dots i { animation: none; }
 
-/* ── the dock ── */
+/* ── the dock ── three islands in one row: reactions · the type box · icon buttons ── */
 .hall-dock {
     position: relative; z-index: 3; flex: 0 0 auto;
     display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 8px 12px;
-    padding: 8px 12px;
-    padding-bottom: max(10px, env(safe-area-inset-bottom));
+    padding: 10px 14px;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    transform: translateY(calc(-1 * var(--hall-kb)));     /* a phone keyboard lifts it */
+}
+.hall.kb .hall-dock { background: #0b0c11; border-radius: 18px 18px 0 0; }
+.hall-reacts-wrap {
+    flex: 0 1 auto; min-width: 0;
+    display: flex; align-items: center; gap: 2px; padding: 3px;
+    border-radius: 50px; background: var(--hall-card); border: 1px solid var(--hall-line);
 }
 .hall-reacts {
-    display: flex; gap: 2px; padding: 3px; border-radius: 50px;
-    background: var(--hall-card); border: 1px solid var(--hall-line);
+    flex: 0 1 240px; min-width: 0;                         /* six in view, the rest scroll */
+    display: flex; gap: 0; overflow-x: auto; overscroll-behavior: contain;
+    scrollbar-width: none; scroll-snap-type: x proximity;
     transition: opacity 0.2s ease;
 }
+.hall-reacts::-webkit-scrollbar { display: none; }
 .hall-reacts.cool { opacity: 0.55; }
 .hall-reacts.is-off { opacity: 0.35; filter: grayscale(1); }
 .hall-react {
-    width: 38px; height: 38px; border: 0; border-radius: 50%; background: none; cursor: pointer;
-    font-size: 1.2rem; line-height: 1; display: grid; place-items: center;
+    flex: 0 0 40px; width: 40px; height: 40px; border: 0; border-radius: 50%; background: none; cursor: pointer;
+    font-size: 1.25rem; line-height: 1; display: grid; place-items: center; scroll-snap-align: start;
     transition: transform 0.2s var(--bounce), background 0.15s ease;
 }
 .hall-react:active { transform: scale(0.86); }
-.hall-actions { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 6px; }
+.hall-rx-nav {
+    flex: 0 0 auto; width: 22px; height: 34px; border: 0; border-radius: 50px; cursor: pointer;
+    background: none; color: #74767e; display: none; place-items: center; padding: 0;
+}
+.hall-compose-slot { flex: 0 1 460px; min-width: 220px; }
+.hall.log-open .hall-compose-slot { display: none; }
+.hall-actions {
+    flex: 0 0 auto; display: flex; align-items: center; justify-content: center; gap: 6px;
+    padding: 4px; border-radius: 50px; background: var(--hall-card); border: 1px solid var(--hall-line);
+}
+.hall-actions-sep { width: 1px; height: 22px; background: #30333f; }
+/* A round icon button. Its name is `data-tip` (shown on hover with a mouse) + aria-label. */
+.hall-ibtn, .hall-cbtn {
+    position: relative; flex: 0 0 auto; display: grid; place-items: center; padding: 0;
+    border: 0; border-radius: 50%; cursor: pointer; font: inherit;
+    transition: transform 0.2s var(--bounce), background 0.15s ease, color 0.15s ease;
+}
+.hall-ibtn { width: 42px; height: 42px; background: #1f2129; color: #e4e5ea; }
+.hall-ibtn:active, .hall-cbtn:active { transform: scale(0.9); }
+.hall-ibtn.on { background: #e9eaee; color: #14151b; }
+.hall-ibtn.warn { background: #2b2410; color: var(--brand-yellow); }
+.hall-ibtn.danger, .hall-ibtn.leave { background: #2a1114; color: #ff9d95; }
+.hall-ibtn.leave.on { background: var(--brand-yellow); color: #201a05; }
+.hall-ibtn.end { background: #d93a33; color: #ffffff; }
+.hall-ibtn.is-off { opacity: 0.45; }
+.hall-badge {
+    position: absolute; top: -4px; inset-inline-end: -4px;
+    display: grid; place-items: center; min-width: 19px; height: 19px; padding: 0 5px;
+    border-radius: 50px; background: var(--brand-red, #e5484d); color: #ffffff;
+    box-shadow: 0 0 0 2px var(--hall-card);
+    font-size: 0.66rem; font-weight: 800; line-height: 1;
+}
+.hall-ibtn.warn .hall-badge { background: var(--brand-yellow); color: #201a05; }
+.hall-cbtn { width: 36px; height: 36px; background: none; color: #a9abb3; }
+.hall-cbtn.on { background: #2a2d38; color: #ffffff; }
+@media (hover: hover) and (pointer: fine) {
+    .hall-rx-nav { display: grid; }
+    .hall-rx-nav:hover { background: #23252e; color: #e4e5ea; }
+    .hall-ibtn:hover { background: #2c2f3b; transform: translateY(-2px); }
+    .hall-ibtn.on:hover { background: #ffffff; }
+    .hall-ibtn.warn:hover { background: #3a3014; }
+    .hall-ibtn.danger:hover, .hall-ibtn.leave:hover { background: #3f171b; }
+    .hall-ibtn.leave.on:hover { background: #ffd84a; }
+    .hall-ibtn.end:hover { background: #f04d39; }
+    .hall-cbtn:hover { background: #23252e; color: #ffffff; }
+    .hall-ibtn[data-tip]:hover::after, .hall-cbtn[data-tip]:hover::after {
+        content: attr(data-tip);
+        position: absolute; z-index: 20; bottom: calc(100% + 10px); left: 50%;
+        transform: translateX(-50%);
+        padding: 4px 10px; border-radius: 9px;
+        background: #e9eaee; color: #14151b;
+        font-size: 0.74rem; font-weight: 700; white-space: nowrap; pointer-events: none;
+        box-shadow: 0 10px 24px -10px #000;
+    }
+}
 .hall-btn {
     display: inline-flex; align-items: center; gap: 6px;
     padding: 8px 15px; border-radius: 50px; cursor: pointer;
@@ -14942,7 +15014,7 @@ body.power-save .hall-dots i { animation: none; }
 .hall-btn.danger { background: #2a1114; border-color: #5a2020; color: #ff9d95; }
 .hall-btn.is-off { opacity: 0.45; }
 @media (hover: hover) and (pointer: fine) {
-    .hall-react:hover { background: #23252e; transform: scale(1.12); }
+    .hall-react:hover { background: #23252e; transform: scale(1.14); }
     .hall-btn:hover { background: #1d1f27; border-color: #454958; }
     .hall-btn.on:hover { background: #fff; }
     .hall-btn.danger:hover { background: #3a161a; }
@@ -14964,36 +15036,39 @@ body.power-save .hall-dots i { animation: none; }
 .hall-req-btn { padding: 5px 12px; border-radius: 50px; cursor: pointer; background: #23252e; border: 1px solid #353846; color: #e4e5ea; font: inherit; font-size: 0.76rem; font-weight: 700; }
 .hall-req-btn.yes { background: #12301f; border-color: #1f5a37; color: #9be5bd; }
 
+/* The type box: always there — in the dock's middle, or under the open log (game.js
+   moves the ONE element between `#hall-compose-slot` and `#hall-log-slot`). */
 .hall-compose {
-    position: absolute; z-index: 14; bottom: 76px; left: 50%;
-    width: min(460px, calc(100vw - 20px));
-    display: flex; align-items: center; gap: 6px;
-    padding: 6px; border-radius: 50px;
-    background: #171920; border: 1px solid #3a3e4c; box-shadow: 0 24px 50px -18px #000;
-    transform: translateX(-50%) translateY(10px);
-    opacity: 0; visibility: hidden;
-    transition: opacity 0.18s ease, transform 0.25s var(--bounce), visibility 0s linear 0.25s;
+    position: relative;
+    display: flex; align-items: center; gap: 4px;
+    padding: 5px; border-radius: 50px;
+    background: #171920; border: 1px solid #30333f;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.2s ease;
 }
-.hall-compose.show { opacity: 1; visibility: visible; transform: translateX(-50%); transition: opacity 0.18s ease, transform 0.25s var(--bounce), visibility 0s; }
-.hall-input-wrap { position: relative; flex: 1 1 auto; min-width: 0; height: 38px; border-radius: 50px; }
+.hall-compose:focus-within { border-color: #565b70; box-shadow: 0 0 0 3px rgba(120, 140, 255, 0.14); }
+.hall-compose.is-off { opacity: 0.5; }
+.hall-compose .hall-send { transition: background 0.15s ease, color 0.15s ease, transform 0.2s var(--bounce); }
+.hall-compose:not(.has-text) .hall-send { background: #262933; color: #74767e; }
+.hall-send:active { transform: scale(0.9); }
+.hall-input-wrap { position: relative; flex: 1 1 auto; min-width: 0; height: 36px; border-radius: 50px; }
 /* Behind the box: the same text, invisible — only a mention's background shows. */
 .hall-input-hl {
     position: absolute; inset: 0; padding: 0 14px; overflow: hidden; pointer-events: none;
-    white-space: pre; line-height: 38px; color: transparent;
-    font: inherit; font-size: 16px; font-weight: 600; line-height: 38px;
+    white-space: pre; line-height: 36px; color: transparent;
+    font: inherit; font-size: 16px; font-weight: 600; line-height: 36px;
 }
 .hall-input-hl .hall-tag { padding: 0; font-weight: inherit; color: transparent; background: #2b3157; box-shadow: 0 0 0 2px #2b3157; border-radius: 4px; }
 /* A mention, in a seat's bubble and in the log. */
 .hall-tag { padding: 0 4px; border-radius: 6px; background: #2b3157; color: #c7d0ff; font-weight: 700; }
 .hall-tag.me { background: #4a3d10; color: #ffe58a; }
 .hall-input {
-    position: relative; display: block; width: 100%; height: 38px; padding: 0 14px;
+    position: relative; display: block; width: 100%; height: 36px; padding: 0 14px;
     background: none; border: 0; outline: 0;
     color: #f1f1f3; font: inherit; font-size: 16px; font-weight: 600;   /* 16px: iOS zooms the page under that */
     -webkit-user-select: text; user-select: text;
 }
 .hall-input::placeholder { color: #74767e; }
-.hall-send { flex: 0 0 auto; width: 38px; height: 38px; border: 0; border-radius: 50%; cursor: pointer; background: #e9eaee; color: #14151b; display: grid; place-items: center; }
+.hall-send { flex: 0 0 auto; width: 36px; height: 36px; border: 0; border-radius: 50%; cursor: pointer; background: #e9eaee; color: #14151b; display: grid; place-items: center; }
 .hall-men {
     position: absolute; bottom: calc(100% + 8px); left: 0; right: 0;
     display: none; flex-direction: column; padding: 5px; border-radius: 18px;
@@ -15012,6 +15087,7 @@ body.power-save .hall-dots i { animation: none; }
 }
 .hall-stk.show { display: block; }
 .hall-stk .chat-stk-grid { max-height: min(236px, 34dvh); }
+.hall-compose-slot .hall-stk .chat-stk-grid { grid-template-columns: repeat(5, 1fr); }
 .hall-bubble.stk { padding: 5px; }
 .hall-stk-img { display: block; width: 84px; height: 84px; object-fit: contain; }
 body.is-mobile .hall-stk-img { width: 64px; height: 64px; }
@@ -15020,24 +15096,34 @@ body.is-mobile .hall-stk-img { width: 64px; height: 64px; }
    room makes way for it, on a narrow one it lies over the room. */
 .hall-log {
     position: absolute; z-index: 13; top: 0; bottom: 0; right: 0;
-    width: min(320px, 88vw);
+    bottom: var(--hall-kb);
+    width: min(var(--hall-log-w), 88vw);
     display: flex; flex-direction: column;
     background: #0f1015; border-left: 1px solid var(--hall-line);
     box-shadow: -30px 0 60px -30px #000;
-    padding-bottom: calc(59px + env(safe-area-inset-bottom));      /* the type bar docks here */
     transform: translateX(100%);
     visibility: hidden;
     transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s linear 0.28s;
 }
-/* With the log open the type bar is docked under it and always there, like a chat app's. */
-.hall.log-open .hall-compose {
-    left: auto; right: 0; bottom: 0; width: min(320px, 88vw);
-    padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
-    border: 0; border-top: 1px solid var(--hall-line); border-radius: 0;
-    background: #0f1015; box-shadow: none;
-    transform: none; opacity: 1; visibility: visible; transition: none;
+/* With the log open the type box lives under it, like a chat app's. */
+.hall-log-slot {
+    flex: 0 0 auto; padding: 10px; padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    border-top: 1px solid var(--hall-line);
 }
-.hall.log-open .hall-input-wrap { background: #1b1d25; }
+.hall-log-slot:empty { display: none; }
+.hall-log-slot .hall-compose { background: #1b1d25; }
+/* The drawer's inner edge is a handle: drag it to make the log wider (a PC only). */
+.hall-log-grip {
+    position: absolute; z-index: 2; top: 0; bottom: 0; left: -5px; width: 11px;
+    display: none; cursor: ew-resize; touch-action: none;
+}
+.hall-log-grip::after {
+    content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 3px;
+    background: var(--brand-blue); opacity: 0; transition: opacity 0.15s ease;
+}
+.hall-log-grip:hover::after, .hall.log-sizing .hall-log-grip::after { opacity: 1; }
+.hall.log-sizing, .hall.log-sizing * { cursor: ew-resize; -webkit-user-select: none; user-select: none; }
+.hall.log-sizing .hall-log { transition: none; }
 .hall.log-open .hall-log { transform: none; visibility: visible; transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), visibility 0s; }
 .hall-log-head {
     flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -15050,6 +15136,15 @@ body.is-mobile .hall-stk-img { width: 64px; height: 64px; }
     flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
     padding: 6px 12px 14px;
     -webkit-user-select: text; user-select: text;
+    /* No bright system scrollbar: nothing at rest, a thin dark one while the pointer is on the log. */
+    scrollbar-width: thin; scrollbar-color: transparent transparent;
+}
+.hall-log:hover .hall-log-list { scrollbar-color: #30333f transparent; }
+@supports not (scrollbar-color: auto) {
+    .hall-log-list::-webkit-scrollbar { width: 6px; }
+    .hall-log-list::-webkit-scrollbar-track { background: transparent; }
+    .hall-log-list::-webkit-scrollbar-thumb { background: transparent; border-radius: 6px; }
+    .hall-log:hover .hall-log-list::-webkit-scrollbar-thumb { background: #30333f; }
 }
 .hall-log-empty { position: absolute; top: 50%; left: 18px; right: 18px; text-align: center; font-size: 0.82rem; font-weight: 600; line-height: 1.7; color: var(--hall-ink-3); }
 .hall-log-row { position: relative; padding: 10px 44px 0 0; }
@@ -15065,10 +15160,11 @@ body.is-mobile .hall-stk-img { width: 64px; height: 64px; }
 .hall-log-text { font-size: 0.86rem; font-weight: 600; line-height: 1.55; color: #d9dae0; overflow-wrap: anywhere; text-align: right; }
 .hall-log-row.men .hall-log-text { margin: 0 -6px; padding: 2px 6px; border-radius: 8px; background: #2b2410; color: #f6e7a8; }
 .hall-log-stk { display: block; width: 92px; height: 92px; object-fit: contain; margin-top: 2px; }
-.hall-log-n { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 50px; background: var(--brand-red, #e5484d); color: #fff; font-size: 0.72rem; }
 @media (min-width: 900px) {
-    body:not(.is-mobile) .hall.log-open { padding-right: 320px; }
-    body:not(.is-mobile) .hall.log-open .hall-reqs { left: calc(50% - 160px); }
+    body:not(.is-mobile) .hall.log-open { padding-right: var(--hall-log-w); }
+    body:not(.is-mobile) .hall.log-open .hall-reqs { left: calc(50% - var(--hall-log-w) / 2); }
+    body:not(.is-mobile) .hall-log { width: var(--hall-log-w); }
+    body:not(.is-mobile) .hall-log-grip { display: block; }
 }
 .hall-men-av { flex: 0 0 auto; width: 26px; height: 26px; border-radius: 50%; background: #2a2c34 center / cover no-repeat; display: grid; place-items: center; font-size: 0.72rem; color: #e8e8ea; }
 
@@ -15102,9 +15198,19 @@ body.is-mobile .hall-main { padding: 2px 8px 0; }
 body.is-mobile .hall-screen { height: min(40dvh, calc((100vw - 16px) * 0.5625)); border-radius: 10px; }
 body.is-mobile .hall-dock { gap: 6px; padding: 6px 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); }
 body.is-mobile .hall-btn { padding: 7px 12px; font-size: 0.76rem; }
-body.is-mobile .hall-react { width: 34px; height: 34px; font-size: 1.08rem; }
-body.is-mobile .hall-compose { bottom: 118px; }
+body.is-mobile .hall-react { flex-basis: 36px; width: 36px; height: 36px; font-size: 1.12rem; }
+body.is-mobile .hall-ibtn { width: 38px; height: 38px; }
+body.is-mobile .hall-actions { gap: 4px; padding: 3px; }
 body.is-mobile .hall-reqs { bottom: 118px; }
+/* A phone or a narrow window: the type box takes the first row, the rest share the second. */
+body.is-mobile .hall-compose-slot { order: -1; flex: 1 1 100%; }
+body.is-mobile .hall-reacts-wrap { flex: 1 1 120px; }
+body.is-mobile .hall-reacts { flex: 1 1 auto; }
+@media (max-width: 900px) {
+    .hall-compose-slot { order: -1; flex: 1 1 100%; }
+    .hall-reacts-wrap { flex: 1 1 120px; }
+    .hall-reacts { flex: 1 1 auto; }
+}
 @media (max-width: 560px) {
     .hall-pill.voice span { display: none; }
     .hall-pill.voice { padding: 6px; }
@@ -15118,7 +15224,8 @@ body.is-mobile .hall-reqs { bottom: 118px; }
     .hall-aud { flex: 1 1 0; width: auto; padding: 0; }
     .hall-spill { height: 18px; }
     .hall-stage { margin-top: -14px; padding-bottom: 8px; }
-    .hall-compose, body.is-mobile .hall-compose, .hall-reqs, body.is-mobile .hall-reqs { bottom: 64px; }
+    .hall-reqs, body.is-mobile .hall-reqs { bottom: 64px; }
+    .hall-compose-slot, body.is-mobile .hall-compose-slot { order: 0; flex: 1 1 200px; }
 }
 @media (prefers-reduced-motion: reduce) {
     .hall-walk { transition: none; }

@@ -2470,6 +2470,23 @@ hidden tab is pulled in when it is looked at again.
 - **Its own timers, not the frame loop**: `_hallTick` (125 ms `setInterval`) and
   `_hallSlowTick` (5 s: hi, stale people, the beat). The loop idles at the calm rate under
   an overlay and stops in a hidden tab — and people flip to Discord all meeting.
+- **The dock** (`#hall-dock`, redesigned Oct 3): three islands in one centred row —
+  the reactions strip, the type box, and round ICON buttons (`.hall-ibtn`; their name is
+  `data-tip` + `aria-label`, written by `_hallTip`, shown as a hover tooltip with a mouse —
+  never set `textContent` on them, it would wipe the SVG). Counts are `.hall-badge`.
+  On a phone / under 900px the type box takes the first row.
+- **The type box is always on screen** (`#hall-compose`): ONE element that `_hallLogSet`
+  MOVES between `#hall-compose-slot` (the dock's middle) and `#hall-log-slot` (under the
+  open log). `cmp.open` now means "the caret is in it"; there is no «تعليق» button and no
+  `.show` class. A phone keyboard lifts the dock / the log through `--hall-kb`
+  (`_hallComposeFit`, only while the input has the focus).
+- **Big displays** (`_hallUiFit`, `_hall.ui`, `--hall-z`, `.hall.scaled`): the room is laid
+  out in a box `1/z` of the window and `transform: scale(z)`d to fill it — what browser
+  zoom does (z = min(w/`HALL_UI_W`, h/`HALL_UI_H`), 1 under 1.04 and on phones, max
+  `HALL_UI_MAX`). **Rects and pointer positions are SCREEN px; any px written back as a
+  style inside the room is divided by `_hall.ui`** (`_hallFly`, the bubble's `--bx`,
+  `_hallZoomApply`, `_hallLogWidth`). Viewport units inside the room are divided by
+  `var(--hall-z)`. The transform makes `.hall` the containing block of its `fixed` children.
 - **Comments**: the hall's OWN input (`#hall-input`, a plain `<input>`, 100 chars), not the
   world chat box. `@` lists attendees; a mention is `@name` text + `men:[uids]`. A comment
   floats over the seat (`--bx` nudges it on screen). **Focus mode** (`meeting/focus`):
@@ -2488,6 +2505,9 @@ hidden tab is pulled in when it is looked at again.
   mention's background (`_hallInputPaint`, `raw` = every character kept so it lines up; its
   `scrollLeft` follows the input's). The input's own text stays visible — if the layer is
   off by a hair (an emoji image on a non-Apple device) only the highlight shifts.
+- **The sticker button** (`#hall-stk-btn`, `_hallStkBtnPress`): on an empty box it types
+  «/» (again takes it back); with text typed it opens the whole set (`stk.browse` — a pick
+  sends and the text stays; arrows / Enter belong to the text then).
 - **Stickers**: a comment that STARTS with «/» (not «//») searches them (`_hallStkQuery`,
   `_hallStkUpdate`, popup `#hall-stk`, the world chat's tile classes); arrows move, Enter
   or a press sends `{t:'hc', uid, m:'', k:<name>}` (`_hallStkSend`) — an older page drops
@@ -2497,16 +2517,16 @@ hidden tab is pulled in when it is looked at again.
   comment/sticker `_hallShowComment` shows is appended — memory only, what THIS client
   heard, capped at `HALL_LOG_MAX`, kept across a rejoin of the same meeting id. Open
   state per device (`HALL_LOG_KEY`; never auto-open on a phone). ≥ 900px wide the room
-  gets `padding-right: 320px` (then `layoutDirty`); narrower it lies over the room.
+  gets `padding-right: var(--hall-log-w)` (then `layoutDirty`); narrower it lies over the
+  room. **Its width is dragged by its inner edge** on a PC (`#hall-log-grip`,
+  `_hallLogGripWire`, `_hallLogWidth`: 280 → 60% of the room, kept in `HALL_LOG_W_KEY`,
+  double-click resets). Its scrollbar is transparent at rest, thin and dark on hover.
   Text keeps `dir="auto"` (word order) but is ALWAYS right-aligned; a sticker row is
   `dir="rtl"` (an image alone resolves to ltr and sat on the left). A ring colour too dark
   to read (`_hallDarkHex`) leaves the name white.
-- **The type bar docks under the open log** (CSS only: `.hall.log-open .hall-compose` — the
-  same ONE `#hall-compose`, always visible there). A press in it opens it (`focus` →
-  `_hallComposeOpen`, which is idempotent); after a send it stays with the caret
-  (`_hallComposeDone`), floating over the room it closes as before. Opening the log by a
-  press on a PC focuses it. `_hallComposeFit` clears its keyboard lift when closed, or the
-  docked bar would stay floating. `.hall-log` reserves the bar's height as bottom padding.
+- **The type box under the open log** is the same ONE `#hall-compose` (moved there, see
+  the dock above). After a send it stays with the caret (`_hallComposeDone`) wherever it
+  is. Opening the log by a press on a PC focuses it.
 - **نافذة المحادثة** (`#hall-pop-btn`, `_hallPopToggle`, `_hallPopBuild`, `_hallPopAdd`,
   `_hallPopSync`, `_hallPopClose`, `HALL_POP_CSS`): the log in a small window of its own, for
   whoever is sharing a screen (they are looking at another window). Chrome / Edge: Document
@@ -2519,7 +2539,10 @@ hidden tab is pulled in when it is looked at again.
   the bar); no picker — a mention is «@name» typed out; a refused send flashes it red.
 - **The fireplace crackle is silent in the hall** (`updateFireplaceAmbient` checks
   `_hall.in / entering`; `_hallEnter` zeroes it at once).
-- **Reactions**: the table's six (`MEET_REACTIONS`, keys 1–6), the avatar animation
+- **Reactions**: `HALL_REACTIONS` = the table's six (keys 1–6) + more (😭 💀 🎉 🔥 🥀 …) in
+  a strip that scrolls sideways (drag, wheel, two arrows; RTL — "more" is a negative
+  scroll). Each extra borrows one of the six motions / voices (`a`); an older page drops
+  a key it doesn't know. The avatar animation
   reuses the `rx*` keyframes, plus emoji that fly up the room (`_hallFly`).
 - **Leaving**: a member asks (`hl`), a moderator answers (`hla`) → `out/{uid}` is written,
   the hall closes, and `#hall-card` offers «العودة إلى الاجتماع» / «متابعة العمل» while

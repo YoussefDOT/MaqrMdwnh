@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 391 · Updated 10/3 1:37 PM</div>
+    <div id="build-number" class="build-number">Build 392 · Updated 10/3 2:17 PM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1993,18 +1993,41 @@
                 </div>
             </section>
         </div>
-        <footer class="hall-dock">
-            <div id="hall-reacts" class="hall-reacts" role="group" aria-label="التفاعلات"></div>
+        <footer id="hall-dock" class="hall-dock">
+            <div class="hall-reacts-wrap">
+                <button id="hall-rx-prev" class="hall-rx-nav" type="button" aria-label="التفاعلات السابقة"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+                <div id="hall-reacts" class="hall-reacts" role="group" aria-label="التفاعلات"></div>
+                <button id="hall-rx-next" class="hall-rx-nav" type="button" aria-label="تفاعلات أخرى"><svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
+            </div>
+            <div id="hall-compose-slot" class="hall-compose-slot">
+                <div id="hall-compose" class="hall-compose">
+                    <div id="hall-men" class="hall-men" role="listbox"></div>
+                    <div id="hall-stk" class="hall-stk">
+                        <div id="hall-stk-cap" class="chat-stk-cap"></div>
+                        <div id="hall-stk-grid" class="chat-stk-grid" role="listbox" aria-label="الملصقات"></div>
+                    </div>
+                    <div class="hall-input-wrap">
+                        <div id="hall-input-hl" class="hall-input-hl" dir="rtl" aria-hidden="true"></div>
+                        <input id="hall-input" class="hall-input" type="text" maxlength="100" dir="rtl" autocomplete="off" enterkeyhint="send" placeholder="اكتب تعليقًا… (@ للإشارة)">
+                    </div>
+                    <button id="hall-stk-btn" class="hall-cbtn" type="button" aria-label="الملصقات" data-tip="الملصقات">
+                        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3Z"/><path d="M14 3v4a2 2 0 0 0 2 2h4"/><path d="M8 13h.01M16 13h.01"/><path d="M10 16s.8 1 2 1c1.3 0 2-1 2-1"/></svg>
+                    </button>
+                    <button id="hall-send" class="hall-send" type="button" aria-label="إرسال">
+                        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                </div>
+            </div>
             <div class="hall-actions">
-                <button id="hall-say" class="hall-btn" type="button">تعليق</button>
-                <button id="hall-log-btn" class="hall-btn" type="button">سجل المحادثة <b id="hall-log-n" class="hall-log-n" hidden></b></button>
-                <button id="hall-pop-btn" class="hall-btn" type="button" hidden>نافذة المحادثة</button>
-                <button id="hall-share" class="hall-btn" type="button" hidden>مشاركة الشاشة</button>
-                <button id="hall-kill" class="hall-btn" type="button" hidden>إيقاف المشاركة</button>
-                <button id="hall-focus-btn" class="hall-btn" type="button" hidden>وضع التركيز</button>
-                <button id="hall-req-btn" class="hall-btn warn" type="button" hidden>طلبات المغادرة <b id="hall-req-n"></b></button>
-                <button id="hall-leave" class="hall-btn" type="button">طلب المغادرة</button>
-                <button id="hall-end" class="hall-btn danger" type="button" hidden>إنهاء الاجتماع</button>
+                <button id="hall-log-btn" class="hall-ibtn" type="button" data-tip="سجل المحادثة" aria-label="سجل المحادثة"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/></svg><b id="hall-log-n" class="hall-badge" hidden></b></button>
+                <button id="hall-pop-btn" class="hall-ibtn" type="button" data-tip="نافذة المحادثة" aria-label="نافذة المحادثة" hidden><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><rect x="12" y="12" width="6" height="4" rx="1" fill="currentColor" stroke="none"/></svg></button>
+                <button id="hall-share" class="hall-ibtn" type="button" data-tip="مشاركة الشاشة" aria-label="مشاركة الشاشة" hidden><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="M12 13V8M9.5 10.5 12 8l2.5 2.5"/></svg></button>
+                <button id="hall-kill" class="hall-ibtn danger" type="button" data-tip="إيقاف المشاركة" aria-label="إيقاف المشاركة" hidden><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/><path d="m9.5 7.5 5 5M14.5 7.5l-5 5"/></svg></button>
+                <button id="hall-focus-btn" class="hall-ibtn" type="button" data-tip="وضع التركيز" aria-label="وضع التركيز" hidden><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="7"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/></svg></button>
+                <button id="hall-req-btn" class="hall-ibtn warn" type="button" data-tip="طلبات المغادرة" aria-label="طلبات المغادرة" hidden><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 11V6a2 2 0 0 0-4 0"/><path d="M14 10V4a2 2 0 0 0-4 0v2"/><path d="M10 10.5V6a2 2 0 0 0-4 0v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg><b id="hall-req-n" class="hall-badge"></b></button>
+                <span class="hall-actions-sep" aria-hidden="true"></span>
+                <button id="hall-leave" class="hall-ibtn leave" type="button" data-tip="طلب المغادرة" aria-label="طلب المغادرة"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="M16 17l5-5-5-5M21 12H9"/></svg></button>
+                <button id="hall-end" class="hall-ibtn end" type="button" data-tip="إنهاء الاجتماع" aria-label="إنهاء الاجتماع" hidden><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/></svg></button>
             </div>
         </footer>
         <div id="hall-reqs" class="hall-reqs">
@@ -2012,6 +2035,7 @@
             <div id="hall-req-list"></div>
         </div>
         <aside id="hall-log" class="hall-log" aria-label="سجل المحادثة">
+            <div id="hall-log-grip" class="hall-log-grip" role="separator" aria-orientation="vertical" aria-label="اسحب لتغيير عرض السجل"></div>
             <div class="hall-log-head">
                 <span>سجل المحادثة</span>
                 <button id="hall-log-close" class="hall-log-close" type="button" aria-label="إخفاء السجل">
@@ -2020,21 +2044,8 @@
             </div>
             <div id="hall-log-list" class="hall-log-list"></div>
             <div id="hall-log-empty" class="hall-log-empty">لا تعليقات بعد — ما يُكتب في الاجتماع يظهر هنا.</div>
+            <div id="hall-log-slot" class="hall-log-slot"></div>
         </aside>
-        <div id="hall-compose" class="hall-compose">
-            <div id="hall-men" class="hall-men" role="listbox"></div>
-            <div id="hall-stk" class="hall-stk">
-                <div id="hall-stk-cap" class="chat-stk-cap"></div>
-                <div id="hall-stk-grid" class="chat-stk-grid" role="listbox" aria-label="الملصقات"></div>
-            </div>
-            <div class="hall-input-wrap">
-                <div id="hall-input-hl" class="hall-input-hl" dir="rtl" aria-hidden="true"></div>
-                <input id="hall-input" class="hall-input" type="text" maxlength="100" dir="rtl" autocomplete="off" enterkeyhint="send" placeholder="اكتب تعليقًا… (@ للإشارة، / للملصقات)">
-            </div>
-            <button id="hall-send" class="hall-send" type="button" aria-label="إرسال">
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            </button>
-        </div>
         <div id="hall-confirm" class="hall-confirm" role="alertdialog" aria-modal="true" aria-labelledby="hall-confirm-head">
             <div class="hall-confirm-card">
                 <div id="hall-confirm-head" class="hall-confirm-head"></div>
@@ -2687,7 +2698,7 @@
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
         <link rel="modulepreload" href="firebase-config.js?v=4">
-        <script type="module" src="game.js?v=362"></script>
+        <script type="module" src="game.js?v=363"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 
