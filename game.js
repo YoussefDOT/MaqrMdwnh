@@ -36306,12 +36306,20 @@ function _jumpFx(player, now) {
     if (j.k === 'off') {
         // Walked off an edge: a drop that accelerates, reaching the ground exactly when
         // the airborne window ends, then the landing squash over what's left.
+        // EVERY value starts and ends where the standing avatar already is — nothing
+        // may change in one frame. It used to begin 18 px up with a 5% stretch and
+        // land straight into an 18% squash: three one-frame snaps, the last of them
+        // "the size snaps when he hits the ground".
         if (t < JUMP_OFF_AIR) {
             const u = t / JUMP_OFF_AIR;
-            return { dy: -JUMP_OFF_LIFT * (1 - u * u), s: 1, sx: 1 - 0.05 * (1 - u), sy: 1 + 0.05 * (1 - u) };
+            const arc = Math.sin(u * Math.PI);            // 0 → 1 → 0
+            const st = u * u * (1 - u) * 4;               // the stretch builds late, gone at touchdown
+            return { dy: -JUMP_OFF_LIFT * 0.6 * arc, s: 1, sx: 1 - 0.04 * st, sy: 1 + 0.05 * st };
         }
-        const r = 1 - easeOutBack(Math.max(0.0001, (t - JUMP_OFF_AIR) / (1 - JUMP_OFF_AIR)));
-        return { dy: 0, s: 1, sx: 1 + 0.18 * r, sy: 1 - 0.18 * r };
+        // The landing: a soft squash that eases IN, then springs back out.
+        const v = (t - JUMP_OFF_AIR) / (1 - JUMP_OFF_AIR);
+        const r = Math.sin(Math.PI * v) * (1 - v) * 1.3;
+        return { dy: 0, s: 1, sx: 1 + 0.09 * r, sy: 1 - 0.09 * r };
     }
     if (j.k === 'fall') {
         // Picks up from wherever the jump was (dy0 / s0) and falls AWAY from the
