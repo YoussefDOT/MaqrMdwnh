@@ -2474,7 +2474,7 @@ hidden tab is pulled in when it is looked at again.
   (`isReducedGraphics()`) keeps the still glow and drops the rim. No backdrop-filter.
 
 ### The screen share (WebRTC)
-One sharer at a time (stage or moderator; the earlier `at` wins a tie). Desktop browsers
+One sharer at a time, and ONLY someone on the stage (a moderator in the seats cannot — owner's rule; a sharer sent back down stops sharing). The earlier `at` wins a tie. Desktop browsers
 only — no phone has `getDisplayMedia`; phones watch. Press the screen to zoom it.
 - **SFU when the relay has its keys** (`/rtc/ok` → `{ok:true}`): `_hallSfuPublish` /
   `_hallViewStart` go through the relay's `/rtc/pub|sub|ans` (`rtcHandle` in

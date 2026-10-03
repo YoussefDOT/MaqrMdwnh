@@ -47181,7 +47181,8 @@ function _hallRefreshDock() {
     const me = gameState.userId, mod = _hallIsMod(me), stage = _hallOnStage(me);
     const sh = _hall.share, mine = !!_hall.cast;
     const canCast = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);   // no phone has it
-    E.share.hidden = !(mine || ((stage || mod) && canCast && !sh));
+    // The screen belongs to the stage: a moderator in the seats cannot share either.
+    E.share.hidden = !(mine || (stage && canCast && !sh));
     E.share.textContent = mine ? 'إيقاف المشاركة' : 'مشاركة الشاشة';
     E.share.classList.toggle('on', mine);
     E.kill.hidden = !(mod && sh && !sh.mine);
@@ -47211,6 +47212,8 @@ function _hallTick() {
     let key = '';
     for (const p of _hall.people.values()) key += p.uid + (_hallOnStage(p.uid) ? 'S' : p.g) + '|';
     if (_hall.layoutDirty || key !== _hall.tickKey) { _hall.tickKey = key; _hallLayout(); }
+    // Sent back down to the seats while sharing: the screen goes with the stage.
+    if (_hall.cast && !_hallOnStage(gameState.userId)) { _hallCastStop(); _libToast('توقفت مشاركة شاشتك — نزلت عن المنصة'); }
     const bucket = Math.floor(now / HALL_WANDER_MS);
     for (const p of _hall.people.values()) {
         const el = p.el;
@@ -47819,6 +47822,7 @@ async function _hallSfuProbe() {
 
 async function _hallCastStart() {
     if (!_hall.in || _hall.cast) return;
+    if (!_hallOnStage(gameState.userId)) { _libToast('مشاركة الشاشة لمن على المنصة فقط'); return; }
     if (_hall.share) { _libToast('هناك من يشارك شاشته الآن'); return; }
     if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) { _libToast('هذا المتصفح لا يدعم مشاركة الشاشة'); return; }
     let stream;
