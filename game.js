@@ -46646,21 +46646,29 @@ function _hallEnsureSounds() {
     const fe = gameState.focusAudioEngine;
     try { if (fe && !fe.ctx) fe.init(); } catch (_) {}
     if (!fe || !fe.ctx) return;
-    _hall.sndBusy = _hall.sndBusy || {};
+    _hall.sndLoad = _hall.sndLoad || {};
     [['meetingStart', 'Sound/meeting_start.mp3'], ['meetingLoaded', 'Sound/meeting_loaded.mp3']].forEach(([key, url]) => {
-        if (fe.buffers[key] || _hall.sndBusy[key]) return;
-        _hall.sndBusy[key] = true;
-        fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+        if (fe.buffers[key] || _hall.sndLoad[key]) return;
+        _hall.sndLoad[key] = fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
             .then(ab => fe.ctx.decodeAudioData(ab))
             .then(buf => { if (!fe.buffers[key]) fe.buffers[key] = buf; })
             .catch(() => {})
-            .then(() => { _hall.sndBusy[key] = false; });
+            .then(() => { _hall.sndLoad[key] = null; });
     });
 }
-function _hallCue(key, vol) {
+// Always the Web Audio buffer, never the <audio> copy: an element STREAMS the file,
+// and a stream that stalls while the hall is being built is a cue that stops and
+// carries on. Not decoded yet → wait for it for `waitMs`, and past that stay silent
+// (a cue that arrives late is worse than none).
+function _hallCue(key, vol, waitMs) {
     const fe = gameState.focusAudioEngine;
-    try { if (fe && fe.playHandled(key, 1, vol)) return; } catch (_) {}
-    try { const el = gameState.sounds[key]; if (el) { el.volume = vol; playSoundRobust(el); } } catch (_) {}
+    const go = () => { try { return !!(fe && fe.playHandled(key, 1, vol)); } catch (_) { return false; } };
+    if (go()) return;
+    _hallEnsureSounds();
+    const load = _hall.sndLoad && _hall.sndLoad[key];
+    if (!load) return;
+    const t0 = performance.now();
+    load.then(() => { if (performance.now() - t0 <= waitMs && (_hall.entering || _hall.in)) go(); });
 }
 
 /* ── the other sounds — synthesised, so there is no file to load ───────────── */
@@ -46933,15 +46941,15 @@ function _hallEnter(d) {
     _hallEndWork();
     perfWake(6000);
     let t = 0;
-    _hallCue('meetingStart', 0.85);                   // the animation starts here
+    _hallCue('meetingStart', 0.85, 1500);                   // the animation starts here
     if (!quick) { _hallBanner(d); t += 1900; }
-    _hallAfter(t, () => { _hallWarp(); _hallSfx('warp'); });
+    _hallAfter(t, () => _hallWarp());
     t += 620;
     _hallAfter(t, () => _hallCurtain(true));
     t += 680;
     _hallAfter(t, () => { _hallBanner(null); _hallOpen(d); });
     t += 1350;
-    _hallAfter(t, () => { _hallCurtain(false); _hallCue('meetingLoaded', 0.85); });   // loaded: the curtain starts to slide
+    _hallAfter(t, () => { _hallCurtain(false); _hallCue('meetingLoaded', 0.85, 600); });   // loaded: the curtain starts to slide
     t += 420;
     _hallAfter(t, () => {
         _hall.E.root.classList.add('revealed');
