@@ -48060,6 +48060,7 @@ function _hallPickRender() {
             b.type = 'button';
             b.className = 'hall-chip' + (_hall.pickSel.has(x.uid) ? ' on' : '') + (x.on ? ' online' : '');
             b.dataset.uid = x.uid;
+            b.dataset.q = _fireNormName(x.n).toLowerCase();
             b.setAttribute('role', 'checkbox');
             b.setAttribute('aria-checked', _hall.pickSel.has(x.uid) ? 'true' : 'false');
             const av = document.createElement('span');
@@ -48067,7 +48068,7 @@ function _hallPickRender() {
             av.textContent = (x.n || '؟').charAt(0);
             if (x.face) {
                 const img = document.createElement('img');
-                img.alt = ''; img.loading = 'lazy'; img.decoding = 'async'; img.draggable = false;
+                img.alt = ''; img.decoding = 'async'; img.draggable = false;
                 img.onerror = () => img.remove();
                 img.src = x.face;
                 av.appendChild(img);
@@ -48177,7 +48178,8 @@ async function _hallPtsOpen(meta) {
         const rec = MDWNH_ROSTER.byDiscord[uid];
         // No points row: a guest or a test ghost, and the leader himself.
         const can = !!(rec && rec.dbKey && !rec.admin && !rec.dummy);
-        rows.push({ uid, n: (rec && rec.name) || _chatClean(name).slice(0, 40) || '—', key: can ? _libNfc(rec.dbKey) : '', can, on: can });
+        rows.push({ uid, n: (rec && rec.name) || _chatClean(name).slice(0, 40) || '—', key: can ? _libNfc(rec.dbKey) : '', can, on: can,
+                    face: (rec && rec.slug) ? _libAvatar(rec.slug) : '' });
     }
     if (!rows.some(r => r.can)) {
         _hall.ptsOpen = false;
@@ -48218,11 +48220,30 @@ function _hallPtsRender() {
         const av = document.createElement('span');
         av.className = 'hall-chip-av';
         av.textContent = (r.n || '؟').charAt(0);
+        if (r.face) {
+            const img = document.createElement('img');
+            img.alt = ''; img.decoding = 'async'; img.draggable = false;
+            img.onerror = () => img.remove();
+            img.src = r.face;
+            av.appendChild(img);
+        }
         const nm = document.createElement('span');
         nm.className = 'hall-chip-name';
         nm.textContent = r.can ? r.n : `${r.n} — بلا حساب نقاط`;
         b.append(av, nm);
         E.ptsList.appendChild(b);
+    }
+    _hallPtsPaint();
+}
+// A press changes classes and the total only — the panel is built once (a rebuild
+// would reload every face and sticker).
+function _hallPtsPaint() {
+    const E = _hall.E, P = _hall.pts;
+    if (!E || !P) return;
+    for (const b of E.ptsAmounts.querySelectorAll('.hall-amt')) b.classList.toggle('on', Number(b.dataset.v) === P.amount);
+    for (const b of E.ptsList.querySelectorAll('.hall-chip')) {
+        const r = P.rows.find(x => x.uid === b.dataset.uid);
+        b.classList.toggle('on', !!(r && r.on));
     }
     const n = P.rows.filter(r => r.on).length;
     E.ptsSum.textContent = n ? `${_libAr(n)} عضوًا × ${_libAr(P.amount)} = ${_libAr(n * P.amount)} نقطة` : 'لم تختر أحدًا';
@@ -48428,14 +48449,27 @@ function setupHallUI() {
     E.pickClose.addEventListener('click', _hallPickClose);
     E.pick.addEventListener('click', (e) => { if (e.target === E.pick) _hallPickClose(); });
     E.pickTitle.addEventListener('input', _hallPickFoot);
-    E.pickSearch.addEventListener('input', () => { _hall.pickQ = E.pickSearch.value; _hallPickRender(); });
+    // The search hides chips in place — nothing is rebuilt, so no face reloads.
+    E.pickSearch.addEventListener('input', () => {
+        const q = _fireNormName(E.pickSearch.value).toLowerCase();
+        for (const chip of E.pickBody.querySelectorAll('.hall-chip')) {
+            chip.style.display = (!q || (chip.dataset.q || '').includes(q)) ? '' : 'none';
+        }
+    });
     E.pickBody.addEventListener('click', (e) => {
         const all = e.target.closest('.hall-pick-all');
         if (all) {
             const list = (_hall.pickGroups && _hall.pickGroups[all.dataset.grp]) || [];
             const full = list.every(x => _hall.pickSel.has(x.uid));
             for (const x of list) { if (full) _hall.pickSel.delete(x.uid); else _hall.pickSel.add(x.uid); }
-            _hallPickRender();
+            // In place — a rebuild would unload and reload every face.
+            const sec = all.closest('.hall-pick-sec');
+            for (const chip of (sec ? sec.querySelectorAll('.hall-chip') : [])) {
+                const on = _hall.pickSel.has(chip.dataset.uid);
+                chip.classList.toggle('on', on);
+                chip.setAttribute('aria-checked', on ? 'true' : 'false');
+            }
+            _hallPickHeads();
             return;
         }
         const chip = e.target.closest('.hall-chip');
@@ -48471,13 +48505,13 @@ function setupHallUI() {
     // The points panel.
     E.ptsAmounts.addEventListener('click', (e) => {
         const b = e.target.closest('.hall-amt');
-        if (b && _hall.pts) { _hall.pts.amount = Number(b.dataset.v); _hallPtsRender(); }
+        if (b && _hall.pts) { _hall.pts.amount = Number(b.dataset.v); _hallPtsPaint(); }
     });
     E.ptsList.addEventListener('click', (e) => {
         const b = e.target.closest('.hall-chip');
         if (!b || !_hall.pts) return;
         const r = _hall.pts.rows.find(x => x.uid === b.dataset.uid);
-        if (r && r.can) { r.on = !r.on; _hallPtsRender(); }
+        if (r && r.can) { r.on = !r.on; _hallPtsPaint(); }
     });
     E.ptsGo.addEventListener('click', () => { if (!E.ptsGo.classList.contains('is-off')) _hallPtsSend(); });
     E.ptsLater.addEventListener('click', _hallPtsClose);          // asked again on the next login
