@@ -131,7 +131,7 @@ Grep anchors for the major systems (all verified to exist):
 | رموز آبل التعبيرية (صور) | `_emoImgs`, `emoLoadData`, `_emoActivate`, `_emoTextNode`, `_emoParse`, `_emoDrawSlots`, `_emoKey`, `emoIsOne`, `emoRecent`, `emoNoteUsed`, `EMO_IMG_KEY`, `tools/bake_emoji.mjs` |
 | التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `_peekBody`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad`, `tools/shots.mjs`, `tools/shots.py` |
-| القاعة — الاجتماع العام | `HALL_`, `_hall`, `hallIsCallCommand`, `hallCallCommand`, `hallOpenPicker`, `_hallCreate`, `_hallOnDoc`, `_hallTryEnter`, `_hallEnter`, `_hallEndWork`, `_hallAutoInvoice`, `_hallOpen`, `_hallExit`, `_hallOnMsg`, `_hallOnHi`, `_hallOnBot`, `_hallOnStage`, `_hallLayout`, `_hallFit`, `_hallTick`, `_hallSlowTick`, `_hallCastStart`, `_hallOnShare`, `_hallViewStart`, `_hallSfuPublish`, `_hallRtcCall`, `_hallLeavePress`, `_hallEnd`, `_hallPtsOpen`, `_hallPtsSend`, `_hallOnAwards`, `hallHoldsInput`, `updateHallLifecycle`; relay: `rtcHandle`; bot: `STAGE_CHANNEL_ID`, `sendStage`, `stageLive` |
+| القاعة — الاجتماع العام | `HALL_`, `_hall`, `hallIsCallCommand`, `hallCallCommand`, `hallOpenPicker`, `_hallCreate`, `_hallOnDoc`, `_hallTryEnter`, `_hallEnter`, `_hallEndWork`, `_hallAutoInvoice`, `_hallOpen`, `_hallExit`, `_hallSayText`, `_hallMenFind`, `_hallFillText`, `_hallInputPaint`, `_hallComposeDone`, `_hallOnMsg`, `_hallOnHi`, `_hallOnBot`, `_hallOnStage`, `_hallLayout`, `_hallFit`, `_hallTick`, `_hallSlowTick`, `_hallCastStart`, `_hallOnShare`, `_hallViewStart`, `_hallSfuPublish`, `_hallRtcCall`, `_hallLeavePress`, `_hallEnd`, `_hallPtsOpen`, `_hallPtsSend`, `_hallOnAwards`, `hallHoldsInput`, `updateHallLifecycle`; relay: `rtcHandle`; bot: `STAGE_CHANNEL_ID`, `sendStage`, `stageLive` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds`, `_seamlessLoop`, `_mp3CutBytes`, `_glideParam`, `_warmGames`, `playSoundRobust` |
 | Settings (full panel, pills, live preview) | `setupSettingsUI`, `_stg`, `_stgSeg`, `_stgShowTab`, `_stgPreviewKick` |
@@ -2478,6 +2478,16 @@ hidden tab is pulled in when it is looked at again.
 - **Mentions search the roster** (`_hallMenList`, like `_chatMenCandidates`): display name,
   roster `name`, `dbKey`, Telegram name, slug anywhere; handle / email from the start. The
   row and the inserted `@tag` use the roster name (`_hallMenName`), display name beside it.
+- **A mention is found from the TEXT, on both ends** (`_hallMenFind`): every «@name» that is
+  someone in the hall, as the picker writes it (roster name, spaces as «_»). So a mention
+  typed by hand pings too (`_hallSayText` adds it to `men`), and sender and reader mark the
+  same words. `_hallFillText(el, text)` draws them as `.hall-tag` spans (`.me` = yellow) in
+  the seat bubble and the log — nodes only, never innerHTML.
+- **The tag while typing**: `#hall-input` is a plain `<input>` and can't style part of its
+  text, so `#hall-input-hl` sits BEHIND it with the same text, transparent, painting only a
+  mention's background (`_hallInputPaint`, `raw` = every character kept so it lines up; its
+  `scrollLeft` follows the input's). The input's own text stays visible — if the layer is
+  off by a hair (an emoji image on a non-Apple device) only the highlight shifts.
 - **Stickers**: a comment that STARTS with «/» (not «//») searches them (`_hallStkQuery`,
   `_hallStkUpdate`, popup `#hall-stk`, the world chat's tile classes); arrows move, Enter
   or a press sends `{t:'hc', uid, m:'', k:<name>}` (`_hallStkSend`) — an older page drops
@@ -2488,6 +2498,15 @@ hidden tab is pulled in when it is looked at again.
   heard, capped at `HALL_LOG_MAX`, kept across a rejoin of the same meeting id. Open
   state per device (`HALL_LOG_KEY`; never auto-open on a phone). ≥ 900px wide the room
   gets `padding-right: 320px` (then `layoutDirty`); narrower it lies over the room.
+  Text keeps `dir="auto"` (word order) but is ALWAYS right-aligned; a sticker row is
+  `dir="rtl"` (an image alone resolves to ltr and sat on the left). A ring colour too dark
+  to read (`_hallDarkHex`) leaves the name white.
+- **The type bar docks under the open log** (CSS only: `.hall.log-open .hall-compose` — the
+  same ONE `#hall-compose`, always visible there). A press in it opens it (`focus` →
+  `_hallComposeOpen`, which is idempotent); after a send it stays with the caret
+  (`_hallComposeDone`), floating over the room it closes as before. Opening the log by a
+  press on a PC focuses it. `_hallComposeFit` clears its keyboard lift when closed, or the
+  docked bar would stay floating. `.hall-log` reserves the bar's height as bottom padding.
 - **نافذة المحادثة** (`#hall-pop-btn`, `_hallPopToggle`, `_hallPopBuild`, `_hallPopAdd`,
   `_hallPopSync`, `_hallPopClose`, `HALL_POP_CSS`): the log in a small window of its own, for
   whoever is sharing a screen (they are looking at another window). Chrome / Edge: Document
@@ -2495,7 +2514,9 @@ hidden tab is pulled in when it is looked at again.
   popup, with a line saying it won't stay on top. Desktop only. Read-only COPIES
   (`importNode`) of the rows `_hallLogPush` already built — zero network. A `<base>` makes
   relative sticker / avatar URLs resolve. Closed by `_hallExit`. Starting a share toasts a
-  pointer to it. Shared as "entire screen", the window is in the picture.
+  pointer to it. Shared as "entire screen", the window is in the picture. It has its own
+  type box (`.hp-input`): plain text, Enter → `_hallSayText` (the one send path, shared with
+  the bar); no picker — a mention is «@name» typed out; a refused send flashes it red.
 - **The fireplace crackle is silent in the hall** (`updateFireplaceAmbient` checks
   `_hall.in / entering`; `_hallEnter` zeroes it at once).
 - **Reactions**: the table's six (`MEET_REACTIONS`, keys 1–6), the avatar animation
