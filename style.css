@@ -13443,9 +13443,18 @@ body.is-mobile .dm-tip { padding-bottom: max(14px, env(safe-area-inset-bottom));
 .dm-bub.big { padding: 2px 4px; background: transparent !important; font-size: 40px; line-height: 1.2; }
 .dm-bub.stk { padding: 0; background: transparent !important; }
 .dm-bub.stk img { display: block; width: 132px; height: 132px; object-fit: contain; }
-.dm-msg time { margin: 2px 6px 0; font-size: 10px; font-weight: 600; color: #6d6d6f; }
-.dm-msg.cont time { display: none; }
-.dm-msg.cont:last-child time, .dm-msg:not(.cont) + .dm-msg.cont:last-child time { display: block; }
+/* الوقت يُخفى بارتفاع صفر لا بـ display: none — حذف رسالة يغيّر تجميع ما حولها، فيظهر
+   وقت أو يختفي، ولا بد أن ينزلق ذلك بدل أن يقفز بالمحادثة كلها. */
+.dm-msg time {
+    display: block;
+    max-height: 20px;
+    overflow: hidden;
+    margin: 2px 6px 0;
+    font-size: 10px; font-weight: 600; color: #6d6d6f;
+    transition: max-height .26s cubic-bezier(0.4, 0, 0.2, 1), margin-top .26s cubic-bezier(0.4, 0, 0.2, 1), opacity .2s ease;
+}
+.dm-msg.cont time { max-height: 0; margin-top: 0; opacity: 0; }
+.dm-msg.cont:last-child time, .dm-msg.cont.tail time { max-height: 20px; margin-top: 2px; opacity: 1; }
 .dm-msg.failed .dm-bub { background: #5a2420; color: #ffd9d4; }
 .dm-msg.failed time::after { content: ' · لم تُرسل'; color: #ff7d6b; }
 
@@ -14037,7 +14046,7 @@ img.emo {
 .dm-down-n[hidden] { display: none; }
 
 /* معدّلة / روابط / اقتباس رسالة محذوفة / خروج رسالة حُذفت */
-.dm-msg.ed time { display: block; }
+.dm-msg.ed time { max-height: 20px; margin-top: 2px; opacity: 1; }
 /* «معدّلة»: وسم صغير قبل الوقت، لا كلمة في سطره */
 .dm-ed {
     display: inline-block;

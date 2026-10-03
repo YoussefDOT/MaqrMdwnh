@@ -45612,17 +45612,29 @@ function _dmApplyDeleted(peer, msg) {
 const DM_DEL_POOF_MS = 250, DM_DEL_CLOSE_MS = 280;
 function _dmRowLeave(peer, row) {
     const box = _dm.els.msgs;
-    const done = () => {
-        if (!row.isConnected) return;
-        const next = row.nextElementSibling, prevEl = row.previousElementSibling;
-        if (prevEl && prevEl.classList.contains('dm-day') && !(next && next.classList.contains('dm-msg'))) prevEl.remove();
-        row.remove();
-        // The row that followed may now open a group (or join the one before it).
+    // What its leaving changes around it — done as the gap STARTS to close, so it eases
+    // with it (a timestamp appearing or going after the slide snapped the whole chat):
+    // the row that followed may now open a group or join the one before it, and when
+    // the newest message goes, the one before it becomes the one that shows its time.
+    let tail = null;
+    const regroup = () => {
+        const next = row.nextElementSibling;
         if (next && next.classList.contains('dm-msg') && _DM_KEY_RE.test(next.dataset.k || '')) {
             const th = _dmThread(peer), m = _dmFindMsg(th, next.dataset.k);
             const pv = m && _dmPrevShown(th, th.msgs.indexOf(m));
             next.classList.toggle('cont', !!(pv && _dmSameDay(pv.t, m.t) && pv.f === m.f && m.t - pv.t < DM_GROUP_MS));
+        } else if (!next) {
+            const pe = row.previousElementSibling;
+            if (pe && pe.classList.contains('dm-msg')) { tail = pe; pe.classList.add('tail'); }
         }
+    };
+    const done = () => {
+        if (!row.isConnected) return;
+        const next = row.nextElementSibling, prevEl = row.previousElementSibling;
+        regroup();
+        if (prevEl && prevEl.classList.contains('dm-day') && !(next && next.classList.contains('dm-msg'))) prevEl.remove();
+        row.remove();
+        if (tail) tail.classList.remove('tail');        // (:last-child says the same from here on)
         if (_dmThreadShown(peer)) _dmPaintThreadState();
     };
     row.classList.add('out');
@@ -45653,6 +45665,7 @@ function _dmRowLeave(peer, row) {
         if (prevEl && prevEl.classList.contains('dm-day') && !(next && next.classList.contains('dm-msg'))) els.push(prevEl);
         for (const el of els) { el.style.height = el.offsetHeight + 'px'; el.classList.add('closing'); }
         void box.offsetHeight;                  // the starting height has to be computed first
+        regroup();
         for (const el of els) {
             el.style.height = '0px';
             el.style.marginTop = '0px'; el.style.marginBottom = '0px';
