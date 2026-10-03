@@ -2446,7 +2446,11 @@ hidden tab is pulled in when it is looked at again.
   CSS) → `#hall-curtain` — a SECOND element wearing the boot screen's classes (`.boot`),
   never `#loading-screen` itself: `finishBootScreen` opens the entrance gate and must not
   be reused → `_hallOpen` under it → the curtain lifts → the title animates on the screen,
-  confetti. Sounds are synthesised (`_hallSfx`, no files). All timers go through
+  confetti. Two recorded cues (`_hallCue`): `meeting_start.mp3` at the start of the
+  animation, `meeting_loaded.mp3` as the curtain starts to lift — in the `rest` list, and
+  fetched early by `_hallEnsureSounds` the moment a meeting wants this member (96k
+  re-encodes; the `.full.mp3` originals are gitignored). The rest are synthesised
+  (`_hallSfx`, no files). All timers go through
   `_hallAfter` so `_hallExit` cancels the lot.
 - `_hall.canvasOff` stops the world pass (`_worldCanvasHidden`); `hallHoldsInput()` is in
   the keydown / wheel / `handleMovement` / `_chatMustClose` guard lists (it also covers

@@ -1441,6 +1441,8 @@ class FocusAudioEngine {
             jumpStart: null,
             jumpLand: null,
             lemoThrow: null,   // رمية ليمو — the whole throw, cut to the clip
+            meetingStart: null,   // القاعة — the call
+            meetingLoaded: null,  // القاعة — the curtain lifts
             // الدردشة القريبة — mentions. Web Audio so a ping sounds in a background tab.
             chatMention: null,
             mentionPing: null,
@@ -1579,6 +1581,7 @@ class FocusAudioEngine {
             ['sofaSit', 'Sound/Sofa_Sit.mp3'], ['sofaStand', 'Sound/Sofa_Stand.mp3'],
             ['jumpStart', 'Sound/Jump_Start.mp3'], ['jumpLand', 'Sound/Jump_Land.mp3'],
             ['lemoThrow', 'Sound/lemo_throw.mp3'],
+            ['meetingStart', 'Sound/meeting_start.mp3'], ['meetingLoaded', 'Sound/meeting_loaded.mp3'],
             ['paperIntro', 'Sound/Paper_Intro.mp3'], ['paperSwipe', 'Sound/Paper_Swipe.mp3'],
             ['paperDaysSwap', 'Sound/Paper_DaysSwap.mp3'], ['paperExit', 'Sound/Paper_Exit.mp3'],
             ['paperTaskComplete', 'Sound/Paper_Task_Complete.mp3'],
@@ -2986,6 +2989,8 @@ const gameState = {
         jumpStart:               _lazyAudio('Sound/Jump_Start.mp3'),
         jumpLand:                _lazyAudio('Sound/Jump_Land.mp3'),
         lemoThrow:               _lazyAudio('Sound/lemo_throw.mp3'),   // رمية ليمو
+        meetingStart:            _lazyAudio('Sound/meeting_start.mp3'),   // القاعة
+        meetingLoaded:           _lazyAudio('Sound/meeting_loaded.mp3'),
         // الدردشة القريبة — mention cues (HTMLAudio fallback until the buffers decode)
         chatMention:             _lazyAudio('Sound/chat_mention.mp3'),
         mentionPing:             _lazyAudio('Sound/mention_ping.mp3'),
@@ -46633,7 +46638,32 @@ async function hallCallCommand() {
     hallOpenPicker();
 }
 
-/* ── sounds — synthesised, so there is no file to load ─────────────────────── */
+/* ── the two recorded cues: the call, and the curtain lifting ───────────────── */
+// They decode after spawn with the other effects (the `rest` list). A member pulled
+// in right after logging in can get here first, so the moment a meeting wants them
+// the two buffers are fetched on their own. Idempotent; a failure is retried next call.
+function _hallEnsureSounds() {
+    const fe = gameState.focusAudioEngine;
+    try { if (fe && !fe.ctx) fe.init(); } catch (_) {}
+    if (!fe || !fe.ctx) return;
+    _hall.sndBusy = _hall.sndBusy || {};
+    [['meetingStart', 'Sound/meeting_start.mp3'], ['meetingLoaded', 'Sound/meeting_loaded.mp3']].forEach(([key, url]) => {
+        if (fe.buffers[key] || _hall.sndBusy[key]) return;
+        _hall.sndBusy[key] = true;
+        fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+            .then(ab => fe.ctx.decodeAudioData(ab))
+            .then(buf => { if (!fe.buffers[key]) fe.buffers[key] = buf; })
+            .catch(() => {})
+            .then(() => { _hall.sndBusy[key] = false; });
+    });
+}
+function _hallCue(key, vol) {
+    const fe = gameState.focusAudioEngine;
+    try { if (fe && fe.playHandled(key, 1, vol)) return; } catch (_) {}
+    try { const el = gameState.sounds[key]; if (el) { el.volume = vol; playSoundRobust(el); } } catch (_) {}
+}
+
+/* ── the other sounds — synthesised, so there is no file to load ───────────── */
 function _hallSfx(kind) {
     const fe = gameState.focusAudioEngine;
     try { if (fe && !fe.ctx) fe.init(); } catch (_) {}
@@ -46747,7 +46777,7 @@ function _hallOnDoc(v) {
         return;
     }
     if (_hall.entering) return;
-    if (invited && !out) { _hall.want = true; _hallCard(false); perfWake(); }
+    if (invited && !out) { _hall.want = true; _hallCard(false); perfWake(); _hallEnsureSounds(); }
     else { _hall.want = false; _hallCard(invited && out); }
 }
 
@@ -46903,17 +46933,17 @@ function _hallEnter(d) {
     _hallEndWork();
     perfWake(6000);
     let t = 0;
-    if (!quick) { _hallBanner(d); _hallSfx('call'); t += 1900; }
+    _hallCue('meetingStart', 0.85);                   // the animation starts here
+    if (!quick) { _hallBanner(d); t += 1900; }
     _hallAfter(t, () => { _hallWarp(); _hallSfx('warp'); });
     t += 620;
     _hallAfter(t, () => _hallCurtain(true));
     t += 680;
     _hallAfter(t, () => { _hallBanner(null); _hallOpen(d); });
     t += 1350;
-    _hallAfter(t, () => { _hallCurtain(false); _playMenuSfx('loadingEnd', 0.85); });
+    _hallAfter(t, () => { _hallCurtain(false); _hallCue('meetingLoaded', 0.85); });   // loaded: the curtain starts to slide
     t += 420;
     _hallAfter(t, () => {
-        _hallSfx('arrive');
         _hall.E.root.classList.add('revealed');
         _hallConfetti(40);
         _hall.entering = false;
@@ -48128,6 +48158,7 @@ function _hallPickFoot() {
     E.pickGo.classList.toggle('is-off', !!need);
 }
 async function hallOpenPicker() {
+    _hallEnsureSounds();                              // the caller hears the call too
     const E = _hall.E;
     if (!E || _hall.pickOpen || !hallCanCall()) return;
     _hall.pickOpen = true;
