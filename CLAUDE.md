@@ -123,6 +123,7 @@ Grep anchors for the major systems (all verified to exist):
 | القفز | `JUMP_KINDS`, `_jumpFx`, `jumpUpdateLocal`, `_jumpLand`, `_jumpMaybeFall`, `_jumpStepOff`, `_jumpTopAt`, `_jumpQuake`, `triggerJump`, `canJump`, `receiveJump`, `anyDoubleTapJump`, `jumpTapWhileMoving`, `JUMP_FLICK_`, `jumpMaybeHint` |
 | نداء ليمو (walks over + answers) | `LEMO_UID`, `lemoSummon`, `lemoAsk`, `_lemoFolStep`, `_lemoRelease`, `_lemoRetPose`, `onLemoRelay`, `_lemoTalkStep`, `lemoPress`, `lemoIsAsleep`, `lemoIsBusy`, `lemoTalkingTo`, `_lemoCallHolds`, `_lemoHistPush`, `_lemoPeekBody` |
 | رمية ليمو (he throws a member into a session) | `LTH_`, `_lth`, `lemoThrowBegin`, `lemoThrowAllowed`, `_lthMemberOk`, `_lthLock`, `updateLemoThrow`, `_lthAt`, `_lthFx`, `_lthAbove`, `_lthLemoPose`, `_lthLemoDone`, `receiveLemoThrow`, `updateRemoteThrows`, `LTH_REL`; the clip: `LEMO_ANIMS.Throw`, `lemoPlayThrow`, `_lemoActStep`, `_lemoDropSheet`, `_lemo.act`, `SEQS` in `Art/Lemo/slice.py`; the relay: `parseThrow`, `canThrow` |
+| ليمو يرمي النقاط (القاعة) | `HLP_`, `_hlp`, `_hlpGive`, `_hlpAdd`, `_hlpOnMsg`, `_hlpPlan`, `_hlpNextAt`, `_hlpPose`, `_hlpTick`, `_hlpDraw`, `_hlpSticker`, `_hlpHit`, `_hlpCounter`, `_hlpCue`, `_hlpPopOpen`, `_hlpTestThrow`, `HLP_STK`, `LEMO_ANIMS.ThrowPoints`; the solo test room: `_hallSandbox`, `_hallSandboxSeats`, `_hall.sandbox`; REST: `libPtsPatch`, `libPtsPost` |
 | أمر القائد (the leader orders throws) | `LORD_`, `_lord`, `_lordParse`, `lemoOrderThrow`, `_lordNext`, `_lordOnReply`, `_lordAccept`, `_lordMineStep`, `onLordOrder`, `onLordReply`, `_lordIsLeader`, `_lordLockSession`, `lordLockLeftMs`, `lordLockRefuse` |
 | خط الخطف (the kidnap line, on every screen) | `drawKidnapLine`, `_drawKidnapLineTo`, `sendKidnapWS`, `receiveKidnap`, `drawRemoteKidnapLines`, `_kidLineLive`, `KID_` |
 | ليمو: the walk + routes | `_lemoWalkPlan`, `_lemoWalkAt`, `_lemoTrip`, `_lemoNavBuild`, `_lemoNavPath`, `_lemoNavLeg`, `_lemoStairRun`, `LEMO_SPEED`, `LEMO_NAP_CHANCE` |
@@ -2599,6 +2600,69 @@ someone is in the Stage channel, that channel outranks a summon and the table. I
 there as audience (muted, not deafened), relays `spk` as ever, and sends
 `{t:'stage', ids:[in the channel], sp:[speakers = not suppressed]}` on every change and
 every heartbeat. Deployed by pushing its repo (Render).
+
+### ليمو يرمي النقاط — points, thrown live during the meeting
+A moderator (`_hallIsMod`: نواف, يوسف, whoever called the meeting) presses a member's seat →
+a small picker of the four point stickers (`.hlp-pop`) → ليمو walks onto the stage from the
+left, plays **ThrowPoints** (turns round, comes back holding that sticker, throws), the
+sticker flies straight at the member, lands with a burst + the Points site's own cue for
+that amount, and the member's TOTAL appears over their head and counts up. He waits
+`HLP_LINGER_MS`, then turns and walks off; an order given while he is there is next in his
+queue (`HLP_NEXT_MS` apart). Code: the `ليمو يرمي النقاط` block before `hallStart`.
+
+- **One relay event per throw** (the hall's room): `{t:'hp', uid:<giver>, k, to, p, at, f, sh?}`
+  — `at` = earliest server time his clip may start, `f` = the member's total before it
+  (-1 unknown), `sh` = show only. Accepted only from a moderator; every field re-checked.
+  Everything else is a PURE function of the orders a screen knows and `serverNow()`:
+  `_hlpPlan` (effective start `s` + which visit to the stage, sorted by `at` then `k` — so
+  two moderators at once are queued the same everywhere), `_hlpPose` (walk in / clip /
+  idle / walk out). Nothing is streamed. A late joiner simply misses what is over.
+- **The points are written by the GIVER's client, before the event is sent**, straight to
+  the Points database over REST: `PATCH players/<dbKey>` with
+  `totalPoints: {".sv": {"increment": p}}` (atomic) + `lastUpdated`, and one `history` row
+  (`note: 'اجتماع: <title>'`) — the same two writes the Points site's `performAddPoints`
+  makes. **No claim and no trip to that site** (the after-meeting attendance panel below
+  still uses claims). A failed write = a toast and no throw. The member's own HUD chip is
+  bumped at the hit (`_lib.points`).
+- **A سراج ghost, and the solo test room, are SHOW ONLY** (`sh`): the real total is read to
+  count from, nothing is written. Not for a member with no points row (guest, نواف) unless
+  it is show only; never to yourself.
+- **The sticker is not in his frames.** One `<img>` (`Art/Points/N.webp`, copied from the
+  Points site), placed per frame on `HLP_STK` — centre / turn / squash for frames 16–38,
+  tracked off the owner's guide video (guide minus the Lemo-only frame = the sticker; turn
+  by matching the real +10 sticker), stepped at 15 fps like the hand. From frame 38 it
+  flies in a straight line at the member's avatar (aimed once, at release) at the guide's
+  own speed (`HLP_SPEED`, 891 source px a frame) and spin (`HLP_SPIN`), 220–800 ms.
+- **He is a canvas in `.hall-fx`**, drawn by a 33 ms `setInterval` that exists only while a
+  show is on (invariant 26; the frame loop sleeps under the hall). Sheets through
+  `_lemoSheet` (Walk at `HLP_WALK_FPS`, Idle, ThrowPoints — the last dropped when he
+  leaves). Geometry (`_hlpGeo`) is read at most twice a second and is in the hall's own px
+  (screen ÷ `_hall.ui`). `HLP_BOX` is his canvas in source-cell px; the one anchor
+  (`LEMO_ANCHOR_SX/SY`) places every clip, mirrored about it on the way out.
+- **Sounds**: `Sound/Lemo_ThrowPoints.mp3` (the owner's, cut to the clip — starts on frame 0
+  of each order's clip; 96k, original is the gitignored `.full.mp3`; in the `rest` list) and
+  `Sound/Points/{5,10,20,30}.mp3` (the Points site's `1–4.mp3`, re-encoded at 96k).
+  The four cues + the stickers are preloaded **as the hall opens** (`_hlpPreload`, 2.6 s
+  in) — not after spawn with the other effects: ~9 MB of PCM only a meeting plays.
+  Buffers only (`_hlpCue`, the `_hallCue` rule). **The +30 cue starts 600 ms BEFORE the
+  landing** (`HLP_SND_LEAD` — it opens with a warm-up and its own hit is 0.6 s in; the
+  flight is measured ahead of the release, `o.flyEst`); the others start on the impact.
+- **Colour**: the PNG sequences leave After Effects a shade off the old sheets (darker
+  shadows, less blue) — he visibly changed colour the moment a clip started. `match` on a
+  `SEQS` entry fits a per-channel curve (the sequence's first frame against the Idle frame
+  it copies) and applies it before lighting. The first Throw clip's frames were gone, so
+  its shipped sheet was matched in place (baked frame 0 against baked Idle 23).
+- **The clip**: 67 frames on the ordinary 2048 cell → `SEQS` in `slice.py` (`off: (0,0)`,
+  61 kept, `res` 0.16, 8 columns, 610 KB, 18.6 MB decoded). Masters not on disk
+  (owner's call) — a re-bake needs a fresh export into `Art/Lemo/ThrowPoints/`.
+- **تجربة القاعة وحدي — the solo test room** (`_hallSandbox`, a سراج ghost only; the button
+  is in the invite panel's foot): the hall opened on this screen alone — **no meeting doc,
+  no relay socket, nobody called** — a dozen seats that are all سراج (the owner's call: no
+  real member in a test), counting up from a made-up number.
+  `_hall.sandbox` gates every write and the socket (`_hallSockOpen`, `_hallOpen`,
+  `_hallSlowTick`, `_hallEnd`, `_hallLeaveNow`, `_hallToggleFocus`, `_hallOnDoc`); a real
+  meeting starting replaces it. «جرّب رمية ليمو» (`.hlp-test`, ghost moderators) throws a
+  random sticker at a random seat. Dev: `__mq.x._hallSandbox()`, `__mq.x._hlpGive(uid, 10)`.
 
 ### The points (the leader's panel — never in the news)
 When a meeting ends while `adminAllowed()` is in it — or on his next login, from `done` —

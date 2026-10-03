@@ -74,9 +74,24 @@ SHEETS = [("Sleeping.png", "Sleeping", 40), ("Wake Up.png", "WakeUp", 27),
 # home on the throw) while the game keeps his anchor still, so the bake also records
 # how far his head is from where it started, per frame -- the game slides his contact
 # shadow by it, or the shadow would sit alone on the floor while he backs away.
+# `match`: the sequences come out of After Effects a shade off the old sheets (darker
+# shadows, less blue: his head read 244/206/56 against Idle's 245/211/71) -- the owner saw
+# him change colour the moment a clip started. Each sequence opens on one of Idle's own
+# frames, so a per-channel curve is fitted from that pair (sequence frame `first` against
+# the named Idle frame) and applied to every frame before lighting. Measured on
+# ThrowPoints: mean difference 5.8/8.9/14.6 -> 2.0/1.8/0.8.
+# (Throw's frames were already gone when this was found, so its shipped sheet was matched
+# in place, baked frame 0 against baked Idle 23. A re-bake from a fresh export uses this.)
 SEQS = [
     {"dir": "throw", "base": "Throw", "first": 0, "last": 67,
-     "off": (365, 240), "res": 0.16, "cols": 8, "root": True},
+     "off": (365, 240), "res": 0.16, "cols": 8, "root": True, "match": ("Idle.png", 23)},
+    # ThrowPoints (القاعة: he turns round, comes back with a points sticker and throws it).
+    # Drawn on the ordinary 2048 cell, so no offset. Frames 61-66 of the export are him
+    # standing still; the clip ends at 60 and Idle carries on (frame 0 = the last frame).
+    # The sticker is NOT in these frames: the page draws it, on the path tracked off the
+    # owner's guide video (HLP_STK in game.js).
+    {"dir": "ThrowPoints", "base": "ThrowPoints", "first": 0, "last": 60,
+     "off": (0, 0), "res": 0.16, "cols": 8, "match": ("Idle.png", 23)},
 ]
 
 
@@ -137,6 +152,14 @@ class SeqSrc:
         self.res, self.cols = spec.get("res", RES), spec.get("cols", COLS)
         self.ox, self.oy = spec["off"]
         self.want_root = bool(spec.get("root"))
+        self.match = spec.get("match")
+        self.luts = None
+        # LEMO_SEQ_<BASE>=/some/folder bakes from frames kept somewhere else.
+        alt = os.environ.get("LEMO_SEQ_" + spec["base"].upper())
+        if alt:
+            self.files = self._files(alt)[spec["first"]:spec["last"] + 1]
+            self.n = len(self.files)
+            return
         self.files = self._files(os.path.join(HERE, spec["dir"]))[spec["first"]:spec["last"] + 1]
         self.n = len(self.files)
 
@@ -173,7 +196,53 @@ class SeqSrc:
         im = Image.open(self.files[i]).convert("RGBA")
         out = im.crop((box[0] + self.ox, box[1] + self.oy, box[2] + self.ox, box[3] + self.oy))
         im.close()
+        if self.match and self.luts is None:
+            self.luts = self._fit_luts() or False
+        if self.luts:
+            r, g, b, a = out.split()
+            out = Image.merge("RGBA", (r.point(self.luts[0]), g.point(self.luts[1]), b.point(self.luts[2]), a))
         return out
+
+    def _fit_luts(self):
+        """Per-channel curves taking this sequence's colours to the old sheets'."""
+        fname, fidx = self.match
+        path = os.path.join(HERE, fname)
+        if not os.path.isfile(path):
+            print(f"{self.base:9s} colour match skipped -- {fname} is not on this machine")
+            return None
+        ref = Image.open(path).convert("RGBA")
+        scols = ref.size[0] // CELL
+        c, r = fidx % scols, fidx // scols
+        bb = (480, 360, 1520, 1730)                       # the standing body, cell space
+        want = ref.crop((c * CELL + bb[0], r * CELL + bb[1], c * CELL + bb[2], r * CELL + bb[3]))
+        ref.close()
+        im = Image.open(self.files[0]).convert("RGBA")
+        have = im.crop((bb[0] + self.ox, bb[1] + self.oy, bb[2] + self.ox, bb[3] + self.oy))
+        im.close()
+        hp, wp = list(have.getdata())[::5], list(want.getdata())[::5]
+        luts = []
+        for ch in range(3):
+            tot, cnt = [0] * 256, [0] * 256
+            for a, b in zip(hp, wp):
+                if a[3] > 250 and b[3] > 250:
+                    tot[a[ch]] += b[ch]
+                    cnt[a[ch]] += 1
+            known = [(v, tot[v] / cnt[v]) for v in range(256) if cnt[v] >= 20]
+            if len(known) < 8:
+                return None
+            lut = []
+            for v in range(256):
+                lo = [k for k in known if k[0] <= v]
+                hi = [k for k in known if k[0] >= v]
+                if lo and hi:
+                    a, b = lo[-1], hi[0]
+                    lut.append(a[1] if a[0] == b[0] else a[1] + (b[1] - a[1]) * (v - a[0]) / (b[0] - a[0]))
+                elif lo:
+                    lut.append(lo[-1][1] + (v - lo[-1][0]))
+                else:
+                    lut.append(hi[0][1] - (hi[0][0] - v))
+            luts.append([max(0, min(255, round(x))) for x in lut])
+        return luts
 
     def roots(self):
         """Per frame: the head's centre-x minus frame 0's, in source px. The head is

@@ -1443,6 +1443,8 @@ class FocusAudioEngine {
             lemoThrow: null,   // رمية ليمو — the whole throw, cut to the clip
             meetingStart: null,   // القاعة — the call
             meetingLoaded: null,  // القاعة — the curtain lifts
+            pts5: null, pts10: null, pts20: null, pts30: null,   // القاعة — a points sticker lands (the Points site's own cues)
+            lemoThrowPoints: null,   // القاعة — ليمو turns, brings the sticker out and throws it (cut to the clip)
             // الدردشة القريبة — mentions. Web Audio so a ping sounds in a background tab.
             chatMention: null,
             mentionPing: null,
@@ -1583,6 +1585,7 @@ class FocusAudioEngine {
             ['jumpStart', 'Sound/Jump_Start.mp3'], ['jumpLand', 'Sound/Jump_Land.mp3'],
             ['lemoThrow', 'Sound/lemo_throw.mp3'],
             ['meetingStart', 'Sound/meeting_start.mp3'], ['meetingLoaded', 'Sound/meeting_loaded.mp3'],
+            ['lemoThrowPoints', 'Sound/Lemo_ThrowPoints.mp3'],
             ['paperIntro', 'Sound/Paper_Intro.mp3'], ['paperSwipe', 'Sound/Paper_Swipe.mp3'],
             ['paperDaysSwap', 'Sound/Paper_DaysSwap.mp3'], ['paperExit', 'Sound/Paper_Exit.mp3'],
             ['paperTaskComplete', 'Sound/Paper_Task_Complete.mp3'],
@@ -2992,6 +2995,7 @@ const gameState = {
         jumpLand:                _lazyAudio('Sound/Jump_Land.mp3'),
         lemoThrow:               _lazyAudio('Sound/lemo_throw.mp3'),   // رمية ليمو
         meetingStart:            _lazyAudio('Sound/meeting_start.mp3'),   // القاعة
+        lemoThrowPoints:         _lazyAudio('Sound/Lemo_ThrowPoints.mp3'),   // القاعة — ليمو يرمي النقاط
         meetingLoaded:           _lazyAudio('Sound/meeting_loaded.mp3'),
         // الدردشة القريبة — mention cues (HTMLAudio fallback until the buffers decode)
         chatMention:             _lazyAudio('Sound/chat_mention.mp3'),
@@ -17251,7 +17255,7 @@ if (/^(localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.)/.test(location.hostname))
         // مقر ١.٥ — a getter, not a value: these are declared further down the module,
         // so reading them here at evaluation time would be a temporal-dead-zone throw.
         get x() {
-            return { _lemo, _lemoNav, _lemoNavBuild, _lemoNavPath, _lemoApplyDoc, onLemoRelay, lemoPress, lemoPlayThrow, lemoThrowBegin, _lth, _lord, lemoOrderThrow, _lordParse,
+            return { _lemo, _lemoNav, _lemoNavBuild, _lemoNavPath, _lemoApplyDoc, onLemoRelay, lemoPress, lemoPlayThrow, lemoThrowBegin, _lth, _hall, _hlp, _hallSandbox, _hlpGive, _hlpTestThrow, _lord, lemoOrderThrow, _lordParse,
                      _hall, hallOpenPicker, _hallOnDoc, _hallCreate, _hallPtsOpen,
                      _dm, dmOpen, dmClose, _dmPickFile, _dmSubmit, _peek, peekOpen, _rx, reactNow,
                      openChatBox, closeChatBox, _chatUi,
@@ -30497,6 +30501,11 @@ const LEMO_ANIMS = {
                        -391, -387, -370, -293, -197, -177, -180, -202, -235, -235, -235, -233, -229, -226, -221, -217, -212,
                        -207, -202, -203, -202, -202, -202, -202, -203, -203, -203, -203, -203, -124, -106, -28, 13, 24,
                        22, 13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0] },
+    // القاعة: he turns round, comes back holding a points sticker and throws it. Drawn on
+    // the ordinary 2048 cell. The sticker itself is NOT in these frames — the hall draws
+    // it on the path tracked off the owner's guide (HLP_STK). Fetched for a throw in the
+    // hall and dropped when he leaves the stage.
+    ThrowPoints: { frames: 61, cols: 8, fw: 270, fh: 282, box: [199, 275, 1890, 2043], fps: 15, loop: false },
 };
 
 // ── The walk — three clips in one sheet (مقر ١.٥) ───────────────────────────────
@@ -33333,6 +33342,8 @@ const libGet    = p      => fetch(`${LIB_DB}/${p}.json`).then(_libJson);
 const libPut    = (p, v) => fetch(`${LIB_DB}/${p}.json`, { method: 'PUT', ..._libBody(v) }).then(_libJson);
 const libPtsGet = p      => fetch(`${LIB_PTS_DB}/${p}.json`).then(_libJson);
 const libPtsPut = (p, v) => fetch(`${LIB_PTS_DB}/${p}.json`, { method: 'PUT', ..._libBody(v) }).then(_libJson);
+const libPtsPatch = (p, v) => fetch(`${LIB_PTS_DB}/${p}.json`, { method: 'PATCH', ..._libBody(v) }).then(_libJson);
+const libPtsPost  = (p, v) => fetch(`${LIB_PTS_DB}/${p}.json`, { method: 'POST', ..._libBody(v) }).then(_libJson);
 
 /* ── small helpers (mirrors of the library's) ─────────────────────────────── */
 const _libEsc = s => String(s == null ? '' : s)
@@ -47556,8 +47567,11 @@ function _hallParseDoc(v) {
 }
 
 function _hallOnDoc(v) {
-    const prev = _hall.doc;
     const d = _hallParseDoc(v);
+    // The solo test room (a سراج ghost's) has no doc on the server: nothing there can
+    // end it, and a REAL meeting starting takes its place.
+    if (_hall.sandbox) { if (!d) return; _hallExit('sandbox', null); }
+    const prev = _hall.doc;
     // A child write that landed after the meeting was removed leaves junk behind.
     if (v && !d) { remove(ref(database, `${HALL_PATH}/meeting`)).catch(() => {}); }
     _hall.doc = d;
@@ -47757,7 +47771,7 @@ function _hallSend(obj) {
     try { ws.send(JSON.stringify(obj)); return true; } catch (_) { return false; }
 }
 function _hallSockOpen() {
-    if (!_hall.in) return;
+    if (!_hall.in || _hall.sandbox) return;           // the solo test room talks to nobody
     const cur = _hall.ws;
     if (cur && (cur.readyState === WebSocket.OPEN || cur.readyState === WebSocket.CONNECTING)) return;
     let ws;
@@ -47820,6 +47834,7 @@ function _hallOnMsg(data) {
         case 'hl': _hallSetLeaveReq(p, m.on === 1, true); break;
         case 'hla': _hallOnLeaveAnswer(p, m); break;
         case 'hs': _hallOnShare(m); break;
+        case 'hp': _hlpOnMsg(p, m); break;
     }
 }
 
@@ -48031,7 +48046,7 @@ function _hallRefreshStatus() {
     const live = _hallBotLive();
     E.voice.classList.toggle('live', live);
     E.voiceTxt.textContent = live ? 'ديسكورد: متصل' : 'ديسكورد: غير متصل';
-    E.net.hidden = !!(_hall.ws && _hall.ws.readyState === WebSocket.OPEN);
+    E.net.hidden = !!_hall.sandbox || !!(_hall.ws && _hall.ws.readyState === WebSocket.OPEN);
 }
 function _hallClock() {
     const d = _hall.doc;
@@ -48088,6 +48103,8 @@ function _hallRefreshDock() {
     _hallTip(E.leave, free ? 'مغادرة' : (_hall.myLeaveReq ? 'إلغاء طلب المغادرة' : 'طلب المغادرة'));
     E.leave.classList.toggle('on', !free && _hall.myLeaveReq);
     E.compose.classList.toggle('is-off', !_hallMaySpeak(me));
+    E.root.classList.toggle('can-give', mod);          // a moderator's press on a member gives points
+    if (_hlp.testBtn) _hlp.testBtn.hidden = !(mod && gameState.isSirajGhost);
 }
 // An icon button's name: the tooltip a mouse sees, and what a screen reader says.
 function _hallTip(btn, text) {
@@ -48158,11 +48175,12 @@ function _hallSlowTick() {
     _hallSockOpen();
     if (now - _hall.hiAt >= HALL_HI_MS) _hallHi(false);
     for (const p of [..._hall.people.values()]) {
-        if (p.uid !== gameState.userId && now - p.at > HALL_STALE_MS) _hallDrop(p.uid);
+        if (p.uid !== gameState.userId && !p.fake && now - p.at > HALL_STALE_MS) _hallDrop(p.uid);
     }
     const mine = _hall.people.get(gameState.userId);
     if (mine) mine.at = now;
     // The beat: ONE writer (the lowest uid present), once a minute.
+    if (_hall.sandbox) return;
     if (now - _hall.beatAt >= HALL_BEAT_MS && _hall.doc && !gameState._dupSessionDetected) {
         let low = gameState.userId;
         for (const uid of _hall.people.keys()) if (uid < low) low = uid;
@@ -48222,6 +48240,11 @@ function _hallOpen(d) {
     _hall.beatAt = 0;
     _hallAfter(900, () => { if (_hall.in) _hall.canvasOff = true; });
     // "I attended" — once, for the points afterwards.
+    // The points cues (ليمو يرمي النقاط) are fetched and decoded now, as the room opens —
+    // long before anyone is given points. Not after spawn with the other effects: they are
+    // ~9 MB of PCM that only a meeting ever plays.
+    _hallAfter(2600, _hlpPreload);
+    if (_hall.sandbox) { _hallSandboxSeats(); return; }
     update(ref(database), { [`${HALL_PATH}/att/${d.id}/${_hallMe()}`]: _hallMyName() || '—' }).catch(() => {});
     _hallSfuProbe();
 }
@@ -48231,9 +48254,11 @@ function _hallExit(why, prev) {
     _hallClearTimers();
     _hallCurtainKill();
     if (E) { E.call.classList.remove('show'); E.warp.classList.remove('go'); }
-    const was = _hall.in;
+    const was = _hall.in, sbx = !!_hall.sandbox;
     _hall.in = false; _hall.entering = false;
     _hall.canvasOff = false;
+    _hlpStop();
+    if (sbx) { _hall.sandbox = false; _hall.doc = null; }
     perfWake(1500);
     try { _hallCastStop(true); } catch (_) {}
     _hallPopClose();
@@ -48261,7 +48286,7 @@ function _hallExit(why, prev) {
         for (const p of _hall.people.values()) if (p.el) p.el.remove();
         _hall.people.clear();
     }, 450);
-    if (!was) return;
+    if (!was || sbx) return;
     if (why === 'ended') {
         _hallSfx('end');
         _libToast('انتهى الاجتماع — شكرًا لحضوركم', 4200);
@@ -48281,6 +48306,7 @@ function hallStop() {
 function _hallLeaveNow() {
     const d = _hall.doc;
     if (!d || !_hall.in) return;
+    if (_hall.sandbox) { _hallExit('left', null); return; }
     _hall.cardHidden = '';
     update(ref(database), { [`${HALL_PATH}/meeting/out/${_hallMe()}`]: serverNow() }).catch(() => {});
     _hallExit('left', d);
@@ -48369,6 +48395,7 @@ function _hallRejoin() {
 function _hallEnd() {
     const d = _hall.doc;
     if (!d || !_hallIsMod(gameState.userId)) return;
+    if (_hall.sandbox) { _hallExit('left', null); return; }
     try { _hallCastStop(); } catch (_) {}
     update(ref(database), {
         [`${HALL_PATH}/meeting`]: null,
@@ -48377,7 +48404,7 @@ function _hallEnd() {
 }
 function _hallToggleFocus() {
     const d = _hall.doc;
-    if (!d || !_hallIsMod(gameState.userId)) return;
+    if (!d || !_hallIsMod(gameState.userId) || _hall.sandbox) return;
     update(ref(database), { [`${HALL_PATH}/meeting/focus`]: d.focus ? 0 : 1 }).catch(() => {});
 }
 
@@ -49665,6 +49692,9 @@ async function hallOpenPicker() {
     E.pickBody.textContent = '';
     E.pick.classList.add('active');
     E.pick.setAttribute('aria-hidden', 'false');
+    // A سراج ghost can open the room alone, to try it without calling anyone.
+    const pickTest = document.getElementById('hall-pick-test');
+    if (pickTest) pickTest.hidden = !gameState.isSirajGhost;
     await _withTimeout(_mdwnhRosterReady.catch(() => {}), 4000, null);
     if (!_hall.pickOpen) return;
     _hallPickFoot();
@@ -49875,6 +49905,573 @@ async function _hallShowAward() {
 }
 
 /* ── wiring ────────────────────────────────────────────────────────────────── */
+/* ══ ليمو يرمي النقاط — points, thrown live in the hall ═══════════════════════
+   A moderator presses a member's seat and picks a sticker (٥ / ١٠ / ٢٠ / ٣٠). ليمو walks
+   onto the stage from the left, turns round, comes back holding that sticker and throws
+   it straight at the member. It lands with a burst and the Points site's own cue for
+   that amount, the member's total appears over their head and counts up — and the
+   Points database has already been written. He waits a little, then turns and walks
+   off; an order given while he is still there is simply next in his queue.
+
+   WHAT IS SENT. One relay event per throw, in the hall's own room:
+     {t:'hp', uid:<giver>, k, to:<member>, p, at, f, sh?}
+   `at` = the earliest server time his clip may start for this order; `f` = the member's
+   total before it (-1 = unknown); `sh` = show only. Everything else — when he walks in,
+   which frame he is on, where the sticker is, when it lands — is a PURE function of the
+   orders this screen knows and serverNow() (_hlpPlan / _hlpPose), so every screen plays
+   the same show and nothing is streamed. Two moderators ordering at once are queued the
+   same way everywhere (sorted by `at`, then `k`).
+
+   WHAT IS WRITTEN. The GIVER's client, before it sends the event: an atomic increment of
+   `players/<dbKey>/totalPoints` in the Points database and one `history` row — the same
+   two writes the Points site makes (performAddPoints). No claim, no trip to that site.
+   A سراج ghost (and the solo test room) is SHOW ONLY: the same throw, nothing written.
+
+   THE STICKER is not in his frames. It is one <img>, placed frame by frame on the path
+   tracked off the owner's guide video (HLP_STK: centre, turn and squash, frames 16–38,
+   stepped at the clip's 15 fps like the hand that holds it), then flown in a straight
+   line at the member at the guide's own speed and spin.
+
+   HIS OWN TIMER. He is a canvas in the hall's fx layer, drawn by a 33 ms setInterval
+   that exists only while he is on (or coming to) the stage — the frame loop is asleep
+   under the hall. Sounds for his own moves are the owner's to add; the landing cue is
+   the Points site's (Sound/Points/N.mp3, fetched when the first order arrives). */
+const HLP_FPS       = 15;
+const HLP_CLIP_MS   = 61 * 1000 / HLP_FPS;        // LEMO_ANIMS.ThrowPoints.frames
+const HLP_NEXT_MS   = 54 * 1000 / HLP_FPS;        // the next throw may start here (he is all but standing again)
+const HLP_STK_F0    = 16;                         // the sticker first shows on this frame…
+const HLP_REL_F     = 38;                         // …and leaves his hand on this one
+const HLP_REL_MS    = HLP_REL_F * 1000 / HLP_FPS;
+// The sticker in his hand, frames 16…38: [centre x, centre y (source-cell px), turn (deg), scale x, scale y].
+const HLP_STK = [
+    [1223, 869, 0, 0.2, 0.74], [1641, 606, 15, 0.87, 0.94], [1644, 492, 4, 1, 1], [1631, 479, 4, 1, 1],
+    [1631, 504, 4, 1, 1], [1631, 531, 4, 1, 1], [1630, 542, 4, 1, 1], [1629, 538, 4, 1, 1],
+    [1625, 525, 4, 1, 1], [1619, 511, 4, 1, 1], [1609, 501, 3, 1, 1], [1590, 488, 2, 1, 1],
+    [1510, 442, -3, 1, 1], [1427, 400, -9, 1, 1], [1402, 389, -12, 1, 1], [1388, 383, -12, 1, 1],
+    [1379, 380, -12, 1, 1], [1374, 377, -12, 1, 1], [1370, 376, -12, 1, 1], [1367, 375, -12, 1, 1],
+    [1366, 374, -12, 1, 1], [1365, 374, -12, 1, 1], [1809, 661, 24, 1, 1],
+];
+const HLP_STK_D     = 505;                        // the sticker image's side in source px (its disc is 450)
+const HLP_SPEED     = 891 * HLP_FPS;              // source px a second — the guide's first flying frame
+const HLP_SPIN      = 78 * HLP_FPS;               // degrees a second, the same frame
+const HLP_FLY_MIN   = 220, HLP_FLY_MAX = 800;     // ms
+const HLP_ENTER_MS  = 2300;                       // the walk in from the left edge
+const HLP_EXIT_MS   = 2100;                       // …and back out
+const HLP_LINGER_MS = 3200;                       // he waits this long for another order before leaving
+const HLP_LEAD_MS   = 450;                        // an order reaches every screen before it starts
+const HLP_WALK_FPS  = 20;                         // his walk clip, played brisk
+const HLP_BOX       = [180, 260, 1900, 2050];     // his canvas, in source-cell px (holds every clip he uses here)
+const HLP_BITS      = { 5: 14, 10: 22, 20: 32, 30: 46 };
+// A cue that opens with a warm-up starts this many ms BEFORE the sticker lands, so that
+// its own hit falls on the impact. Only the +30 has one (silent 0.2 s, peak at 0.6 s).
+const HLP_SND_LEAD  = { 30: 600 };
+
+const _hlp = {
+    orders: [], seen: new Set(), busy: new Set(),
+    timer: 0, cv: null, ctx: null, cvKey: '', drawKey: '',
+    geo: null, geoAt: 0,
+    pop: null, popUid: '', testBtn: null,
+    snd: {},
+};
+
+// Effective start of every order (`s`) and the show it belongs to. A show = one visit to
+// the stage: orders close enough together that he never left. Deterministic in the
+// orders alone, so every screen computes the same queue.
+function _hlpPlan() {
+    const os = _hlp.orders;
+    os.sort((a, b) => a.at - b.at || (a.k < b.k ? -1 : 1));
+    let prev = null;
+    for (const o of os) {
+        if (prev && o.at <= prev.s + HLP_CLIP_MS + HLP_LINGER_MS) {
+            o.s = Math.max(o.at, prev.s + HLP_NEXT_MS);
+            o.show = prev.show;
+        } else {
+            o.s = prev ? Math.max(o.at, prev.s + HLP_CLIP_MS + HLP_LINGER_MS + HLP_EXIT_MS + HLP_ENTER_MS) : o.at;
+            o.show = prev ? prev.show + 1 : 0;
+        }
+        prev = o;
+    }
+}
+// The earliest moment a new order may start, given what he is doing now.
+function _hlpNextAt() {
+    _hlpPlan();
+    const now = serverNow(), os = _hlp.orders, last = os[os.length - 1];
+    if (!last) return now + HLP_LEAD_MS + HLP_ENTER_MS;
+    const leaveAt = last.s + HLP_CLIP_MS + HLP_LINGER_MS;
+    if (now + HLP_LEAD_MS <= leaveAt) return Math.max(now + HLP_LEAD_MS, last.s + HLP_NEXT_MS);
+    return Math.max(now + HLP_LEAD_MS + HLP_ENTER_MS, leaveAt + HLP_EXIT_MS + HLP_ENTER_MS);
+}
+
+// His walk clip over `D` ms: the warm-up, the cruise looped, the stop — and how far
+// along the way he is (0…1; he has arrived a little before the clip has settled).
+function _hlpWalk(el, D, out) {
+    const fm = 1000 / HLP_WALK_FPS, tS = LEMO_WALK_START_N * fm, tE = LEMO_WALK_END_N * fm;
+    if (el < tS) out.frame = Math.min(LEMO_WALK_START_N - 1, Math.floor(el / fm));
+    else if (el < D - tE) out.frame = LEMO_WALK_LOOP_0 + (Math.floor((el - tS) / fm) % LEMO_WALK_LOOP_N);
+    else out.frame = Math.min(LEMO_WALK_END_0 + LEMO_WALK_END_N - 1, LEMO_WALK_END_0 + Math.max(0, Math.floor((el - (D - tE)) / fm)));
+    const u = Math.max(0, Math.min(1, el / (D - 600)));
+    out.u = u * u * (3 - 2 * u);
+    out.anim = 'Walk';
+}
+// Where he is and what he is doing at server time t. PURE.
+const _hlpPoseOut = { on: false, u: 0, anim: 'Idle', frame: 0, face: 1 };
+function _hlpPose(t, out) {
+    out.on = false;
+    const os = _hlp.orders;
+    for (let i = 0; i < os.length; i++) {
+        const first = os[i];
+        let j = i;
+        while (j + 1 < os.length && os[j + 1].show === first.show) j++;
+        const last = os[j], t0 = first.s - HLP_ENTER_MS, end = last.s + HLP_CLIP_MS, gone = end + HLP_LINGER_MS + HLP_EXIT_MS;
+        if (t >= t0 && t < gone) {
+            out.on = true; out.face = 1; out.u = 1;
+            if (t < first.s) { _hlpWalk(t - t0, HLP_ENTER_MS, out); return out; }
+            if (t >= end + HLP_LINGER_MS) {
+                _hlpWalk(t - end - HLP_LINGER_MS, HLP_EXIT_MS, out);
+                out.u = 1 - out.u; out.face = -1;
+                return out;
+            }
+            let cur = first;
+            for (let q = i; q <= j; q++) if (os[q].s <= t) cur = os[q];
+            const c = t - cur.s;
+            if (c < HLP_CLIP_MS) { out.anim = 'ThrowPoints'; out.frame = Math.min(60, Math.floor(c * HLP_FPS / 1000)); }
+            else { out.anim = 'Idle'; out.frame = Math.floor(t / 125) % LEMO_ANIMS.Idle.frames; }
+            return out;
+        }
+        i = j;
+    }
+    return out;
+}
+
+// Where the stage is, in the hall's own px (screen px ÷ the room's scale). Read at most
+// twice a second — never per tick.
+function _hlpGeo(force) {
+    const E = _hall.E, now = performance.now();
+    if (!E) return null;
+    if (!force && _hlp.geo && now - _hlp.geoAt < 500) return _hlp.geo;
+    const floor = E.root.querySelector('.hall-stage-floor');
+    if (!floor) return _hlp.geo;
+    const r = floor.getBoundingClientRect(), ui = _hall.ui || 1;
+    if (!r.width) return _hlp.geo;
+    const a = parseFloat(E.stageRow.style.getPropertyValue('--hall-a')) || 60;
+    const bodyH = Math.max(54, Math.min(112, a * 1.3));
+    _hlp.geoAt = now;
+    _hlp.geo = {
+        k: bodyH / LEMO_BODY_SRC_H,                              // hall px per source px
+        feetY: (r.top + r.height * 0.42) / ui,
+        standX: (r.left + Math.max(46, r.width * 0.08)) / ui,
+        offX: -bodyH * 0.9,
+    };
+    return _hlp.geo;
+}
+function _hlpCanvas(g) {
+    const layer = _hallFx();
+    if (!layer) return null;
+    const dp = Math.min(2, (window.devicePixelRatio || 1) * (_hall.ui || 1));
+    const w = (HLP_BOX[2] - HLP_BOX[0]) * g.k, h = (HLP_BOX[3] - HLP_BOX[1]) * g.k;
+    const key = Math.round(w * dp) + 'x' + Math.round(h * dp);
+    if (!_hlp.cv) {
+        const cv = document.createElement('canvas');
+        cv.className = 'hlp-lemo';
+        layer.appendChild(cv);
+        _hlp.cv = cv; _hlp.ctx = cv.getContext('2d'); _hlp.cvKey = '';
+    }
+    if (_hlp.cvKey !== key) {
+        _hlp.cvKey = key; _hlp.drawKey = '';
+        _hlp.cv.width = Math.max(1, Math.round(w * dp)); _hlp.cv.height = Math.max(1, Math.round(h * dp));
+        _hlp.cv.style.width = w.toFixed(1) + 'px'; _hlp.cv.style.height = h.toFixed(1) + 'px';
+        _hlp.dp = dp;
+    }
+    return _hlp.cv;
+}
+function _hlpDraw(pose, g) {
+    const cv = _hlpCanvas(g);
+    if (!cv) return;
+    const x = g.offX + (g.standX - g.offX) * pose.u;
+    cv.style.transform = `translate(${(x - (LEMO_ANCHOR_SX - HLP_BOX[0]) * g.k).toFixed(1)}px, ${(g.feetY - (LEMO_ANCHOR_SY - HLP_BOX[1]) * g.k).toFixed(1)}px)`;
+    let name = pose.anim, frame = pose.frame, sheet = _lemoSheet(name);
+    if (!sheet && name !== 'Idle') { name = 'Idle'; frame = Math.floor(Date.now() / 125) % LEMO_ANIMS.Idle.frames; sheet = _lemoSheet('Idle'); }
+    const key = (sheet ? name : '-') + ':' + frame + ':' + pose.face;
+    if (key === _hlp.drawKey) return;
+    _hlp.drawKey = key;
+    const ctx = _hlp.ctx, kk = g.k * _hlp.dp;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, cv.width, cv.height);
+    if (!sheet) return;
+    const a = LEMO_ANIMS[name], ax = (LEMO_ANCHOR_SX - HLP_BOX[0]) * kk, ay = (LEMO_ANCHOR_SY - HLP_BOX[1]) * kk;
+    // The shadow he stands on, then him — mirrored about his own anchor on the way out.
+    ctx.globalAlpha = 0.3; ctx.fillStyle = '#000';
+    ctx.beginPath(); ctx.ellipse(ax, ay - 4 * kk, 300 * kk, 70 * kk, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.translate(ax, 0); ctx.scale(pose.face === -1 ? -1 : 1, 1); ctx.translate(-ax, 0);
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(sheet, (frame % a.cols) * a.fw, ((frame / a.cols) | 0) * a.fh, a.fw, a.fh,
+        (a.box[0] - HLP_BOX[0]) * kk, (a.box[1] - HLP_BOX[1]) * kk, (a.box[2] - a.box[0]) * kk, (a.box[3] - a.box[1]) * kk);
+}
+
+// One order's sticker at clip time c (ms): in his hand on the tracked path, then in the air.
+function _hlpSticker(o, c, g) {
+    if (o.hit) return;
+    const f = Math.floor(c * HLP_FPS / 1000);
+    if (f < HLP_STK_F0) return;
+    const layer = _hallFx();
+    if (!layer) return;
+    if (!o.el) {
+        const im = document.createElement('img');
+        im.className = 'hlp-stk';
+        im.alt = ''; im.draggable = false; im.decoding = 'async';
+        im.src = `Art/Points/${o.p}.webp`;
+        im.style.setProperty('--d', (HLP_STK_D * g.k).toFixed(1) + 'px');
+        layer.appendChild(im);
+        o.el = im;
+    }
+    const X = (sx) => g.standX + (sx - LEMO_ANCHOR_SX) * g.k, Y = (sy) => g.feetY + (sy - LEMO_ANCHOR_SY) * g.k;
+    // A cue with a warm-up is started early: the flight is measured ahead of the release
+    // (the seat is where it will be), and the cue leaves `lead` ms before the landing.
+    const lead = HLP_SND_LEAD[o.p] || 0;
+    if (lead && !o.sndHit && c >= HLP_REL_MS - lead) {
+        if (o.flyEst == null) { const a = _hlpAim(o, g); o.flyEst = a ? a.fly : -1; }
+        const due = HLP_REL_MS + (o.fly != null ? o.fly : o.flyEst) - lead;
+        if (o.flyEst >= 0 && c >= due) { o.sndHit = true; if (c - due < 400) _hlpSound(o.p); }
+    }
+    if (c < HLP_REL_MS) {
+        const r = HLP_STK[f - HLP_STK_F0];
+        o.el.style.transform = `translate(${X(r[0]).toFixed(1)}px, ${Y(r[1]).toFixed(1)}px) rotate(${r[2]}deg) scale(${r[3]}, ${r[4]})`;
+        return;
+    }
+    // Released: straight at the member, at the guide's own speed and spin. Aimed once.
+    const rel = HLP_STK[HLP_STK.length - 1];
+    if (o.fly == null) {
+        const a = _hlpAim(o, g);
+        if (!a) { o.hit = true; o.el.remove(); o.el = null; return; }      // they have left: nothing to hit
+        o.x0 = a.x0; o.y0 = a.y0; o.tx = a.tx; o.ty = a.ty; o.tr = a.tr; o.fly = a.fly;
+    }
+    const u = (c - HLP_REL_MS) / o.fly;
+    if (u >= 1) { _hlpHit(o, c - HLP_REL_MS - o.fly < 1500); return; }
+    const x = o.x0 + (o.tx - o.x0) * u, y = o.y0 + (o.ty - o.y0) * u;
+    o.el.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px) rotate(${(rel[2] + HLP_SPIN * (c - HLP_REL_MS) / 1000).toFixed(0)}deg)`;
+}
+
+// From his hand at the release to the member's avatar: where, and how long the flight is.
+function _hlpAim(o, g) {
+    const tp = _hall.people.get(o.to), av = tp && tp.el && tp.el.querySelector('.hall-av');
+    const r = av ? av.getBoundingClientRect() : null, ui = _hall.ui || 1;
+    if (!r || !r.width) return null;
+    const rel = HLP_STK[HLP_STK.length - 1];
+    const x0 = g.standX + (rel[0] - LEMO_ANCHOR_SX) * g.k, y0 = g.feetY + (rel[1] - LEMO_ANCHOR_SY) * g.k;
+    const tx = (r.left + r.width / 2) / ui, ty = (r.top + r.height / 2) / ui;
+    return { x0, y0, tx, ty, tr: r.width / 2 / ui,
+             fly: Math.max(HLP_FLY_MIN, Math.min(HLP_FLY_MAX, Math.hypot(tx - x0, ty - y0) / (HLP_SPEED * g.k) * 1000)) };
+}
+// It lands: the burst, the Points site's cue, and their total counting up over their head.
+// `live` = this screen saw it land (false: it joined late — no show for something long over).
+function _hlpHit(o, live) {
+    o.hit = true;
+    const el = o.el, layer = _hallFx();
+    o.el = null;
+    if (el) {
+        if (!live || !layer) el.remove();
+        else {
+            el.classList.add('hit');
+            el.style.transform = `translate(${o.tx.toFixed(1)}px, ${o.ty.toFixed(1)}px) rotate(${(Math.random() * 40 - 20).toFixed(0)}deg) scale(1.9)`;
+            setTimeout(() => el.remove(), 320);
+        }
+    }
+    if (!live || !layer || !_hall.in) return;
+    const tp = _hall.people.get(o.to);
+    const bob = tp && tp.el && tp.el.querySelector('.hall-bob');
+    if (bob) { bob.classList.remove('hlp-hit', 'hop'); void bob.offsetWidth; bob.classList.add('hlp-hit'); }
+    if (!document.hidden) {
+        const ring = document.createElement('i');
+        ring.className = 'hlp-ring';
+        ring.style.left = o.tx.toFixed(1) + 'px'; ring.style.top = o.ty.toFixed(1) + 'px';
+        ring.style.setProperty('--r', (o.tr * 2).toFixed(0) + 'px');
+        layer.appendChild(ring);
+        setTimeout(() => ring.remove(), 700);
+        const n = _hall.fx ? (HLP_BITS[o.p] || 20) : 8;
+        for (let i = 0; i < n; i++) {
+            const b = document.createElement('i');
+            b.className = 'hlp-bit';
+            const ang = (i / n) * Math.PI * 2 + Math.random() * 0.5, d = o.tr * (1.6 + Math.random() * 2.6);
+            b.style.left = o.tx.toFixed(1) + 'px'; b.style.top = o.ty.toFixed(1) + 'px';
+            b.style.background = HALL_CONF_COLORS[i % HALL_CONF_COLORS.length];
+            b.style.setProperty('--dx', (Math.cos(ang) * d).toFixed(0) + 'px');
+            b.style.setProperty('--dy', (Math.sin(ang) * d * 0.8 - o.tr * 0.9).toFixed(0) + 'px');
+            b.style.setProperty('--rot', (Math.random() * 720 - 360).toFixed(0) + 'deg');
+            b.style.animationDuration = (0.7 + Math.random() * 0.5).toFixed(2) + 's';
+            layer.appendChild(b);
+            setTimeout(() => b.remove(), 1400);
+        }
+    }
+    if (!o.sndHit) _hlpSound(o.p);
+    _hlpCounter(o, layer);
+    // My own total, on my own card — the number the Points database now holds.
+    if (!o.sh && _dmCanon(o.to) === _hallMe() && typeof _lib.points === 'number') {
+        _lib.points += o.p;
+        try { _libPaintScore(); } catch (_) {}
+    }
+}
+function _hlpCounter(o, layer) {
+    const box = document.createElement('div');
+    box.className = 'hlp-count';
+    box.dir = 'rtl';
+    const num = document.createElement('b'), plus = document.createElement('span');
+    plus.textContent = '+' + _libAr(o.p);
+    box.append(num, plus);
+    box.style.left = o.tx.toFixed(1) + 'px';
+    box.style.top = (o.ty - o.tr - 10).toFixed(1) + 'px';
+    layer.appendChild(box);
+    const known = o.f >= 0, from = known ? o.f : 0, to = from + o.p;
+    const paint = (v) => { num.textContent = known ? `${_libAr(v)} نقطة` : `${_libAr(v)} نقطة`; };
+    paint(from);
+    // The count: a short beat to read the old number, then up to the new one.
+    const dur = 700 + o.p * 28, t0 = performance.now() + 380;
+    const iv = setInterval(() => {
+        const u = Math.max(0, Math.min(1, (performance.now() - t0) / dur));
+        paint(Math.round(from + (to - from) * (1 - (1 - u) * (1 - u))));
+        if (u >= 1) { clearInterval(iv); box.classList.add('done'); }
+    }, 40);
+    setTimeout(() => { clearInterval(iv); box.classList.add('out'); }, 380 + dur + 2600);
+    setTimeout(() => box.remove(), 380 + dur + 3100);
+}
+// The Points site's own cue for that amount. Buffer only (see _hallCue); fetched when the
+// first order for that amount arrives, seconds before it can land.
+function _hlpEnsureSound(p) { _hlpEnsureCue('pts' + p, `Sound/Points/${p}.mp3`); }
+function _hlpPreload() {
+    if (!_hall.in) return;
+    for (const v of HALL_PTS) _hlpEnsureSound(v);
+    _hlpEnsureCue('lemoThrowPoints', 'Sound/Lemo_ThrowPoints.mp3');
+    for (const v of HALL_PTS) { const im = new Image(); im.decoding = 'async'; im.src = `Art/Points/${v}.webp`; }
+}
+function _hlpEnsureCue(key, url) {
+    const fe = gameState.focusAudioEngine;
+    try { if (fe && !fe.ctx) fe.init(); } catch (_) {}
+    if (!fe || !fe.ctx || fe.buffers[key] || _hlp.snd[key]) return;
+    _hlp.snd[key] = fetch(url).then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+        .then(ab => fe.ctx.decodeAudioData(ab))
+        .then(buf => { if (!fe.buffers[key]) fe.buffers[key] = buf; })
+        .catch(() => {})
+        .then(() => { _hlp.snd[key] = null; });
+}
+function _hlpSound(p) { _hlpCue('pts' + p, `Sound/Points/${p}.mp3`, 0.6); }
+// Play a cue now; not decoded yet → wait for it a moment, and past that stay silent.
+function _hlpCue(key, url, vol) {
+    const fe = gameState.focusAudioEngine;
+    const go = () => { try { return !!(fe && fe.playHandled(key, 1, vol)); } catch (_) { return false; } };
+    if (go()) return;
+    _hlpEnsureCue(key, url);
+    const load = _hlp.snd[key], t0 = performance.now();
+    if (load) load.then(() => { if (performance.now() - t0 <= 700 && _hall.in) go(); });
+}
+
+function _hlpTick() {
+    if (!_hall.in) { _hlpStop(); return; }
+    const t = serverNow(), g = _hlpGeo(false), os = _hlp.orders;
+    if (!g) return;
+    const pose = _hlpPose(t, _hlpPoseOut);
+    if (pose.on) _hlpDraw(pose, g);
+    else if (_hlp.cv) { _hlp.cv.remove(); _hlp.cv = null; _hlp.ctx = null; }
+    for (const o of os) {
+        if (t < o.s) continue;
+        // His own sound was cut to the clip: it starts on frame 0, never part-way in.
+        if (!o.snd) { o.snd = true; if (t - o.s < 500) _hlpCue('lemoThrowPoints', 'Sound/Lemo_ThrowPoints.mp3', 0.6); }
+        _hlpSticker(o, t - o.s, g);
+    }
+    // Everything thrown and he has left: the show is over.
+    const last = os[os.length - 1];
+    if (!last || (t > last.s + HLP_CLIP_MS + HLP_LINGER_MS + HLP_EXIT_MS + 400 && os.every(o => o.hit))) {
+        for (const o of os) if (o.el) o.el.remove();
+        _hlp.orders = [];
+        clearInterval(_hlp.timer); _hlp.timer = 0;
+        if (_hlp.cv) { _hlp.cv.remove(); _hlp.cv = null; _hlp.ctx = null; }
+        _lemoDropSheet('ThrowPoints');
+    }
+}
+function _hlpStop() {
+    clearInterval(_hlp.timer); _hlp.timer = 0;
+    for (const o of _hlp.orders) if (o.el) o.el.remove();
+    _hlp.orders = []; _hlp.busy.clear();
+    if (_hlp.cv) { _hlp.cv.remove(); _hlp.cv = null; _hlp.ctx = null; }
+    _hlp.geo = null;
+    _hlpPopClose();
+    try { _lemoDropSheet('ThrowPoints'); } catch (_) {}
+}
+
+// An order, from this client or the relay — already checked.
+function _hlpAdd(o) {
+    if (!_hall.in || _hlp.seen.has(o.k)) return;
+    _hlp.seen.add(o.k);
+    if (_hlp.seen.size > 400) _hlp.seen = new Set([o.k]);
+    o.hit = false; o.el = null; o.fly = null;
+    _hlp.orders.push(o);
+    _hlpPlan();
+    for (const n of ['Walk', 'Idle', 'ThrowPoints']) ensureLemoSheet(n);
+    _hlpEnsureSound(o.p);
+    _hlpEnsureCue('lemoThrowPoints', 'Sound/Lemo_ThrowPoints.mp3');   // normally decoded after spawn already
+    _hlpGeo(true);
+    if (!_hlp.timer) _hlp.timer = setInterval(_hlpTick, 33);
+}
+// `{t:'hp'}` from another member's client: relayed data, every field re-checked — and
+// all it can do is play a throw on this screen (the giver's own client writes the points).
+function _hlpOnMsg(p, m) {
+    if (!_hallIsMod(p.uid)) return;
+    const pts = Number(m.p), at = Number(m.at), f = Number(m.f);
+    if (!HALL_PTS.includes(pts) || !Number.isFinite(at) || Math.abs(at - serverNow()) > 90000) return;
+    if (typeof m.to !== 'string' || !HALL_UID_RE.test(m.to) || typeof m.k !== 'string' || !/^[\w-]{4,24}$/.test(m.k)) return;
+    _hlpAdd({ k: m.k, by: p.uid, to: m.to, p: pts, at, f: (Number.isFinite(f) && f >= 0 && f < 1e7) ? Math.floor(f) : -1, sh: m.sh === 1 });
+}
+
+// A moderator gives `p` points to the member in seat `uid`.
+async function _hlpGive(uid, p) {
+    const me = gameState.userId;
+    if (!_hall.in || !_hallIsMod(me) || !HALL_PTS.includes(p) || _hlp.busy.has(uid)) return;
+    const tp = _hall.people.get(uid);
+    if (!tp) return;
+    // A test ghost — and the solo test room — only SHOW it: nothing reaches the Points database.
+    const show = !!gameState.isSirajGhost || !!_hall.sandbox;
+    const rec = MDWNH_ROSTER.byDiscord[tp.cu];
+    const can = !!(rec && rec.dbKey && !rec.admin && !rec.dummy);
+    if (!show && !can) { _libToast('لا يملك هذا العضو حساب نقاط'); return; }
+    if (!show && tp.cu === _hallMe()) { _libToast('لا يمكنك منح النقاط لنفسك'); return; }
+    _hlp.busy.add(uid);
+    _hlpEnsureSound(p);
+    let from = -1;
+    try {
+        if (can) {
+            const path = `players/${encodeURIComponent(rec.dbKey)}`;
+            const cur = await _withTimeout(libPtsGet(`${path}/totalPoints`), 6000, '__late');
+            if (cur === '__late') throw new Error('timeout');
+            from = typeof cur === 'number' ? cur : 0;
+            if (!show) {
+                // The Points site's own two writes (performAddPoints): the total, atomically, and a history row.
+                await libPtsPatch(path, { totalPoints: { '.sv': { increment: p } }, lastUpdated: { '.sv': 'timestamp' } });
+                const d = _hall.doc;
+                libPtsPost('history', { user: rec.dbKey, amount: p, note: 'اجتماع: ' + ((d && d.title) || 'القاعة'), timestamp: Date.now(), isWheel: false, isPunishment: false }).catch(() => {});
+            }
+        } else from = 40 + Math.floor(_hallHash(uid) * 400);       // a test seat has no row: a number to count from
+    } catch (e) {
+        console.error('[hall] points', e);
+        _hlp.busy.delete(uid);
+        _libToast('تعذّر منح النقاط، حاول مجددًا');
+        return;
+    }
+    _hlp.busy.delete(uid);
+    if (!_hall.in) return;
+    const o = { k: Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36), by: me, to: uid, p, at: Math.round(_hlpNextAt()), f: from, sh: show };
+    const m = { t: 'hp', uid: me, k: o.k, to: uid, p, at: o.at, f: from };
+    if (show) m.sh = 1;
+    _hallSend(m);
+    _hlpAdd(o);
+}
+
+/* the sticker picker over a seat */
+function _hlpPopOpen(uid, seat) {
+    const E = _hall.E, tp = _hall.people.get(uid);
+    if (!E || !tp || !_hallIsMod(gameState.userId)) return;
+    if (!_hlp.pop) {
+        const pop = document.createElement('div');
+        pop.className = 'hlp-pop';
+        pop.setAttribute('role', 'dialog');
+        const name = document.createElement('div');
+        name.className = 'hlp-pop-name';
+        const row = document.createElement('div');
+        row.className = 'hlp-pop-row';
+        for (const v of HALL_PTS) {
+            const b = document.createElement('button');
+            b.type = 'button'; b.className = 'hlp-pop-btn'; b.dataset.v = String(v);
+            b.setAttribute('aria-label', `${_libAr(v)} نقطة`);
+            const im = document.createElement('img');
+            im.alt = ''; im.draggable = false; im.decoding = 'async'; im.src = `Art/Points/${v}.webp`;
+            b.appendChild(im);
+            row.appendChild(b);
+        }
+        pop.append(name, row);
+        pop.addEventListener('click', (e) => {
+            const b = e.target.closest('.hlp-pop-btn');
+            if (!b) return;
+            const to = _hlp.popUid;
+            _hlpPopClose();
+            _hlpGive(to, Number(b.dataset.v));
+        });
+        E.root.appendChild(pop);
+        _hlp.pop = pop;
+    }
+    const av = seat.querySelector('.hall-av'), r = av.getBoundingClientRect(), ui = _hall.ui || 1, pop = _hlp.pop;
+    pop.firstChild.textContent = `نقاط إلى ${tp.n || 'العضو'}`;
+    _hlp.popUid = uid;
+    const W = window.innerWidth / ui, half = 118;
+    pop.style.left = Math.max(half + 8, Math.min(W - half - 8, (r.left + r.width / 2) / ui)).toFixed(1) + 'px';
+    // Above the seat — or under it when there is no room above (a member on the stage).
+    const below = r.top / ui < 150;
+    pop.classList.toggle('below', below);
+    pop.style.top = ((below ? r.bottom + 10 : r.top - 10) / ui).toFixed(1) + 'px';
+    pop.classList.add('show');
+}
+function _hlpPopClose() {
+    if (_hlp.pop) _hlp.pop.classList.remove('show');
+    _hlp.popUid = '';
+}
+// A سراج ghost's one-press test: a random sticker at a random seat.
+function _hlpTestThrow() {
+    if (!_hall.in || !_hallIsMod(gameState.userId)) return;
+    const others = [..._hall.people.values()].filter(p => p.uid !== gameState.userId);
+    const tp = others.length ? others[Math.floor(Math.random() * others.length)] : _hall.people.get(gameState.userId);
+    if (tp) _hlpGive(tp.uid, HALL_PTS[Math.floor(Math.random() * HALL_PTS.length)]);
+}
+function _hlpSetupUI(root) {
+    // A moderator's press on a member (not on himself) opens the sticker picker.
+    root.addEventListener('click', (e) => {
+        const av = e.target.closest('.hall-seat .hall-av');
+        if (!av || !_hall.in || !_hallIsMod(gameState.userId)) return;
+        const seat = av.closest('.hall-seat'), uid = seat.dataset.uid;
+        if (!uid || uid === gameState.userId) return;
+        if (_hlp.popUid === uid) { _hlpPopClose(); return; }
+        _hlpPopOpen(uid, seat);
+    });
+    root.addEventListener('pointerdown', (e) => {
+        if (_hlp.popUid && !e.target.closest('.hlp-pop') && !e.target.closest('.hall-seat .hall-av')) _hlpPopClose();
+    });
+    const tb = document.createElement('button');
+    tb.type = 'button'; tb.className = 'hlp-test'; tb.hidden = true;
+    tb.textContent = 'جرّب رمية ليمو';
+    tb.addEventListener('click', _hlpTestThrow);
+    root.appendChild(tb);
+    _hlp.testBtn = tb;
+    window.addEventListener('resize', () => { _hlp.geo = null; _hlp.cvKey = ''; _hlpPopClose(); });
+}
+
+/* The solo test room — a سراج ghost only. The hall, opened on this screen alone: no
+   meeting doc, no relay room, nobody called. A dozen سراج seats to throw at. */
+const HALL_SANDBOX_SEATS = [
+    ['m', '#F04D39'], ['m', '#3BB9AB'], ['m', '#F4C82C'], ['m', '#086FB4'], ['m', '#ffffff'], ['m', '#3BB9AB'],
+    ['m', '#F04D39'], ['m', '#F4C82C'], ['f', '#F04D39'], ['f', '#3BB9AB'], ['f', '#F4C82C'], ['f', '#086FB4'],
+];
+function _hallSandbox() {
+    if (!gameState.isSirajGhost || _hall.in || _hall.entering) return;
+    if (_hall.doc) { _libToast('هناك اجتماع قائم الآن — جرّب بعد انتهائه'); return; }
+    const me = _hallMe();
+    const d = { id: String(Date.now()), title: 'تجربة القاعة', by: me, byName: _hallMyName(), at: serverNow(), who: { [me]: 1 }, out: {}, focus: false };
+    _hallPickClose();
+    _hall.sandbox = true;
+    _hall.doc = d;
+    _hall.rejoin = true;
+    _hallEnter(d);
+}
+function _hallSandboxSeats() {
+    const now = Date.now();
+    // Every seat is سراج (the owner's call: no real member's face in a test) — his roster
+    // picture, his name, a ring colour each so the seats can be told apart.
+    let face = '';
+    try { const r = MDWNH_ROSTER.bySlug && MDWNH_ROSTER.bySlug.siraj; if (r && r.slug) face = _libAvatar(r.slug); } catch (_) {}
+    HALL_SANDBOX_SEATS.forEach(([g, c], i) => {
+        const uid = 'sbx_' + (i + 1);
+        const p = { uid, cu: uid, t0: now + i, at: now, lv: false, el: null, n: 'سراج', av: face, c, g, fake: true };
+        _hall.people.set(uid, p);
+        _hallSeatEl(p);
+    });
+    _hall.layoutDirty = true;
+}
+
 function hallStart() {
     if (_hall.started || !gameState.userId) return;
     _hall.started = true;
@@ -50010,6 +50607,7 @@ function setupHallUI() {
     root.addEventListener('click', (e) => {
         if (e.target.closest('.hall-seat.me .hall-av') && !_hall.cmp.open) _hallComposeOpen();
     });
+    _hlpSetupUI(root);
 
     E.share.addEventListener('click', () => { if (_hall.cast) _hallCastStop(); else _hallCastStart(); });
     E.kill.addEventListener('click', () => {
@@ -50084,6 +50682,8 @@ function setupHallUI() {
         chip.setAttribute('aria-checked', _hall.pickSel.has(uid) ? 'true' : 'false');
         _hallPickHeads();
     });
+    const pickTest = document.getElementById('hall-pick-test');
+    if (pickTest) pickTest.addEventListener('click', _hallSandbox);
     E.pickGo.addEventListener('click', async () => {
         if (E.pickGo.classList.contains('is-busy')) return;
         if (E.pickGo.classList.contains('is-off')) {

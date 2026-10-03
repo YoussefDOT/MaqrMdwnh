@@ -12,6 +12,8 @@ Art/Lemo/*.png
 # A PNG-sequence master (the Throw clip's 111 frames, 115 MB) — slice.py bakes it
 # into Art/Lemo/Sheets/Throw.webp; the frames never ship.
 Art/Lemo/throw/
+# …and the ThrowPoints clip's 67 frames (52 MB) → Art/Lemo/Sheets/ThrowPoints.webp.
+Art/Lemo/ThrowPoints/
 
 # Fireplace fire source spritesheet (4x8 grid of 1500x1920 cells, ~12 MB) — only the
 # sliced Art/Fire/fire_NN.png sequence (~890 KB) ships. Keep the master out of git.
@@ -29,6 +31,8 @@ Sound/player_Fall.full.mp3
 # The two meeting-hall cues ship re-encoded at 96k; these are the originals.
 Sound/meeting_start.full.mp3
 Sound/meeting_loaded.full.mp3
+# ليمو throwing points in the hall ships re-encoded at 96k; this is the original.
+Sound/Lemo_ThrowPoints.full.mp3
 
 # Meeting-room + extra-table masters. What ships is Art/Workspace/Extension_*.webp
 # (cropped to their painted bbox) and Art/Meeting_Table_Real.webp; the full-canvas
