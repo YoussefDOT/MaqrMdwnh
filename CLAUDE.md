@@ -3068,6 +3068,39 @@ of it while lit.
 - The lit icon's preview runs a counted number of times, never `infinite` (invariant 26:
   the sheet can stay open). Closed by: an outside press, Escape, and every view change.
 
+### «يكتب الآن»، الأصوات، والحذف (Oct 3)
+Grep anchors: `_dmTypSet`, `_dmTypInput`, `_dmOnTypingWS`, `_dmSetPeerTyping`, `_dmPaintTyping`,
+`_dmSfx`, `_dmFxSound`, `_dmFxKit`, `_dmFxSoundStop`, `_dmEnsureFxSounds`, `_dmRowLeave`, `_dmScrollEnd`.
+- **Typing is a relay FLAG, zero Firebase**: `{t:'dmt', f, to, on}` — `f`, **not `uid`**, so an
+  older page drops it at `!msg.uid` instead of reading it as a position. Re-asserted every
+  `DM_TYP_PING_MS`, expired by the reader after `DM_TYP_STALE_MS`; a message ends it (no «off»
+  before a send). Sent only to a member who is online. The relay hands it to the whole lobby
+  room and only `to` acts on it — who types to whom is on the wire, like the rest of the relay.
+  Shown as a three-dot row at the END of the thread (`.dm-typing` — new messages are inserted
+  BEFORE it), in the header's sub line, and on the list row. The dots' animation is a counted
+  50 cycles, never `infinite` (invariant 26).
+- **Send / receive cues**: `Sound/Dm_Send.mp3`, `Sound/Dm_Recieve.mp3` (64k mono; originals are
+  the gitignored `.full.mp3`), in the `rest` list (4-step pattern), played by `_dmSfx` (never two
+  inside `DM_SFX_GAP_MS`). Receive: `_dmOnIncoming` (thread not being looked at — the work-phase
+  silence still applies) or `_dmOnMsg` (the open thread, only a message fresher than
+  `DM_FX_LIVE_MS`). A message with an effect plays the effect's sound instead.
+- **Effect sounds are synthesised** (`_dmFxSound`, Web Audio, no files except the spotlight's
+  lamp cue `Sound/spotlight.mp3`, fetched on the first thread open, with a synthesised
+  fallback). Everything is scheduled on the audio clock up front, events after t=0 EARLY by
+  the output latency. **The times in `_dmFxSound` mirror the CSS keyframes** (slam hit =
+  `DM_SLAM_HIT_MS`; loud's shake keyframes; the fireworks' `dls`; the spotlight's
+  0 / 1.10 / 1.16 / 1.24 / 3.30 / 4.40 s) — change one, change the other. `_dmFxClear`
+  stops the sound.
+- **Spotlight** (`dmSpotDark` / `dmSpotLight`, 4.4 s): `::before` = the whole card black;
+  at 25% it is swapped (step-end) for `::after`, the same black with an elliptical hole
+  over the bubble, plus `.dm-spot-beam` / `.dm-spot-glow`; a flicker; fade from 75%.
+- **Delete does NOT rebuild the list** (`_dmRowLeave`): the bubble crumples + dust
+  (`DM_DEL_POOF_MS`), then the row's height (and its day line's, if it was that day's only
+  message) is written to 0 with a transition so the rest slides, then the row is removed and
+  the next row's `cont` is recomputed in place. `_dmRerenderKeep` is only the failed-write path.
+- New messages scroll to the end smoothly (`_dmScrollEnd`; `_dm.stickAt` makes `_dmNearEnd`
+  true while that scroll is still travelling).
+
 ### نصائح ليمو — the dock under the list (`#dm-tip`, `DM_TIPS`)
 ليمو's picture and a speech bubble under the list of conversations: **one tip a day**
 (`_dmTipIndex`: local days since `DM_TIP_DAY0`, the same tip for everyone that day), the

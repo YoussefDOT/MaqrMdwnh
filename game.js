@@ -1446,6 +1446,7 @@ class FocusAudioEngine {
             // الدردشة القريبة — mentions. Web Audio so a ping sounds in a background tab.
             chatMention: null,
             mentionPing: null,
+            dmSend: null, dmRecv: null,      // الرسائل الخاصة
             mentionAlarm: null,
             // رف الجوائز — the award ceremony. Loaded lazily (ensureTrophySounds)
             // the moment the player walks up to the shelf, never on the login path:
@@ -1588,6 +1589,7 @@ class FocusAudioEngine {
             ['paperInvoiceIntro', 'Sound/Paper_Invoice_Intro.mp3'], ['paperInvoiceExit', 'Sound/Paper_Invoice_Exit.mp3'],
             ['paperInvoiceFlip', 'Sound/Paper_Invoice_Flip.mp3'], ['invoiceCardSave', 'Sound/Invoice_Card_Sounds.mp3'],
             ['sparkle', 'Sound/Sparkle.mp3'],
+            ['dmSend', 'Sound/Dm_Send.mp3'], ['dmRecv', 'Sound/Dm_Recieve.mp3'],
         ];
         const waitWorld = async () => {
             for (let i = 0; i < 200 && !_worldReady; i++) await new Promise(r => setTimeout(r, 250));
@@ -2995,6 +2997,9 @@ const gameState = {
         chatMention:             _lazyAudio('Sound/chat_mention.mp3'),
         mentionPing:             _lazyAudio('Sound/mention_ping.mp3'),
         mentionAlarm:            _lazyAudio('Sound/mention_alarm.mp3'),
+        // الرسائل الخاصة — send / receive (fallbacks; played through the buffers)
+        dmSend:                  _lazyAudio('Sound/Dm_Send.mp3'),
+        dmRecv:                  _lazyAudio('Sound/Dm_Recieve.mp3'),
         // رف الجوائز — HTMLAudio fallbacks only; the ceremony itself always runs on
         // the Web Audio buffers (ensureTrophySounds) because it needs pitch control
         // and a handle to fade out.
@@ -11385,6 +11390,8 @@ function onPresenceMessage(data) {
     // ليمو's words, from the relay itself (no `uid`: the sender is the room, not a
     // player) — "he is thinking for X" and then the answer. See نداء ليمو.
     if (msg.t === 'lemot' || msg.t === 'lemoa') { perfWake(); onLemoRelay(msg); return; }
+    // «يكتب الآن» in a private conversation (`f`, not `uid`: an older page drops it).
+    if (msg.t === 'dmt') { _dmOnTypingWS(msg); return; }
     if (!msg.uid || msg.uid === gameState.userId) return;
     // Someone's Firebase view says we left — say otherwise. (The ask is also their
     // position, so it carries on through the normal handling below.)
@@ -43720,6 +43727,10 @@ const DM_SWIPE_MAX_PX   = 84;
 const DM_DOWN_SHOW_PX   = 260;     // scrolled this far up → the «to the newest» button
 const DM_SEND_HOLD_MS   = 380;     // the send button held this long opens the effects
 const DM_FX_LIVE_MS     = 20000;   // a message this fresh plays its effect as it arrives
+const DM_TYP_PING_MS    = 2400;    // «يكتب الآن» is re-asserted this often while the member types…
+const DM_TYP_STALE_MS   = 6500;    // …and dropped by the reader after this much silence
+const DM_SFX_GAP_MS     = 140;     // two arrival sounds are never closer than this
+const DM_FX_VOL         = 0.55;    // the effects' synthesised sounds, as a whole
 // تأثيرات الرسائل — see «تأثيرات الرسائل» below. `scr` = it fills the drawer; otherwise it plays on the bubble.
 // `c` = its colour in the picker; `ico` = its icon there (static markup, drawn in white on
 // that colour — a small picture of what the effect does).
@@ -43783,6 +43794,9 @@ const _dm = {
     sw: null,                    // a swipe-to-reply in progress
     below: 0,                    // messages that arrived while the reader was scrolled up
     fxSeen: new Set(), fxT: 0, fxClearT: 0,
+    fxOut: null, fxSndT: 0, fxSndReq: false, noise: null, sfxAt: 0, stickAt: 0,
+    typ: { on: false, to: '', at: 0 },   // MY «يكتب الآن», as last sent
+    typing: {},                  // peer → the timer that expires THEIR «يكتب الآن»
     sendHoldT: 0, sendHeldAt: 0,
     // The effects picker over the send button (see «منتقي التأثيرات»).
     fxp: { open: false, drag: false, moved: false, hot: '', pid: -1, sx: 0, sy: 0, gx: 0, gy: 0, items: [], tickAt: 0, shutAt: 0, holdAt: 0, down: false, refocus: 0 },
@@ -43965,11 +43979,11 @@ function _dmPaintBadge() {
 // minigame) gets the badge and nothing else — a private message must not be able to
 // do what the room's chat is forbidden to do.
 function _dmOnIncoming(peer, r) {
+    _dmSetPeerTyping(peer, false);           // the message is what they were typing
     if (_dm.open && _dm.view === 'thread' && _dm.peer === peer && !document.hidden) return;
     const quiet = localInWorkPhase() || gameState.azkar.active || gameState.prayer.isOverlayActive || isMinigameActive();
     if (!quiet) {
-        _meetBlip(1.18, 0.05);
-        setTimeout(() => _meetBlip(1.56, 0.045), 95);
+        _dmSfx('dmRecv', 0.7);
         _dmToast(peer, r);
     }
     _dmNotify(peer, r);
@@ -44058,6 +44072,7 @@ function dmOpenWith(uid) {
 function dmClose() {
     if (!_dm.open) return;
     const E = _dm.els;
+    _dmTypSet(false);
     _dm.open = false;
     _dm.canvasOff = false;          // the world draws again BEFORE the panel fades
     clearTimeout(_dm.offT);
@@ -44140,9 +44155,11 @@ function _dmRow(mid, row) {
     const nm = document.createElement('b');
     nm.textContent = info.name;
     const sub = document.createElement('small');
-    if (row) sub.textContent = (row.f === _dm.me ? 'أنت: ' : '') + (row.m || DM_STK_LABEL);
+    const typing = !!_dm.typing[mid];
+    if (typing) sub.textContent = 'يكتب الآن…';
+    else if (row) sub.textContent = (row.f === _dm.me ? 'أنت: ' : '') + (row.m || DM_STK_LABEL);
     else sub.textContent = info.online ? 'في المقر الآن' : 'غير متصل';
-    if (!row && info.online) sub.classList.add('on');
+    if (typing || (!row && info.online)) sub.classList.add('on');
     body.append(nm, sub);
     b.append(av, body);
     if (row) {
@@ -44214,6 +44231,7 @@ function _dmRenderList(animate) {
 
 function _dmShowList() {
     const E = _dm.els;
+    _dmTypSet(false);
     _dmStashDraft();
     _dmConfirmClose();
     _dmFxClear();
@@ -44357,7 +44375,17 @@ function _dmPrevShown(th, idx) {
 function _dmShownCount(th) { let n = 0; for (const m of th.msgs) if (!m.d) n++; return n; }
 function _dmNearEnd() {
     const box = _dm.els.msgs;
-    return box.scrollHeight - box.scrollTop - box.clientHeight < 90;
+    // (a smooth scroll to the end is still on its way: that counts as being there)
+    return box.scrollHeight - box.scrollTop - box.clientHeight < 90 || Date.now() - _dm.stickAt < 450;
+}
+// To the newest message. Smooth for something that just arrived; never scrollIntoView.
+function _dmScrollEnd(smooth) {
+    const box = _dm.els.msgs;
+    if (smooth && !_dmFxReduced() && typeof box.scrollTo === 'function') {
+        _dm.stickAt = Date.now();
+        try { box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' }); return; } catch (_) {}
+    }
+    box.scrollTop = box.scrollHeight;
 }
 
 function _dmOnMsg(peer, key, v) {
@@ -44392,15 +44420,22 @@ function _dmOnMsg(peer, key, v) {
         const box = E.msgs;
         const near = _dmNearEnd();
         _dmPaintThreadState();
-        box.appendChild(_dmMsgNode(msg, _dmPrevShown(th, th.msgs.length - 1), true));
+        // Their message is what the three dots were about: the dots go as it lands.
+        if (msg.f !== _dm.me) _dmSetPeerTyping(peer, false, true);
+        const node = _dmMsgNode(msg, _dmPrevShown(th, th.msgs.length - 1), true);
+        const fr = node.lastElementChild;
+        box.insertBefore(node, box.querySelector('.dm-typing'));     // (null → at the end)
         // `fresh` is only the entrance. Left on, anything that swapped the row's
         // animation for a moment (the slam's quake) REPLAYED the entrance of every
         // message of this visit when it ended.
-        const fr = box.lastElementChild;
         if (fr) setTimeout(() => fr.classList.remove('fresh'), 520);
-        if (near || msg.f === _dm.me) box.scrollTop = box.scrollHeight;
+        if (near || msg.f === _dm.me) _dmScrollEnd(th.loaded);
         else if (th.loaded) { _dm.below++; _dmPaintDown(); }
-        _dmFxArrived(peer, th, msg);
+        const showed = _dmFxArrived(peer, th, msg);
+        // The arrival sound — for a message that came in NOW, to a thread being looked
+        // at (anything else is _dmOnIncoming's). An effect brings its own sound.
+        if (!showed && msg.f !== _dm.me && th.loaded && !document.hidden
+            && Math.abs(serverNow() - msg.t) < DM_FX_LIVE_MS) _dmSfx('dmRecv', 0.6);
     } else {
         _dmRenderThread();
     }
@@ -44571,6 +44606,7 @@ function _dmRenderThread() {
     E.msgs.textContent = '';
     E.msgs.appendChild(frag);
     _dmPaintThreadState();
+    _dmPaintTyping();
 }
 // Rebuild the list where the reader is: what they were looking at stays put.
 function _dmRerenderKeep() {
@@ -44634,7 +44670,7 @@ function _dmPaintPeerHead() {
     if (!E || _dm.view !== 'thread' || !_dm.peer) return;
     const info = _dmPeerInfo(_dm.peer);
     const pl = info.pl;
-    const sub = !info.online ? 'غير متصل'
+    const sub = _dm.typing[_dm.peer] ? 'يكتب الآن…' : !info.online ? 'غير متصل'
         : (pl && pl.isWorking && !pl.isOnBreak) ? 'في جلسة عمل الآن' : 'في المقر الآن';
     const key = info.name + '|' + info.avatar + '|' + sub;
     if (E.peerKey === key) return;
@@ -44648,6 +44684,8 @@ function _dmPaintPeerHead() {
 
 function _dmShowThread(peer) {
     const E = _dm.els;
+    _dmTypSet(false);
+    _dmEnsureFxSounds();
     _dmStashDraft();
     _dmPop('');
     _dmFxpClose();
@@ -44718,6 +44756,339 @@ function _dmMarkRead() {
     update(ref(database), { [`${_dm.base}/inbox/${_dm.me}/${_dm.peer}/n`]: 0 }).catch(() => {});
 }
 
+// ─── «يكتب الآن» ─────────────────────────────────────────────────────────────
+// A FLAG on the relay, exactly like the room chat's: {t:'dmt', f, to, on}. Zero
+// Firebase. Re-asserted every DM_TYP_PING_MS while the member types, dropped by the
+// reader after DM_TYP_STALE_MS of silence — so a dead socket ends it by itself. The
+// message itself ends it too (no «off» is sent before a send). `f`, not `uid`: an
+// older page drops a relay message with no `uid` instead of reading it as a position.
+// The relay hands it to the whole lobby room; only the member named in `to` acts on
+// it — so who is typing to whom is on the wire, like everything else on the relay.
+function _dmTypSet(on) {
+    const T = _dm.typ, now = Date.now();
+    const to = on ? _dm.peer : T.to;
+    if (on && T.on && T.to === to && now - T.at < DM_TYP_PING_MS) return;
+    if (!on && !T.on) return;
+    T.on = !!on; T.to = on ? to : ''; T.at = now;
+    const ws = presenceNet.ws;
+    if (!to || !_dm.me || !ws || ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(JSON.stringify({ t: 'dmt', f: _dm.me, to, on: on ? 1 : 0 })); } catch (_) {}
+}
+// The text box changed. Nothing is sent to a member who isn't here (no socket to hear it).
+function _dmTypInput() {
+    const E = _dm.els, peer = _dm.peer;
+    const on = !!(E && E.input.value.trim()) && !_dm.edit && _dmThreadShown(peer)
+        && dmCanMessage(peer) && !!_dmPlayerOf(peer);
+    _dmTypSet(on);
+}
+function _dmOnTypingWS(msg) {
+    if (!_dm.me || msg.to !== _dm.me || typeof msg.f !== 'string' || !_dmKeyOk(msg.f)) return;
+    const peer = _dmCanon(msg.f);
+    if (!dmCanMessage(peer)) return;
+    _dmSetPeerTyping(peer, msg.on === 1);
+}
+// `now` = take the dots away without their fade (a message is landing in their place).
+function _dmSetPeerTyping(peer, on, now) {
+    const was = !!_dm.typing[peer];
+    clearTimeout(_dm.typing[peer]);
+    if (on) _dm.typing[peer] = setTimeout(() => _dmSetPeerTyping(peer, false), DM_TYP_STALE_MS);
+    else delete _dm.typing[peer];
+    if (was === !!on || !_dm.open || !_dm.els) return;
+    if (_dm.view === 'list') { _dmRenderList(false); return; }
+    if (_dm.peer !== peer) return;
+    _dm.els.peerKey = '';
+    _dmPaintPeerHead();
+    _dmPaintTyping(now);
+}
+// The three dots: the last row of the open thread, where their next message will land.
+function _dmPaintTyping(now) {
+    const E = _dm.els;
+    if (!E || _dm.view !== 'thread') return;
+    const box = E.msgs;
+    let el = box.querySelector('.dm-typing');
+    const on = !!_dm.typing[_dm.peer];
+    if (on) {
+        if (el) { clearTimeout(el._goT); el.classList.remove('out'); return; }
+        const near = _dmNearEnd();
+        el = document.createElement('div');
+        el.className = 'dm-typing';
+        el.setAttribute('aria-label', 'يكتب الآن');
+        const b = document.createElement('div');
+        b.className = 'dm-typing-bub';
+        for (let i = 0; i < 3; i++) b.appendChild(document.createElement('i'));
+        el.appendChild(b);
+        box.appendChild(el);
+        if (near) _dmScrollEnd(true);
+    } else if (el) {
+        if (now) { el.remove(); return; }
+        el.classList.add('out');
+        clearTimeout(el._goT);
+        el._goT = setTimeout(() => el.remove(), 200);
+    }
+}
+
+// ─── الأصوات ─────────────────────────────────────────────────────────────────
+// Send / receive are the two recorded cues (Dm_Send / Dm_Recieve — 64k mono
+// re-encodes; the originals are the gitignored `.full.mp3`), decoded after spawn
+// with the other effects. Client side only: nothing about a sound is sent.
+function _dmSfx(name, peak) {
+    const now = Date.now();
+    if (now - _dm.sfxAt < DM_SFX_GAP_MS) return;
+    _dm.sfxAt = now;
+    _chatSfx(name, 1, peak);
+}
+function _dmSendPop() {
+    const b = _dm.els && _dm.els.send;
+    if (!b) return;
+    b.classList.remove('sent');
+    void b.offsetWidth;
+    b.classList.add('sent');
+    setTimeout(() => b.classList.remove('sent'), 420);
+}
+// The spotlight's lamp cue (the trophy ceremony's file) — fetched once, the first
+// time a thread is opened; the effect synthesises its own if it isn't there yet.
+function _dmEnsureFxSounds() {
+    const fe = gameState.focusAudioEngine;
+    if (_dm.fxSndReq || !fe || !fe.ctx || fe.buffers.spotlight) return;
+    _dm.fxSndReq = true;
+    fetch('Sound/spotlight.mp3').then(r => r.arrayBuffer()).then(ab => fe.ctx.decodeAudioData(ab))
+        .then((b) => { if (!fe.buffers.spotlight) fe.buffers.spotlight = b; })
+        .catch(() => { _dm.fxSndReq = false; });
+}
+function _dmNoiseBuf(ctx) {
+    if (_dm.noise && _dm.noise.sampleRate === ctx.sampleRate) return _dm.noise;
+    const n = ctx.sampleRate, b = ctx.createBuffer(1, n, n), d = b.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    return (_dm.noise = b);
+}
+// Everything an effect's sound is built from. All of it is SCHEDULED on the audio
+// clock up front (sample-accurate, and the main thread is out of the path — invariant
+// 35); every level is an envelope, so nothing starts or stops with a click.
+function _dmFxKit(ctx, out, fe) {
+    const env = (g, t, dur, peak, atk) => {
+        atk = Math.min(atk || 0.008, dur * 0.5);
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + atk);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    };
+    const tone = (t, dur, f0, f1, type, peak, atk) => {
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = type || 'sine';
+        o.frequency.setValueAtTime(f0, t);
+        if (f1 && f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+        env(g, t, dur, peak, atk);
+        o.connect(g); g.connect(out);
+        o.start(t); o.stop(t + dur + 0.05);
+    };
+    const noise = (t, dur, peak, ftype, f0, f1, q, atk) => {
+        const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+        s.buffer = _dmNoiseBuf(ctx); s.loop = true;
+        f.type = ftype; f.Q.value = q || 0.8;
+        f.frequency.setValueAtTime(f0, t);
+        if (f1 && f1 !== f0) f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+        env(g, t, dur, peak, atk || 0.006);
+        s.connect(f); f.connect(g); g.connect(out);
+        s.start(t, Math.random() * 0.8); s.stop(t + dur + 0.05);
+    };
+    // A decoded cue, from `off` seconds in. false when it hasn't been decoded.
+    const buf = (name, t, rate, peak, off) => {
+        const b = fe.buffers[name];
+        if (!b) return false;
+        const s = ctx.createBufferSource(), g = ctx.createGain();
+        s.buffer = b; s.playbackRate.value = rate || 1;
+        g.gain.setValueAtTime(peak, t);
+        s.connect(g); g.connect(out);
+        s.start(t, off || 0);
+        return true;
+    };
+    return { tone, noise, buf };
+}
+// Stop whatever effect sound is playing (the panel closed, another effect started).
+function _dmFxSoundStop() {
+    clearTimeout(_dm.fxSndT);
+    const o = _dm.fxOut;
+    _dm.fxOut = null;
+    if (!o) return;
+    try {
+        const t = o.context.currentTime;
+        o.gain.cancelScheduledValues(t);
+        o.gain.setValueAtTime(o.gain.value, t);
+        o.gain.linearRampToValueAtTime(0, t + 0.09);
+        setTimeout(() => { try { o.disconnect(); } catch (_) {} }, 220);
+    } catch (_) {}
+}
+// The sound of one effect. `o.dls` = the fireworks' burst delays (seconds).
+// Times are seconds from the effect's first frame and mirror its CSS keyframes — change
+// one, change the other. Anything after the first instant is scheduled EARLY by the
+// output latency (a phone on `latencyHint: 'playback'` is ~0.1 s late), so the hit is
+// heard on the frame it is seen.
+function _dmFxSound(kind, o) {
+    const fe = gameState.focusAudioEngine;
+    if (!fe) return;
+    if (!fe.ctx) { try { fe.init(); } catch (_) {} }
+    const ctx = fe.ctx;
+    if (!ctx) return;
+    _dmFxSoundStop();
+    const go = () => {
+        try {
+            const out = ctx.createGain();
+            out.gain.value = DM_FX_VOL;
+            out.connect(ctx.destination);
+            _dm.fxOut = out;
+            const K = _dmFxKit(ctx, out, fe);
+            const t0 = ctx.currentTime + 0.03;
+            const lat = Math.min(0.25, (ctx.outputLatency || 0) + (ctx.baseLatency || 0));
+            const at = (s) => t0 + Math.max(0, s - lat);
+            const rnd = (a, b) => a + Math.random() * (b - a);
+            let end = 2;
+            if (kind === 'slam') {
+                // It falls (a whoosh closing in), and lands at DM_SLAM_HIT_MS.
+                const hit = at(DM_SLAM_HIT_MS / 1000);
+                K.noise(t0, Math.max(0.08, hit - t0), 0.2, 'bandpass', 2600, 500, 1.1, Math.max(0.05, hit - t0 - 0.02));
+                K.tone(hit, 0.46, 150, 40, 'sine', 0.95, 0.004);
+                K.tone(hit, 0.1, 340, 90, 'triangle', 0.4, 0.002);
+                K.noise(hit, 0.14, 0.5, 'lowpass', 1100, 180, 0.7, 0.002);
+                end = 1;
+            } else if (kind === 'loud') {
+                // Swells with the pop (0 → .27 s), rattles on each shake keyframe, lets go.
+                K.tone(t0, 0.3, 170, 560, 'sawtooth', 0.13, 0.05);
+                K.tone(t0, 0.3, 255, 840, 'triangle', 0.1, 0.05);
+                K.noise(t0, 1.0, 0.09, 'bandpass', 800, 1700, 0.7, 0.26);
+                for (const s of [0.37, 0.5, 0.62, 0.75, 0.88]) {
+                    K.tone(at(s), 0.11, 150, 118, 'sawtooth', 0.14, 0.004);
+                    K.noise(at(s), 0.06, 0.12, 'bandpass', 1400, 900, 2, 0.003);
+                }
+                K.tone(at(1.15), 0.4, 420, 150, 'sine', 0.07, 0.02);
+                end = 1.8;
+            } else if (kind === 'ink') {
+                K.noise(t0, 0.75, 0.06, 'bandpass', 5200, 7600, 3, 0.3);
+                K.tone(t0 + 0.06, 0.55, 1900, 2500, 'sine', 0.03, 0.2);
+                end = 1;
+            } else if (kind === 'confetti') {
+                // The popper, then paper glittering down.
+                K.noise(t0, 0.11, 0.55, 'bandpass', 1900, 800, 0.8, 0.002);
+                K.tone(t0, 0.12, 720, 190, 'triangle', 0.32, 0.002);
+                const notes = [1568, 1760, 2093, 2349, 2637, 3136];
+                for (let i = 0; i < 16; i++) {
+                    const f = notes[(Math.random() * notes.length) | 0];
+                    K.tone(t0 + 0.1 + Math.pow(Math.random(), 1.6) * 1.7, 0.28, f, f, 'sine', rnd(0.03, 0.075), 0.004);
+                }
+                end = 2.4;
+            } else if (kind === 'balloons') {
+                const notes = [330, 392, 440, 494, 587, 659];
+                for (let i = 0; i < 7; i++) {
+                    const f = notes[(Math.random() * notes.length) | 0];
+                    K.tone(t0 + i * 0.24 + rnd(0, 0.09), 0.22, f, f * 1.5, 'sine', 0.13, 0.03);
+                }
+                end = 2.2;
+            } else if (kind === 'fireworks') {
+                for (const dl of (o && o.dls) || [0]) {
+                    const b = at(dl);
+                    K.tone(b, 0.55, 115, 36, 'sine', 0.65, 0.003);
+                    K.noise(b, 0.4, 0.34, 'lowpass', 2800, 260, 0.7, 0.003);
+                    for (let i = 0; i < 8; i++) K.noise(b + 0.12 + Math.random() * 0.6, 0.03, rnd(0.05, 0.13), 'highpass', 5200, 5200, 0.7, 0.002);
+                    end = Math.max(end, dl + 1.4);
+                }
+            } else if (kind === 'love') {
+                // Two heartbeats under a small rising chime.
+                for (const s of [0, 0.95]) {
+                    K.tone(at(s), 0.17, 72, 44, 'sine', 0.75, 0.006);
+                    K.tone(at(s + 0.2), 0.15, 88, 50, 'sine', 0.5, 0.006);
+                }
+                [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => {
+                    K.tone(t0 + 0.12 + i * 0.15, 1.1, f, f, 'sine', 0.075, 0.012);
+                    K.tone(t0 + 0.12 + i * 0.15, 0.6, f * 2, f * 2, 'sine', 0.02, 0.012);
+                });
+                end = 2.4;
+            } else if (kind === 'lasers') {
+                for (let i = 0; i < 6; i++) {
+                    const s = t0 + i * 0.21 + rnd(0, 0.06);
+                    K.tone(s, 0.17, rnd(2300, 3200), 260, 'square', 0.055, 0.003);
+                    K.tone(s, 0.17, rnd(1200, 1600), 130, 'sine', 0.09, 0.003);
+                }
+                K.noise(t0, 1.5, 0.03, 'bandpass', 3000, 5000, 4, 0.4);
+                end = 2;
+            } else if (kind === 'echo') {
+                // The arrival cue, repeating as it gets further away.
+                for (let i = 0; i < 6; i++) {
+                    const s = t0 + i * 0.19, p = 0.6 * Math.pow(0.64, i);
+                    if (!K.buf('dmRecv', s, 1 - i * 0.035, p)) K.tone(s, 0.22, 880 - i * 30, 660, 'sine', p * 0.4, 0.005);
+                }
+                end = 1.9;
+            } else if (kind === 'spot') {
+                // 0      the room's lights die (a falling thump, air closing in)
+                // .3     dark. A low drone creeps up… and is cut just before
+                // 1.10   the lamp slams ON — the relay clunk, a hum starts, a glow rings
+                // 1.16   it flickers out (hum drops) / 1.24 catches again (a tick)
+                // 3.30   the lamp eases off and the room comes back; all of it fades by 4.4
+                const ON = at(1.10), OFF = at(1.16), ON2 = at(1.24), FADE = at(3.30), END = at(4.40);
+                K.tone(t0, 0.55, 250, 36, 'sine', 0.6, 0.012);
+                K.noise(t0, 0.42, 0.24, 'lowpass', 3200, 110, 0.7, 0.01);
+                const dr = ctx.createOscillator(), dg = ctx.createGain();
+                dr.type = 'sine'; dr.frequency.setValueAtTime(49, t0); dr.frequency.linearRampToValueAtTime(58, ON);
+                dg.gain.setValueAtTime(0.0001, at(0.3));
+                dg.gain.linearRampToValueAtTime(0.2, ON - 0.06);
+                dg.gain.linearRampToValueAtTime(0.0001, ON - 0.02);
+                dr.connect(dg); dg.connect(out); dr.start(at(0.3)); dr.stop(ON);
+                // The lamp. The recorded cue's hit sits ~0.15 s in: started 0.11 s in and
+                // 0.04 s early, it lands on ON. No cue decoded → a synthesised relay.
+                if (!K.buf('spotlight', Math.max(t0, ON - 0.04), 1, 0.85, 0.11)) {
+                    K.tone(ON, 0.05, 1900, 300, 'square', 0.22, 0.001);
+                    K.noise(ON, 0.07, 0.4, 'bandpass', 1300, 700, 1.2, 0.001);
+                    K.tone(ON, 0.34, 96, 48, 'sine', 0.85, 0.002);
+                }
+                K.noise(ON2, 0.025, 0.22, 'highpass', 3200, 3200, 0.7, 0.001);
+                K.tone(ON2, 0.05, 1500, 500, 'square', 0.07, 0.001);
+                // The lamp's hum (mains, and its octave), out during the flicker.
+                const hg = ctx.createGain(), lp = ctx.createBiquadFilter();
+                lp.type = 'lowpass'; lp.frequency.value = 520;
+                hg.gain.setValueAtTime(0, t0);
+                hg.gain.setValueAtTime(1, ON); hg.gain.setValueAtTime(0, OFF); hg.gain.setValueAtTime(1, ON2);
+                hg.gain.setValueAtTime(1, FADE); hg.gain.linearRampToValueAtTime(0, END);
+                for (const [f, type, lv] of [[100, 'sawtooth', 0.05], [200, 'sine', 0.03], [50, 'sine', 0.06]]) {
+                    const h = ctx.createOscillator(), g = ctx.createGain();
+                    h.type = type; h.frequency.value = f; g.gain.value = lv;
+                    h.connect(g); g.connect(lp); h.start(ON); h.stop(END + 0.05);
+                }
+                lp.connect(hg); hg.connect(out);
+                // The glow: a soft fifth that blooms once the lamp has caught, and goes with it.
+                for (const [f, lv] of [[880, 0.04], [1318.5, 0.028], [1760, 0.012]]) {
+                    const s = ctx.createOscillator(), g = ctx.createGain();
+                    s.type = 'sine'; s.frequency.value = f;
+                    g.gain.setValueAtTime(0.0001, ON2);
+                    g.gain.linearRampToValueAtTime(lv, ON2 + 0.5);
+                    g.gain.setValueAtTime(lv, FADE);
+                    g.gain.linearRampToValueAtTime(0.0001, END - 0.1);
+                    s.connect(g); g.connect(out); s.start(ON2); s.stop(END);
+                }
+                K.noise(FADE, END - FADE, 0.045, 'lowpass', 2600, 240, 0.7, 0.25);
+                end = 4.6;
+            }
+            _dm.fxSndT = setTimeout(() => {
+                if (_dm.fxOut === out) _dm.fxOut = null;
+                try { out.disconnect(); } catch (_) {}
+            }, end * 1000 + 400);
+        } catch (_) {}
+    };
+    // ctx.resume() is async — never fire-and-forget.
+    if (ctx.state === 'suspended') ctx.resume().then(go).catch(() => {});
+    else go();
+}
+// A message leaving: a small falling "bloop" and a puff.
+function _dmDelSound() {
+    const fe = gameState.focusAudioEngine, ctx = fe && fe.ctx;
+    if (!ctx || ctx.state !== 'running') return;
+    try {
+        const out = ctx.createGain();
+        out.gain.value = DM_FX_VOL;
+        out.connect(ctx.destination);
+        const K = _dmFxKit(ctx, out, fe), t = ctx.currentTime + 0.02;
+        K.tone(t, 0.2, 540, 130, 'sine', 0.22, 0.006);
+        K.noise(t + 0.03, 0.24, 0.11, 'bandpass', 1900, 420, 0.9, 0.02);
+        setTimeout(() => { try { out.disconnect(); } catch (_) {} }, 700);
+    } catch (_) {}
+}
+
 // ─── Sending ─────────────────────────────────────────────────────────────────
 // A ghost's side of a conversation is removed with it (set once per peer).
 function _dmGhostArm(peer) {
@@ -44775,7 +45146,11 @@ function _dmSend(text, stk, att, fx) {
         n: Math.min(999, ((cur && Math.round(+cur.n)) || 0) + 1),
         pn: myName, pa: myAv,
     })).catch(() => {});
+    _dm.typ.on = false;             // the message itself ends «يكتب الآن» on their side
     _dmOnMsg(peer, key, msg);       // shown at once — the listener's own copy is de-duped by key
+    // An effect is its own sound; anything else leaves with the send cue.
+    if (!msg.x || msg.x === 'ink' || _dmFxReduced()) _dmSfx('dmSend', 0.6);
+    _dmSendPop();
     _dm.inbox[peer] = { t, m: preview, f: _dm.me, n: 0, pn: info.name, pa: _dmSafeAvatar(info.avatar) };
     if (rp) _dmSetReply(null);
     return true;
@@ -45224,10 +45599,65 @@ function _dmApplyDeleted(peer, msg) {
     if (_dm.reply && _dm.reply.k === msg.k) _dmSetReply(null);
     const row = _DM_KEY_RE.test(msg.k) && E.msgs.querySelector(`.dm-msg[data-k="${msg.k}"]`);
     if (!row) { _dmRefreshQuotes(msg.k); return; }
-    // It shrinks away, then the list is rebuilt (the day lines and the grouping of
-    // the messages around it may have changed).
+    _dmRefreshQuotes(msg.k);
+    if (E.hov && E.hov.parentNode === row) _dmHov(null);
+    _dmRowLeave(peer, row);
+}
+// A deleted message's row leaves the screen: the bubble crumples into a puff of
+// dust, THEN the gap it left closes — the row's height (and its day line's, when it
+// was that day's only message) eases to nothing, so everything around it slides
+// instead of snapping. The list is not rebuilt: the row after it is re-grouped in place.
+const DM_DEL_POOF_MS = 250, DM_DEL_CLOSE_MS = 280;
+function _dmRowLeave(peer, row) {
+    const box = _dm.els.msgs;
+    const done = () => {
+        if (!row.isConnected) return;
+        const next = row.nextElementSibling, prevEl = row.previousElementSibling;
+        if (prevEl && prevEl.classList.contains('dm-day') && !(next && next.classList.contains('dm-msg'))) prevEl.remove();
+        row.remove();
+        // The row that followed may now open a group (or join the one before it).
+        if (next && next.classList.contains('dm-msg') && _DM_KEY_RE.test(next.dataset.k || '')) {
+            const th = _dmThread(peer), m = _dmFindMsg(th, next.dataset.k);
+            const pv = m && _dmPrevShown(th, th.msgs.indexOf(m));
+            next.classList.toggle('cont', !!(pv && _dmSameDay(pv.t, m.t) && pv.f === m.f && m.t - pv.t < DM_GROUP_MS));
+        }
+        if (_dmThreadShown(peer)) _dmPaintThreadState();
+    };
     row.classList.add('out');
-    setTimeout(() => { if (_dmThreadShown(peer)) _dmRerenderKeep(); }, 230);
+    row.style.pointerEvents = 'none';
+    if (_dmFxReduced()) { done(); return; }
+    // The dust: a few specks in the bubble's own colour, thrown out from its middle.
+    const line = row.querySelector('.dm-line'), bub = row.querySelector('.dm-bub');
+    if (line && bub) {
+        const cx = line.offsetLeft + line.offsetWidth / 2, cy = line.offsetTop + line.offsetHeight / 2;
+        const col = getComputedStyle(bub).backgroundColor;
+        const solid = !!col && col !== 'transparent' && col !== 'rgba(0, 0, 0, 0)';
+        for (let i = 0; i < 10; i++) {
+            const d = document.createElement('i');
+            const a = (Math.PI * 2 * i) / 10 + Math.random() * 0.5, r = 18 + Math.random() * 30 + line.offsetWidth * 0.18;
+            const sz = (4 + Math.random() * 6).toFixed(1);
+            d.className = 'dm-dust';
+            d.style.cssText = `left:${cx.toFixed(1)}px;top:${cy.toFixed(1)}px;width:${sz}px;height:${sz}px;`
+                + `--dx:${(Math.cos(a) * r).toFixed(1)}px;--dy:${(Math.sin(a) * r * 0.7 - 6).toFixed(1)}px;`
+                + `animation-delay:${(0.08 + Math.random() * 0.06).toFixed(2)}s;` + (solid ? `background:${col};` : '');
+            row.appendChild(d);
+        }
+    }
+    _dmDelSound();
+    setTimeout(() => {
+        if (!row.isConnected) return;
+        const prevEl = row.previousElementSibling, next = row.nextElementSibling;
+        const els = [row];
+        if (prevEl && prevEl.classList.contains('dm-day') && !(next && next.classList.contains('dm-msg'))) els.push(prevEl);
+        for (const el of els) { el.style.height = el.offsetHeight + 'px'; el.classList.add('closing'); }
+        void box.offsetHeight;                  // the starting height has to be computed first
+        for (const el of els) {
+            el.style.height = '0px';
+            el.style.marginTop = '0px'; el.style.marginBottom = '0px';
+            el.style.paddingTop = '0px'; el.style.paddingBottom = '0px';
+        }
+        setTimeout(done, DM_DEL_CLOSE_MS + 30);
+    }, DM_DEL_POOF_MS);
 }
 
 // ─── تأثيرات الرسائل — message effects ───────────────────────────────────────
@@ -45271,6 +45701,7 @@ function _dmFxArrived(peer, th, msg) {
     if (!msg.x || !th.loaded || _dm.fxSeen.has(msg.k)) return;
     if (Math.abs(serverNow() - msg.t) > DM_FX_LIVE_MS) { _dm.fxSeen.add(msg.k); return; }
     _dmPlayFx(msg);
+    return msg.x !== 'ink' && !_dmFxReduced();          // true = it is playing, with its own sound
 }
 function _dmFxUnread(peer) {
     const th = _dmThread(peer);
@@ -45296,9 +45727,10 @@ function _dmPlayFx(msg) {
     const row = _DM_KEY_RE.test(msg.k) && E.msgs.querySelector(`.dm-msg[data-k="${msg.k}"]`);
     if (!row) return;
     const kind = msg.x;
-    if (kind === 'ink') { row.classList.remove('ink-open'); return; }
+    if (kind === 'ink') { row.classList.remove('ink-open'); _dmFxSound('ink'); return; }
     if (_dmFxReduced()) return;
     if (!DM_FX[kind].scr) {
+        _dmFxSound(kind);
         row.classList.remove('fresh', 'fx-slam', 'fx-loud');    // the effect IS its entrance
         void row.offsetWidth;                    // restart it if it is still playing
         row.classList.add('fx-' + kind);
@@ -45320,6 +45752,7 @@ const DM_FX_COLORS = ['#F04D39', '#F7B500', '#3BB9AB', '#3D7DD8', '#ff8fb1', '#f
 function _dmFxClear() {
     const L = _dm.els && _dm.els.fx;
     clearTimeout(_dm.fxClearT);
+    _dmFxSoundStop();
     if (!L) return;
     L.className = 'dm-fx';
     L.textContent = '';
@@ -45352,6 +45785,7 @@ function _dmScreenFx(kind, row, msg) {
         return d;
     };
     let ms = 3600;
+    const dls = [];                              // the fireworks' bursts, for their sound
     if (kind === 'confetti') {
         // One element each: it falls and tumbles in 3D in the same single segment.
         for (let i = 0, n = small ? 48 : 80; i < n; i++) {
@@ -45377,6 +45811,7 @@ function _dmScreenFx(kind, row, msg) {
             const col = pick(DM_FX_COLORS), delay = (b * 0.42 + Math.random() * 0.15).toFixed(2), n = small ? 14 : 20;
             // The burst is one box (it sinks a little as it fades — gravity, once for
             // all its sparks), holding a flash and the sparks.
+            dls.push(+delay);
             const g = add('dm-fwb', `left:${cx}px;top:${cy}px;--dl:${delay}s;--c:${col};`);
             const flash = document.createElement('b');
             g.appendChild(flash);
@@ -45418,14 +45853,26 @@ function _dmScreenFx(kind, row, msg) {
         }
         ms = 3600;
     } else if (kind === 'spot') {
+        // The whole conversation goes BLACK, then a lamp snaps on over this one
+        // message (a flicker as it catches), holds, and eases off as the room returns.
+        // The timeline is the CSS's (dmSpotDark / dmSpotLight, 4.4 s) and the sound's
+        // (_dmFxSound 'spot') — the three move together.
+        const rw = Math.round(br.width * 0.95 + 14), rh = Math.round(br.height * 0.85 + 12);
         L.classList.add('spot');
         L.style.setProperty('--x', bx + 'px');
         L.style.setProperty('--y', by + 'px');
-        L.style.setProperty('--rad', Math.round(Math.max(br.width, br.height) * 0.62 + 34) + 'px');
-        ms = 3300;
+        L.style.setProperty('--rw', rw + 'px');
+        L.style.setProperty('--rh', rh + 'px');
+        // The beam: from above the card, leaning in from its middle, down onto the bubble.
+        const ox = bx + (W / 2 - bx) * 0.35, up = by + 40;
+        add('dm-spot-beam', `left:${bx}px;top:${by}px;width:${rw * 2}px;height:${Math.round(Math.hypot(ox - bx, up))}px;`
+            + `--a:${(Math.atan2(ox - bx, up) * 180 / Math.PI).toFixed(1)}deg;`);
+        add('dm-spot-glow', `left:${bx}px;top:${by}px;width:${rw * 2 + 70}px;height:${rh * 2 + 70}px;`);
+        ms = 4500;
     }
     void L.offsetWidth;
     L.classList.add('on', kind);
+    _dmFxSound(kind, { dls });
     _dm.fxClearT = setTimeout(_dmFxClear, ms);
 }
 
@@ -46388,7 +46835,7 @@ function setupDmUI() {
         });
         E.fxp.addEventListener('pointerleave', () => { if (!fxp.drag) _dmFxpHot(''); });
     }
-    E.input.addEventListener('input', _dmAutosize);
+    E.input.addEventListener('input', () => { _dmAutosize(); _dmTypInput(); });
     E.input.addEventListener('keydown', (e) => {
         // Enter sends; Shift+Enter is a new line. An Enter that commits an IME word isn't a send.
         if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); _dmSubmit(); return; }

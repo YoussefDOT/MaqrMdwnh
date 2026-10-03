@@ -47,3 +47,6 @@ __pycache__/
 
 # Output of tools/lemo_prompt.mjs (ليمو's prompt, for a test outside the مقر)
 tools/out/
+# The two DM cues ship re-encoded at 64k mono; these are the originals.
+Sound/Dm_Send.full.mp3
+Sound/Dm_Recieve.full.mp3
