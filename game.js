@@ -3833,6 +3833,23 @@ function syncEntityRenderToTarget(entity) {
 //     position error and decay it to zero over ~250 ms, so the correction is a
 //     glide. Only a genuine teleport (further than NET_SMOOTH_MAX) snaps.
 //
+//  4. A PLAYHEAD, not `now − delay` (Overwatch / Source 2 "time dilation"). Each
+//     player has its own playback position `pt`, which CHASES `now − delay` by
+//     running a little fast or slow. After a stall the burst of late packets is
+//     replayed fast-forward along the path the member really walked, instead of
+//     the avatar cutting straight across to where it "should" be (through walls,
+//     and as a teleport past NET_SMOOTH_MAX — the "bad internet = snapping
+//     everywhere" report). A delay that grows slows the replay; it never steps
+//     the avatar backwards.
+//
+//  5. THE CLOCK OFFSET IS A SLIDING MINIMUM, and a sender clock that goes BACK
+//     is a new page load. It used to be an all-time minimum with a "drop any
+//     stamp ≤ the newest seen" guard: a member who RELOADED came back with a
+//     clock near zero, so every packet they sent was dropped as stale for as long
+//     as their previous visit had lasted — they stood frozen on that one screen
+//     while everyone else saw them walk. A laptop whose clock paused in sleep
+//     left its samples stamped hours in the past for good.
+//
 // When the buffer does starve we extrapolate with the velocity easing to zero
 // (a natural coast to a stop) instead of running flat out and then clamping
 // dead — the clamp was the visible half of the old jump.
@@ -3850,7 +3867,16 @@ const NET_JITTER_MAX  = 220;
 const NET_JIT_ATTACK  = 0.40; // grow the jitter estimate fast…
 const NET_JIT_DECAY   = 0.015;// …shrink it slowly (one good packet proves nothing)
 const NET_JIT_HALFLIFE= 5000; // ms — stale jitter halves this fast with no new evidence
-const NET_OFF_CREEP   = 0.003;// clock-offset drift follow (a faster path snaps instantly)
+const NET_OFF_WIN     = 2500; // ms per bucket of the clock-offset minimum (two buckets are kept)
+const NET_OFF_IDLE    = 4000; // ms of silence after which the offset is measured afresh
+const NET_OFF_REBASE  = 250;  // an offset change up to this re-times the buffer; a bigger one restarts it
+const NET_W_BACK      = 1000; // sender's clock went BACK this far → it is a new page load, start over
+const NET_CATCH_K     = 500;  // ms of lag per +1.0 of playback rate (the playhead's time constant)
+const NET_CATCH_MAX   = 2.2;  // fastest replay while catching up after a stall
+const NET_SLOW_MIN    = 0.7;  // slowest, while the buffer is being rebuilt
+const NET_CATCH_SNAP  = 3000; // ms behind past which the playhead jumps instead of fast-forwarding
+const NET_FRAME_GAP   = 400;  // ms without a drawn frame → the playhead restarts at its target
+const NET_BUF_MAX_LEN = 72;   // samples kept at most (a hidden tab never plays them out)
 const NET_DELAY_SHRINK= 0.02; // per 60 fps frame, easing `delay` back down
 const NET_GAP_MULT    = 1.6;  // delay floor as a multiple of the sender's packet spacing
 const NET_EXTRAP_MS   = 260;  // ms of coast when starved (velocity eases to 0 across it)
@@ -3859,7 +3885,6 @@ const NET_ERR_DECAY   = 0.86; // per 60 fps frame → correction invisible in ~2
 const NET_ERR_MAX_STEP= 3.2;  // world units/frame the correction may add (walk is 5, sprint 9)
 const NET_SMOOTH_MAX  = 300;  // world units; beyond this it's a teleport, not an error
 const NET_IDLE_GAP    = 400;  // ms of silence after which the timeline restarts
-const NET_BLOAT_MS    = 260;  // ms of backlog past `delay` before we wind playback forward
 const NET_BUF_MAX_AGE = 1600; // ms of history to retain
 
 function _netNow() {
@@ -3912,7 +3937,12 @@ function _netClockFor(player) {
     let n = player._netClock;
     if (!n) {
         n = player._netClock = {
-            off: null,           // sender clock → local clock (minimum-filtered)
+            off: null,           // sender clock → local clock (sliding minimum)
+            offCur: Infinity,    // …this bucket's minimum
+            offPrev: Infinity,   // …and the bucket before it
+            offAt: 0,            // when this bucket began
+            pt: null,            // the playhead (local-clock time being replayed)
+            ptAt: 0,             // frame time the playhead was last advanced
             lastW: 0,            // newest sender stamp seen (drops stale / duplicate)
             lastRecv: 0,         // local arrival time of the newest packet (idle test)
             gap: POS_WS_MIN_INTERVAL, // observed sender packet spacing
@@ -3930,23 +3960,71 @@ function _netClockFor(player) {
 // `w` = the sender's own performance.now() when it built the packet. Omitted by
 // the Firebase fallback path (and by any pre-`w` client), which falls back to
 // arrival stamping — correct, just no jitter immunity.
+// The sender started over (reloaded the page), or its clock stepped: forget what
+// was learned about it and restart the timeline. The avatar stays where it is drawn
+// and the continuity guard glides it onto the new samples.
+function _netClockReset(player, n) {
+    n.off = null; n.offCur = Infinity; n.offPrev = Infinity; n.offAt = 0;
+    n.lastW = 0; n.gap = POS_WS_MIN_INTERVAL; n.jitter = NET_JITTER_MIN;
+    n.pt = null;
+    if (player._netBuf) { player._netBuf.length = 0; n.resync = true; }
+    if (player._sitQueue) for (const it of player._sitQueue) it.wt = null;
+}
+
 function pushNetSample(player, x, y, w) {
     const now = _netNow();
     if (player.renderX === undefined) { player.renderX = x; player.renderY = y; }
     const n = _netClockFor(player);
+    const silent = now - n.lastRecv;
     n.lastRecv = now;
 
     let t;
     if (typeof w === 'number' && isFinite(w)) {
+        if (n.lastW && w < n.lastW - NET_W_BACK) _netClockReset(player, n);
+        else if (n.off !== null && silent > NET_OFF_IDLE) {
+            // Nothing for a while (they stood still, their laptop slept, our tab was
+            // away): either clock may have paused meanwhile, so measure afresh. The
+            // buffer restarts below on the same silence.
+            n.off = null;
+        }
         const d = now - w;                                   // transit + epoch difference
-        if (n.off === null || d < n.off) n.off = d;          // a faster path IS the truth
-        else n.off += (d - n.off) * NET_OFF_CREEP;           // otherwise follow drift only
+        if (n.off === null) {
+            n.off = n.offCur = d; n.offPrev = Infinity; n.offAt = now;
+        } else {
+            // The fastest packet of the last two buckets defines the true send
+            // time; later ones are just late. Sliding, so it follows drift and
+            // recovers from a step in either direction within seconds.
+            if (now - n.offAt > NET_OFF_WIN) { n.offPrev = n.offCur; n.offCur = d; n.offAt = now; }
+            else if (d < n.offCur) n.offCur = d;
+            const off = Math.min(n.offCur, n.offPrev);
+            const shift = off - n.off;
+            if (shift !== 0) {
+                const buf0 = player._netBuf;
+                if (Math.abs(shift) <= NET_OFF_REBASE) {
+                    // A better estimate of the same clock: re-time what is buffered
+                    // (and the playhead with it) so the samples keep the spacing
+                    // they were SENT at.
+                    if (buf0) for (let i = 0; i < buf0.length; i++) buf0[i].t += shift;
+                    if (n.pt !== null) n.pt += shift;
+                } else if (buf0 && buf0.length) {
+                    buf0.length = 0; n.resync = true; n.pt = null;   // the clock itself moved
+                }
+                n.off = off;
+            }
+        }
         const late = d - n.off;
         n.jitter += (late - n.jitter) * (late > n.jitter ? NET_JIT_ATTACK : NET_JIT_DECAY);
         if (n.jitter < NET_JITTER_MIN) n.jitter = NET_JITTER_MIN;
         if (n.jitter > NET_JITTER_MAX) n.jitter = NET_JITTER_MAX;
         if (n.lastW) {
-            if (w <= n.lastW) return;                        // stale / duplicate
+            if (w < n.lastW) return;                         // out of order
+            if (w === n.lastW) {
+                // Two packets built in the same frame (a landing, then the walk):
+                // the later one is the truth about that moment.
+                const b0 = player._netBuf, l0 = b0 && b0[b0.length - 1];
+                if (l0) { l0.x = x; l0.y = y; l0.m = player._netM; l0.s = player._netS; }
+                return;
+            }
             const g = w - n.lastW;
             if (g < 2000) n.gap += (g - n.gap) * 0.15;       // track the real send rate
         }
@@ -3963,6 +4041,7 @@ function pushNetSample(player, x, y, w) {
         // the avatar themselves, so the next frame must snap, not glide.
         buf = player._netBuf = [];
         n.playing = false; n.starved = false; n.resync = false; n.errX = 0; n.errY = 0;
+        n.pt = null;
     }
     const last = buf[buf.length - 1];
     if (last && t - last.t > NET_IDLE_GAP) {
@@ -3972,11 +4051,16 @@ function pushNetSample(player, x, y, w) {
         // the timeline here and let the continuity guard absorb the offset.
         buf.length = 0;
         n.resync = true;
+        n.pt = null;
     } else if (last && t <= last.t) {
         t = last.t + 1;                                      // keep the timeline monotonic
     }
     buf.push({ t, x, y, m: player._netM, s: player._netS });
-    while (buf.length > 2 && now - buf[0].t > NET_BUF_MAX_AGE) buf.shift();
+    // Drop what the playhead has passed (keeping one sample behind it for the
+    // curve's slope) — never what it has yet to replay.
+    const ref = n.pt !== null ? n.pt : now - NET_BUF_MAX_AGE;
+    while (buf.length > 3 && buf[2].t < ref) buf.shift();
+    while (buf.length > NET_BUF_MAX_LEN) buf.shift();
 }
 
 // Continuity guard: absorb a positional discontinuity as a decaying offset
@@ -4015,14 +4099,26 @@ function interpolateRemoteFromBuffer(entity) {
 
     const prevX = entity.renderX, prevY = entity.renderY;
     const lastS = buf[buf.length - 1];
-    // Buffer bloat guard: a burst (or a delay that grew during a spike and hasn't
-    // eased back) can leave playback trailing far behind the newest sample, which
-    // reads as the player lagging permanently. Wind the clock forward gently —
-    // 6 ms a frame is invisible motion but clears a second of backlog in ~3 s.
-    if (lastS.t - (now - n.delay) > n.delay + NET_BLOAT_MS) {
-        n.delay = Math.max(NET_DELAY_MIN, n.delay - 6 * dtF);
+    // The playhead chases `now − delay`. Behind (a burst just landed after a
+    // stall) → it runs fast and the avatar walks the real path, quicker; ahead (the
+    // delay just grew) → it runs slow. It only JUMPS when there is no timeline to
+    // keep: a fresh buffer, a stretch with no frames drawn, or hopelessly behind.
+    const targetT = now - n.delay;
+    const fdt = now - n.ptAt;
+    n.ptAt = now;
+    if (n.pt === null || !(fdt >= 0 && fdt <= NET_FRAME_GAP)) {
+        if (n.pt !== null) n.resync = true;
+        n.pt = targetT;
+    } else {
+        const lag = targetT - (n.pt + fdt);
+        if (lag > NET_CATCH_SNAP) { n.pt = targetT; n.resync = true; }
+        else n.pt += fdt * Math.max(NET_SLOW_MIN, Math.min(NET_CATCH_MAX, 1 + lag / NET_CATCH_K));
     }
-    const renderT = now - n.delay;
+    // Mid-walk with nothing newer to play: hold the playhead at the end of the
+    // coast, so when the late packets land the replay resumes from HERE.
+    const lastMoving = lastS.m !== undefined ? !!lastS.m : !!entity.isMoving;
+    if (lastMoving && n.pt > lastS.t + NET_EXTRAP_MS) n.pt = lastS.t + NET_EXTRAP_MS;
+    const renderT = n.pt;
     let ix, iy, starving = false;
 
     if (buf.length === 1 || renderT <= buf[0].t) {
@@ -6568,7 +6664,8 @@ function updateRemoteSitAnims() {
             const it = q[0], n = player._netClock;
             // Compared against the LIVE delay each frame, the same clock the
             // position replay runs on, so the hop lands on the replay's timeline.
-            if (it.wt === null || !n || now >= it.deadline || now - n.delay >= it.wt) {
+            if (it.wt === null || !n || now >= it.deadline
+                || (n.pt !== null ? n.pt : now - n.delay) >= it.wt) {
                 _beginRemoteSitAnim(player, q.shift().msg);
             }
         }
@@ -6758,7 +6855,10 @@ function updateFloorsAndScales() {
         if (off >= 0 && off < JUMP_OFF_AIR) {
             const base = desiredPlayerScale(player);            // _elev is already false
             const u = off / JUMP_OFF_AIR;
-            player.renderScale = base * (JUMP_TOP_SCALE + (1 - JUMP_TOP_SCALE) * u);
+            // Eased at both ends: a linear shrink stopped dead at touchdown, which
+            // read as the size snapping when the feet hit the floor.
+            const e = u * u * (3 - 2 * u);
+            player.renderScale = base * (JUMP_TOP_SCALE + (1 - JUMP_TOP_SCALE) * e);
             continue;
         }
         player.renderScale += (desiredPlayerScale(player) - player.renderScale) * k;
@@ -7132,6 +7232,7 @@ function startGame(userData) {
             if (_p) updatePlayerPosition(_p.x, _p.y);
             publishAwayState();
             ensurePresenceSocket();   // re-open the relay if the wake dropped it
+            presenceWake();           // …and check that an "open" one is still real
         };
         // Going hidden has to publish «بعيد» from the event itself — rAF stops in a
         // hidden tab, so the 10s heartbeat below can't do it on the way OUT.
@@ -7140,6 +7241,7 @@ function startGame(userData) {
         });
         window.addEventListener('focus', _resyncPresence);
         window.addEventListener('online', _resyncPresence);
+        window.addEventListener('pageshow', (e) => { if (e.persisted) _resyncPresence(); });
         // First publish of the session: clears an `awaySince` the LAST session left
         // behind, which the change guard would otherwise skip as "no change".
         publishAwayState(true);
@@ -11254,49 +11356,191 @@ const presenceNet = {
     turnAt: -1e9,       // last out-of-band turn send — rate-limited to one per interval
     reconnectTimer: null,
     closing: false,     // true = we asked it to close (logout); don't reconnect
+    // Liveness (see _presenceWatch). All times are Date.now().
+    openedAt: 0,        // when this socket was created (connect timeout)
+    inAt: 0,            // last time ANYTHING arrived on it
+    probeAt: 0,         // an unanswered "ping" went out at this time (0 = none)
+    probeDue: 0,        // …and must be answered within this many ms
+    pongOk: false,      // this relay answers "ping" itself (seen at least once)
+    fails: 0,           // opens in a row that never became a live socket (backoff)
+    watch: null,        // the watchdog interval
+    watchAt: 0,         // its last tick (a long gap = this page was frozen)
+    fbPosAt: 0,         // last Firebase position written because the socket was down
 };
 
+/* ── Why a watchdog ────────────────────────────────────────────────────────────
+   A WebSocket whose network path died (a phone changing towers, Wi-Fi → data, a
+   NAT that forgot it, a laptop that slept) stays `OPEN` for MINUTES: nothing tells
+   the page. Meanwhile every send goes nowhere and nothing arrives — "the whole
+   server froze: everyone stands still for me, and I stand still for everyone",
+   cured only by a reload (a new socket). The page sent "ping" all along but never
+   looked for the "pong".
+   Now: any inbound byte is proof of life; with none recently, a "ping" is sent and
+   must be answered in time, or the socket is thrown away and a new one opened at
+   once. While WALKING the check is every few seconds (the radio is awake anyway);
+   idle it stays at the old 25 s keep-alive. Coming back to the tab, or the network
+   changing, checks at once. It runs on a timer, not the frame loop — a hidden tab
+   has no frames, and that is exactly where a socket dies unnoticed. */
+const WS_CONNECT_MAX_MS = 8000;   // a socket still CONNECTING after this is abandoned
+const WS_PROBE_ACTIVE_MS = 3000;  // walking: no inbound for this long → ping
+const WS_PROBE_DUE_MS = 4500;     // …answered within this, or the socket is dead
+const WS_PROBE_WAKE_MS = 3000;    // the deadline for the check on tab return / network change
+const WS_FB_FALLBACK_MS = 700;    // socket down + walking → a Firebase position this often
+
+function presenceLive() {
+    const ws = presenceNet.ws;
+    return !!ws && ws.readyState === WebSocket.OPEN;
+}
+
 // The single entry point. Opens a socket if we don't have a healthy one for the
-// current lobby. Safe to call repeatedly (startGame, the 10s heartbeat, resync).
+// current lobby. Safe to call repeatedly (startGame, the heartbeat, resync).
 function ensurePresenceSocket() {
     if (!gameState.userId || !gameState.selectedLobby) return;
     presenceNet.closing = false;
+    if (!presenceNet.watch) presenceNet.watch = setInterval(_presenceWatch, 1000);
     const ws = presenceNet.ws;
     const lobbyOk = presenceNet.lobby === gameState.selectedLobby;
     if (ws && lobbyOk && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
-    if (ws && !lobbyOk) { try { ws.close(); } catch (_) {} presenceNet.ws = null; }
+    if (ws) _presenceDetach(ws);
+    if (presenceNet.reconnectTimer) { clearTimeout(presenceNet.reconnectTimer); presenceNet.reconnectTimer = null; }
     _openPresenceSocket();
+}
+
+// Let go of a socket for good: its late events must not touch the next one.
+function _presenceDetach(ws) {
+    try { ws.onopen = ws.onmessage = ws.onclose = ws.onerror = null; } catch (_) {}
+    try { ws.close(); } catch (_) {}
+    if (presenceNet.ws === ws) presenceNet.ws = null;
+    presenceNet.probeAt = 0;
 }
 
 function _openPresenceSocket() {
     const lobby = gameState.selectedLobby;
     const url = `${PRESENCE_WS_BASE}/lobby/${encodeURIComponent(lobby)}?uid=${encodeURIComponent(gameState.userId)}`;
     let ws;
-    try { ws = new WebSocket(url); } catch (_) { _schedulePresenceReconnect(); return; }
+    try { ws = new WebSocket(url); } catch (_) { presenceNet.fails++; _schedulePresenceReconnect(); return; }
     presenceNet.ws = ws;
     presenceNet.lobby = lobby;
+    presenceNet.openedAt = Date.now();
+    presenceNet.probeAt = 0;
     ws.onopen = () => {
+        if (presenceNet.ws !== ws) return;
+        presenceNet.inAt = Date.now();
         // Announce our current position immediately so others place us correctly.
         const p = gameState.players[gameState.userId];
         if (p) sendPositionWS(p.x, p.y, true);
+        // …and learn whether this relay answers pings (it also proves the path both ways).
+        _presenceProbe(WS_PROBE_DUE_MS);
     };
-    ws.onmessage = (ev) => onPresenceMessage(ev.data);
-    ws.onclose = () => { if (!presenceNet.closing) _schedulePresenceReconnect(); };
+    ws.onmessage = (ev) => {
+        if (presenceNet.ws !== ws) return;
+        presenceNet.inAt = Date.now();
+        presenceNet.probeAt = 0;
+        presenceNet.fails = 0;
+        if (ev.data === 'pong') { presenceNet.pongOk = true; return; }
+        if (ev.data === 'ping') return;          // an older relay forwards other members' pings
+        onPresenceMessage(ev.data);
+    };
+    ws.onclose = () => {
+        if (presenceNet.ws !== ws) return;
+        presenceNet.ws = null;
+        presenceNet.probeAt = 0;
+        presenceNet.fails++;
+        if (!presenceNet.closing) _schedulePresenceReconnect();
+    };
     ws.onerror = () => { try { ws.close(); } catch (_) {} };
 }
 
-function _schedulePresenceReconnect() {
+// First retry almost at once (a dead socket was just replaced — the network is
+// usually fine), then back off so a relay that is really down isn't hammered.
+function _schedulePresenceReconnect(now) {
     if (presenceNet.reconnectTimer || presenceNet.closing) return;
+    const f = presenceNet.fails;
+    const wait = now ? 0 : (f <= 1 ? 250 : Math.min(8000, 500 * Math.pow(2, f - 2))) + Math.random() * 250;
     presenceNet.reconnectTimer = setTimeout(() => {
         presenceNet.reconnectTimer = null;
         ensurePresenceSocket();
-    }, 2000);
+    }, wait);
+}
+
+function _presenceProbe(dueMs) {
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send('ping'); } catch (_) { return; }
+    presenceNet.probeAt = Date.now();
+    presenceNet.probeDue = dueMs;
+}
+
+// The socket is not answering: replace it now.
+function _presenceDead(ws) {
+    console.warn('[relay] socket stopped answering — reconnecting');
+    _presenceDetach(ws);
+    presenceNet.fails = 0;
+    _schedulePresenceReconnect(true);
+}
+
+function _presenceWatch() {
+    const now = Date.now();
+    const slept = now - presenceNet.watchAt > 5000;   // throttled, frozen or asleep since the last tick
+    presenceNet.watchAt = now;
+    if (presenceNet.closing || !gameState.userId || !gameState.selectedLobby || gameState._dupSessionDetected) return;
+    const ws = presenceNet.ws;
+    if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+        if (ws) _presenceDetach(ws);
+        _schedulePresenceReconnect();
+        return;
+    }
+    if (ws.readyState === WebSocket.CONNECTING) {
+        if (now - presenceNet.openedAt > WS_CONNECT_MAX_MS) { presenceNet.fails++; _presenceDetach(ws); _schedulePresenceReconnect(); }
+        return;
+    }
+    if (slept) {
+        // We can't tell a late answer from a missing one across a freeze: ask again.
+        _presenceProbe(WS_PROBE_WAKE_MS);
+        return;
+    }
+    if (presenceNet.probeAt) {
+        if (now - presenceNet.probeAt > presenceNet.probeDue) {
+            // An older relay never answers; then silence proves nothing.
+            if (presenceNet.pongOk) _presenceDead(ws); else presenceNet.probeAt = 0;
+        }
+        return;
+    }
+    const p = gameState.players[gameState.userId];
+    const active = (p && p.isMoving) || (performance.now() - presenceNet.lastSendAt < WS_PROBE_ACTIVE_MS);
+    if (now - presenceNet.inAt >= (active ? WS_PROBE_ACTIVE_MS : WS_KEEPALIVE_MS)) {
+        _presenceProbe(WS_PROBE_DUE_MS);
+        presenceNet.inAt = now;       // paces the next ping; a real arrival overwrites it
+    }
+}
+
+// Back at the tab / the network changed: is the socket we hold still real?
+function presenceWake() {
+    if (presenceNet.closing || !gameState.userId) return;
+    const ws = presenceNet.ws;
+    if (ws && ws.readyState === WebSocket.OPEN) _presenceProbe(WS_PROBE_WAKE_MS);
+    else if (!ws || ws.readyState !== WebSocket.CONNECTING) {
+        if (presenceNet.reconnectTimer) { clearTimeout(presenceNet.reconnectTimer); presenceNet.reconnectTimer = null; }
+        ensurePresenceSocket();
+    }
+}
+
+// Socket down while walking: nobody would see a step until it reconnects. Keep
+// the others' picture moving through Firebase meanwhile (their listener feeds the
+// same replay buffer). Rare and short — the socket is back within a second or two.
+function _posFallbackWalk(x, y) {
+    if (presenceLive()) return;
+    const now = Date.now();
+    if (now - presenceNet.fbPosAt < WS_FB_FALLBACK_MS) return;
+    presenceNet.fbPosAt = now;
+    updatePlayerPosition(x, y);
 }
 
 function disconnectPresenceSocket() {
     presenceNet.closing = true;
     if (presenceNet.reconnectTimer) { clearTimeout(presenceNet.reconnectTimer); presenceNet.reconnectTimer = null; }
-    if (presenceNet.ws) { try { presenceNet.ws.close(); } catch (_) {} presenceNet.ws = null; }
+    if (presenceNet.watch) { clearInterval(presenceNet.watch); presenceNet.watch = null; }
+    if (presenceNet.ws) _presenceDetach(presenceNet.ws);
     presenceNet.lobby = null;
 }
 
@@ -11458,6 +11702,7 @@ function onPresenceMessage(data) {
     // reads it to decide whether to extrapolate when the buffer starves.
     player.isMoving = msg.m === 1;
     player.isSprinting = msg.s === 1;
+    if (msg.m === 1) perfWake();
     // The buffered copy is what actually drives the walk cycle — the sample it
     // rides on is replayed one interpolation delay later, so the animation stops
     // when the avatar visually stops rather than a delay early.
@@ -11762,6 +12007,7 @@ function handleMovement() {
         // Live movement goes over the WebSocket relay (throttled), NOT Firebase —
         // this is the per-frame write that used to spam the database.
         sendPositionWS(player.x, player.y, startedMoving);
+        _posFallbackWalk(player.x, player.y);
 
         if (Math.random() < (player.isSprinting ? 0.8 : 0.4) * gameState.dtFactor) {
             spawnDust(player.renderX, player.renderY, player.isSprinting ? 2 : 1, false);
@@ -12489,14 +12735,7 @@ function gameLoop(timestamp) {
     // kept open by a bare "ping" the relay answers on its own without forwarding
     // it to anyone (see presence-server). An older relay forwards it; every client
     // ignores a message that isn't JSON, so that is harmless.
-    if (gameState.userId && !gameState.isSirajGhost) {
-        const _now = Date.now();
-        if (!gameState._lastWsPing || _now - gameState._lastWsPing > WS_KEEPALIVE_MS) {
-            gameState._lastWsPing = _now;
-            const ws = presenceNet.ws;
-            if (ws && ws.readyState === WebSocket.OPEN) { try { ws.send('ping'); } catch (_) {} }
-        }
-    }
+    // (Sent by the relay watchdog's own timer now — see _presenceWatch.)
 
     try {
         // Edge bokeh: hide during all three minigames (they each return early before render()).
@@ -35970,12 +36209,12 @@ let _anyTap = { t: 0, x: 0, y: 0 };
      work session — a short screen shake and Jump_Land.mp3. */
 const JUMP_KINDS = {
     '':   { ms: JUMP_MS },
-    off:  { ms: 300 },
+    off:  { ms: 440 },
     fall: { ms: 640 },
 };
 const JUMP_AIR    = [0.10, 0.72];   // the airborne window of a jump, as fractions of JUMP_MS
 const JUMP_FALL_LAND = 0.70;        // where in a fall the feet touch the ground
-const JUMP_OFF_AIR = 0.62;          // how much of a step-off is spent in the air
+const JUMP_OFF_AIR = 0.68;          // how much of a step-off is spent in the air
 const JUMP_OFF_LIFT = 18;           // the table's height, as the step-down's drop (px)
 const JUMP_TOP_SCALE   = 1.14;   // standing on a table: a touch closer to the camera
 const JUMP_QUAKE_MS    = 1100;
@@ -36254,12 +36493,13 @@ function receiveJump(player, msg) {
         player._jump = { t0: now, k, s0: fx ? fx.s : 1, dy0: fx ? fx.dy : 0 };
         player._hatKick = { up: 1.6, t: now, land: _jumpLandMs(k) };
         const x = Number(msg.x), y = Number(msg.y);
-        // The quake lands where their avatar lands — one interpolation delay late here.
-        const lag = (player._netClock && player._netClock.delay) || 150;
+        // The quake (and its sound) lands on the frame the fall drawn HERE touches
+        // down. It used to wait one interpolation delay more: the avatar hit the
+        // ground, and the thud came a beat later.
         setTimeout(() => {
             const lx = Number.isFinite(x) ? x : player.x, ly = Number.isFinite(y) ? y : player.y;
             _jumpQuake(lx, ly, false);
-        }, _jumpLandMs('fall') + lag);
+        }, _jumpLandMs('fall'));
         return;
     }
     if (player._jump && now - player._jump.t0 < JUMP_COOLDOWN_MS && k !== 'off') return;
@@ -36293,7 +36533,7 @@ function _jumpLand(p) {
             const nx = p.x + j.ox * r, ny = p.y + j.oy * r;
             if (ok(nx, ny, true) === 'floor') { p.x = nx; p.y = ny; where = 'floor'; break; }
         }
-        if (where) syncEntityRenderToTarget(p);
+        if (where) p.smoothMove = true;       // glide to it — a jump here read as a snap
     }
     if (!where) {
         search:
@@ -36320,6 +36560,10 @@ function _jumpMaybeFall(p, now) {
     const fy = p.y + _JUMP_FEET;
     if (_jumpInPlatform(p.x, fy) || isOnStairs(p.x, p.y)) return;
     const fx = _jumpFx(p, now);
+    // A jump already made its take-off sound (the right one if the fall was
+    // predicted, the ordinary hop if not) — never a second one on top. Only a fall
+    // that began with no jump at all (walked off a desk at the edge) plays it here.
+    const hadJump = !!(p._jump && p._jump.k === '');
     p._jump = { t0: now, k: 'fall', s0: fx ? fx.s : 1, dy0: fx ? fx.dy : 0 };
     p._elev = false;
     p._hatKick = { up: 1.6, t: now, land: _jumpLandMs('fall') };
@@ -36329,9 +36573,7 @@ function _jumpMaybeFall(p, now) {
         x: Math.round(p.x + (p._vx || 0) * lead * 0.6),
         y: Math.round(p.y + (p._vy || 0) * lead * 0.6),
     });
-    // Jump_Start already played at take-off if the jump began near the edge.
-    if (!p._jumpStartPlayed) _jumpPlayStart();
-    p._jumpStartPlayed = false;
+    if (!hadJump) _jumpPlayStart();
     perfWake(1200);
 }
 
@@ -36403,15 +36645,50 @@ function _jumpPlayStart() {
     const fe = gameState.focusAudioEngine;
     try { if (!(fe && fe.playHandled('jumpStart', 1, 0.9))) playSoundRobust(gameState.sounds.jumpStart); } catch (_) {}
 }
-// On the mezzanine, close enough to its edge that this jump may go over it — the
-// take-off then plays Jump_Start instead of the ordinary hop, so the fall doesn't
-// add a second jump sound.
-const JUMP_EDGE_NEAR = 70;
-function _jumpNearEdge(p) {
-    if ((p.floor || 1) !== 2) return false;
-    const fy = p.y + _JUMP_FEET;
-    const d = Math.min(p.x - PLAT_X0, PLAT_X1 - p.x, fy - PLAT_Y0, PLAT_Y1 - fy);
-    return d < JUMP_EDGE_NEAR;
+/* Will THIS jump leave the mezzanine? Decided at take-off, before any sound plays,
+   by walking the jump forward: the same easing toward the held direction that
+   handleMovement applies (so letting go mid-press, or a direction only just
+   pressed, are both read right), the floor's rules through the crouch and the air's
+   rules after it. Standing still at the edge → no. Running at it → yes.
+   It used to be "is the edge within 70 px", which called a hop in place a fall and
+   missed a run-up from further back — the wrong sound, or two of them. */
+function _jumpInputVec() {
+    const k = gameState.keys, j = gameState.joystick;
+    let sprint = k['ShiftLeft'] || k['ShiftRight'];
+    const sp = sprint ? MOVE_SPEED * 1.8 : MOVE_SPEED;
+    let dx = 0, dy = 0;
+    if (k['KeyW'] || k['ArrowUp']) dy -= sp;
+    if (k['KeyS'] || k['ArrowDown']) dy += sp;
+    if (k['KeyA'] || k['ArrowLeft']) dx -= sp;
+    if (k['KeyD'] || k['ArrowRight']) dx += sp;
+    if (j && j.active && j.magnitude > 0.08) {
+        const js = j.sprinting ? MOVE_SPEED * 1.8 : MOVE_SPEED;
+        dx += j.dx * js; dy += j.dy * js;
+    }
+    return { dx, dy };
+}
+function _jumpWillFall(p) {
+    if ((p.floor || 1) !== 2 || !worldCollision.built) return false;
+    const { dx, dy } = _jumpInputVec();
+    const hasInput = dx !== 0 || dy !== 0;
+    let vx = p._vx || 0, vy = p._vy || 0;
+    if (!hasInput && Math.hypot(vx, vy) < 0.25) return false;
+    const rk = hasInput ? 0.30 : 0.40;
+    let x = p.x, y = p.y;
+    const frames = Math.ceil(JUMP_MS * JUMP_AIR[1] / 16.667);
+    const crouch = Math.floor(JUMP_MS * JUMP_AIR[0] / 16.667);
+    for (let i = 0; i < frames; i++) {
+        vx += (dx - vx) * rk; vy += (dy - vy) * rk;
+        if (!hasInput && Math.hypot(vx, vy) < 0.25) return false;
+        const air = i >= crouch;
+        const blocked = (nx, ny) => air
+            ? _jumpAirBlocked(nx, ny, ny + _JUMP_FEET, 2)
+            : checkCollision(nx, ny, { floor: 2, elev: !!p._elev, air: false });
+        if (!blocked(x + vx, y)) x += vx;
+        if (!blocked(x, y + vy)) y += vy;
+        if (air && !_jumpInPlatform(x, y + _JUMP_FEET) && !isOnStairs(x, y)) return true;
+    }
+    return false;
 }
 
 function triggerJump() {
@@ -36422,8 +36699,7 @@ function triggerJump() {
     p._jump = { t0: now, k: '' };
     _jumpDust(p, 5);
     sendJumpWS('');
-    p._jumpStartPlayed = _jumpNearEdge(p);
-    if (p._jumpStartPlayed) _jumpPlayStart();
+    if (_jumpWillFall(p)) _jumpPlayStart();
     else {
         const fe = gameState.focusAudioEngine;
         if (fe) fe.playEffect('sofaStand');   // the couch hop's own sound — the same motion
