@@ -47123,7 +47123,16 @@ function _hallPaintSeat(p) {
         const rec = MDWNH_ROSTER && MDWNH_ROSTER.byDiscord && MDWNH_ROSTER.byDiscord[p.cu || p.uid];
         if (rec && rec.slug) face = _libAvatar(rec.slug);
     } catch (_) {}
-    const list = [p.av, face].filter((u, i, a) => u && a.indexOf(u) === i);
+    // First choice: the picture the WORLD already loaded for this member. It is known to
+    // work, whatever its form (the relay drops a base64 one, and the safe-URL test can
+    // refuse an address the world draws fine). Only someone from my own lobby has one.
+    let world = '';
+    const wi = gameState.avatarCache && gameState.avatarCache[p.uid];
+    if (wi && typeof wi === 'object' && wi.naturalWidth > 0 && typeof wi.src === 'string' && !/["\\\n\r]/.test(wi.src)) {
+        world = wi.src;
+        _hallAvOk.set(world, 1);
+    }
+    const list = [world, p.av, face].filter((u, i, a) => u && a.indexOf(u) === i);
     const key = list.join('|');
     p._avKey = key;
     const tryAt = (i) => {
