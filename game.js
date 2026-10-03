@@ -31798,8 +31798,8 @@ const LTH_LOCK_F   = 20;      // the member can't move from this frame on
 const LTH_RUSH_F1  = 23;      // …and he is beside them by this one (frames 20–22)
 const LTH_HOLD_F0  = 24;      // LTH_REL[0] is this frame — still standing on the floor
 const LTH_THROW_F  = 46;      // the release
-const LTH_GRAB_F   = LTH_LOCK_F + 2;   // his rush ends ON the member — the screen shakes here
-const LTH_SHAKE_AMP = 13;     // screen px for the thrown member; less for anyone near, by distance
+const LTH_GRAB_F   = LTH_LOCK_F + 3;   // just after his rush ends ON the member — the screen shakes here
+const LTH_SHAKE_AMP = 9;      // screen px for the thrown member; less for anyone near, by distance
 // The member's centre relative to his anchor, in source-cell px, frames 24…46.
 const LTH_REL = [
     [391, -692], [101, -997], [-49, -1155], [-117, -1227], [-153, -1264], [-170, -1283], [-175, -1287], [-176, -1287],
