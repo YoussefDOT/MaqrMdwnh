@@ -44429,7 +44429,9 @@ function _dmOnMsg(peer, key, v) {
         // animation for a moment (the slam's quake) REPLAYED the entrance of every
         // message of this visit when it ended.
         if (fr) setTimeout(() => fr.classList.remove('fresh'), 520);
-        if (near || msg.f === _dm.me) _dmScrollEnd(th.loaded);
+        // (a message with an effect jumps there: the effect measures where the bubble IS,
+        // and a scroll still travelling would leave the light below it)
+        if (near || msg.f === _dm.me) _dmScrollEnd(th.loaded && !msg.x);
         else if (th.loaded) { _dm.below++; _dmPaintDown(); }
         const showed = _dmFxArrived(peer, th, msg);
         // The arrival sound — for a message that came in NOW, to a thread being looked
@@ -45743,8 +45745,13 @@ function _dmPlayFx(msg) {
         }, DM_SLAM_HIT_MS);
         return;
     }
+    // The entrance (`fresh`) draws the bubble smaller and lower for its first frames —
+    // measured through it, the spotlight landed small and under the message.
+    row.classList.remove('fresh');
     requestAnimationFrame(() => {
-        if (row.isConnected && _dmThreadShown(_dm.peer)) _dmScreenFx(kind, row, msg);
+        if (!row.isConnected || !_dmThreadShown(_dm.peer)) return;
+        if (Date.now() - _dm.stickAt < 600) { _dm.stickAt = 0; E.msgs.scrollTop = E.msgs.scrollHeight; }   // a smooth scroll still on its way
+        _dmScreenFx(kind, row, msg);
     });
 }
 const DM_SLAM_HIT_MS = 235;
@@ -45857,7 +45864,9 @@ function _dmScreenFx(kind, row, msg) {
         // message (a flicker as it catches), holds, and eases off as the room returns.
         // The timeline is the CSS's (dmSpotDark / dmSpotLight, 4.4 s) and the sound's
         // (_dmFxSound 'spot') — the three move together.
-        const rw = Math.round(br.width * 0.95 + 14), rh = Math.round(br.height * 0.85 + 12);
+        // The hole is an ellipse AROUND the bubble's box (clear out to 72% of its radius),
+        // sized from the bubble itself: one word or a tall picture, all of it is lit.
+        const rw = Math.round(br.width * 0.86 + 24), rh = Math.round(br.height * 0.86 + 26);
         L.classList.add('spot');
         L.style.setProperty('--x', bx + 'px');
         L.style.setProperty('--y', by + 'px');
