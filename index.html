@@ -198,7 +198,7 @@
 
     <!-- زر وضع التجربة — ثابت في أسفل الشاشة، يظهر في كل شاشات الدخول -->
     <button id="siraj-test-link" class="siraj-test-link">وضع التجربة</button>
-    <div id="build-number" class="build-number">Build 385 · Updated 10/3 10:06 AM</div>
+    <div id="build-number" class="build-number">Build 386 · Updated 10/3 10:17 AM</div>
 
     <!-- نافذة اختيار الصالة — احتياطية فقط: تظهر للحساب الذي لم تُحدَّد صالته بعد -->
     <div id="discord-first-lobby-modal" class="modal-overlay">
@@ -1997,6 +1997,7 @@
             <div id="hall-reacts" class="hall-reacts" role="group" aria-label="التفاعلات"></div>
             <div class="hall-actions">
                 <button id="hall-say" class="hall-btn" type="button">تعليق</button>
+                <button id="hall-log-btn" class="hall-btn" type="button">سجل المحادثة <b id="hall-log-n" class="hall-log-n" hidden></b></button>
                 <button id="hall-share" class="hall-btn" type="button" hidden>مشاركة الشاشة</button>
                 <button id="hall-kill" class="hall-btn" type="button" hidden>إيقاف المشاركة</button>
                 <button id="hall-focus-btn" class="hall-btn" type="button" hidden>وضع التركيز</button>
@@ -2009,9 +2010,23 @@
             <div class="hall-reqs-head">طلبات المغادرة</div>
             <div id="hall-req-list"></div>
         </div>
+        <aside id="hall-log" class="hall-log" aria-label="سجل المحادثة">
+            <div class="hall-log-head">
+                <span>سجل المحادثة</span>
+                <button id="hall-log-close" class="hall-log-close" type="button" aria-label="إخفاء السجل">
+                    <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+                </button>
+            </div>
+            <div id="hall-log-list" class="hall-log-list"></div>
+            <div id="hall-log-empty" class="hall-log-empty">لا تعليقات بعد — ما يُكتب في الاجتماع يظهر هنا.</div>
+        </aside>
         <div id="hall-compose" class="hall-compose">
             <div id="hall-men" class="hall-men" role="listbox"></div>
-            <input id="hall-input" class="hall-input" type="text" maxlength="100" dir="rtl" autocomplete="off" enterkeyhint="send" placeholder="اكتب تعليقًا… (@ للإشارة إلى عضو)">
+            <div id="hall-stk" class="hall-stk">
+                <div id="hall-stk-cap" class="chat-stk-cap"></div>
+                <div id="hall-stk-grid" class="chat-stk-grid" role="listbox" aria-label="الملصقات"></div>
+            </div>
+            <input id="hall-input" class="hall-input" type="text" maxlength="100" dir="rtl" autocomplete="off" enterkeyhint="send" placeholder="اكتب تعليقًا… (@ للإشارة، / للملصقات)">
             <button id="hall-send" class="hall-send" type="button" aria-label="إرسال">
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>
@@ -2668,7 +2683,7 @@
              The preload URL must match game.js's import byte for byte, or the
              module (and Firebase) would be instantiated twice. Bump both together. -->
         <link rel="modulepreload" href="firebase-config.js?v=4">
-        <script type="module" src="game.js?v=357"></script>
+        <script type="module" src="game.js?v=358"></script>
 
     <div id="pwa-toast" role="status" aria-live="polite"></div>
 

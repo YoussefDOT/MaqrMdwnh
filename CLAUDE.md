@@ -2473,7 +2473,23 @@ hidden tab is pulled in when it is looked at again.
 - **Comments**: the hall's OWN input (`#hall-input`, a plain `<input>`, 100 chars), not the
   world chat box. `@` lists attendees; a mention is `@name` text + `men:[uids]`. A comment
   floats over the seat (`--bx` nudges it on screen). **Focus mode** (`meeting/focus`):
-  only moderators and the stage may comment — enforced on send AND on receive.
+  only moderators and the stage may comment **or react** (`_hallMaySpeak`) — enforced on
+  send AND on receive; the reaction row dims (`.is-off`).
+- **Mentions search the roster** (`_hallMenList`, like `_chatMenCandidates`): display name,
+  roster `name`, `dbKey`, Telegram name, slug anywhere; handle / email from the start. The
+  row and the inserted `@tag` use the roster name (`_hallMenName`), display name beside it.
+- **Stickers**: a comment that STARTS with «/» (not «//») searches them (`_hallStkQuery`,
+  `_hallStkUpdate`, popup `#hall-stk`, the world chat's tile classes); arrows move, Enter
+  or a press sends `{t:'hc', uid, m:'', k:<name>}` (`_hallStkSend`) — an older page drops
+  an empty `m`. Shown in the seat bubble (`.hall-bubble.stk`).
+- **سجل المحادثة** (`#hall-log`, `_hallLogPush`, `_hallLogSet`, `_hallLogReset`): a side
+  panel on the right, toggled by `#hall-log-btn` (unread badge while closed). Every
+  comment/sticker `_hallShowComment` shows is appended — memory only, what THIS client
+  heard, capped at `HALL_LOG_MAX`, kept across a rejoin of the same meeting id. Open
+  state per device (`HALL_LOG_KEY`; never auto-open on a phone). ≥ 900px wide the room
+  gets `padding-right: 320px` (then `layoutDirty`); narrower it lies over the room.
+- **The fireplace crackle is silent in the hall** (`updateFireplaceAmbient` checks
+  `_hall.in / entering`; `_hallEnter` zeroes it at once).
 - **Reactions**: the table's six (`MEET_REACTIONS`, keys 1–6), the avatar animation
   reuses the `rx*` keyframes, plus emoji that fly up the room (`_hallFly`).
 - **Leaving**: a member asks (`hl`), a moderator answers (`hla`) → `out/{uid}` is written,
