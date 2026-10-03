@@ -7189,6 +7189,7 @@ function startGame(userData) {
     setupChatUI();
     setupSocialUI();
     setupMeetingUI();
+    setupHallUI();
     setupJuiceUi();   // JUICE: per-element UI blip + sequenced pop-out
     startTabTitleTicker();
 
@@ -8735,7 +8736,7 @@ function setupControls() {
         // Dashboard overlay owns all input — never let typing (W/A/S/D, arrows…) bleed
         // into player movement or game-world keybinds while it's open.
         if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || readingEndCardOpen()
-            || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || settingsIsOpen() || dmHoldsInput()) return;
+            || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || settingsIsOpen() || dmHoldsInput() || hallHoldsInput()) return;
         // مسافة = قفزة. Space belongs to whatever is FOCUSED first, though: a field
         // being typed into, or a button/link it activates (the settings rows, the
         // meeting seat, the trophy slots are all focusable). Only a press that reaches
@@ -8773,7 +8774,7 @@ function setupControls() {
         // Disable scroll zoom while azkar overlay is open
         if (gameState.azkar && gameState.azkar.active) return;
         // Disable scroll zoom while the dashboard / customization / fireplace / tasks panel is open
-        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || meetingIsOpen() || settingsIsOpen() || dmIsModal()) return;
+        if (dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || meetingIsOpen() || settingsIsOpen() || dmIsModal() || hallHoldsInput()) return;
         // Disable scroll zoom during a reading session — it owns the camera zoom
         // (locks at 2.2x) and never re-asserts it, so a stray scroll here would
         // stick and never recover once the cinematic camera hands control back.
@@ -10866,6 +10867,7 @@ function doLogout() {
     disconnectPresenceSocket();   // close the live-position relay; don't reconnect
     stopLemo();                   // his lobby doc listener
     dmStop();                     // the private-messages inbox + any open thread
+    hallStop();                   // the general meeting's doc listener + its relay socket
     // Explicit logout — don't auto-resume on the next load.
     try { localStorage.removeItem(ACTIVE_SESSION_KEY); } catch (_) {}
     clearPendingEndCard();
@@ -11651,7 +11653,7 @@ function handleMovement() {
     // finish reading). Covers: login entrance, dashboard, char-customizer, fireplace,
     // minigame overlays, locked-in sessions, kidnap anim, prayer, sitting, reading.
     if ((JUICE_ENTRANCE && _entrance.active)
-        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || isMinigameOverlayOpen() || settingsIsOpen() || dmHoldsInput()
+        || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || libPanelIsOpen() || chalModalIsOpen() || chatIsOpen() || adminPanelIsOpen() || isMinigameOverlayOpen() || settingsIsOpen() || dmHoldsInput() || hallHoldsInput()
         || gameState.isLockedIn || gameState.anim.active || gameState.prayer.isOverlayActive
         || gameState.isSitting || gameState.sitAnim.active || (gameState.reading && gameState.reading.active)
         || readingEndCardOpen()) {
@@ -12355,6 +12357,7 @@ const SLOW_TASKS = [
     { f: updatePiPLifecycle },
     { f: updateLibPanelLifecycle },
     { f: updateAdminLifecycle },
+    { f: updateHallLifecycle },
     { f: updateCoopTaskPanel,           world: true },
     { f: updatePomoLeaveBtn,            world: true },
     { f: updateSharedPomoProximity,     world: true },
@@ -12610,7 +12613,7 @@ function gameLoop(timestamp) {
 
 // True when nothing drawn into the world canvas can be seen — skip the whole pass.
 function _worldCanvasHidden() {
-    return gameState.azkar.active || troCeremonyIsRunning() || _meet.canvasOff || _stg.canvasOff || _pipCoversWorld() ||
+    return gameState.azkar.active || troCeremonyIsRunning() || _meet.canvasOff || _stg.canvasOff || _hall.canvasOff || _pipCoversWorld() ||
         (gameState._isMobile && (gameState.prayer.isOverlayActive
             || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen() || _lib.canvasOff || _dm.canvasOff));
 }
@@ -16997,6 +17000,7 @@ if (/^(localhost|127\.0\.0\.1|\[::1\]|10\.|192\.168\.)/.test(location.hostname))
         // so reading them here at evaluation time would be a temporal-dead-zone throw.
         get x() {
             return { _lemo, _lemoNav, _lemoNavBuild, _lemoNavPath, _lemoApplyDoc, onLemoRelay, lemoPress, lemoPlayThrow, lemoThrowBegin, _lth, _lord, lemoOrderThrow, _lordParse,
+                     _hall, hallOpenPicker, _hallOnDoc, _hallCreate, _hallPtsOpen,
                      _dm, dmOpen, dmClose, _dmPickFile, _dmSubmit, _peek, peekOpen, _rx, reactNow,
                      openChatBox, closeChatBox, _chatUi,
                      isOnStairs, checkCollision, _lemoRound, LEMO_SPOTS, LEMO_ROUTE, LEMO_MEET_SPOTS,
@@ -20451,7 +20455,7 @@ function endFreeMode() {
     // saves/discards itself and sets _dashFreeHandled so we don't double-save here.
     if (!_dashFreeHandled) dashSaveSession('free', getCurrentTaskText(), totalMs);
     // Short free session (not a >2h discard) → tell the user why nothing was saved.
-    if (!_dashFreeHandled && !_dashFreeDiscarded && totalMs > 0 && totalMs < DASH_MIN_SESSION_MS) {
+    if (!_dashFreeHandled && !_dashFreeDiscarded && totalMs > 0 && totalMs < DASH_MIN_SESSION_MS && !_hallQuietEnd) {
         showSessionNotSavedToast();
     }
     _dashFreeHandled = false;
@@ -20462,7 +20466,10 @@ function endFreeMode() {
     const showCard = !_dashFreeDiscarded && (cardMins * 60000 >= DASH_MIN_SESSION_MS);
     _dashFreeOverrideMins = null;
     _dashFreeDiscarded = false;
-    if (showCard) showFreeModeSuccessModal(cardMins, getCurrentTaskText());
+    // Summoned to a general meeting (القاعة): no end card — the session is archived
+    // by itself, with the auto photo as its picture.
+    if (showCard && _hallQuietEnd) _hallAutoInvoice('free', cardMins, getCurrentTaskText());
+    else if (showCard) showFreeModeSuccessModal(cardMins, getCurrentTaskText());
     else _pendingInvoice = null;   // nothing to archive for a short/aborted session
 }
 
@@ -20854,7 +20861,7 @@ function exitPomoNow() {
     // (no end card — exitPomoNow shows none). The 10-min floor is enforced inside dashSaveSession.
     const _pomoWorked = pomoWorkedMsNow();
     dashSaveSession('pomodoro', getCurrentTaskText(), _pomoWorked);
-    if (_pomoWorked > 0 && _pomoWorked < DASH_MIN_SESSION_MS) showSessionNotSavedToast();
+    if (_pomoWorked > 0 && _pomoWorked < DASH_MIN_SESSION_MS && !_hallQuietEnd) showSessionNotSavedToast();
     const sp = gameState.sharedPomo;
 
     // Leave coop session if in one
@@ -37316,6 +37323,8 @@ function _chatSend() {
     const read = _chatReadInput().map(p => ((p.u && p.u !== LEMO_UID && !gameState.players[p.u]) ? { t: '@' + p.n } : p));
     const parts = _chatCleanParts(read);
     if (!parts) { closeChatBox(); return; }
+    // «//اجتماع» — the call to a general meeting (see القاعة). Never sent as a message.
+    if (hallIsCallCommand(_chatPlain(parts))) { closeChatBox(); hallCallCommand(); return; }
     const now = Date.now();
     // نداء ليمو — checked first: a refusal holds the whole message, like a cooldown.
     const callsLemo = parts.some(p => p.u === LEMO_UID);
@@ -37897,7 +37906,7 @@ function chatCanOpen() {
 function _chatMustClose() {
     return gameState.azkar.active || gameState.prayer.isOverlayActive
         || dashboardIsOpen() || charCustomIsOpen() || fireplaceIsOpen() || trophyShelfIsOpen() || adminPanelIsOpen()
-        || libPanelIsOpen() || chalModalIsOpen() || readingEndCardOpen() || settingsIsOpen() || dmIsModal()
+        || libPanelIsOpen() || chalModalIsOpen() || readingEndCardOpen() || settingsIsOpen() || dmIsModal() || hallHoldsInput()
         || isMinigameOverlayOpen()
         || gameState.race.active || gameState.coffee.active || gameState.laptopBoss.active
         || gameState.anim.active
@@ -38735,6 +38744,8 @@ function _stkSlashQuery() {
     const parts = _chatReadInput();
     if (parts.length !== 1 || parts[0].u || typeof parts[0].t !== 'string') return null;
     const t = parts[0].t;
+    // «//…» is a command (//اجتماع — see القاعة), never a sticker search.
+    if (t.charAt(1) === '/') return null;
     return t.charAt(0) === '/' ? t.slice(1) : null;
 }
 
@@ -46455,4 +46466,2033 @@ function setupDmUI() {
     });
     // The inbox listener waits for calm — never on the login / spawn path.
     whenCalm(dmStart);
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   القاعة — الاجتماع العام (the general meeting)
+
+   The leader (نواف), the stage manager (يوسف) or a سراج ghost types «//اجتماع» in
+   the chat → a paper panel to pick who is invited (both lobbies) and name the
+   meeting → everyone invited is pulled out of whatever they are doing (a work
+   session is saved by itself, auto photo included) into a full-screen hall: a big
+   screen, a stage in front of it, and the audience in seats — brothers on the
+   left, an aisle, sisters on the right. An invited member who logs in later lands
+   in it too, until the meeting is ended.
+
+   WHERE THE STATE LIVES (decision tree §5):
+     lobbies/stage/meeting   = { id, title, by, byName, at, who:{uid:1}, out:{uid:ts}, focus }
+         ONE tiny doc for BOTH lobbies ('stage' is not a real lobby — it is simply a
+         child of `lobbies`, which the rules already allow). One listener per client.
+         It changes when a meeting starts / ends, someone is let out, or focus flips.
+     lobbies/stage/beat      = server ms — "someone is still in there". Written once
+         a minute by ONE present client (the lowest uid). Nobody listens to it; a
+         member about to be pulled in reads it once, and a meeting nobody has been
+         in for HALL_DEAD_MS is deleted instead (nobody gets stuck in an empty hall).
+     lobbies/stage/att/{id}/{uid} = name — who actually attended (for the points).
+     lobbies/stage/done      = { id, title, by, end } — a finished meeting whose
+         points the leader has not decided yet.
+     lobbies/stage/awards/{uid}/{id} = { t, p, ts } — "you were given points": each
+         client listens to its OWN row only; shown as the claim card, then removed.
+   Everything live — who is in the hall, comments, reactions, typing, leave
+   requests, the screen-share handshake — rides the relay, in its own room
+   ('stage', so both lobbies meet there). Zero Firebase, and the relay needed no
+   change for it (it forwards raw bytes for any room name).
+
+   THE SCREEN is WebRTC. Through Cloudflare's SFU when the relay has its keys
+   (`/rtc/*`, see presence-server) — the sharer uploads ONE copy; otherwise
+   straight from the sharer to each viewer (fine for a handful, heavy past that).
+
+   WHO IS ON STAGE comes from MdwnhBot (it sits in the Discord Stage channel and
+   relays who is a speaker and who is talking). No bot → the caller stands there.
+
+   Everything on the relay is client-claimed, like the rest of it. Fine for the
+   trusted group; every field is still type-checked on receive.
+   ═══════════════════════════════════════════════════════════════════════════ */
+const HALL_PATH = 'lobbies/stage';
+const HALL_ROOM = 'stage';
+const HALL_MANAGER_UIDS = new Set([DASH_TARGET_UID]);   // يوسف — مدير المنصة
+const HALL_HI_MS = 20000;            // "I am here", re-asserted (a background tab stretches it to ~1/min)
+const HALL_STALE_MS = 150000;        // …so someone silent this long has gone
+const HALL_BEAT_MS = 60000;
+const HALL_DEAD_MS = 5 * 60000;      // nobody in the hall this long → the meeting deletes itself
+const HALL_MAX_MS = 8 * 3600000;     // and no meeting outlives this
+const HALL_DONE_KEEP_MS = 3 * 86400000;
+const HALL_BOT_STALE_MS = 40000;
+const HALL_SPK_STALE_MS = 9000;
+const HALL_REACT_MS = 1600;
+const HALL_REACT_GAP_MS = 700;
+const HALL_MSG_GAP_MS = 1200;
+const HALL_MSG_MAX = 100;
+const HALL_TITLE_MAX = 60;
+const HALL_TYP_PING_MS = 2400;
+const HALL_TYP_STALE_MS = 6500;
+const HALL_WANDER_MS = 4800;         // a talking presenter picks a new spot this often
+const HALL_PTS = [5, 10, 20, 30];
+const HALL_ICE = [{ urls: ['stun:stun.cloudflare.com:3478', 'stun:stun.l.google.com:19302'] }];
+const HALL_RTC_HTTP = PRESENCE_WS_BASE.replace(/^ws/, 'http');
+const HALL_GLOW_IDLE = '120, 170, 255';
+const HALL_UID_RE = /^[\w-]{1,40}$/;
+
+let _hallQuietEnd = false;           // a session being ended by the summon: no card, no toast
+
+const _hall = {
+    E: null,                 // cached elements
+    doc: null,               // the live meeting, parsed — or null
+    unsubDoc: null, unsubAward: null, started: false,
+    in: false, entering: false, want: false, rejoin: false,
+    canvasOff: false, openedAt: 0,
+    timers: [],
+    ws: null, wsRetry: 0, wsPing: 0, tick5: 0, tickT: 0,
+    hiAt: 0, hiTimer: 0, beatAt: 0,
+    people: new Map(),       // uid → { uid, cu, n, av, c, g, at, t0, lv, el, … }
+    layoutKey: '', layoutDirty: false,
+    bot: { at: 0, ids: new Set(), sp: new Set(), talk: new Map() },
+    share: null,             // { uid, sid, at, sfu, mine }
+    cast: null,              // my own share: { stream, track, sid, at, pcs, sfu }
+    view: null,              // what I am watching: { sid, pc, got, timer }
+    sfuOk: false,
+    fx: true, glowTimer: 0, glowCv: null, glow: '',
+    myLeaveReq: false, lastReactAt: 0, lastMsgAt: 0,
+    cmp: { open: false, mens: new Map(), typAt: 0, sel: 0, rows: [] },
+    pickOpen: false, pickSel: new Set(), pickQ: '',
+    ptsOpen: false, pts: null, ptsPending: null,
+    awardQ: [], awardSeen: new Set(),
+    cardFor: '', cardHidden: '',
+    clockAt: 0,
+};
+
+function hallIsOpen() { return _hall.in; }
+// Movement, world keys and the wheel all stand down for the hall and its panels.
+function hallHoldsInput() { return _hall.in || _hall.entering || _hall.pickOpen || _hall.ptsOpen; }
+function _hallMe() { return _dmCanon(gameState.userId); }
+function _hallIsMod(uid) {
+    const c = _dmCanon(uid), d = _hall.doc, rec = MDWNH_ROSTER.byDiscord[c];
+    return ADMIN_UIDS.has(c) || HALL_MANAGER_UIDS.has(c) || !!(rec && rec.admin) || !!(d && d.by === c);
+}
+function hallCanCall() { return adminAllowed() || HALL_MANAGER_UIDS.has(_hallMe()); }
+function _hallMyName() {
+    const me = gameState.players[gameState.userId];
+    return ((me && me.username) || '').trim().slice(0, 40);
+}
+function _hallHash(s) {
+    let h = 2166136261;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return ((h >>> 0) % 100000) / 100000;
+}
+function _hallAfter(ms, fn) {
+    const id = setTimeout(() => {
+        const i = _hall.timers.indexOf(id);
+        if (i >= 0) _hall.timers.splice(i, 1);
+        try { fn(); } catch (e) { console.error('[hall]', e); }
+    }, ms);
+    _hall.timers.push(id);
+    return id;
+}
+function _hallClearTimers() { for (const id of _hall.timers) clearTimeout(id); _hall.timers.length = 0; }
+
+// «//اجتماع» — with or without the alef, whatever hamza it wears.
+function hallIsCallCommand(text) {
+    const t = _fireNormName(String(text || '')).replace(/\s+/g, '');
+    return /^\/\/(ال)?ا?جتماع$/.test(t);
+}
+async function hallCallCommand() {
+    if (!hallCanCall()) { _libToast('الدعوة إلى اجتماع للقائد ومدير المنصة فقط'); return; }
+    if (_hall.in || _hall.entering) return;
+    const d = _hall.doc;
+    if (d) {
+        if (await _hallIsDead(d)) { _hallReap(d); }
+        else {
+            // A meeting is on and I am not in it: a moderator simply walks in.
+            const me = _hallMe();
+            update(ref(database), {
+                [`${HALL_PATH}/meeting/who/${me}`]: 1,
+                [`${HALL_PATH}/meeting/out/${me}`]: null,
+            }).catch(() => _libToast('تعذّر الدخول إلى الاجتماع'));
+            _hall.rejoin = true;
+            return;
+        }
+    }
+    hallOpenPicker();
+}
+
+/* ── sounds — synthesised, so there is no file to load ─────────────────────── */
+function _hallSfx(kind) {
+    const fe = gameState.focusAudioEngine;
+    try { if (fe && !fe.ctx) fe.init(); } catch (_) {}
+    const ctx = fe && fe.ctx;
+    if (!ctx) return;
+    const play = () => {
+        try {
+            const t = ctx.currentTime;
+            const out = ctx.createGain();
+            out.gain.value = 0.9;
+            out.connect(ctx.destination);
+            const tone = (type, f0, f1, at, dur, peak) => {
+                const o = ctx.createOscillator(), g = ctx.createGain();
+                o.type = type;
+                o.frequency.setValueAtTime(f0, t + at);
+                if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + at + dur);
+                g.gain.setValueAtTime(0.0001, t + at);
+                g.gain.exponentialRampToValueAtTime(peak, t + at + 0.02);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + at + dur);
+                o.connect(g); g.connect(out);
+                o.start(t + at); o.stop(t + at + dur + 0.05);
+            };
+            let life = 1200;
+            if (kind === 'call') {            // a rising four-note bell
+                [[523.25, 0], [659.25, 0.13], [783.99, 0.26], [1046.5, 0.42]].forEach(([f, at]) => {
+                    tone('sine', f, f, at, 0.7, 0.16); tone('triangle', f * 2, f * 2, at, 0.3, 0.035);
+                });
+                life = 1600;
+            } else if (kind === 'warp') {     // a sweep up, with air behind it
+                const lp = ctx.createBiquadFilter();
+                lp.type = 'lowpass';
+                lp.frequency.setValueAtTime(300, t);
+                lp.frequency.exponentialRampToValueAtTime(5200, t + 0.7);
+                lp.connect(out);
+                const o = ctx.createOscillator(), g = ctx.createGain();
+                o.type = 'sawtooth';
+                o.frequency.setValueAtTime(90, t);
+                o.frequency.exponentialRampToValueAtTime(1500, t + 0.75);
+                g.gain.setValueAtTime(0.0001, t);
+                g.gain.exponentialRampToValueAtTime(0.09, t + 0.25);
+                g.gain.exponentialRampToValueAtTime(0.0001, t + 0.85);
+                o.connect(g); g.connect(lp);
+                o.start(t); o.stop(t + 0.9);
+                const len = Math.floor(ctx.sampleRate * 0.8);
+                const buf = ctx.createBuffer(1, len, ctx.sampleRate), ch = buf.getChannelData(0);
+                for (let i = 0; i < len; i++) ch[i] = (Math.random() * 2 - 1) * (i / len);
+                const n = ctx.createBufferSource(), ng = ctx.createGain();
+                n.buffer = buf;
+                ng.gain.setValueAtTime(0.05, t);
+                ng.gain.exponentialRampToValueAtTime(0.0001, t + 0.85);
+                n.connect(ng); ng.connect(lp);
+                n.start(t);
+                life = 1300;
+            } else if (kind === 'arrive') {   // a soft open chord
+                [392, 523.25, 659.25, 783.99].forEach((f, i) => tone('sine', f, f, i * 0.05, 1.5, 0.085));
+                life = 2100;
+            } else if (kind === 'end') {      // three notes down
+                [[659.25, 0], [523.25, 0.16], [392, 0.32]].forEach(([f, at]) => tone('sine', f, f, at, 0.6, 0.13));
+                life = 1400;
+            } else if (kind === 'join') {
+                tone('sine', 880, 1175, 0, 0.16, 0.05);
+                life = 500;
+            } else if (kind === 'hand') {
+                tone('triangle', 587.33, 880, 0, 0.22, 0.09);
+                life = 600;
+            }
+            setTimeout(() => { try { out.disconnect(); } catch (_) {} }, life + 400);
+        } catch (_) {}
+    };
+    // ctx.resume() is async — never fire-and-forget.
+    if (ctx.state === 'suspended') ctx.resume().then(play).catch(() => {});
+    else play();
+}
+
+/* ── the doc ───────────────────────────────────────────────────────────────── */
+function _hallParseDoc(v) {
+    if (!v || typeof v !== 'object') return null;
+    if (typeof v.id !== 'string' || !/^\d{6,16}$/.test(v.id)) return null;
+    if (typeof v.by !== 'string' || !HALL_UID_RE.test(v.by)) return null;
+    if (typeof v.at !== 'number' || !v.who || typeof v.who !== 'object') return null;
+    return {
+        id: v.id,
+        title: _chatClean(v.title).slice(0, HALL_TITLE_MAX) || 'اجتماع',
+        by: v.by,
+        byName: _chatClean(v.byName).slice(0, 40),
+        at: v.at,
+        who: v.who,
+        out: (v.out && typeof v.out === 'object') ? v.out : {},
+        focus: v.focus === 1,
+    };
+}
+
+function _hallOnDoc(v) {
+    const prev = _hall.doc;
+    const d = _hallParseDoc(v);
+    // A child write that landed after the meeting was removed leaves junk behind.
+    if (v && !d) { remove(ref(database, `${HALL_PATH}/meeting`)).catch(() => {}); }
+    _hall.doc = d;
+    if (!d) {
+        _hall.want = false;
+        if (_hall.in || _hall.entering) _hallExit('ended', prev);
+        _hallCard(false);
+        return;
+    }
+    if (prev && prev.id !== d.id && (_hall.in || _hall.entering)) _hallExit('ended', prev);
+    const me = _hallMe();
+    const invited = !!d.who[me], out = !!d.out[me];
+    if (_hall.in) {
+        if (out || !invited) { _hallExit('left', d); _hallCard(invited); return; }
+        _hallApplyDoc(prev);
+        return;
+    }
+    if (_hall.entering) return;
+    if (invited && !out) { _hall.want = true; _hallCard(false); perfWake(); }
+    else { _hall.want = false; _hallCard(invited && out); }
+}
+
+async function _hallIsDead(d) {
+    const now = serverNow();
+    if (now - d.at > HALL_MAX_MS) return true;
+    if (now - d.at < HALL_DEAD_MS) return false;
+    let snap = null;
+    try { snap = await _withTimeout(get(ref(database, `${HALL_PATH}/beat`)), 5000, null); } catch (_) {}
+    if (!snap) return false;                          // unreadable → assume it is alive
+    const beat = Number(snap.val()) || 0;
+    return serverNow() - Math.max(beat, d.at) > HALL_DEAD_MS;
+}
+// An abandoned meeting: delete it, and leave the leader his points decision.
+function _hallReap(d) {
+    update(ref(database), {
+        [`${HALL_PATH}/meeting`]: null,
+        [`${HALL_PATH}/done`]: { id: d.id, title: d.title, by: d.by, end: serverNow() },
+    }).catch(() => {});
+}
+
+function _hallCanEnterNow() {
+    return !!(_boot.gateOpen && !(JUICE_ENTRANCE && _entrance.active)
+        && gameState.players[gameState.userId]
+        && !gameState.azkar.active && !gameState.prayer.isOverlayActive
+        && !isMinigameActive() && !isMinigameOverlayOpen()
+        && !gameState.anim.active && !gameState.sitAnim.active
+        && !troCeremonyIsRunning() && !gameState._dupSessionDetected
+        && !document.hidden);
+}
+
+// From SLOW_TASKS: only what happens OUTSIDE the hall (being pulled in, a points
+// card). Inside it the hall runs its own timer (_hallTick) — the frame loop idles at
+// the calm rate under an overlay, far too slow for a speaking ring.
+function updateHallLifecycle() {
+    if (!gameState.userId || !_hall.E) return;
+    // The megaphone in the HUD tools — only for who may call a meeting.
+    const btn = _hall.E.hudBtn;
+    if (btn) {
+        const can = hallCanCall();
+        if (btn.hidden === can) { btn.hidden = !can; try { _hudPositionDock(); } catch (_) {} }
+    }
+    if (_hall.want && !_hall.in && !_hall.entering && _hall.doc && _hallCanEnterNow()) _hallTryEnter();
+    if (_hall.in || _hall.entering || !_boot.gateOpen) return;
+    if (_hall.awardQ.length && _hallQuietScreen()) _hallShowAward();
+    else if (_hall.ptsPending && !_hall.ptsOpen && _hallQuietScreen()) {
+        const p = _hall.ptsPending; _hall.ptsPending = null; _hallPtsOpen(p);
+    }
+}
+function _hallQuietScreen() {
+    return !gameState.azkar.active && !gameState.prayer.isOverlayActive && !isMinigameActive()
+        && !localInWorkPhase() && !gameState.anim.active && !(JUICE_ENTRANCE && _entrance.active)
+        && !document.querySelector('#lib-claim-modal:not(.hidden)');
+}
+
+async function _hallTryEnter() {
+    const d = _hall.doc;
+    if (!d) return;
+    _hall.entering = true;
+    _hall.want = false;
+    let dead = false;
+    try { dead = await _hallIsDead(d); } catch (_) {}
+    if (dead) { _hall.entering = false; _hallReap(d); return; }
+    if (!_hall.doc || _hall.doc.id !== d.id || !_hallCanEnterNow()) {
+        _hall.entering = false;
+        _hall.want = !!(_hall.doc && _hall.doc.who[_hallMe()] && !_hall.doc.out[_hallMe()]);
+        return;
+    }
+    _hallEnter(d);
+}
+
+/* ── the summon: a work session is saved by itself, photo included ─────────── */
+function _hallAutoInvoice(mode, minutes, task) {
+    _pendingInvoice = null;
+    if (!dashTrackingEnabled() || (minutes || 0) * 60000 < DASH_MIN_SESSION_MS) return;
+    const uid = gameState.userId, finishMs = Date.now();
+    const meta = { mode, task: (task || '').trim() || null, minutes, finishMs, hasPhoto: false };
+    const write = (thumb) => {
+        const up = {};
+        if (thumb) { up[`dashboards/${uid}/invoicePhotos/${finishMs}`] = thumb; meta.hasPhoto = true; }
+        up[`dashboards/${uid}/invoices/${finishMs}`] = meta;
+        update(ref(database), up).catch(_dashErr('invoice'));
+    };
+    const shot = _autoShot.url;
+    if (shot && shot.startsWith('data:image/jpeg')) _makeThumb(shot, write);
+    else write(null);
+}
+function _hallEndWork() {
+    _hallQuietEnd = true;
+    try {
+        if (gameState.reading && gameState.reading.active) { try { endReadingSession(true); } catch (e) { console.warn('[hall] reading', e); } }
+        if (gameState.freeMode.active) {
+            endFreeMode();
+        } else if (gameState.pomodoro.active || gameState.sharedPomo.phase === 'active') {
+            const worked = pomoWorkedMsNow(), task = getCurrentTaskText();
+            exitPomoNow();
+            _hallAutoInvoice('pomodoro', Math.floor(worked / 60000), task);
+        }
+    } catch (e) { console.error('[hall] end work', e); }
+    _hallQuietEnd = false;
+}
+
+/* ── transport ─────────────────────────────────────────────────────────────── */
+function _hallBanner(d) {
+    const el = _hall.E.call;
+    if (!el) return;
+    if (!d) { el.classList.remove('show'); return; }
+    _hall.E.callWho.textContent = (d.byName || 'القائد') + ' يدعوك إلى اجتماع';
+    _hall.E.callTitle.textContent = d.title;
+    el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+}
+function _hallWarp() {
+    const el = _hall.E.warp;
+    if (!el) return;
+    el.classList.remove('go'); void el.offsetWidth; el.classList.add('go');
+    _hallAfter(1200, () => el.classList.remove('go'));
+}
+function _hallCurtain(on) {
+    const el = _hall.E.curtain, fill = _hall.E.curtainFill;
+    if (!el) return;
+    if (on) {
+        const msg = el.querySelector('.boot-msg');
+        if (msg) msg.textContent = HALL_CURTAIN_LINES[Math.floor(Math.random() * HALL_CURTAIN_LINES.length)];
+        el.classList.remove('slide-out');
+        el.classList.add('active');
+        void el.offsetWidth;
+        el.classList.add('slide-in');
+        if (fill) {
+            fill.style.transition = 'none'; fill.style.width = '0%';
+            void fill.offsetWidth;
+            fill.style.transition = 'width 1.5s cubic-bezier(0.3, 0.7, 0.2, 1)'; fill.style.width = '100%';
+        }
+    } else {
+        if (!el.classList.contains('active')) return;
+        el.classList.remove('slide-in');
+        el.classList.add('slide-out');
+        setTimeout(() => { el.classList.remove('active', 'slide-out'); }, 730);
+    }
+}
+function _hallCurtainKill() {
+    const el = _hall.E && _hall.E.curtain;
+    if (el) el.classList.remove('active', 'slide-in', 'slide-out');
+}
+
+function _hallEnter(d) {
+    const quick = d.by === _hallMe() || _hall.rejoin;
+    _hall.rejoin = false;
+    _hall.entering = true;
+    gameState.keys = {};
+    try { if (chatIsOpen()) closeChatBox(); } catch (_) {}
+    try { if (peekIsOpen()) peekClose(); } catch (_) {}
+    try { if (meetingIsOpen()) leaveMeetingTable(); } catch (_) {}
+    _hallEndWork();
+    perfWake(6000);
+    let t = 0;
+    if (!quick) { _hallBanner(d); _hallSfx('call'); t += 1900; }
+    _hallAfter(t, () => { _hallWarp(); _hallSfx('warp'); });
+    t += 620;
+    _hallAfter(t, () => _hallCurtain(true));
+    t += 680;
+    _hallAfter(t, () => { _hallBanner(null); _hallOpen(d); });
+    t += 1350;
+    _hallAfter(t, () => { _hallCurtain(false); _playMenuSfx('loadingEnd', 0.85); });
+    t += 420;
+    _hallAfter(t, () => {
+        _hallSfx('arrive');
+        _hall.E.root.classList.add('revealed');
+        _hallConfetti(40);
+        _hall.entering = false;
+    });
+}
+
+/* ── the relay room ────────────────────────────────────────────────────────── */
+function _hallSend(obj) {
+    const ws = _hall.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try { ws.send(JSON.stringify(obj)); return true; } catch (_) { return false; }
+}
+function _hallSockOpen() {
+    if (!_hall.in) return;
+    const cur = _hall.ws;
+    if (cur && (cur.readyState === WebSocket.OPEN || cur.readyState === WebSocket.CONNECTING)) return;
+    let ws;
+    try { ws = new WebSocket(`${PRESENCE_WS_BASE}/lobby/${HALL_ROOM}?uid=${encodeURIComponent(gameState.userId)}`); }
+    catch (_) { _hallSockRetry(); return; }
+    _hall.ws = ws;
+    ws.onopen = () => { if (_hall.ws === ws) { _hallHi(true); _hallRefreshStatus(); } };
+    ws.onmessage = (ev) => { if (_hall.ws === ws) _hallOnMsg(ev.data); };
+    ws.onclose = () => { if (_hall.ws === ws) { _hall.ws = null; _hallRefreshStatus(); _hallSockRetry(); } };
+    ws.onerror = () => { try { ws.close(); } catch (_) {} };
+}
+function _hallSockRetry() {
+    if (!_hall.in || _hall.wsRetry) return;
+    _hall.wsRetry = setTimeout(() => { _hall.wsRetry = 0; _hallSockOpen(); }, 2000);
+}
+function _hallSockClose() {
+    clearTimeout(_hall.wsRetry); _hall.wsRetry = 0;
+    const ws = _hall.ws;
+    _hall.ws = null;
+    if (ws) { try { ws.close(); } catch (_) {} }
+}
+
+function _hallCastInfo() {
+    const c = _hall.cast;
+    const o = { sid: c.sid, at: c.at };
+    if (c.sfu) o.sfu = { s: c.sfu.session, n: c.sfu.name };
+    return o;
+}
+// "I am here" — who I am, for the people in the other lobby who have never seen me.
+function _hallHi(ask) {
+    const me = gameState.players[gameState.userId] || {};
+    let av = typeof me.avatar === 'string' ? me.avatar : '';
+    if (av.length > 600) av = '';                         // a base64 picture is not relayed
+    const m = {
+        t: 'hi', uid: gameState.userId, n: _hallMyName(), av,
+        c: _validHex(me.ringColor) || '', g: gameState.selectedLobby === 'female' ? 'f' : 'm',
+    };
+    if (ask) m.q = 1;
+    if (_hall.myLeaveReq) m.lv = 1;
+    if (_hall.cast) m.sh = _hallCastInfo();
+    if (_hallSend(m)) _hall.hiAt = Date.now();
+}
+
+function _hallOnMsg(data) {
+    if (typeof data !== 'string' || data === 'pong' || data === 'ping') return;
+    let m;
+    try { m = JSON.parse(data); } catch (_) { return; }
+    if (!m || typeof m !== 'object' || typeof m.uid !== 'string') return;
+    if (m.uid === 'mdwnhbot') { _hallOnBot(m); return; }
+    if (!HALL_UID_RE.test(m.uid) || m.uid === gameState.userId) return;
+    if (m.t === 'hi') { _hallOnHi(m); return; }
+    if (m.t === 'bye') { _hallDrop(m.uid); return; }
+    const p = _hall.people.get(m.uid);
+    if (!p) return;                       // someone we have not been introduced to yet
+    p.at = Date.now();
+    switch (m.t) {
+        case 'hc': _hallOnComment(p, m); break;
+        case 'hr': _hallOnReact(p, m.r); break;
+        case 'ht': _hallSetTyping(p, m.on === 1); break;
+        case 'hl': _hallSetLeaveReq(p, m.on === 1, true); break;
+        case 'hla': _hallOnLeaveAnswer(p, m); break;
+        case 'hs': _hallOnShare(m); break;
+    }
+}
+
+function _hallOnHi(m) {
+    const now = Date.now();
+    let p = _hall.people.get(m.uid);
+    const fresh = !p;
+    if (!p) {
+        p = { uid: m.uid, cu: _dmCanon(m.uid), t0: now, lv: false, el: null };
+        _hall.people.set(m.uid, p);
+    }
+    p.at = now;
+    const n = _chatClean(m.n).slice(0, 40), g = m.g === 'f' ? 'f' : 'm';
+    let av = (typeof m.av === 'string' && m.av.length <= 600 && _MEET_SAFE_URL.test(m.av)) ? m.av : '';
+    // A picture too big to relay (a base64 one): someone from my own lobby is already
+    // known to this client, picture included.
+    if (!av) {
+        const pl = gameState.players[m.uid];
+        if (pl && typeof pl.avatar === 'string' && _MEET_SAFE_URL.test(pl.avatar)) av = pl.avatar;
+    }
+    const c = _validHex(m.c) || '';
+    if (fresh || p.n !== n || p.av !== av || p.c !== c || p.g !== g) {
+        p.n = n; p.av = av; p.c = c; p.g = g;
+        if (p.el) _hallPaintSeat(p);
+        _hall.layoutDirty = true;
+    }
+    if (fresh) { _hallSeatEl(p); if (performance.now() - _hall.openedAt > 3000) _hallSfx('join'); }
+    _hallSetLeaveReq(p, m.lv === 1, false);
+    if (m.sh && typeof m.sh === 'object') _hallOnShare({ t: 'hs', k: 'on', uid: m.uid, sid: m.sh.sid, at: m.sh.at, sfu: m.sh.sfu });
+    else if (_hall.share && _hall.share.uid === m.uid && !_hall.share.mine && now - (_hall.share.seenAt || 0) > 4000) _hallShareGone(m.uid);
+    // A newcomer asked who is here: one answer covers everyone who asked in the same beat.
+    if (m.q === 1 && !_hall.hiTimer) {
+        _hall.hiTimer = setTimeout(() => { _hall.hiTimer = 0; if (_hall.in) _hallHi(false); }, 120 + Math.random() * 480);
+    }
+}
+
+function _hallDrop(uid) {
+    const p = _hall.people.get(uid);
+    if (!p || uid === gameState.userId) return;
+    _hall.people.delete(uid);
+    if (p.el) { const el = p.el; el.classList.add('out'); setTimeout(() => el.remove(), 300); }
+    if (_hall.cast) { const pc = _hall.cast.pcs.get(uid); if (pc) { try { pc.close(); } catch (_) {} _hall.cast.pcs.delete(uid); } }
+    _hallShareGone(uid);
+    _hall.layoutDirty = true;
+    _hallRenderReqs();
+}
+
+// MdwnhBot, from the Discord Stage channel: who is in it, who is a speaker, who is talking.
+function _hallOnBot(m) {
+    const now = Date.now();
+    // The bot sees the Discord ACCOUNT; a member with two accounts is still one member.
+    const ids = (a) => new Set(Array.isArray(a) ? a.filter(x => typeof x === 'string' && x.length <= 32).slice(0, 200).map(_dmCanon) : []);
+    if (m.t === 'stage') {
+        _hall.bot.at = now;
+        _hall.bot.ids = ids(m.ids);
+        _hall.bot.sp = ids(m.sp);
+        return;
+    }
+    if (m.t === 'vc') { _hall.bot.vcAt = now; return; }
+    if (m.t === 'spk' && typeof m.s === 'string' && m.s.length <= 32) {
+        _hall.bot.talk.set(_dmCanon(m.s), { on: m.on === 1, at: now });
+    }
+}
+function _hallBotLive() { return Date.now() - _hall.bot.at < HALL_BOT_STALE_MS; }
+function _hallOnStage(uid) {
+    const d = _hall.doc;
+    if (!d) return false;
+    const cu = _dmCanon(uid);
+    // Anyone the bot can see in the Stage channel: Discord decides.
+    if (_hallBotLive() && _hall.bot.ids.has(cu)) return _hall.bot.sp.has(cu);
+    return cu === d.by;
+}
+function _hallTalking(cu, now) {
+    const s = _hall.bot.talk.get(cu);
+    return !!(s && s.on && now - s.at < HALL_SPK_STALE_MS);
+}
+
+/* ── seats ─────────────────────────────────────────────────────────────────── */
+function _hallPaintSeat(p) {
+    const el = p.el;
+    if (!el) return;
+    const av = el.querySelector('.hall-av');
+    av.style.setProperty('--ring', p.c || (p.uid === gameState.userId ? COLORS.blue : '#ffffff'));
+    if (p.av) { av.style.backgroundImage = `url("${p.av}")`; delete av.dataset.initial; }
+    else { av.style.backgroundImage = ''; av.dataset.initial = (p.n || '؟').trim().charAt(0).toUpperCase(); }
+    el.querySelector('.hall-name').textContent = p.n || '';
+    el.title = p.n || '';
+}
+function _hallSeatEl(p) {
+    if (p.el) return p.el;
+    const el = document.createElement('div');
+    el.className = 'hall-seat' + (p.uid === gameState.userId ? ' me' : '');
+    el.dataset.uid = p.uid;
+    el.innerHTML = '<div class="hall-walk">'
+        + '<div class="hall-bubble" dir="auto"></div>'
+        + '<div class="hall-dots" aria-hidden="true"><i></i><i></i><i></i></div>'
+        + '<div class="hall-bob"><div class="hall-av"><span class="hall-emoji" aria-hidden="true"></span></div>'
+        + '<span class="hall-hand" aria-hidden="true">✋</span><span class="hall-cast" aria-hidden="true"></span></div>'
+        + '<div class="hall-name"></div></div>';
+    p.el = el;
+    _hallPaintSeat(p);
+    _hall.layoutDirty = true;
+    return el;
+}
+
+function _hallFit(box, n) {
+    const W = box.clientWidth, H = box.clientHeight;
+    if (!n || W < 10 || H < 10) return 44;
+    for (let s = 62; s >= 26; s -= 2) {
+        const cw = s + (s >= 40 ? 16 : 8), ch = s + (s >= 40 ? 30 : 10);
+        const cols = Math.floor(W / cw);
+        if (cols < 1) continue;
+        if (Math.ceil(n / cols) * ch <= H) return s;
+    }
+    return 26;
+}
+function _hallLayout() {
+    const E = _hall.E;
+    if (!E || !_hall.in) return;
+    _hall.layoutDirty = false;
+    const stage = [], m = [], f = [];
+    const all = [..._hall.people.values()].sort((a, b) => a.t0 - b.t0 || (a.uid < b.uid ? -1 : 1));
+    for (const p of all) {
+        if (!p.el) _hallSeatEl(p);
+        p.stage = _hallOnStage(p.uid);
+        (p.stage ? stage : p.g === 'f' ? f : m).push(p);
+    }
+    const place = (list, box) => {
+        for (const p of list) {
+            if (p.el.parentNode !== box) {
+                const walk = p.el.querySelector('.hall-walk');
+                if (walk) walk.style.transform = '';
+                p._wb = null;
+                p.el.classList.remove('pop'); void p.el.offsetWidth; p.el.classList.add('pop');
+                box.appendChild(p.el);
+            }
+        }
+    };
+    place(stage, E.stageRow); place(m, E.sideM); place(f, E.sideF);
+    E.sideM.parentNode.classList.toggle('none', !m.length);
+    E.sideF.parentNode.classList.toggle('none', !f.length);
+    E.aud.classList.toggle('split', !!(m.length && f.length));
+    E.aud.classList.toggle('empty', !m.length && !f.length);
+    E.sideM.parentNode.style.flexGrow = String(Math.max(1, m.length));
+    E.sideF.parentNode.style.flexGrow = String(Math.max(1, f.length));
+    E.countM.textContent = m.length ? `الإخوة · ${_libAr(m.length)}` : '';
+    E.countF.textContent = f.length ? `الأخوات · ${_libAr(f.length)}` : '';
+    E.stageRow.classList.toggle('empty', !stage.length);
+    // Everyone must be visible: the seat shrinks until the block fits its box.
+    for (const [box, list] of [[E.sideM, m], [E.sideF, f]]) {
+        const s = _hallFit(box, list.length);
+        box.style.setProperty('--hall-a', s + 'px');
+        box.classList.toggle('tiny', s < 40);
+    }
+    const sw = E.stageRow.clientWidth || 600;
+    const ps = Math.round(Math.max(40, Math.min(isMobile() ? 58 : 76, sw / Math.max(1, stage.length) / 1.9)));
+    E.stageRow.style.setProperty('--hall-a', ps + 'px');
+    _hall.slot = Math.max(0, Math.min(120, (sw / Math.max(1, stage.length) - ps) * 0.42));
+    _hall.layoutKey = all.map(p => p.uid + (p.stage ? 'S' : p.g)).join('|');
+    _hallRefreshStatus();
+    _hallRefreshDock();
+}
+
+function _hallRefreshStatus() {
+    const E = _hall.E, d = _hall.doc;
+    if (!E || !d || !_hall.in) return;
+    const n = _hall.people.size, inv = Object.keys(d.who).length;
+    E.count.textContent = `${_libAr(n)} حاضرًا من ${_libAr(inv)}`;
+    const live = _hallBotLive();
+    E.voice.classList.toggle('live', live);
+    E.voiceTxt.textContent = live ? 'ديسكورد: متصل' : 'ديسكورد: غير متصل';
+    E.net.hidden = !!(_hall.ws && _hall.ws.readyState === WebSocket.OPEN);
+}
+function _hallClock() {
+    const d = _hall.doc;
+    if (!d || !_hall.E) return;
+    const s = Math.max(0, Math.floor((serverNow() - d.at) / 1000));
+    _hall.E.clock.textContent = formatTime(s);
+}
+
+function _hallApplyDoc(prev) {
+    const E = _hall.E, d = _hall.doc;
+    if (!E || !d) return;
+    E.title.textContent = d.title;
+    E.idleTitle.textContent = d.title;
+    E.idleBy.textContent = d.byName ? `دعا إليه ${d.byName}` : '';
+    E.root.classList.toggle('focus', d.focus);
+    E.focusBadge.hidden = !d.focus;
+    if (prev && prev.id === d.id && prev.focus !== d.focus) {
+        _libToast(d.focus ? 'وضع التركيز مفعّل — التعليقات متوقفة' : 'أُلغي وضع التركيز — يمكنكم التعليق');
+        if (d.focus && !_hallMaySpeak(gameState.userId)) _hallComposeClose();
+    }
+    _hallRefreshStatus();
+    _hallRefreshDock();
+}
+function _hallMaySpeak(uid) {
+    const d = _hall.doc;
+    return !d || !d.focus || _hallIsMod(uid) || _hallOnStage(uid);
+}
+
+// What the dock offers depends on who I am right now — a class per state, never the
+// `disabled` attribute (iOS leaks touches through a disabled button).
+function _hallRefreshDock() {
+    const E = _hall.E;
+    if (!E || !_hall.in) return;
+    const me = gameState.userId, mod = _hallIsMod(me), stage = _hallOnStage(me);
+    const sh = _hall.share, mine = !!_hall.cast;
+    const canCast = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);   // no phone has it
+    E.share.hidden = !(mine || ((stage || mod) && canCast && !sh));
+    E.share.textContent = mine ? 'إيقاف المشاركة' : 'مشاركة الشاشة';
+    E.share.classList.toggle('on', mine);
+    E.kill.hidden = !(mod && sh && !sh.mine);
+    E.focusBtn.hidden = !mod;
+    E.focusBtn.textContent = (_hall.doc && _hall.doc.focus) ? 'إلغاء وضع التركيز' : 'وضع التركيز';
+    E.focusBtn.classList.toggle('on', !!(_hall.doc && _hall.doc.focus));
+    E.end.hidden = !mod;
+    let reqs = 0;
+    for (const p of _hall.people.values()) if (p.lv && p.uid !== me) reqs++;
+    E.reqBtn.hidden = !(mod && reqs);
+    E.reqN.textContent = _libAr(reqs);
+    if (!reqs) E.reqs.classList.remove('show');
+    const free = mod || !_hallModPresent();
+    E.leave.textContent = free ? 'مغادرة' : (_hall.myLeaveReq ? 'إلغاء طلب المغادرة' : 'طلب المغادرة');
+    E.leave.classList.toggle('on', !free && _hall.myLeaveReq);
+    E.say.classList.toggle('is-off', !_hallMaySpeak(me));
+}
+function _hallModPresent() {
+    for (const p of _hall.people.values()) if (p.uid !== gameState.userId && _hallIsMod(p.uid)) return true;
+    return false;
+}
+
+// ~8 Hz on a timer while the hall is up: who is on stage, who is talking, what went stale.
+function _hallTick() {
+    if (!_hall.in) return;
+    const now = Date.now();
+    let key = '';
+    for (const p of _hall.people.values()) key += p.uid + (_hallOnStage(p.uid) ? 'S' : p.g) + '|';
+    if (_hall.layoutDirty || key !== _hall.tickKey) { _hall.tickKey = key; _hallLayout(); }
+    const bucket = Math.floor(now / HALL_WANDER_MS);
+    for (const p of _hall.people.values()) {
+        const el = p.el;
+        if (!el) continue;
+        const spk = _hallTalking(p.cu, now);
+        if (el._spk !== spk) {
+            el._spk = spk; el.classList.toggle('spk', spk);
+            if (spk) { const bob = el.querySelector('.hall-bob'); bob.classList.remove('hop'); void bob.offsetWidth; bob.classList.add('hop'); }
+        }
+        // A talking presenter drifts about the stage. A pure function of (uid, time
+        // bucket), so every screen sees the same walk and nothing is relayed.
+        if (p.stage && spk && p._wb !== bucket) {
+            p._wb = bucket;
+            const off = (_hallHash(p.uid + ':' + bucket) - 0.5) * 2 * (_hall.slot || 0);
+            const walk = el.querySelector('.hall-walk');
+            if (walk) walk.style.transform = `translateX(${off.toFixed(1)}px)`;
+        }
+        if (p.typing && now - p.typAt > HALL_TYP_STALE_MS) _hallSetTyping(p, false);
+        const cast = !!(_hall.share && _hall.share.uid === p.uid);
+        if (el._cast !== cast) { el._cast = cast; el.classList.toggle('casting', cast); }
+    }
+    if (now - _hall.clockAt > 900) { _hall.clockAt = now; _hallClock(); _hallRefreshStatus(); }
+}
+
+// Every 5 s on a timer — rAF (and with it SLOW_TASKS) stops in a hidden tab, and
+// people flip to Discord during a meeting all the time.
+function _hallSlowTick() {
+    if (!_hall.in) return;
+    const now = Date.now();
+    _hallSockOpen();
+    if (now - _hall.hiAt >= HALL_HI_MS) _hallHi(false);
+    for (const p of [..._hall.people.values()]) {
+        if (p.uid !== gameState.userId && now - p.at > HALL_STALE_MS) _hallDrop(p.uid);
+    }
+    const mine = _hall.people.get(gameState.userId);
+    if (mine) mine.at = now;
+    // The beat: ONE writer (the lowest uid present), once a minute.
+    if (now - _hall.beatAt >= HALL_BEAT_MS && _hall.doc && !gameState._dupSessionDetected) {
+        let low = gameState.userId;
+        for (const uid of _hall.people.keys()) if (uid < low) low = uid;
+        if (low === gameState.userId) {
+            _hall.beatAt = now;
+            set(ref(database, `${HALL_PATH}/beat`), serverNow()).catch(() => {});
+        }
+    }
+    if (_hall.doc && serverNow() - _hall.doc.at > HALL_MAX_MS && _hallIsMod(gameState.userId)) _hallEnd();
+}
+
+/* ── open / close ──────────────────────────────────────────────────────────── */
+function _hallOpen(d) {
+    const E = _hall.E;
+    if (!E) return;
+    _hall.in = true;
+    _hall.openedAt = performance.now();
+    _hall.fx = !isReducedGraphics();
+    _hall.myLeaveReq = false;
+    _hall.layoutKey = ''; _hall.tickKey = '';
+    _hall.bot = { at: 0, ids: new Set(), sp: new Set(), talk: new Map() };
+    for (const p of _hall.people.values()) if (p.el) p.el.remove();
+    _hall.people.clear();
+    const now = Date.now(), me = gameState.players[gameState.userId] || {};
+    const mine = {
+        uid: gameState.userId, cu: _hallMe(), t0: now - 1, at: now, lv: false, el: null,
+        n: _hallMyName(), av: (typeof me.avatar === 'string' && _MEET_SAFE_URL.test(me.avatar)) ? me.avatar : '',
+        c: _validHex(me.ringColor) || '', g: gameState.selectedLobby === 'female' ? 'f' : 'm',
+    };
+    _hall.people.set(mine.uid, mine);
+    _hallSeatEl(mine);
+    E.root.classList.remove('revealed', 'casting', 'zoomed', 'waiting');
+    E.root.classList.toggle('lowfx', !_hall.fx);
+    E.root.style.setProperty('--hall-glow', HALL_GLOW_IDLE);
+    _hallApplyDoc(null);
+    _hallScreenIdle();
+    document.body.classList.add('hall-active');
+    E.root.setAttribute('aria-hidden', 'false');
+    E.root.classList.add('active');
+    _hallLayout();
+    _hallClock();
+    _hallSockOpen();
+    clearInterval(_hall.tick5);
+    _hall.tick5 = setInterval(_hallSlowTick, 5000);
+    clearInterval(_hall.tickT);
+    _hall.tickT = setInterval(_hallTick, 125);
+    clearInterval(_hall.wsPing);
+    _hall.wsPing = setInterval(() => { const ws = _hall.ws; if (ws && ws.readyState === WebSocket.OPEN) { try { ws.send('ping'); } catch (_) {} } }, WS_KEEPALIVE_MS);
+    _hall.beatAt = 0;
+    _hallAfter(900, () => { if (_hall.in) _hall.canvasOff = true; });
+    // "I attended" — once, for the points afterwards.
+    update(ref(database), { [`${HALL_PATH}/att/${d.id}/${_hallMe()}`]: _hallMyName() || '—' }).catch(() => {});
+    _hallSfuProbe();
+}
+
+function _hallExit(why, prev) {
+    const E = _hall.E;
+    _hallClearTimers();
+    _hallCurtainKill();
+    if (E) { E.call.classList.remove('show'); E.warp.classList.remove('go'); }
+    const was = _hall.in;
+    _hall.in = false; _hall.entering = false;
+    _hall.canvasOff = false;
+    perfWake(1500);
+    try { _hallCastStop(true); } catch (_) {}
+    _hallViewStop();
+    _hall.share = null;
+    clearInterval(_hall.tick5); _hall.tick5 = 0;
+    clearInterval(_hall.tickT); _hall.tickT = 0;
+    clearInterval(_hall.wsPing); _hall.wsPing = 0;
+    clearTimeout(_hall.hiTimer); _hall.hiTimer = 0;
+    _hallSockClose();
+    _hallComposeClose();
+    _hallConfirm(null);
+    if (E && E.fxLayer) E.fxLayer.textContent = '';
+    if (E) {
+        E.root.classList.remove('active', 'revealed', 'casting', 'zoomed', 'waiting');
+        E.root.setAttribute('aria-hidden', 'true');
+        E.reqs.classList.remove('show');
+        try { E.video.srcObject = null; } catch (_) {}
+    }
+    document.body.classList.remove('hall-active');
+    clearInterval(_hall.glowTimer); _hall.glowTimer = 0;
+    setTimeout(() => {
+        if (_hall.in) return;
+        for (const p of _hall.people.values()) if (p.el) p.el.remove();
+        _hall.people.clear();
+    }, 450);
+    if (!was) return;
+    if (why === 'ended') {
+        _hallSfx('end');
+        _libToast('انتهى الاجتماع — شكرًا لحضوركم', 4200);
+        if (prev && adminAllowed()) _hall.ptsPending = { id: prev.id, title: prev.title };
+    }
+}
+
+function hallStop() {
+    try { if (_hall.unsubDoc) _hall.unsubDoc(); } catch (_) {}
+    try { if (_hall.unsubAward) _hall.unsubAward(); } catch (_) {}
+    _hall.unsubDoc = _hall.unsubAward = null;
+    _hall.started = false; _hall.want = false;
+    if (_hall.in || _hall.entering) _hallExit('stop', null);
+}
+
+/* ── leaving ───────────────────────────────────────────────────────────────── */
+function _hallLeaveNow() {
+    const d = _hall.doc;
+    if (!d || !_hall.in) return;
+    _hall.cardHidden = '';
+    update(ref(database), { [`${HALL_PATH}/meeting/out/${_hallMe()}`]: serverNow() }).catch(() => {});
+    _hallExit('left', d);
+    _hallCard(true);
+}
+function _hallLeavePress() {
+    const me = gameState.userId;
+    if (_hallIsMod(me) || !_hallModPresent()) {
+        _hallConfirm('مغادرة الاجتماع؟', 'يمكنك العودة ما دام الاجتماع قائمًا.', 'مغادرة', _hallLeaveNow);
+        return;
+    }
+    _hall.myLeaveReq = !_hall.myLeaveReq;
+    _hallSend({ t: 'hl', uid: me, on: _hall.myLeaveReq ? 1 : 0 });
+    const p = _hall.people.get(me);
+    if (p) _hallSetLeaveReq(p, _hall.myLeaveReq, false);
+    _libToast(_hall.myLeaveReq ? 'أُرسل طلبك — بانتظار إذن القائد أو مدير المنصة' : 'أُلغي طلب المغادرة');
+    _hallRefreshDock();
+}
+function _hallSetLeaveReq(p, on, cue) {
+    if (!!p.lv === !!on) return;
+    p.lv = !!on;
+    if (p.el) p.el.classList.toggle('hand', p.lv);
+    if (on && cue && _hallIsMod(gameState.userId)) _hallSfx('hand');
+    _hallRefreshDock();
+    _hallRenderReqs();
+}
+function _hallOnLeaveAnswer(mod, m) {
+    if (!_hallIsMod(mod.uid) || typeof m.to !== 'string') return;
+    if (m.to === gameState.userId) {
+        if (!_hall.myLeaveReq) return;
+        _hall.myLeaveReq = false;
+        const mine = _hall.people.get(gameState.userId);
+        if (mine) _hallSetLeaveReq(mine, false, false);
+        if (m.ok === 1) { _hallSfx('join'); _hallLeaveNow(); }
+        else { _libToast('لم يُؤذن بالمغادرة الآن'); _hallRefreshDock(); }
+        return;
+    }
+    const p = _hall.people.get(m.to);
+    if (p) _hallSetLeaveReq(p, false, false);
+}
+function _hallAnswerLeave(uid, ok) {
+    if (!_hallIsMod(gameState.userId)) return;
+    _hallSend({ t: 'hla', uid: gameState.userId, to: uid, ok: ok ? 1 : 0 });
+    const p = _hall.people.get(uid);
+    if (p) _hallSetLeaveReq(p, false, false);
+}
+function _hallRenderReqs() {
+    const box = _hall.E && _hall.E.reqList;
+    if (!box) return;
+    box.textContent = '';
+    for (const p of _hall.people.values()) {
+        if (!p.lv || p.uid === gameState.userId) continue;
+        const row = document.createElement('div');
+        row.className = 'hall-req';
+        const nm = document.createElement('span');
+        nm.className = 'hall-req-name';
+        nm.textContent = p.n || '—';
+        const yes = document.createElement('button');
+        yes.type = 'button'; yes.className = 'hall-req-btn yes'; yes.textContent = 'سماح';
+        yes.dataset.uid = p.uid; yes.dataset.ok = '1';
+        const no = document.createElement('button');
+        no.type = 'button'; no.className = 'hall-req-btn'; no.textContent = 'رفض';
+        no.dataset.uid = p.uid; no.dataset.ok = '0';
+        row.append(nm, yes, no);
+        box.appendChild(row);
+    }
+}
+
+// The card a member who was let out sees while the meeting is still on.
+function _hallCard(show) {
+    const el = _hall.E && _hall.E.card, d = _hall.doc;
+    if (!el) return;
+    const on = !!(show && d && _hall.cardHidden !== d.id && !_hall.in);
+    if (on) _hall.E.cardTitle.textContent = d.title;
+    el.classList.toggle('show', on);
+}
+function _hallRejoin() {
+    const d = _hall.doc;
+    if (!d) { _hallCard(false); return; }
+    _hall.rejoin = true;
+    update(ref(database), { [`${HALL_PATH}/meeting/out/${_hallMe()}`]: null })
+        .catch(() => _libToast('تعذّرت العودة، حاول مجددًا'));
+    _hallCard(false);
+}
+
+function _hallEnd() {
+    const d = _hall.doc;
+    if (!d || !_hallIsMod(gameState.userId)) return;
+    try { _hallCastStop(); } catch (_) {}
+    update(ref(database), {
+        [`${HALL_PATH}/meeting`]: null,
+        [`${HALL_PATH}/done`]: { id: d.id, title: d.title, by: d.by, end: serverNow() },
+    }).catch(() => _libToast('تعذّر إنهاء الاجتماع، حاول مجددًا'));
+}
+function _hallToggleFocus() {
+    const d = _hall.doc;
+    if (!d || !_hallIsMod(gameState.userId)) return;
+    update(ref(database), { [`${HALL_PATH}/meeting/focus`]: d.focus ? 0 : 1 }).catch(() => {});
+}
+
+// One small confirm inside the hall. `null` puts it away.
+function _hallConfirm(head, text, yes, fn) {
+    const E = _hall.E;
+    if (!E) return;
+    if (!head) { E.confirm.classList.remove('show'); _hall.confirmFn = null; return; }
+    E.confirmHead.textContent = head;
+    E.confirmText.textContent = text || '';
+    E.confirmYes.textContent = yes || 'نعم';
+    _hall.confirmFn = fn;
+    E.confirm.classList.add('show');
+}
+
+/* ── the playful bits ───────────────────────────────────────────────────────
+   One-shot DOM pieces: built for a burst, animated on transform/opacity only,
+   removed by a timer. No loop of their own, and none of it on reduced graphics
+   beyond the single flying emoji. */
+const HALL_CURTAIN_LINES = [
+    'جارٍ الانتقال إلى قاعة الاجتماع…',
+    'نحجز لك مقعدًا في الصف الأول…',
+    'نمسح الغبار عن الشاشة الكبيرة…',
+    'شدّوا الأحزمة، القاعة قريبة…',
+    'ليمو يرتّب الكراسي…',
+];
+const HALL_CONF_COLORS = ['#F04D39', '#F4C82C', '#3BB9AB', '#086FB4', '#ffffff'];
+function _hallFx() {
+    const E = _hall.E;
+    return E && (E.fxLayer || (E.fxLayer = (() => {
+        const d = document.createElement('div');
+        d.className = 'hall-fx';
+        d.setAttribute('aria-hidden', 'true');
+        E.root.appendChild(d);
+        return d;
+    })()));
+}
+// A reaction leaves the seat and floats up the room, swaying as it goes.
+function _hallFly(p, emoji) {
+    const layer = _hallFx(), el = p && p.el;
+    if (!layer || !el || document.hidden || layer.childElementCount > 40) return;
+    const r = el.querySelector('.hall-av').getBoundingClientRect();
+    if (!r.width) return;
+    const n = _hall.fx ? 3 : 1;
+    for (let i = 0; i < n; i++) {
+        const f = document.createElement('span');
+        f.className = 'hall-fly';
+        f.dataset.e = emoji;
+        f.textContent = emoji;
+        f.style.left = (r.left + r.width / 2) + 'px';
+        f.style.top = r.top + 'px';
+        f.style.setProperty('--dx', ((Math.random() - 0.5) * 120).toFixed(0) + 'px');
+        f.style.setProperty('--dy', (-(140 + Math.random() * 160)).toFixed(0) + 'px');
+        f.style.setProperty('--rot', ((Math.random() - 0.5) * 50).toFixed(0) + 'deg');
+        f.style.setProperty('--s', (0.8 + Math.random() * 0.7).toFixed(2));
+        f.style.animationDelay = (i * 90) + 'ms';
+        layer.appendChild(f);
+        setTimeout(() => f.remove(), 2100 + i * 90);
+    }
+}
+// Brand-coloured confetti from the top of the room.
+function _hallConfetti(count) {
+    const layer = _hallFx();
+    if (!layer || !_hall.fx || document.hidden) return;
+    const n = Math.min(count || 36, 60), W = window.innerWidth;
+    for (let i = 0; i < n; i++) {
+        const c = document.createElement('i');
+        c.className = 'hall-conf';
+        c.style.left = (Math.random() * W).toFixed(0) + 'px';
+        c.style.background = HALL_CONF_COLORS[i % HALL_CONF_COLORS.length];
+        c.style.setProperty('--dx', ((Math.random() - 0.5) * 160).toFixed(0) + 'px');
+        c.style.setProperty('--rot', (360 + Math.random() * 720).toFixed(0) + 'deg');
+        c.style.animationDuration = (1.5 + Math.random() * 1.1).toFixed(2) + 's';
+        c.style.animationDelay = (Math.random() * 0.35).toFixed(2) + 's';
+        layer.appendChild(c);
+        setTimeout(() => c.remove(), 3200);
+    }
+}
+// A little voice for each reaction — two notes, a different pair for each.
+const HALL_RX_NOTES = { happy: [660, 990], clap: [520, 520], laugh: [740, 880], love: [587, 880], sad: [392, 311], mad: [220, 185] };
+function _hallRxSound(k, peak) {
+    const fe = gameState.focusAudioEngine, ctx = fe && fe.ctx;
+    const nn = HALL_RX_NOTES[k];
+    if (!ctx || !nn || ctx.state !== 'running' || document.hidden) return;
+    try {
+        const t = ctx.currentTime;
+        nn.forEach((f, i) => {
+            const o = ctx.createOscillator(), g = ctx.createGain();
+            o.type = k === 'mad' ? 'sawtooth' : (k === 'clap' ? 'square' : 'sine');
+            o.frequency.setValueAtTime(f, t + i * 0.09);
+            g.gain.setValueAtTime(0.0001, t + i * 0.09);
+            g.gain.exponentialRampToValueAtTime(peak, t + i * 0.09 + 0.012);
+            g.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.09 + (k === 'clap' ? 0.05 : 0.16));
+            o.connect(g); g.connect(ctx.destination);
+            o.start(t + i * 0.09); o.stop(t + i * 0.09 + 0.2);
+        });
+    } catch (_) {}
+}
+
+/* ── reactions ─────────────────────────────────────────────────────────────── */
+function _hallPlayReact(p, k) {
+    const def = MEET_REACT_BY_KEY[k], el = p && p.el;
+    if (!def || !el) return;
+    const av = el.querySelector('.hall-av'), em = el.querySelector('.hall-emoji');
+    em.textContent = def.e;
+    for (const r of MEET_REACTIONS) av.classList.remove('rx-' + r.k);
+    el.classList.remove('rx');
+    void av.offsetWidth;
+    av.classList.add('rx-' + k);
+    el.classList.add('rx');
+    clearTimeout(el._rxT);
+    el._rxT = setTimeout(() => { av.classList.remove('rx-' + k); el.classList.remove('rx'); }, HALL_REACT_MS + 80);
+    _hallFly(p, def.e);
+}
+function hallReact(k) {
+    if (!_hall.in || !MEET_REACT_BY_KEY[k]) return;
+    const now = performance.now();
+    if (now - _hall.lastReactAt < HALL_REACT_GAP_MS) return;
+    _hall.lastReactAt = now;
+    _hallPlayReact(_hall.people.get(gameState.userId), k);
+    _hallRxSound(k, 0.06);
+    _hallSend({ t: 'hr', uid: gameState.userId, r: k });
+    _hall.E.reacts.classList.add('cool');
+    setTimeout(() => _hall.E && _hall.E.reacts.classList.remove('cool'), HALL_REACT_GAP_MS);
+}
+function _hallOnReact(p, r) {
+    if (!MEET_REACT_BY_KEY[r]) return;
+    const now = performance.now();
+    if (p._rxAt && now - p._rxAt < 400) return;      // relayed data: one per beat
+    p._rxAt = now;
+    _hallPlayReact(p, r);
+    _hallRxSound(r, 0.03);
+}
+
+/* ── comments ──────────────────────────────────────────────────────────────── */
+function _hallSetTyping(p, on) {
+    p.typing = !!on; p.typAt = Date.now();
+    if (p.el) p.el.classList.toggle('typing', p.typing);
+}
+function _hallShowComment(p, text, men) {
+    const el = p && p.el;
+    if (!el) return;
+    _hallSetTyping(p, false);
+    const b = el.querySelector('.hall-bubble');
+    b.textContent = text;
+    const forMe = Array.isArray(men) && (men.includes(gameState.userId) || men.includes(_hallMe()));
+    b.classList.toggle('men', forMe);
+    // A seat at the edge of the room: nudge the bubble back onto the screen.
+    b.style.setProperty('--bx', '0px');
+    const br = b.getBoundingClientRect(), vw = window.innerWidth;
+    if (br.width) {
+        const dx = br.left < 8 ? 8 - br.left : (br.right > vw - 8 ? vw - 8 - br.right : 0);
+        if (dx) b.style.setProperty('--bx', dx.toFixed(0) + 'px');
+    }
+    b.classList.remove('show'); void b.offsetWidth; b.classList.add('show');
+    clearTimeout(el._bubT);
+    el._bubT = setTimeout(() => b.classList.remove('show'), 4200 + text.length * 70);
+    const bob = el.querySelector('.hall-bob');
+    bob.classList.remove('hop'); void bob.offsetWidth; bob.classList.add('hop');
+    return forMe;
+}
+function _hallOnComment(p, m) {
+    if (!_hallMaySpeak(p.uid)) return;               // focus mode, enforced on receive too
+    const text = _chatClean(m.m).slice(0, HALL_MSG_MAX);
+    if (!text) return;
+    const now = Date.now();
+    if (p._msgAt && now - p._msgAt < 500) return;
+    p._msgAt = now;
+    const men = Array.isArray(m.men) ? m.men.filter(x => typeof x === 'string').slice(0, 8) : [];
+    const forMe = _hallShowComment(p, text, men);
+    if (forMe) {
+        _chatSfx('mentionPing', 1, 0.8);
+        try { _chatMentionNotify({ userId: p.uid, username: p.n, avatar: p.av }, 1, text); } catch (_) {}
+    } else if (!document.hidden) _meetBlip(0.95, 0.02);
+}
+
+function _hallComposeOpen() {
+    const E = _hall.E;
+    if (!_hall.in || _hall.cmp.open) return;
+    if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التعليق للمنصة فقط'); return; }
+    _hall.cmp.open = true;
+    _hall.cmp.mens.clear();
+    E.compose.classList.add('show');
+    _hallComposeFit();
+    void E.compose.offsetHeight;                     // not still visibility:hidden when focus is asked for
+    try { E.input.focus({ preventScroll: true }); } catch (_) { try { E.input.focus(); } catch (__) {} }
+}
+function _hallComposeClose() {
+    const E = _hall.E;
+    if (!E || !_hall.cmp.open) return;
+    _hall.cmp.open = false;
+    E.compose.classList.remove('show');
+    E.input.value = '';
+    _hallMenList(null);
+    try { E.input.blur(); } catch (_) {}
+    if (_hall.cmp.typOn) { _hall.cmp.typOn = false; _hallSend({ t: 'ht', uid: gameState.userId, on: 0 }); }
+}
+// Keep the compose bar on top of the phone keyboard.
+function _hallComposeFit() {
+    const E = _hall.E, vv = window.visualViewport;
+    if (!E || !_hall.cmp.open) return;
+    const lift = vv ? Math.max(0, window.innerHeight - vv.height - vv.offsetTop) : 0;
+    E.compose.style.bottom = lift ? (lift + 8) + 'px' : '';
+}
+function _hallMenQuery() {
+    const E = _hall.E, v = E.input.value, caret = E.input.selectionStart == null ? v.length : E.input.selectionStart;
+    const m = /(^|\s)@([^\s@]{0,24})$/.exec(v.slice(0, caret));
+    return m ? { q: m[2], start: caret - m[2].length - 1, end: caret } : null;
+}
+function _hallMenList(q) {
+    const E = _hall.E, box = E.men, c = _hall.cmp;
+    c.rows = [];
+    box.textContent = '';
+    if (!q) { box.classList.remove('show'); return; }
+    const want = _fireNormName(q.q).toLowerCase();
+    for (const p of _hall.people.values()) {
+        if (p.uid === gameState.userId || !p.n) continue;
+        if (want && !_fireNormName(p.n).toLowerCase().includes(want)) continue;
+        c.rows.push(p);
+        if (c.rows.length >= 5) break;
+    }
+    if (!c.rows.length) { box.classList.remove('show'); return; }
+    c.sel = Math.min(c.sel, c.rows.length - 1);
+    c.rows.forEach((p, i) => {
+        const row = document.createElement('div');
+        row.className = 'hall-men-row' + (i === c.sel ? ' sel' : '');
+        row.dataset.i = String(i);
+        const av = document.createElement('span');
+        av.className = 'hall-men-av';
+        if (p.av) av.style.backgroundImage = `url("${p.av}")`; else av.textContent = (p.n || '؟').charAt(0);
+        const nm = document.createElement('span');
+        nm.textContent = p.n;
+        row.append(av, nm);
+        box.appendChild(row);
+    });
+    box.classList.add('show');
+}
+function _hallMenPick(i) {
+    const E = _hall.E, c = _hall.cmp, p = c.rows[i], q = _hallMenQuery();
+    if (!p || !q) return;
+    const name = p.n.replace(/\s+/g, '_');
+    const v = E.input.value;
+    E.input.value = v.slice(0, q.start) + '@' + name + ' ' + v.slice(q.end);
+    const pos = q.start + name.length + 2;
+    try { E.input.setSelectionRange(pos, pos); } catch (_) {}
+    c.mens.set('@' + name, p.uid);
+    _hallMenList(null);
+}
+function _hallComposeInput() {
+    const E = _hall.E, c = _hall.cmp, now = Date.now();
+    if (E.input.value && now - c.typAt > HALL_TYP_PING_MS) {
+        c.typAt = now; c.typOn = true;
+        _hallSend({ t: 'ht', uid: gameState.userId, on: 1 });
+    }
+    c.sel = 0;
+    _hallMenList(_hallMenQuery());
+}
+function _hallComposeSend() {
+    const E = _hall.E, c = _hall.cmp;
+    const text = _chatClean(E.input.value).slice(0, HALL_MSG_MAX);
+    if (!text) { _hallComposeClose(); return; }
+    if (!_hallMaySpeak(gameState.userId)) { _libToast('وضع التركيز مفعّل — التعليق للمنصة فقط'); _hallComposeClose(); return; }
+    const now = Date.now();
+    if (now - _hall.lastMsgAt < HALL_MSG_GAP_MS) return;      // hold the text, send nothing
+    _hall.lastMsgAt = now;
+    const men = [];
+    for (const [tag, uid] of c.mens) if (text.includes(tag) && !men.includes(uid)) men.push(uid);
+    const msg = { t: 'hc', uid: gameState.userId, m: text };
+    if (men.length) msg.men = men.slice(0, 8);
+    if (!_hallSend(msg)) { _libToast('الاتصال منقطع — لم تُرسل الرسالة'); return; }
+    c.typOn = false;
+    _hallShowComment(_hall.people.get(gameState.userId), text, null);
+    if (men.length) _chatSfx('chatMention', 1, 0.75);
+    _hallComposeClose();
+}
+
+/* ── the screen ────────────────────────────────────────────────────────────── */
+function _hallScreenIdle() {
+    const E = _hall.E;
+    if (!E) return;
+    E.root.classList.remove('casting', 'waiting', 'zoomed');
+    try { E.video.pause(); E.video.srcObject = null; } catch (_) {}
+    clearInterval(_hall.glowTimer); _hall.glowTimer = 0;
+    _hall.glow = '';
+    E.root.style.setProperty('--hall-glow', HALL_GLOW_IDLE);
+    _hallRefreshDock();
+}
+function _hallScreenWait(text) {
+    const E = _hall.E;
+    E.root.classList.add('waiting');
+    E.root.classList.remove('casting');
+    E.wait.textContent = text;
+}
+function _hallScreenShow(stream) {
+    const E = _hall.E;
+    try { E.video.srcObject = stream; const pr = E.video.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (_) {}
+    E.root.classList.remove('waiting');
+    E.root.classList.add('casting');
+    const sh = _hall.share, p = sh && _hall.people.get(sh.uid);
+    E.caster.textContent = p ? (sh.mine ? 'أنت تشارك شاشتك' : `شاشة ${p.n}`) : '';
+    clearInterval(_hall.glowTimer); _hall.glowTimer = 0;
+    // The screen lights the room: its average colour, twice a second, into ONE CSS
+    // variable. Off on reduced graphics — the room keeps its still glow.
+    if (_hall.fx) _hall.glowTimer = setInterval(_hallGlowSample, 500);
+    _hallRefreshDock();
+}
+function _hallGlowSample() {
+    const E = _hall.E, v = E && E.video;
+    if (!v || !_hall.in || document.hidden || v.readyState < 2 || !v.videoWidth) return;
+    try {
+        const cv = _hall.glowCv || (_hall.glowCv = document.createElement('canvas'));
+        if (cv.width !== 8) { cv.width = 8; cv.height = 5; }
+        const cx = cv.getContext('2d', { willReadFrequently: true });
+        cx.drawImage(v, 0, 0, 8, 5);
+        const px = cx.getImageData(0, 0, 8, 5).data;
+        let r = 0, g = 0, b = 0;
+        for (let i = 0; i < px.length; i += 4) { r += px[i]; g += px[i + 1]; b += px[i + 2]; }
+        const n = px.length / 4;
+        r /= n; g /= n; b /= n;
+        // A dark slide still lights the room a little; a white one must not blind it.
+        const mx = Math.max(r, g, b, 1), k = Math.min(1.6, 190 / mx);
+        const q = (x) => Math.round(Math.max(40, Math.min(235, x * k)) / 8) * 8;
+        const s = `${q(r)}, ${q(g)}, ${q(b)}`;
+        if (s !== _hall.glow) { _hall.glow = s; E.root.style.setProperty('--hall-glow', s); }
+    } catch (_) {}
+}
+
+function _hallIceDone(pc) {
+    if (pc.iceGatheringState === 'complete') return Promise.resolve();
+    return new Promise(res => {
+        const done = () => { clearTimeout(t); pc.removeEventListener('icegatheringstatechange', chk); res(); };
+        const chk = () => { if (pc.iceGatheringState === 'complete') done(); };
+        const t = setTimeout(done, 2500);
+        pc.addEventListener('icegatheringstatechange', chk);
+    });
+}
+function _hallTuneSender(sender, bitrate, fps) {
+    try {
+        const p = sender.getParameters();
+        if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+        p.encodings[0].maxBitrate = bitrate;
+        p.encodings[0].maxFramerate = fps;
+        const r = sender.setParameters(p);
+        if (r && r.catch) r.catch(() => {});
+    } catch (_) {}
+}
+async function _hallRtcCall(path, body) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), 9000);
+    try {
+        // text/plain on purpose: a "simple" request, so the browser sends no preflight.
+        const r = await fetch(`${HALL_RTC_HTTP}/rtc/${path}`, body
+            ? { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify(body), signal: ctl.signal }
+            : { signal: ctl.signal });
+        const j = await r.json();
+        if (!r.ok || !j || j.error) throw new Error((j && j.error) || ('rtc ' + r.status));
+        return j;
+    } finally { clearTimeout(t); }
+}
+async function _hallSfuProbe() {
+    _hall.sfuOk = false;
+    try { const j = await _hallRtcCall('ok'); _hall.sfuOk = !!(j && j.ok === true); } catch (_) {}
+}
+
+async function _hallCastStart() {
+    if (!_hall.in || _hall.cast) return;
+    if (_hall.share) { _libToast('هناك من يشارك شاشته الآن'); return; }
+    if (!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia)) { _libToast('هذا المتصفح لا يدعم مشاركة الشاشة'); return; }
+    let stream;
+    try {
+        stream = await navigator.mediaDevices.getDisplayMedia({
+            video: { frameRate: { ideal: 15, max: 24 }, width: { max: 1920 }, height: { max: 1080 } }, audio: false,
+        });
+    } catch (e) {
+        if (!e || e.name !== 'NotAllowedError') _libToast('تعذّرت مشاركة الشاشة');
+        return;
+    }
+    const track = stream.getVideoTracks()[0];
+    if (!_hall.in || _hall.share || _hall.cast || !track) { stream.getTracks().forEach(t => t.stop()); return; }
+    try { track.contentHint = 'detail'; } catch (_) {}
+    const cast = _hall.cast = {
+        stream, track, pcs: new Map(), sfu: null,
+        sid: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), at: serverNow(),
+    };
+    track.addEventListener('ended', () => { if (_hall.cast === cast) _hallCastStop(); });
+    _hall.share = { uid: gameState.userId, sid: cast.sid, at: cast.at, mine: true };
+    _hallScreenShow(stream);
+    if (_hall.sfuOk) {
+        try { await _hallSfuPublish(cast); }
+        catch (e) { console.warn('[hall] sfu publish failed — falling back to direct', e); cast.sfu = null; }
+    }
+    if (_hall.cast !== cast) return;
+    _hallSend({ t: 'hs', k: 'on', uid: gameState.userId, ..._hallCastInfo() });
+}
+function _hallCastStop(silent) {
+    const cast = _hall.cast;
+    if (!cast) return;
+    _hall.cast = null;
+    try { cast.stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+    for (const pc of cast.pcs.values()) { try { pc.close(); } catch (_) {} }
+    cast.pcs.clear();
+    if (cast.sfu && cast.sfu.pc) { try { cast.sfu.pc.close(); } catch (_) {} }
+    if (!silent) _hallSend({ t: 'hs', k: 'off', uid: gameState.userId, sid: cast.sid });
+    if (_hall.share && _hall.share.mine) _hall.share = null;
+    if (_hall.in) _hallScreenIdle();
+}
+async function _hallSfuPublish(cast) {
+    const pc = new RTCPeerConnection({ iceServers: HALL_ICE, bundlePolicy: 'max-bundle' });
+    const tx = pc.addTransceiver(cast.track, { direction: 'sendonly' });
+    await pc.setLocalDescription(await pc.createOffer());
+    const name = 'screen-' + cast.sid;
+    let r;
+    try { r = await _hallRtcCall('pub', { sdp: pc.localDescription.sdp, mid: tx.mid, name }); }
+    catch (e) { try { pc.close(); } catch (_) {} throw e; }
+    if (_hall.cast !== cast) { try { pc.close(); } catch (_) {} return; }
+    await pc.setRemoteDescription({ type: 'answer', sdp: r.sdp });
+    cast.sfu = { pc, session: r.session, name };
+    _hallTuneSender(tx.sender, 2500000, 15);
+}
+// A viewer asked for the picture directly (no SFU, or theirs failed).
+async function _hallP2POffer(viewer) {
+    const cast = _hall.cast;
+    if (!cast) return;
+    const old = cast.pcs.get(viewer);
+    if (old) { try { old.close(); } catch (_) {} }
+    const pc = new RTCPeerConnection({ iceServers: HALL_ICE });
+    cast.pcs.set(viewer, pc);
+    pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+            if (cast.pcs.get(viewer) === pc) cast.pcs.delete(viewer);
+            try { pc.close(); } catch (_) {}
+        }
+    };
+    try {
+        const sender = pc.addTrack(cast.track, cast.stream);
+        // Every direct viewer is another encode and another upload on the sharer's machine.
+        _hallTuneSender(sender, 700000, 10);
+        await pc.setLocalDescription(await pc.createOffer());
+        await _hallIceDone(pc);
+        if (_hall.cast !== cast || cast.pcs.get(viewer) !== pc) return;
+        _hallSend({ t: 'hs', k: 'offer', uid: gameState.userId, to: viewer, sid: cast.sid, sdp: pc.localDescription.sdp });
+    } catch (e) { console.warn('[hall] offer', e); }
+}
+
+function _hallOnShare(m) {
+    const me = gameState.userId, k = m.k;
+    if (k === 'on') {
+        if (typeof m.sid !== 'string' || !/^[\w-]{4,40}$/.test(m.sid) || !_hall.people.has(m.uid)) return;
+        const at = typeof m.at === 'number' ? m.at : 0;
+        const sfu = (m.sfu && typeof m.sfu.s === 'string' && typeof m.sfu.n === 'string'
+            && /^[\w-]{8,80}$/.test(m.sfu.s) && /^[\w-]{4,80}$/.test(m.sfu.n)) ? { s: m.sfu.s, n: m.sfu.n } : null;
+        // Two people pressed share in the same moment: the earlier one keeps the screen.
+        if (_hall.cast) {
+            const mine = _hall.cast;
+            if (at < mine.at || (at === mine.at && m.uid < me)) _hallCastStop();
+            else return;
+        }
+        const cur = _hall.share;
+        if (cur && cur.uid === m.uid && cur.sid === m.sid) {
+            cur.seenAt = Date.now();
+            if (sfu && !cur.sfu) cur.sfu = sfu;
+            return;
+        }
+        if (cur && cur.uid !== m.uid && cur.at <= at) return;
+        _hall.share = { uid: m.uid, sid: m.sid, at, sfu, seenAt: Date.now(), tries: 0 };
+        _hallViewStart();
+        return;
+    }
+    if (k === 'off') { _hallShareGone(m.uid); return; }
+    if (m.to !== me) return;
+    if (k === 'want') { if (_hall.cast && m.sid === _hall.cast.sid) _hallP2POffer(m.uid); return; }
+    if (k === 'offer') { _hallP2PAnswer(m); return; }
+    if (k === 'ans') {
+        const pc = _hall.cast && _hall.cast.pcs.get(m.uid);
+        if (pc && typeof m.sdp === 'string' && m.sdp.length < 20000) pc.setRemoteDescription({ type: 'answer', sdp: m.sdp }).catch(() => {});
+        return;
+    }
+    if (k === 'kill') {
+        if (_hall.cast && _hallIsMod(m.uid)) { _hallCastStop(); _libToast('أوقف المشرف مشاركة شاشتك'); }
+    }
+}
+function _hallShareGone(uid) {
+    const sh = _hall.share;
+    if (!sh || sh.mine || sh.uid !== uid) return;
+    _hallViewStop();
+    _hall.share = null;
+    if (_hall.in) _hallScreenIdle();
+}
+
+function _hallViewStop() {
+    const v = _hall.view;
+    _hall.view = null;
+    if (!v) return;
+    clearTimeout(v.timer);
+    if (v.pc) { try { v.pc.close(); } catch (_) {} }
+}
+function _hallViewGot(v, e) {
+    if (_hall.view !== v) return;
+    v.got = true;
+    clearTimeout(v.timer);
+    const stream = (e.streams && e.streams[0]) || new MediaStream([e.track]);
+    _hallScreenShow(stream);
+}
+function _hallViewRetry(v) {
+    const sh = _hall.share;
+    if (_hall.view !== v || !sh || sh.mine) return;
+    sh.tries = (sh.tries || 0) + 1;
+    if (sh.tries >= 2) sh.noSfu = true;               // the SFU had its chance — go direct
+    if (sh.tries < 5) _hallViewStart();
+    else { _hallScreenWait('تعذّر عرض الشاشة على هذا الجهاز — جرّب شبكة أخرى'); }
+}
+async function _hallViewStart() {
+    _hallViewStop();
+    const sh = _hall.share;
+    if (!sh || sh.mine || !_hall.in) return;
+    const v = _hall.view = { sid: sh.sid, pc: null, got: false, timer: 0 };
+    const p = _hall.people.get(sh.uid);
+    _hallScreenWait(`${(p && p.n) || 'عضو'} يشارك شاشته — جارٍ الاتصال…`);
+    v.timer = setTimeout(() => { if (!v.got) _hallViewRetry(v); }, 12000);
+    if (sh.sfu && _hall.sfuOk && !sh.noSfu) {
+        try {
+            const r = await _hallRtcCall('sub', { session: sh.sfu.s, name: sh.sfu.n });
+            if (_hall.view !== v) return;
+            const pc = v.pc = new RTCPeerConnection({ iceServers: HALL_ICE, bundlePolicy: 'max-bundle' });
+            pc.ontrack = (e) => _hallViewGot(v, e);
+            pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed') _hallViewRetry(v); };
+            await pc.setRemoteDescription({ type: 'offer', sdp: r.sdp });
+            await pc.setLocalDescription(await pc.createAnswer());
+            await _hallRtcCall('ans', { session: r.session, sdp: pc.localDescription.sdp });
+        } catch (e) {
+            console.warn('[hall] sfu pull failed — asking the sharer directly', e);
+            sh.noSfu = true;
+            if (_hall.view === v) _hallViewStart();
+        }
+        return;
+    }
+    _hallSend({ t: 'hs', k: 'want', uid: gameState.userId, to: sh.uid, sid: sh.sid });
+}
+async function _hallP2PAnswer(m) {
+    const v = _hall.view, sh = _hall.share;
+    if (!v || !sh || m.uid !== sh.uid || m.sid !== v.sid || typeof m.sdp !== 'string' || m.sdp.length > 20000) return;
+    if (v.pc) { try { v.pc.close(); } catch (_) {} }
+    const pc = v.pc = new RTCPeerConnection({ iceServers: HALL_ICE });
+    pc.ontrack = (e) => _hallViewGot(v, e);
+    pc.onconnectionstatechange = () => { if (pc.connectionState === 'failed' && v.pc === pc) _hallViewRetry(v); };
+    try {
+        await pc.setRemoteDescription({ type: 'offer', sdp: m.sdp });
+        await pc.setLocalDescription(await pc.createAnswer());
+        await _hallIceDone(pc);
+        if (_hall.view !== v || v.pc !== pc) return;
+        _hallSend({ t: 'hs', k: 'ans', uid: gameState.userId, to: m.uid, sid: m.sid, sdp: pc.localDescription.sdp });
+    } catch (e) { console.warn('[hall] answer', e); }
+}
+
+/* ── the invite panel ──────────────────────────────────────────────────────── */
+function _hallPickMembers() {
+    const me = _hallMe(), out = { m: [], f: [], guests: [] }, seen = new Set([me]);
+    const online = new Set();
+    for (const p of Object.values(gameState.players)) online.add(_dmCanon(p.userId));
+    for (const r of MDWNH_ROSTER.list) {
+        if (!r.discordId || r.dummy || r.active === false) continue;
+        const uid = String(r.discordId);
+        if (seen.has(uid)) continue;
+        seen.add(uid);
+        (r.gender === 'f' ? out.f : out.m).push({ uid, n: r.name || r.slug, face: _libAvatar(r.slug), on: online.has(uid) });
+    }
+    for (const p of Object.values(gameState.players)) {
+        const uid = _dmCanon(p.userId);
+        if (seen.has(uid) || !HALL_UID_RE.test(uid)) continue;
+        seen.add(uid);
+        out.guests.push({ uid, n: p.username || 'ضيف', face: (typeof p.avatar === 'string' && _MEET_SAFE_URL.test(p.avatar)) ? p.avatar : '', on: true });
+    }
+    const byOn = (a, b) => (b.on - a.on) || a.n.localeCompare(b.n, 'ar');
+    out.m.sort(byOn); out.f.sort(byOn); out.guests.sort(byOn);
+    return out;
+}
+function _hallPickRender() {
+    const E = _hall.E, groups = _hall.pickGroups;
+    if (!E || !groups) return;
+    const q = _fireNormName(_hall.pickQ).toLowerCase();
+    E.pickBody.textContent = '';
+    const mk = (title, list, key) => {
+        if (!list.length) return;
+        const shown = q ? list.filter(x => _fireNormName(x.n).toLowerCase().includes(q)) : list;
+        const sec = document.createElement('section');
+        sec.className = 'hall-pick-sec';
+        sec.dataset.grp = key; sec.dataset.title = title;
+        const head = document.createElement('div');
+        head.className = 'hall-pick-sechead';
+        const h = document.createElement('h4');
+        const n = list.filter(x => _hall.pickSel.has(x.uid)).length;
+        h.textContent = `${title} · ${_libAr(n)}/${_libAr(list.length)}`;
+        const all = document.createElement('button');
+        all.type = 'button'; all.className = 'hall-pick-all'; all.dataset.grp = key;
+        all.textContent = n === list.length ? 'إلغاء الكل' : 'تحديد الكل';
+        head.append(h, all);
+        const grid = document.createElement('div');
+        grid.className = 'hall-pick-grid';
+        for (const x of shown) {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'hall-chip' + (_hall.pickSel.has(x.uid) ? ' on' : '') + (x.on ? ' online' : '');
+            b.dataset.uid = x.uid;
+            b.setAttribute('role', 'checkbox');
+            b.setAttribute('aria-checked', _hall.pickSel.has(x.uid) ? 'true' : 'false');
+            const av = document.createElement('span');
+            av.className = 'hall-chip-av';
+            av.textContent = (x.n || '؟').charAt(0);
+            if (x.face) {
+                const img = document.createElement('img');
+                img.alt = ''; img.loading = 'lazy'; img.decoding = 'async'; img.draggable = false;
+                img.onerror = () => img.remove();
+                img.src = x.face;
+                av.appendChild(img);
+            }
+            const nm = document.createElement('span');
+            nm.className = 'hall-chip-name';
+            nm.textContent = x.n;
+            b.append(av, nm);
+            grid.appendChild(b);
+        }
+        if (!shown.length) { const e = document.createElement('p'); e.className = 'hall-pick-none'; e.textContent = 'لا نتائج'; grid.appendChild(e); }
+        sec.append(head, grid);
+        E.pickBody.appendChild(sec);
+    };
+    mk('الإخوة', groups.m, 'm');
+    mk('الأخوات', groups.f, 'f');
+    mk('ضيوف متصلون', groups.guests, 'guests');
+    _hallPickFoot();
+}
+function _hallPickHeads() {
+    const E = _hall.E, groups = _hall.pickGroups;
+    if (!E || !groups) return;
+    for (const sec of E.pickBody.querySelectorAll('.hall-pick-sec')) {
+        const list = groups[sec.dataset.grp] || [];
+        const n = list.filter(x => _hall.pickSel.has(x.uid)).length;
+        const h = sec.querySelector('h4'), all = sec.querySelector('.hall-pick-all');
+        if (h) h.textContent = `${sec.dataset.title} · ${_libAr(n)}/${_libAr(list.length)}`;
+        if (all) all.textContent = n === list.length ? 'إلغاء الكل' : 'تحديد الكل';
+    }
+    _hallPickFoot();
+}
+function _hallPickFoot() {
+    const E = _hall.E;
+    const n = _hall.pickSel.size, titled = _chatClean(E.pickTitle.value).length >= 2;
+    // Say plainly WHY the button is off — an untitled meeting was the usual reason.
+    const need = !titled ? 'اكتب عنوان الاجتماع أولًا لتبدأ' : (!n ? 'اختر مدعوًّا واحدًا على الأقل' : '');
+    E.pickCount.textContent = need || `${_libAr(n)} مدعوًّا — جاهز`;
+    E.pickCount.classList.toggle('need', !!need);
+    E.pickTitle.classList.toggle('need', !titled);
+    E.pickGo.classList.toggle('is-off', !!need);
+}
+async function hallOpenPicker() {
+    const E = _hall.E;
+    if (!E || _hall.pickOpen || !hallCanCall()) return;
+    _hall.pickOpen = true;
+    gameState.keys = {};
+    _hall.pickQ = '';
+    E.pickSearch.value = '';
+    E.pickTitle.value = '';
+    E.pickBody.textContent = '';
+    E.pick.classList.add('active');
+    E.pick.setAttribute('aria-hidden', 'false');
+    await _withTimeout(_mdwnhRosterReady.catch(() => {}), 4000, null);
+    if (!_hall.pickOpen) return;
+    _hallPickFoot();
+    _hall.pickGroups = _hallPickMembers();
+    // Everyone starts invited; the leader takes out who is not wanted.
+    _hall.pickSel = new Set([..._hall.pickGroups.m, ..._hall.pickGroups.f].map(x => x.uid));
+    _hallPickRender();
+    if (!isTouchDevice()) { try { E.pickTitle.focus(); } catch (_) {} }
+}
+function _hallPickClose() {
+    const E = _hall.E;
+    _hall.pickOpen = false;
+    if (!E) return;
+    E.pick.classList.remove('active');
+    E.pick.setAttribute('aria-hidden', 'true');
+    try { E.pickTitle.blur(); E.pickSearch.blur(); } catch (_) {}
+}
+async function _hallCreate(title, uids) {
+    title = _chatClean(title).slice(0, HALL_TITLE_MAX);
+    if (!hallCanCall() || !title || !uids || !uids.length || _hall.creating) return false;
+    _hall.creating = true;
+    const me = _hallMe();
+    const who = { [me]: 1 };
+    for (const u of uids) if (HALL_UID_RE.test(u)) who[u] = 1;
+    const now = serverNow();
+    const doc = { id: String(Date.now()), title, by: me, byName: _hallMyName(), at: now, who, focus: 0 };
+    let ok = false;
+    try {
+        const res = await runTransaction(ref(database, `${HALL_PATH}/meeting`), (cur) => {
+            if (cur && cur.id && now - (cur.at || 0) < HALL_MAX_MS) return;   // one is already on
+            return doc;
+        });
+        ok = !!(res && res.committed);
+        if (ok) set(ref(database, `${HALL_PATH}/beat`), now).catch(() => {});
+        else _libToast('هناك اجتماع قائم بالفعل');
+    } catch (e) {
+        console.error('[hall] create', e);
+        _libToast('تعذّر بدء الاجتماع، حاول مجددًا');
+    }
+    _hall.creating = false;
+    return ok;
+}
+
+/* ── the points, afterwards ────────────────────────────────────────────────── */
+async function _hallPtsOpen(meta) {
+    const E = _hall.E;
+    if (!E || _hall.ptsOpen || !adminAllowed() || !meta || !meta.id) return;
+    _hall.ptsOpen = true;
+    let att = null;
+    try { const s = await _withTimeout(get(ref(database, `${HALL_PATH}/att/${meta.id}`)), 7000, null); att = s ? s.val() : null; } catch (_) {}
+    await _withTimeout(_mdwnhRosterReady.catch(() => {}), 4000, null);
+    const rows = [];
+    for (const [uid, name] of Object.entries(att || {})) {
+        if (!HALL_UID_RE.test(uid)) continue;
+        const rec = MDWNH_ROSTER.byDiscord[uid];
+        // No points row: a guest or a test ghost, and the leader himself.
+        const can = !!(rec && rec.dbKey && !rec.admin && !rec.dummy);
+        rows.push({ uid, n: (rec && rec.name) || _chatClean(name).slice(0, 40) || '—', key: can ? _libNfc(rec.dbKey) : '', can, on: can });
+    }
+    if (!rows.some(r => r.can)) {
+        _hall.ptsOpen = false;
+        _hallPtsForget(meta.id);
+        return;
+    }
+    rows.sort((a, b) => (b.can - a.can) || a.n.localeCompare(b.n, 'ar'));
+    _hall.pts = { id: meta.id, title: meta.title || 'اجتماع', rows, amount: 10, busy: false };
+    E.ptsTitle.textContent = _hall.pts.title;
+    _hallPtsRender();
+    E.pts.classList.add('active');
+    E.pts.setAttribute('aria-hidden', 'false');
+}
+function _hallPtsRender() {
+    const E = _hall.E, P = _hall.pts;
+    if (!E || !P) return;
+    E.ptsAmounts.textContent = '';
+    for (const v of HALL_PTS) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'hall-amt' + (v === P.amount ? ' on' : '');
+        b.dataset.v = String(v);
+        const img = document.createElement('img');
+        img.alt = ''; img.draggable = false; img.decoding = 'async';
+        img.onerror = () => { img.style.visibility = 'hidden'; };
+        img.src = _libSticker(v);
+        const lb = document.createElement('span');
+        lb.textContent = `${_libAr(v)} نقطة`;
+        b.append(img, lb);
+        E.ptsAmounts.appendChild(b);
+    }
+    E.ptsList.textContent = '';
+    for (const r of P.rows) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'hall-chip' + (r.on ? ' on' : '') + (r.can ? '' : ' is-off');
+        b.dataset.uid = r.uid;
+        const av = document.createElement('span');
+        av.className = 'hall-chip-av';
+        av.textContent = (r.n || '؟').charAt(0);
+        const nm = document.createElement('span');
+        nm.className = 'hall-chip-name';
+        nm.textContent = r.can ? r.n : `${r.n} — بلا حساب نقاط`;
+        b.append(av, nm);
+        E.ptsList.appendChild(b);
+    }
+    const n = P.rows.filter(r => r.on).length;
+    E.ptsSum.textContent = n ? `${_libAr(n)} عضوًا × ${_libAr(P.amount)} = ${_libAr(n * P.amount)} نقطة` : 'لم تختر أحدًا';
+    E.ptsGo.classList.toggle('is-off', !n);
+}
+function _hallPtsClose() {
+    const E = _hall.E;
+    _hall.ptsOpen = false;
+    _hall.pts = null;
+    if (!E) return;
+    E.pts.classList.remove('active');
+    E.pts.setAttribute('aria-hidden', 'true');
+}
+function _hallPtsForget(id) {
+    update(ref(database), { [`${HALL_PATH}/done`]: null, [`${HALL_PATH}/att/${id}`]: null }).catch(() => {});
+}
+async function _hallPtsSend() {
+    const P = _hall.pts;
+    if (!P || P.busy || !adminAllowed()) return;
+    const list = P.rows.filter(r => r.on && r.can);
+    if (!list.length) return;
+    P.busy = true;
+    _hall.E.ptsGo.classList.add('is-busy');
+    const claimId = 'maqr-meeting-' + P.id, title = 'حضور اجتماع: ' + P.title, ts = Date.now();
+    const done = [], failed = [];
+    // The claim is the ecosystem handshake, unchanged: the same record a library task
+    // writes, at the path the Points site settles. One per member per meeting.
+    await Promise.all(list.map(r =>
+        libPtsPut(`${LIB_PTS_ROOT}/claims/${encodeURIComponent(r.key)}/${claimId}`,
+            { taskId: claimId, title, points: P.amount, color: '#086fb4', ts })
+            .then(() => done.push(r)).catch(() => failed.push(r))));
+    const up = {};
+    for (const r of done) up[`${HALL_PATH}/awards/${r.uid}/${P.id}`] = { t: P.title, p: P.amount, ts };
+    if (!failed.length) { up[`${HALL_PATH}/done`] = null; up[`${HALL_PATH}/att/${P.id}`] = null; }
+    try { await update(ref(database), up); } catch (e) { console.error('[hall] awards', e); }
+    P.busy = false;
+    _hall.E.ptsGo.classList.remove('is-busy');
+    if (failed.length) {
+        // Leave only the ones that did not go through, to be sent again.
+        P.rows = failed.map(r => ({ ...r, on: true }));
+        _hallPtsRender();
+        _libToast(`أُرسلت النقاط إلى ${_libAr(done.length)} — تعذّر الإرسال إلى ${_libAr(failed.length)}، أعد المحاولة`, 5000);
+        return;
+    }
+    _hallPtsClose();
+    _hallSfx('arrive');
+    _libToast(`أُرسلت ${_libAr(P.amount)} نقطة إلى ${_libAr(done.length)} عضوًا 🎉`, 4500);
+}
+
+// "You were given points" — shown as the claim card, once, wherever the member is next seen.
+function _hallOnAwards(v) {
+    if (!v || typeof v !== 'object') return;
+    for (const [id, a] of Object.entries(v)) {
+        if (_hall.awardSeen.has(id) || !a || typeof a !== 'object') continue;
+        const p = Number(a.p);
+        if (!/^\d{6,16}$/.test(id) || !HALL_PTS.includes(p)) continue;
+        _hall.awardSeen.add(id);
+        _hall.awardQ.push({ id, title: 'حضور اجتماع: ' + (_chatClean(a.t).slice(0, HALL_TITLE_MAX) || 'اجتماع'), points: p });
+    }
+}
+function _hallShowAward() {
+    const a = _hall.awardQ.shift();
+    if (!a) return;
+    remove(ref(database, `${HALL_PATH}/awards/${_hallMe()}/${a.id}`)).catch(() => {});
+    _hallSfx('arrive');
+    _libShowClaim({ title: a.title, points: a.points });
+}
+
+/* ── wiring ────────────────────────────────────────────────────────────────── */
+function hallStart() {
+    if (_hall.started || !gameState.userId) return;
+    _hall.started = true;
+    authReady.then(() => {
+        if (!_hall.started) return;
+        _hall.unsubDoc = onValue(ref(database, `${HALL_PATH}/meeting`), (s) => {
+            try { _hallOnDoc(s.val()); } catch (e) { console.error('[hall] doc', e); }
+        }, (e) => console.warn('[hall] doc listener', e));
+        _hall.unsubAward = onValue(ref(database, `${HALL_PATH}/awards/${_hallMe()}`), (s) => {
+            try { _hallOnAwards(s.val()); } catch (e) { console.error('[hall] awards', e); }
+        }, () => {});
+        // A meeting that ended while the leader was away still owes him its points panel.
+        if (adminAllowed()) {
+            get(ref(database, `${HALL_PATH}/done`)).then((s) => {
+                const v = s.val();
+                if (!v || typeof v.id !== 'string' || !/^\d{6,16}$/.test(v.id)) return;
+                if (serverNow() - (Number(v.end) || 0) > HALL_DONE_KEEP_MS) { _hallPtsForget(v.id); return; }
+                if (!_hall.ptsOpen && !_hall.ptsPending) _hall.ptsPending = { id: v.id, title: _chatClean(v.title).slice(0, HALL_TITLE_MAX) };
+            }).catch(() => {});
+        }
+    }).catch(() => {});
+}
+
+function setupHallUI() {
+    const root = document.getElementById('hall-overlay');
+    if (!root || _hall.E) return;
+    const $ = (id) => document.getElementById(id);
+    const E = _hall.E = {
+        root, title: $('hall-title'), clock: $('hall-clock'), count: $('hall-count'),
+        voice: $('hall-voice'), voiceTxt: $('hall-voice-text'), net: $('hall-net'), focusBadge: $('hall-focus-badge'),
+        screen: $('hall-screen'), video: $('hall-video'), idleTitle: $('hall-idle-title'), idleBy: $('hall-idle-by'),
+        wait: $('hall-wait'), caster: $('hall-caster'),
+        stageRow: $('hall-stage-row'), aud: $('hall-aud'), sideM: $('hall-side-m'), sideF: $('hall-side-f'),
+        countM: $('hall-count-m'), countF: $('hall-count-f'),
+        reacts: $('hall-reacts'), say: $('hall-say'), share: $('hall-share'), kill: $('hall-kill'),
+        focusBtn: $('hall-focus-btn'), reqBtn: $('hall-req-btn'), reqN: $('hall-req-n'), reqs: $('hall-reqs'), reqList: $('hall-req-list'),
+        leave: $('hall-leave'), end: $('hall-end'),
+        compose: $('hall-compose'), input: $('hall-input'), send: $('hall-send'), men: $('hall-men'),
+        confirm: $('hall-confirm'), confirmHead: $('hall-confirm-head'), confirmText: $('hall-confirm-text'),
+        confirmYes: $('hall-confirm-yes'), confirmNo: $('hall-confirm-no'),
+        call: $('hall-call'), callWho: $('hall-call-who'), callTitle: $('hall-call-title'),
+        warp: $('hall-warp'), curtain: $('hall-curtain'), curtainFill: $('hall-curtain-fill'),
+        card: $('hall-card'), cardTitle: $('hall-card-title'), cardBack: $('hall-card-back'), cardStay: $('hall-card-stay'),
+        hudBtn: $('hall-btn'),
+        pick: $('hall-pick'), pickTitle: $('hall-pick-title'), pickSearch: $('hall-pick-search'), pickBody: $('hall-pick-body'),
+        pickCount: $('hall-pick-count'), pickGo: $('hall-pick-go'), pickClose: $('hall-pick-close'),
+        pts: $('hall-pts'), ptsTitle: $('hall-pts-title'), ptsAmounts: $('hall-pts-amounts'), ptsList: $('hall-pts-list'),
+        ptsSum: $('hall-pts-sum'), ptsGo: $('hall-pts-go'), ptsSkip: $('hall-pts-skip'), ptsLater: $('hall-pts-later'),
+    };
+
+    E.reacts.innerHTML = MEET_REACTIONS.map(r =>
+        `<button type="button" class="hall-react" data-r="${r.k}" title="${r.n}" aria-label="${r.n}"><span>${r.e}</span></button>`).join('');
+    E.reacts.addEventListener('click', (e) => { const b = e.target.closest('.hall-react'); if (b) hallReact(b.dataset.r); });
+
+    E.say.addEventListener('click', () => { if (_hall.cmp.open) _hallComposeClose(); else _hallComposeOpen(); });
+    E.send.addEventListener('pointerdown', (e) => e.preventDefault());      // keep the keyboard up
+    E.send.addEventListener('click', _hallComposeSend);
+    E.input.addEventListener('input', _hallComposeInput);
+    E.input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        const c = _hall.cmp, open = c.rows.length > 0;
+        if (e.key === 'Escape') { e.preventDefault(); if (open) _hallMenList(null); else _hallComposeClose(); return; }
+        if (open && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+            e.preventDefault();
+            c.sel = (c.sel + (e.key === 'ArrowDown' ? 1 : c.rows.length - 1)) % c.rows.length;
+            _hallMenList(_hallMenQuery());
+            return;
+        }
+        if (e.key === 'Enter' || (open && e.key === 'Tab')) {
+            if (e.isComposing) return;
+            e.preventDefault();
+            if (open) _hallMenPick(c.sel); else _hallComposeSend();
+        }
+    });
+    E.men.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        const row = e.target.closest('.hall-men-row');
+        if (row) _hallMenPick(Number(row.dataset.i));
+    });
+    // My own seat is the comment button too, like my character is in the world.
+    root.addEventListener('click', (e) => {
+        if (e.target.closest('.hall-seat.me .hall-av') && !_hall.cmp.open) _hallComposeOpen();
+    });
+
+    E.share.addEventListener('click', () => { if (_hall.cast) _hallCastStop(); else _hallCastStart(); });
+    E.kill.addEventListener('click', () => {
+        const sh = _hall.share;
+        if (!sh || sh.mine || !_hallIsMod(gameState.userId)) return;
+        const p = _hall.people.get(sh.uid);
+        _hallConfirm('إيقاف مشاركة الشاشة؟', p ? `ستتوقف مشاركة ${p.n}.` : '', 'إيقاف', () => {
+            _hallSend({ t: 'hs', k: 'kill', uid: gameState.userId, to: sh.uid });
+        });
+    });
+    E.screen.addEventListener('click', () => {
+        if (E.root.classList.contains('casting')) E.root.classList.toggle('zoomed');
+    });
+    E.focusBtn.addEventListener('click', _hallToggleFocus);
+    E.reqBtn.addEventListener('click', () => { _hallRenderReqs(); E.reqs.classList.toggle('show'); });
+    E.reqList.addEventListener('click', (e) => {
+        const b = e.target.closest('.hall-req-btn');
+        if (b) _hallAnswerLeave(b.dataset.uid, b.dataset.ok === '1');
+    });
+    E.leave.addEventListener('click', _hallLeavePress);
+    E.end.addEventListener('click', () => {
+        _hallConfirm('إنهاء الاجتماع للجميع؟', 'سيخرج كل الحاضرين، ولن يُدعى من يدخل بعد ذلك.', 'إنهاء الاجتماع', _hallEnd);
+    });
+    E.confirmNo.addEventListener('click', () => _hallConfirm(null));
+    E.confirmYes.addEventListener('click', () => { const fn = _hall.confirmFn; _hallConfirm(null); if (fn) fn(); });
+    E.confirm.addEventListener('click', (e) => { if (e.target === E.confirm) _hallConfirm(null); });
+
+    if (E.hudBtn) E.hudBtn.addEventListener('click', () => { hallCallCommand(); });
+    E.cardBack.addEventListener('click', _hallRejoin);
+    E.cardStay.addEventListener('click', () => { if (_hall.doc) _hall.cardHidden = _hall.doc.id; _hallCard(false); });
+
+    // The invite panel.
+    E.pickClose.addEventListener('click', _hallPickClose);
+    E.pick.addEventListener('click', (e) => { if (e.target === E.pick) _hallPickClose(); });
+    E.pickTitle.addEventListener('input', _hallPickFoot);
+    E.pickSearch.addEventListener('input', () => { _hall.pickQ = E.pickSearch.value; _hallPickRender(); });
+    E.pickBody.addEventListener('click', (e) => {
+        const all = e.target.closest('.hall-pick-all');
+        if (all) {
+            const list = (_hall.pickGroups && _hall.pickGroups[all.dataset.grp]) || [];
+            const full = list.every(x => _hall.pickSel.has(x.uid));
+            for (const x of list) { if (full) _hall.pickSel.delete(x.uid); else _hall.pickSel.add(x.uid); }
+            _hallPickRender();
+            return;
+        }
+        const chip = e.target.closest('.hall-chip');
+        if (!chip) return;
+        const uid = chip.dataset.uid;
+        if (_hall.pickSel.has(uid)) _hall.pickSel.delete(uid); else _hall.pickSel.add(uid);
+        // In place — a rebuild would reload every face.
+        chip.classList.toggle('on', _hall.pickSel.has(uid));
+        chip.setAttribute('aria-checked', _hall.pickSel.has(uid) ? 'true' : 'false');
+        _hallPickHeads();
+    });
+    E.pickGo.addEventListener('click', async () => {
+        if (E.pickGo.classList.contains('is-busy')) return;
+        if (E.pickGo.classList.contains('is-off')) {
+            // Point at what is missing: shake it, and put the caret in the title.
+            const untitled = E.pickTitle.classList.contains('need');
+            const el = untitled ? E.pickTitle : E.pickCount;
+            el.classList.remove('shake'); void el.offsetWidth; el.classList.add('shake');
+            E.pickCount.classList.remove('shake'); void E.pickCount.offsetWidth; E.pickCount.classList.add('shake');
+            if (untitled) { try { E.pickTitle.focus(); } catch (_) {} }
+            _chatNoSound();
+            return;
+        }
+        E.pickGo.classList.add('is-busy');
+        const ok = await _hallCreate(E.pickTitle.value, [..._hall.pickSel]);
+        E.pickGo.classList.remove('is-busy');
+        if (ok) _hallPickClose();
+    });
+    for (const inp of [E.pickTitle, E.pickSearch]) {
+        inp.addEventListener('keydown', (e) => { e.stopPropagation(); if (e.key === 'Escape') _hallPickClose(); });
+    }
+
+    // The points panel.
+    E.ptsAmounts.addEventListener('click', (e) => {
+        const b = e.target.closest('.hall-amt');
+        if (b && _hall.pts) { _hall.pts.amount = Number(b.dataset.v); _hallPtsRender(); }
+    });
+    E.ptsList.addEventListener('click', (e) => {
+        const b = e.target.closest('.hall-chip');
+        if (!b || !_hall.pts) return;
+        const r = _hall.pts.rows.find(x => x.uid === b.dataset.uid);
+        if (r && r.can) { r.on = !r.on; _hallPtsRender(); }
+    });
+    E.ptsGo.addEventListener('click', () => { if (!E.ptsGo.classList.contains('is-off')) _hallPtsSend(); });
+    E.ptsLater.addEventListener('click', _hallPtsClose);          // asked again on the next login
+    E.ptsSkip.addEventListener('click', () => { const P = _hall.pts; _hallPtsClose(); if (P) _hallPtsForget(P.id); });
+
+    // Keys: Enter comments, 1–6 react, Escape steps back. Capture phase, so nothing
+    // of the world's sees a key while the hall is up.
+    window.addEventListener('keydown', (e) => {
+        if (_hall.pickOpen && e.key === 'Escape') { _hallPickClose(); return; }
+        if (!_hall.in || _hall.entering) return;
+        const t = e.target;
+        if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+        if (e.key === 'Escape') {
+            if (E.confirm.classList.contains('show')) _hallConfirm(null);
+            else if (E.root.classList.contains('zoomed')) E.root.classList.remove('zoomed');
+            else if (E.reqs.classList.contains('show')) E.reqs.classList.remove('show');
+            return;
+        }
+        if (e.ctrlKey || e.metaKey || e.altKey) return;
+        if (e.key === 'Enter') { e.preventDefault(); _hallComposeOpen(); return; }
+        const m = /^(?:Digit|Numpad)([1-6])$/.exec(e.code || '');
+        if (m) { const r = MEET_REACTIONS[Number(m[1]) - 1]; if (r) hallReact(r.k); }
+    }, true);
+    root.addEventListener('wheel', (e) => e.stopPropagation(), { passive: true });
+    const relayout = () => { if (_hall.in) { _hall.layoutDirty = true; _hallComposeFit(); } };
+    window.addEventListener('resize', relayout);
+    window.visualViewport?.addEventListener('resize', relayout);
+    window.visualViewport?.addEventListener('scroll', () => { if (_hall.in) _hallComposeFit(); });
+    document.addEventListener('visibilitychange', () => {
+        if (document.hidden || !_hall.in) return;
+        _hallSlowTick();
+        // A picture that stalled while the tab was away is asked for again.
+        const v = _hall.E.video;
+        if (v && v.srcObject && v.paused) { const pr = v.play(); if (pr && pr.catch) pr.catch(() => {}); }
+    });
+    window.addEventListener('pagehide', () => { try { _hallCastStop(); } catch (_) {} });
+
+    // The doc listener waits for calm — never on the login / spawn path.
+    whenCalm(hallStart);
 }

@@ -74,6 +74,118 @@ function auditAllowed(request, env) {
 // The day rolls over at midnight in Riyadh (UTC+3) — where most of the team is.
 const dayKey = () => new Date(Date.now() + 3 * 3600 * 1000).toISOString().slice(0, 10);
 
+// ── القاعة: the meeting hall's screen share ──────────────────────────────────
+// The shared screen is WebRTC. Sent straight from the sharer to every viewer it
+// costs the sharer one upload per viewer; through Cloudflare's Realtime SFU the
+// sharer uploads ONE copy and Cloudflare hands it to everyone. The SFU's API needs
+// a secret the page must never see, so the page asks HERE and this Worker asks
+// Cloudflare:
+//   GET  /rtc/ok            → { ok }            is the SFU set up at all?
+//   POST /rtc/pub { sdp, mid, name }   → { session, sdp }   publish one track
+//   POST /rtc/sub { session, name }    → { session, sdp }   pull it (an offer comes back)
+//   POST /rtc/ans { session, sdp }     → { ok }             the viewer's answer
+// Bodies are JSON sent as text/plain (a "simple" request — no CORS preflight).
+// Two secrets turn it on (Cloudflare dashboard → Realtime → create an SFU app):
+//   npx wrangler secret put RTC_APP_ID
+//   npx wrangler secret put RTC_APP_SECRET
+// Without them /rtc/ok says { ok:false } and the page shares directly instead.
+const RTC_API = 'https://rtc.live.cloudflare.com/v1/apps/';
+const RTC_MAX_BODY = 60000;
+const RTC_ID_RE = /^[\w-]{4,80}$/;
+
+function rtcJson(obj, status, origin) {
+  return new Response(JSON.stringify(obj), {
+    status: status || 200,
+    headers: {
+      'content-type': 'application/json',
+      'cache-control': 'no-store',
+      'access-control-allow-origin': origin || '*',
+      'vary': 'origin',
+    },
+  });
+}
+
+// Only the site itself (and a local dev copy) may spend the SFU's minutes. An
+// Origin header can be forged outside a browser — this keeps other WEBSITES out,
+// which is the realistic misuse.
+function rtcOriginOk(request, env) {
+  const origin = request.headers.get('origin');
+  if (!origin) return true;
+  let site = '';
+  try { site = new URL(String(env.SITE_BASE || '')).origin; } catch (_) {}
+  if (origin === site) return true;
+  return /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\]|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+)(:\d+)?$/.test(origin);
+}
+
+async function rtcHandle(request, env, what) {
+  const origin = request.headers.get('origin') || '*';
+  if (request.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: {
+      'access-control-allow-origin': origin, 'access-control-allow-methods': 'GET, POST',
+      'access-control-allow-headers': 'content-type', 'access-control-max-age': '86400',
+    } });
+  }
+  if (!rtcOriginOk(request, env)) return rtcJson({ error: 'origin' }, 403, origin);
+  const app = String(env.RTC_APP_ID || ''), secret = String(env.RTC_APP_SECRET || '');
+  const ready = app.length > 8 && secret.length > 8;
+  if (what === 'ok') return rtcJson({ ok: ready }, 200, origin);
+  if (!ready) return rtcJson({ error: 'off' }, 503, origin);
+  if (request.method !== 'POST') return rtcJson({ error: 'method' }, 405, origin);
+
+  let body;
+  try {
+    const raw = await request.text();
+    if (raw.length > RTC_MAX_BODY) return rtcJson({ error: 'big' }, 413, origin);
+    body = JSON.parse(raw);
+  } catch (_) { return rtcJson({ error: 'json' }, 400, origin); }
+  if (!body || typeof body !== 'object') return rtcJson({ error: 'json' }, 400, origin);
+
+  const api = async (path, method, payload) => {
+    const res = await fetch(RTC_API + app + path, {
+      method,
+      headers: { authorization: 'Bearer ' + secret, 'content-type': 'application/json' },
+      body: payload ? JSON.stringify(payload) : undefined,
+    });
+    const j = await res.json().catch(() => null);
+    if (!res.ok || !j || j.errorCode) throw new Error((j && (j.errorDescription || j.errorCode)) || ('http ' + res.status));
+    const bad = Array.isArray(j.tracks) && j.tracks.find(t => t && t.errorCode);
+    if (bad) throw new Error(bad.errorDescription || bad.errorCode);
+    return j;
+  };
+
+  try {
+    if (what === 'pub') {
+      if (typeof body.sdp !== 'string' || !RTC_ID_RE.test(String(body.name || '')) || body.mid == null) return rtcJson({ error: 'args' }, 400, origin);
+      const s = await api('/sessions/new', 'POST');
+      const t = await api('/sessions/' + s.sessionId + '/tracks/new', 'POST', {
+        sessionDescription: { type: 'offer', sdp: body.sdp },
+        tracks: [{ location: 'local', mid: String(body.mid), trackName: body.name }],
+      });
+      return rtcJson({ session: s.sessionId, sdp: t.sessionDescription.sdp }, 200, origin);
+    }
+    if (what === 'sub') {
+      if (!RTC_ID_RE.test(String(body.session || '')) || !RTC_ID_RE.test(String(body.name || ''))) return rtcJson({ error: 'args' }, 400, origin);
+      const s = await api('/sessions/new', 'POST');
+      const t = await api('/sessions/' + s.sessionId + '/tracks/new', 'POST', {
+        tracks: [{ location: 'remote', sessionId: body.session, trackName: body.name }],
+      });
+      if (!t.sessionDescription || !t.sessionDescription.sdp) throw new Error('no offer');
+      return rtcJson({ session: s.sessionId, sdp: t.sessionDescription.sdp }, 200, origin);
+    }
+    if (what === 'ans') {
+      if (!RTC_ID_RE.test(String(body.session || '')) || typeof body.sdp !== 'string') return rtcJson({ error: 'args' }, 400, origin);
+      await api('/sessions/' + body.session + '/renegotiate', 'PUT', {
+        sessionDescription: { type: 'answer', sdp: body.sdp },
+      });
+      return rtcJson({ ok: true }, 200, origin);
+    }
+  } catch (e) {
+    console.log('[rtc] ' + what + ' failed: ' + (e && e.message));
+    return rtcJson({ error: 'sfu' }, 502, origin);
+  }
+  return rtcJson({ error: 'path' }, 404, origin);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -85,6 +197,9 @@ export default {
       const room = env.LOBBY.get(env.LOBBY.idFromName(parts[1]));
       return room.fetch(new Request('https://room' + AUDIT_PATH + url.search, { headers: request.headers }));
     }
+
+    // القاعة: the screen share's doorway to Cloudflare's SFU (see rtcHandle).
+    if (parts[0] === 'rtc' && parts[1]) return rtcHandle(request, env, parts[1]);
 
     // Health check / friendly root so you can see it's alive in a browser.
     if (parts[0] !== 'lobby' || !parts[1]) {

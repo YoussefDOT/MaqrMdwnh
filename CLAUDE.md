@@ -131,6 +131,7 @@ Grep anchors for the major systems (all verified to exist):
 | رموز آبل التعبيرية (صور) | `_emoImgs`, `emoLoadData`, `_emoActivate`, `_emoTextNode`, `_emoParse`, `_emoDrawSlots`, `_emoKey`, `emoIsOne`, `emoRecent`, `emoNoteUsed`, `EMO_IMG_KEY`, `tools/bake_emoji.mjs` |
 | التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `_peekBody`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad`, `tools/shots.mjs`, `tools/shots.py` |
+| القاعة — الاجتماع العام | `HALL_`, `_hall`, `hallIsCallCommand`, `hallCallCommand`, `hallOpenPicker`, `_hallCreate`, `_hallOnDoc`, `_hallTryEnter`, `_hallEnter`, `_hallEndWork`, `_hallAutoInvoice`, `_hallOpen`, `_hallExit`, `_hallOnMsg`, `_hallOnHi`, `_hallOnBot`, `_hallOnStage`, `_hallLayout`, `_hallFit`, `_hallTick`, `_hallSlowTick`, `_hallCastStart`, `_hallOnShare`, `_hallViewStart`, `_hallSfuPublish`, `_hallRtcCall`, `_hallLeavePress`, `_hallEnd`, `_hallPtsOpen`, `_hallPtsSend`, `_hallOnAwards`, `hallHoldsInput`, `updateHallLifecycle`; relay: `rtcHandle`; bot: `STAGE_CHANNEL_ID`, `sendStage`, `stageLive` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds`, `_seamlessLoop`, `_mp3CutBytes`, `_glideParam`, `_warmGames`, `playSoundRobust` |
 | Settings (full panel, pills, live preview) | `setupSettingsUI`, `_stg`, `_stgSeg`, `_stgShowTab`, `_stgPreviewKick` |
@@ -361,6 +362,7 @@ A multiplayer collaborative Pomodoro workspace — players appear as avatars in 
 | **التفاعلات + «ماذا فاتني؟»** | تفاعلات طاولة الاجتماعات في كل مكان (١–٦، أو ضغطة مطوّلة على شخصيتك)؛ والضغط على عضو يُظهر آخر خمس رسائل كتبها. صفر فايربيس. See **التفاعلات في العالم**. |
 | **نشرة الأخبار** | A button under the login pill opens the member-facing changelog, grouped by day (`patch-notes.json`). See **نشرة الأخبار**. |
 | **الدردشة القريبة** | Press your character (or Enter on a PC) → a type box floats over your head (on a phone: a slim bar docked to the keyboard, and the camera lifts you into view). ١٠٠ حرف, wrapping onto up to three balanced lines. The message becomes a bubble; a second one pushes the first up on a spring. Someone standing near gets a soft cue with it; someone across the building, or in a work session, gets nothing. **@ mentions** an online member (picker, closest first, searched against the roster): they hear a ping wherever they are, deeper on each repeat, an alarm on the fourth, a قوس on the screen edge pointing at whoever called you (it stays until you see them), a شريط at the bottom, plus a system notification. **Zero Firebase** — it rides the WebSocket relay. See **الدردشة القريبة**. |
+| **القاعة — الاجتماع العام** | نواف، يوسف (مدير المنصة) أو سراج يكتب «//اجتماع» → لوحة ورقية لاختيار المدعوّين من القسمين وعنوان الاجتماع → يُسحب المدعوّون (وجلسة العمل تُحفظ بصورتها) إلى قاعة بملء الشاشة: شاشة كبيرة (مشاركة شاشة WebRTC)، منصة يقف عليها من هو «متحدث» في قناة المنصة في ديسكورد، ومقاعد الحضور (الإخوة يسارًا، ممر، الأخوات يمينًا). تعليقات، إشارات، تفاعلات، طلب مغادرة، وضع تركيز، ثم لوحة نقاط للقائد. See **القاعة**. |
 | **غرفة الاجتماعات** | A room snapped onto the top-right of the scene, hidden behind a doorway that glows white until you walk up to it. Press its table → a seat (the sofa hop) and a full-screen look at the real table with everyone round it: six reactions, the proximity chat, and a **green ring on whoever is talking in the Discord call** — fed live by MdwnhBot over the relay, zero Firebase. See **غرفة الاجتماعات**. |
 | **Lemo (the robot)** | An ambient robot who sleeps in the break room until someone walks up, then wanders it — and now and then walks the owner-drawn route to the meeting room, roams round the table and walks back. **One Lemo per lobby**: everyone sees the same robot, from a seeded timeline off one tiny Firebase doc that only changes when he's woken or put to bed. Arrive to an empty lobby → he's asleep. See **Lemo**. |
 | **Minigames** | Racing / **التين** (fig-catching, was the coffee game) / laptop-boss. Entry is the **games table** in the break room — walk up during a break, press to join. See **Minigame Architecture**. |
@@ -2370,6 +2372,141 @@ separate, delayed animation and only found tables straight ahead. **Don't bring 
   something must not make the second one a jump. Checked right after the minigame buttons.
 - Normal jumps use `sofaStand` (Web Audio). A jump that starts on floor 2 within `JUMP_EDGE_NEAR` of the platform edge (`_jumpNearEdge`) plays **Jump_Start instead** at take-off, and the fall then skips it (`_jumpStartPlayed`) — otherwise two jump sounds played. Both fall sounds are warmed at spawn.
 - `canJump()` is the single guard (leans on `_chatMustClose()`).
+
+## القاعة — الاجتماع العام (the general meeting hall)
+
+A leader-called meeting for BOTH lobbies. Code is the `القاعة` block at the very end of
+`game.js`; markup is `#hall-overlay` (+ `#hall-call`, `#hall-warp`, `#hall-curtain`,
+`#hall-card`, `#hall-pick`, `#hall-pts`) right after `#meet-overlay` in `index.html`;
+styles are the two `القاعة` blocks at the foot of `style.css`. It is NOT the meeting
+room's table (غرفة الاجتماعات) — that is a seat in the world; this is an overlay nobody
+walks to.
+
+### Who, and how it starts
+`hallCanCall()` = `adminAllowed()` (نواف, a سراج ghost) or `HALL_MANAGER_UIDS` (يوسف —
+«مدير المنصة»). They press the megaphone in the HUD tools (`#hall-btn`, hidden for everyone else — toggled by `updateHallLifecycle`), or type **«//اجتماع»** in the world chat (`hallIsCallCommand`: folded
+through `_fireNormName`, so any hamza / a missing alef works). `_chatSend` intercepts it
+before anything else — it is never sent as a message — and `_stkSlashQuery` returns null
+for a text starting «//», or the sticker search would swallow it. → `hallOpenPicker()`:
+a paper panel (`.hall-paper`, the مدونة brand like حضور المقر's): title, search, every
+active roster member of both lobbies (roster faces via `_libAvatar`), online guests;
+**everyone starts selected**. The foot says in red WHY «ابدأ الاجتماع» is off (no title yet / nobody chosen) and a press on the off button shakes the missing field (`_hallPickFoot`). «ابدأ الاجتماع» → `_hallCreate` (a transaction: refuses if
+a live meeting exists). A moderator who types the command while a meeting is on simply
+walks into it.
+**Moderators** (`_hallIsMod`): `ADMIN_UIDS`, the roster's `admin`, `HALL_MANAGER_UIDS`,
+and whoever called this meeting. They end it, toggle focus, answer leave requests, stop
+someone's share, and may leave freely.
+
+### State (decision tree §5)
+```
+lobbies/stage/meeting          = { id, title, by, byName, at, who:{uid:1}, out:{uid:ts}, focus }
+lobbies/stage/beat             = server ms, written 1/min by ONE present client (lowest uid)
+lobbies/stage/att/{id}/{uid}   = name            // who attended (for the points)
+lobbies/stage/done             = { id, title, by, end }   // ended, points not decided yet
+lobbies/stage/awards/{uid}/{id} = { t, p, ts }   // "you were given points"
+```
+- **`lobbies/stage` is not a lobby** — it is a child of `lobbies` so the existing rules
+  cover it (no rules deploy). Deliberately NOT through `lobbyPath()`: this is the one
+  feature both lobbies share. The seats still keep them apart (below).
+- One `onValue` on `meeting` per client (tiny, changes rarely — the ليمو-doc shape) and one
+  on the client's OWN `awards/{uid}` row. Both attached by `hallStart` through `whenCalm`,
+  torn down by `hallStop` (in `doLogout`). uids are canonical (`_dmCanon`) everywhere a
+  member is keyed.
+- **Late child writes can resurrect a deleted doc** (`out/{uid}`, `focus`, `who/{uid}`
+  landing after the meeting was removed). `_hallParseDoc` rejects a doc without `id`/`by`/
+  `at`/`who`, and `_hallOnDoc` removes such junk. `att` lives OUTSIDE the doc for the
+  same reason.
+- **Auto-delete**: before pulling a member in, `_hallIsDead` reads `beat` once; nobody in
+  the hall for `HALL_DEAD_MS` (5 min) → `_hallReap` deletes the meeting (and leaves
+  `done`). `HALL_MAX_MS` (8 h) is the ceiling. An unreadable beat = assume alive.
+- Everything live rides the relay, in its OWN room: a second socket to
+  `/lobby/stage` open only while in the hall. `{t:'hi', uid, n, av, c, g, q?, lv?, sh?}`
+  ("I am here" + who I am, every `HALL_HI_MS`; `q:1` asks everyone to answer — one jittered
+  reply covers all askers), `hc` comment (`m`, `men`), `hr` reaction, `ht` typing, `hl`
+  leave request, `hla` its answer, `hs` the share handshake, and the relay's own `bye`.
+  A `hi` is the only thing accepted from an unknown uid. Types are deliberately NOT
+  `chat` — the relay logs `{"t":"chat"` lines for ليمو. A base64 avatar is not relayed
+  (a same-lobby member's is taken from `gameState.players`).
+
+### Being pulled in (`_hallOnDoc` → `updateHallLifecycle` → `_hallTryEnter` → `_hallEnter`)
+Invited (`who`) and not `out` → `_hall.want`. The SLOW_TASKS guard enters when
+`_hallCanEnterNow()` (boot gate open, no entrance, no azkar/prayer/minigame/kidnap, tab
+visible) — so a member who logs in later lands in it right after the entrance, and a
+hidden tab is pulled in when it is looked at again.
+- **A work session is ended quietly** (`_hallEndWork`, `_hallQuietEnd`): `endFreeMode` /
+  `exitPomoNow` run as usual (the session is saved by `dashSaveSession`), but no end
+  card, no «لم تُحفظ» toast, and the invoice is written directly with the auto photo
+  (`_hallAutoInvoice` ← `_autoShot.url`). The long-free confirm is skipped on purpose.
+- **Transport**: a call banner (skipped for the caller / a rejoin) → `#hall-warp` (one-shot
+  CSS) → `#hall-curtain` — a SECOND element wearing the boot screen's classes (`.boot`),
+  never `#loading-screen` itself: `finishBootScreen` opens the entrance gate and must not
+  be reused → `_hallOpen` under it → the curtain lifts → the title animates on the screen,
+  confetti. Sounds are synthesised (`_hallSfx`, no files). All timers go through
+  `_hallAfter` so `_hallExit` cancels the lot.
+- `_hall.canvasOff` stops the world pass (`_worldCanvasHidden`); `hallHoldsInput()` is in
+  the keydown / wheel / `handleMovement` / `_chatMustClose` guard lists (it also covers
+  the two paper panels). z-index 9800: over every panel, under prayer / azkar.
+
+### The hall
+- **Stage** (`_hallOnStage`): with a live bot feed, anyone the bot sees in the Stage
+  channel is on stage iff Discord says they are a speaker; anyone else (no bot, a ghost,
+  not in the channel) is on stage only if they called the meeting. A talking presenter
+  wears the green ring and drifts about the stage — `_hallHash(uid + time bucket)`, the
+  same on every screen, nothing relayed.
+- **Seats**: brothers physically LEFT, an aisle, sisters RIGHT (`.hall-aud` is
+  `direction: ltr`). `_hallFit` shrinks the seat size per side until everyone fits its
+  box (names hidden under 40px) — "you can see all" is the rule; nothing scrolls.
+- **Its own timers, not the frame loop**: `_hallTick` (125 ms `setInterval`) and
+  `_hallSlowTick` (5 s: hi, stale people, the beat). The loop idles at the calm rate under
+  an overlay and stops in a hidden tab — and people flip to Discord all meeting.
+- **Comments**: the hall's OWN input (`#hall-input`, a plain `<input>`, 100 chars), not the
+  world chat box. `@` lists attendees; a mention is `@name` text + `men:[uids]`. A comment
+  floats over the seat (`--bx` nudges it on screen). **Focus mode** (`meeting/focus`):
+  only moderators and the stage may comment — enforced on send AND on receive.
+- **Reactions**: the table's six (`MEET_REACTIONS`, keys 1–6), the avatar animation
+  reuses the `rx*` keyframes, plus emoji that fly up the room (`_hallFly`).
+- **Leaving**: a member asks (`hl`), a moderator answers (`hla`) → `out/{uid}` is written,
+  the hall closes, and `#hall-card` offers «العودة إلى الاجتماع» / «متابعة العمل» while
+  the meeting lives (also after a reload). No moderator present → leaving is free.
+- **The screen lights the room** through ONE CSS variable, `--hall-glow` ("r, g, b"),
+  sampled from the video twice a second (`_hallGlowSample`, an 8×5 canvas): flat-colour
+  layers under masks (so the colour can ease), a rim light on avatars. `.lowfx`
+  (`isReducedGraphics()`) keeps the still glow and drops the rim. No backdrop-filter.
+
+### The screen share (WebRTC)
+One sharer at a time (stage or moderator; the earlier `at` wins a tie). Desktop browsers
+only — no phone has `getDisplayMedia`; phones watch. Press the screen to zoom it.
+- **SFU when the relay has its keys** (`/rtc/ok` → `{ok:true}`): `_hallSfuPublish` /
+  `_hallViewStart` go through the relay's `/rtc/pub|sub|ans` (`rtcHandle` in
+  `presence-server/src/index.js`), which holds the Cloudflare Realtime app secret. The
+  sharer uploads ONE copy. Bodies are JSON as `text/plain` (no CORS preflight).
+- **Otherwise direct** (and as the fallback when a viewer's SFU pull fails): the viewer
+  sends `hs/want`, the sharer makes one `RTCPeerConnection` per viewer (`_hallP2POffer`,
+  capped at 700 kbps / 10 fps each), non-trickle (`_hallIceDone`). Fine for a handful;
+  every viewer is another encode + upload on the sharer's machine, and with no TURN
+  server some mobile networks cannot connect at all. **The SFU is the real path.**
+- **To turn the SFU on (owner):** Cloudflare dashboard → Realtime → create an SFU app,
+  then `npx wrangler secret put RTC_APP_ID --name mdwnh-presence`, the same for
+  `RTC_APP_SECRET`, and `cd presence-server && npx wrangler deploy`. Until the relay is
+  deployed, `/rtc/ok` fails CORS (one console error per entry) and sharing is direct.
+
+### MdwnhBot (v4-stage)
+`STAGE_CHANNEL_ID` (default `1489339643215483092`). While the hall is live — it hears the
+attendees' `{t:'hi'}` in the relay's `stage` room (`stageLiveAt`, `STAGE_LIVE_MS`) — and
+someone is in the Stage channel, that channel outranks a summon and the table. It sits
+there as audience (muted, not deafened), relays `spk` as ever, and sends
+`{t:'stage', ids:[in the channel], sp:[speakers = not suppressed]}` on every change and
+every heartbeat. Deployed by pushing its repo (Render).
+
+### The points (the leader's panel — never in the news)
+When a meeting ends while `adminAllowed()` is in it — or on his next login, from `done` —
+`_hallPtsOpen` lists who attended (`att/{id}`); 5 / 10 / 20 / 30 (the library's point
+stickers), a press on a name excludes it. «إرسال» writes the ecosystem claim, unchanged:
+`mdwnhLibrary/claims/<NFC dbKey>/maqr-meeting-<id>` per member, and
+`lobbies/stage/awards/{uid}/{id}`; the member's client shows `_libShowClaim` (in the site,
+or on the next login) and removes its row. Guests, ghosts and the leader have no points
+row and are listed off. A failed claim stays in the panel to be re-sent; `done` + `att`
+are removed only when all went through (or on «بلا نقاط»).
 
 ## غرفة الاجتماعات — the meeting room and its table
 
