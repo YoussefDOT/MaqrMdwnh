@@ -45246,19 +45246,25 @@ function _dmLoadMedia(pair, key) {
 
 // A picture's frame asks for its bytes when it comes into view.
 function _dmWatchPic(frame) {
-    if (!_dm.io) {
-        if (typeof IntersectionObserver === 'undefined') { setTimeout(() => _dmFillPic(frame), 0); return; }
-        _dm.io = new IntersectionObserver((entries) => {
-            for (const en of entries) {
-                if (!en.isIntersecting) continue;
-                _dm.io.unobserve(en.target);
-                _dmFillPic(en.target);
-            }
-        }, { root: _dm.els.msgs, rootMargin: '240px 0px' });
-    }
     // Observed on the next turn: the node isn't in the document yet (it is still in
-    // the fragment _dmMsgNode returns).
-    setTimeout(() => { if (frame.isConnected && _dm.io) _dm.io.observe(frame); }, 0);
+    // the fragment _dmMsgNode returns). The observer is made THERE, not here:
+    // _dmShowThread renders a cached thread and then _dmAttachThread →
+    // _dmDetachThread drops the observer — one made here was gone before this
+    // timeout ran, and the re-opened thread's pictures were never asked for.
+    setTimeout(() => {
+        if (!frame.isConnected || frame.dataset.done) return;
+        if (typeof IntersectionObserver === 'undefined') { _dmFillPic(frame); return; }
+        if (!_dm.io) {
+            _dm.io = new IntersectionObserver((entries, obs) => {
+                for (const en of entries) {
+                    if (!en.isIntersecting) continue;
+                    obs.unobserve(en.target);
+                    _dmFillPic(en.target);
+                }
+            }, { root: _dm.els.msgs, rootMargin: '240px 0px' });
+        }
+        _dm.io.observe(frame);
+    }, 0);
 }
 function _dmFillPic(frame) {
     const key = frame.dataset.pic, peer = _dm.peer;
