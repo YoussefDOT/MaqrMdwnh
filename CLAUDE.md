@@ -1674,7 +1674,10 @@ Code is the `أمر القائد` block right after `updateRemoteThrows`.
   instead of `LTH_ARM_MAX_MS`). Every other screen puts the same sticker in `ai.ans` on
   that member's `r:1` (only if it saw the leader's `lord` for them — `_lord.seen`).
 - **The leader's client is only a queue** (`_lord.q`, `_lordNext`): one member at a time,
-  the next on `r` 2 / 3 / 0, on `LORD_ACK_MS` of silence (a cached old client), on
+  the next on `r` 2 / 3 / 0, on `LORD_ACK_MS` of silence (a cached old client — a page
+  loaded before يوسف was allowed to order drops his order silently; the toast tells the
+  leader to have them reload. The order is re-sent once at `LORD_RESEND_MS`, and a
+  member who gets the same `k` again repeats their report), on
   `LORD_STEP_MAX_MS`, or when the member leaves. Each step is a toast for the leader.
   Close the leader's tab and the queue stops where it is.
 - **Both sides tick on a 400 ms `setInterval` that exists only while an order is live**

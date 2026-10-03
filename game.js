@@ -32463,6 +32463,7 @@ const LORD_STICKER = 'إلى العمل';     // the relay's THROW_STICKER
 const LORD_MAX = 8;                   // members per order
 const LORD_LOCK_MS = 60000;           // the forced session can't be ended before this
 const LORD_ACK_MS = 7000;             // no word from the member's client by now → next
+const LORD_RESEND_MS = 3000;           // …but first the order is sent once more
 const LORD_STEP_MAX_MS = 95000;       // …and the whole of one member, as the leader waits
 const LORD_SUMMON_MAX_MS = 25000;     // he is with someone else: the member keeps trying this long
 const LORD_WALK_MAX_MS = 62000;       // summoned, and still not thrown
@@ -32513,7 +32514,12 @@ function _lordTick() {
     const q = _lord.q, cur = q && q.list[q.i];
     if (cur) {
         if (cur.u !== gameState.userId && !gameState.players[cur.u]) _lordNext(`غادر ${cur.n}`);
-        else if (q.st === 'ack' && now - q.at > LORD_ACK_MS) _lordNext(`${cur.n} لم يستجب`);
+        else if (q.st === 'ack' && now - q.at > LORD_ACK_MS) _lordNext(`${cur.n} لم يستجب — صفحته قديمة أو اتصاله منقطع، اطلب منه تحديث الصفحة`);
+        else if (q.st === 'ack' && !q.re && now - q.at > LORD_RESEND_MS) {
+            // One more try: the first may have gone into a socket that was being replaced.
+            q.re = true;
+            _lordSend({ t: 'lord', uid: gameState.userId, to: cur.u, k: q.k });
+        }
         else if (q.st === 'go' && now - q.at > LORD_STEP_MAX_MS) _lordNext(`لم يكتمل رمي ${cur.n}`);
     }
     if (!_lord.q && !_lord.mine && _lord.timer) { clearInterval(_lord.timer); _lord.timer = 0; }
@@ -32555,7 +32561,7 @@ function _lordNext(note) {
         }
         const self = cur.u === gameState.userId;
         if (!self && !gameState.players[cur.u]) continue;
-        q.st = 'ack'; q.at = Date.now();
+        q.st = 'ack'; q.at = Date.now(); q.re = false;
         const sent = _lordSend({ t: 'lord', uid: gameState.userId, to: cur.u, k: q.k });
         if (!sent && !self) { _lord.q = null; _libToast('انقطع الاتصال — لم يصل أمرك إلى ليمو'); return; }
         _libToast(`${pre}ليمو في طريقه إلى ${cur.n}`, 3800);
@@ -32604,7 +32610,12 @@ function _lordReply(k, r, w) {
     _lordOnReply(gameState.userId, k, r, w);      // the leader ordered HIMSELF thrown
 }
 function _lordAccept(k) {
-    if (_lord.mine) { if (_lord.mine.k !== k) _lordReply(k, 0, 'busy'); return; }
+    if (_lord.mine) {
+        // The same order again = the leader never heard my first report: say it again.
+        if (_lord.mine.k !== k) _lordReply(k, 0, 'busy');
+        else _lordSend({ t: 'lordr', uid: gameState.userId, k, r: _lord.mine.st === 'summon' ? 4 : 1 });
+        return;
+    }
     let why = '';
     if (document.hidden) why = 'away';
     else if (gameState.pomodoro.active || gameState.freeMode.active) why = 'work';
