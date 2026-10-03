@@ -131,7 +131,7 @@ Grep anchors for the major systems (all verified to exist):
 | رموز آبل التعبيرية (صور) | `_emoImgs`, `emoLoadData`, `_emoActivate`, `_emoTextNode`, `_emoParse`, `_emoDrawSlots`, `_emoKey`, `emoIsOne`, `emoRecent`, `emoNoteUsed`, `EMO_IMG_KEY`, `tools/bake_emoji.mjs` |
 | التفاعلات في العالم + «ماذا فاتني؟» | `RX_`, `_rx`, `reactNow`, `rxHoldArm`, `drawReactRing`, `PEEK_`, `_peek`, `_peekBody`, `peekCanvasPress`, `drawPeek`, `_histPush`, `updateSocial` |
 | نشرة الأخبار | `patch-notes.json`, `setupNewsUI`, `openNews`, `_newsLoad`, `tools/shots.mjs`, `tools/shots.py` |
-| القاعة — الاجتماع العام | `HALL_`, `_hall`, `hallIsCallCommand`, `hallCallCommand`, `hallOpenPicker`, `_hallCreate`, `_hallOnDoc`, `_hallTryEnter`, `_hallEnter`, `_hallEndWork`, `_hallAutoInvoice`, `_hallOpen`, `_hallExit`, `_hallSayText`, `_hallMenFind`, `_hallFillText`, `_hallInputPaint`, `_hallComposeDone`, `_hallOnMsg`, `_hallOnHi`, `_hallOnBot`, `_hallOnStage`, `_hallLayout`, `_hallFit`, `_hallTick`, `_hallSlowTick`, `_hallCastStart`, `_hallOnShare`, `_hallViewStart`, `_hallSfuPublish`, `_hallRtcCall`, `_hallLeavePress`, `_hallEnd`, `_hallPtsOpen`, `_hallPtsSend`, `_hallOnAwards`, `hallHoldsInput`, `updateHallLifecycle`; relay: `rtcHandle`; bot: `STAGE_CHANNEL_ID`, `sendStage`, `stageLive` |
+| القاعة — الاجتماع العام | `HALL_`, `_hall`, `hallIsCallCommand`, `hallCallCommand`, `hallOpenPicker`, `_hallCreate`, `_hallOnDoc`, `_hallTryEnter`, `_hallEnter`, `_hallEndWork`, `_hallAutoInvoice`, `_hallOpen`, `_hallExit`, `_hallSayText`, `_hallMenFind`, `_hallBubStack`, `_hallFillText`, `_hallInputPaint`, `_hallComposeDone`, `_hallOnMsg`, `_hallOnHi`, `_hallOnBot`, `_hallOnStage`, `_hallLayout`, `_hallFit`, `_hallTick`, `_hallSlowTick`, `_hallCastStart`, `_hallOnShare`, `_hallViewStart`, `_hallSfuPublish`, `_hallRtcCall`, `_hallLeavePress`, `_hallEnd`, `_hallPtsOpen`, `_hallPtsSend`, `_hallOnAwards`, `hallHoldsInput`, `updateHallLifecycle`; relay: `rtcHandle`; bot: `STAGE_CHANNEL_ID`, `sendStage`, `stageLive` |
 | Meeting room / table | `MEET_`, `updateMeeting`, `drawMeetDoorGlow`, `joinMeetingTable`, `openMeetingOverlay`, `onMeetVoiceMsg`, `_meetReactFx` |
 | Audio | `FocusAudioEngine`, `warmGameSounds`, `_seamlessLoop`, `_mp3CutBytes`, `_glideParam`, `_warmGames`, `playSoundRobust` |
 | Settings (full panel, pills, live preview) | `setupSettingsUI`, `_stg`, `_stgSeg`, `_stgShowTab`, `_stgPreviewKick` |
@@ -2492,6 +2492,12 @@ hidden tab is pulled in when it is looked at again.
   floats over the seat (`--bx` nudges it on screen). **Focus mode** (`meeting/focus`):
   only moderators and the stage may comment **or react** (`_hallMaySpeak`) — enforced on
   send AND on receive; the reaction row dims (`.is-off`).
+- **Bubbles never cover each other** (`_hallBubStack`, `--by`): run on every comment shown,
+  200 ms after one hides, and at the end of `_hallLayout`. Newest stays over its seat; each
+  older bubble it would touch is lifted to sit on top of it, by the measured heights (a
+  two-line bubble pushes further). Placed from the bubble's PARENT rect + `offsetWidth/Height`
+  (its own rect carries the lift and the entrance scale); screen px in, `÷ _hall.ui` out.
+  The slide is a CSS `transform` transition; `hallBubbleIn` carries `--by` too.
 - **Mentions search the roster** (`_hallMenList`, like `_chatMenCandidates`): display name,
   roster `name`, `dbKey`, Telegram name, slug anywhere; handle / email from the start. The
   row and the inserted `@tag` use the roster name (`_hallMenName`), display name beside it.

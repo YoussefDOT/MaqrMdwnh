@@ -47238,6 +47238,7 @@ function _hallLayout() {
     _hall.layoutKey = all.map(p => p.uid + (p.stage ? 'S' : p.g)).join('|');
     _hallRefreshStatus();
     _hallRefreshDock();
+    _hallBubStack();                                  // seats moved → the lifts are stale
 }
 
 function _hallRefreshStatus() {
@@ -47755,6 +47756,39 @@ function _hallSetTyping(p, on) {
     p.typing = !!on; p.typAt = Date.now();
     if (p.el) p.el.classList.toggle('typing', p.typing);
 }
+// Two neighbours speaking at once: their bubbles would cover each other. The newest
+// keeps its place over its seat; every older bubble it would touch slides up to sit on
+// top of it — by the real heights, so a two-line bubble pushes further than a one-line
+// one. Rects are SCREEN px, `--by` is written in the room's own px (÷ _hall.ui).
+// All reads first, then the writes (no layout thrash). Pure CSS does the slide.
+function _hallBubStack() {
+    if (!_hall.E || !_hall.in) return;
+    const ui = _hall.ui || 1, GAP = 5 * ui, list = [];
+    for (const p of _hall.people.values()) {
+        const el = p.el, b = el && el.querySelector('.hall-bubble');
+        if (!b || !b.classList.contains('show')) continue;
+        const w = b.offsetWidth * ui, h = b.offsetHeight * ui;
+        if (!w || !h) continue;
+        // The bubble's own rect carries its lift and its entrance scale — place it from
+        // its parent instead: centred on it, 8px above it (the CSS `bottom`).
+        const r = b.parentNode.getBoundingClientRect();
+        const cx = r.left + r.width / 2 + (parseFloat(b.style.getPropertyValue('--bx')) || 0) * ui;
+        list.push({ b, at: el._bubAt || 0, l: cx - w / 2, r: cx + w / 2, bot: r.top - 8 * ui, h, up: 0, t2: 0, b2: 0 });
+    }
+    list.sort((a, c) => c.at - a.at);                 // newest first: it stays at its seat
+    const put = [];
+    for (const it of list) {
+        for (let n = 0; n <= put.length; n++) {       // each pass only moves it UP → it ends
+            const bot = it.bot - it.up, top = bot - it.h;
+            const hit = put.find(o => it.l < o.r + GAP && it.r > o.l - GAP && top < o.b2 + GAP && bot > o.t2 - GAP);
+            if (!hit) break;
+            it.up = it.bot - (hit.t2 - GAP);
+        }
+        it.b2 = it.bot - it.up; it.t2 = it.b2 - it.h;
+        put.push(it);
+    }
+    for (const it of list) it.b.style.setProperty('--by', (-it.up / ui).toFixed(1) + 'px');
+}
 function _hallShowComment(p, text, men, stk) {
     const el = p && p.el;
     if (!el) return;
@@ -47781,7 +47815,12 @@ function _hallShowComment(p, text, men, stk) {
     }
     b.classList.remove('show'); void b.offsetWidth; b.classList.add('show');
     clearTimeout(el._bubT);
-    el._bubT = setTimeout(() => b.classList.remove('show'), 4200 + text.length * 70);
+    el._bubAt = Date.now();
+    el._bubT = setTimeout(() => {
+        b.classList.remove('show');
+        _hallAfter(200, _hallBubStack);               // once it has faded, the ones it held up come down
+    }, 4200 + text.length * 70);
+    _hallBubStack();
     _hallLogPush(p, text, stk, forMe);
     const bob = el.querySelector('.hall-bob');
     bob.classList.remove('hop'); void bob.offsetWidth; bob.classList.add('hop');

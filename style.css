@@ -14893,16 +14893,17 @@ body.is-mobile .dm-act { max-width: calc(100% - 16px); }
     background: #1b1d25; border: 1px solid #3a3e4c;
     font-size: 0.8rem; font-weight: 600; line-height: 1.5; color: #f1f1f3;
     text-align: center; white-space: normal; overflow-wrap: anywhere; text-wrap: balance;
-    transform: translateX(calc(-50% + var(--bx, 0px)));
+    /* `--by` (JS, _hallBubStack): lifted clear of a neighbour's bubble under it. */
+    transform: translate(calc(-50% + var(--bx, 0px)), var(--by, 0px));
     opacity: 0; visibility: hidden; pointer-events: none;
-    transition: opacity 0.25s ease, visibility 0s linear 0.25s;
+    transition: opacity 0.25s ease, visibility 0s linear 0.25s, transform 0.36s cubic-bezier(0.3, 1.25, 0.5, 1);
     box-shadow: 0 10px 24px -10px #000;
 }
-.hall-bubble.show { opacity: 1; visibility: visible; transition: opacity 0.2s ease, visibility 0s; animation: hallBubbleIn 0.38s var(--bounce); }
+.hall-bubble.show { opacity: 1; visibility: visible; transition: opacity 0.2s ease, visibility 0s, transform 0.36s cubic-bezier(0.3, 1.25, 0.5, 1); animation: hallBubbleIn 0.38s var(--bounce); }
 .hall-bubble.men { border-color: var(--brand-yellow); box-shadow: 0 0 0 2px rgba(244, 200, 44, 0.25), 0 10px 24px -10px #000; }
 @keyframes hallBubbleIn {
-    from { transform: translateX(calc(-50% + var(--bx, 0px))) translateY(8px) scale(0.6); }
-    to   { transform: translateX(calc(-50% + var(--bx, 0px))); }
+    from { transform: translate(calc(-50% + var(--bx, 0px)), calc(var(--by, 0px) + 8px)) scale(0.6); }
+    to   { transform: translate(calc(-50% + var(--bx, 0px)), var(--by, 0px)); }
 }
 .hall-dots {
     position: absolute; bottom: calc(100% + 6px); left: 50%; z-index: 5;
