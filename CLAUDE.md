@@ -1644,7 +1644,7 @@ after `_lemoActStep`.
 - Dev: `__mq.x.lemoThrowBegin()` on localhost, standing on his floor while he is awake.
 
 ### أمر القائد — the leader orders a throw
-«@ليمو ارمِ @يوسف @فرات @خالد إلى العمل» from **نواف or a سراج ghost** (`adminAllowed()`):
+«@ليمو ارمِ @يوسف @فرات @خالد إلى العمل» from **نواف, يوسف (مدير المنصة, `HALL_MANAGER_UIDS`) or a سراج ghost** (`_lordCanOrder()`):
 he goes to each named member **one by one**, raises «إلى العمل», throws them (the ordinary
 throw above), and the free session it starts **can't be ended for `LORD_LOCK_MS` (60 s)**.
 Code is the `أمر القائد` block right after `updateRemoteThrows`.
@@ -1656,6 +1656,11 @@ Code is the `أمر القائد` block right after `updateRemoteThrows`.
   ordinary question. So **no relay change and no deploy**, and it costs no tokens.
   He isn't called over to the leader; the usual "busy / wait 4 s / in a work session"
   refusals don't apply to an order (only "asleep" and "still on my last order").
+- **Anyone else's order is refused, by him** (`lemoOrd` in `_chatSend`): the same parse
+  matching for a member who may not order, naming someone other than themselves, goes
+  out as an ordinary question with `ord: 1` and no `th`. The relay (`order` in
+  `lemoMessages`) tells him to refuse and say they can't order him to throw someone
+  else, and `canThrow` is false — he used to throw the ASKER. Needs the relay deployed.
 - **Zero Firebase of its own.** Two relay events, both client-claimed like everything
   there: `{t:'lord', uid:<leader>, to, k}` (accepted only when `_lordIsLeader(uid)`:
   `ADMIN_UIDS`, the roster's `admin`, or a `siraj_` id) and

@@ -31052,7 +31052,7 @@ function _lemoCleanParts(p) {
 // The question goes to the RELAY, not to the lobby: the room asks the model and
 // tells everyone what he said. No `uid` field on purpose — a client that predates
 // this drops a message without one instead of reading it as a position.
-function _lemoSendQuestion(k, q, men) {
+function _lemoSendQuestion(k, q, men, ord) {
     const ws = presenceNet.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) return false;
     const me = gameState.players[gameState.userId];
@@ -31128,7 +31128,9 @@ function _lemoSendQuestion(k, q, men) {
     // Who the question points at (see _chatSend). Left out when there is nobody.
     if (men && men.length) msg.men = men;
     // رمية ليمو: he may throw this member into a session (free, and a laptop is too).
-    if (_lthMemberOk()) msg.th = 1;
+    // `ord`: an order to throw someone else from a member who may not give one — no throw.
+    if (ord) msg.ord = 1;
+    else if (_lthMemberOk()) msg.th = 1;
     if (tk.length) msg.tk = tk;
     if (bk) msg.bk = bk;
     try { ws.send(JSON.stringify(msg)); return true; } catch (_) { return false; }
@@ -31155,7 +31157,7 @@ function _lemoBooksReady() {
 }
 
 // Called by _chatSend once the message (with its question) is on its way.
-function lemoAsk(q, men) {
+function lemoAsk(q, men, ord) {
     const shelf = _lemoBooksReady();   // in step with the summon, not after it
     lemoSummon().then(async r => {
         if (r === 'sleep') { _libToast('ليمو نام قبل أن يسمعك — أيقظه أولًا'); return; }
@@ -31168,7 +31170,7 @@ function lemoAsk(q, men) {
         // the relay's `lemot` is a moment behind.
         _lemo.ai.busy = { to: gameState.userId, k, at: Date.now() };
         await shelf;
-        if (!_lemoSendQuestion(k, q, men)) {
+        if (!_lemoSendQuestion(k, q, men, ord)) {
             _lemo.ai.busy = null;
             _lemo.ai.mine.done = true;
             _lemo.ai.ans = { to: gameState.userId, k, parts: [{ m: LEMO_ERR_LINES.err }], at: Date.now() };
@@ -32233,8 +32235,13 @@ const _lord = { q: null, mine: null, seen: {}, timer: 0, until: 0, lockRead: fal
 function _lordIsLeader(uid) {
     uid = String(uid || '');
     if (uid.startsWith('siraj_') || ADMIN_UIDS.has(uid)) return true;
+    if (HALL_MANAGER_UIDS.has(_dmCanon(uid))) return true;   // يوسف — مدير المنصة
     const rec = MDWNH_ROSTER.byDiscord[uid];
     return !!(rec && rec.admin);
+}
+// May THIS member order him: the leader, a سراج ghost, or the platform manager.
+function _lordCanOrder() {
+    return adminAllowed() || HALL_MANAGER_UIDS.has(_dmCanon(gameState.userId));
 }
 // The message without his mention → who to throw, or null when it isn't an order.
 function _lordParse(about) {
@@ -32287,7 +32294,7 @@ function _lordWarmThrow() {
 // ── the leader's side ──
 // Called by _chatSend once the message is on its way.
 function lemoOrderThrow(list) {
-    if (!adminAllowed() || !list || !list.length || _lord.q) return false;
+    if (!_lordCanOrder() || !list || !list.length || _lord.q) return false;
     _lord.q = { k: Date.now(), list, i: -1, st: '', at: 0, ok: 0 };
     _lordArm();
     _lordNext('');
@@ -37371,7 +37378,12 @@ function _chatSend() {
     });
     // أمر القائد: «@ليمو ارمِ @فلان @فلان إلى العمل» from the leader is an order, not a
     // question — he isn't called over and the model isn't asked.
-    const lemoOrder = (callsLemo && adminAllowed()) ? _lordParse(lemoAbout) : null;
+    const lemoOrderAny = callsLemo ? _lordParse(lemoAbout) : null;
+    const lemoOrder = (lemoOrderAny && _lordCanOrder()) ? lemoOrderAny : null;
+    // Anyone else ordering a throw of ANOTHER member: it goes to him as a question, and
+    // he is told to refuse (`ord` — the relay also takes the throw off the table, or he
+    // would throw the asker instead).
+    const lemoOrd = !lemoOrder && !!lemoOrderAny && lemoOrderAny.some(x => x.u !== gameState.userId);
     if (lemoOrder) {
         const why = lemoIsAsleep() ? 'ليمو نائم 😴 — أيقظه أولًا من غرفة الاستراحة'
                   : _lord.q ? 'ليمو ما زال ينفّذ أمرك السابق' : '';
@@ -37432,7 +37444,7 @@ function _chatSend() {
     for (const p of parts) if (p.u) p.l = _chatMen.last[p.u] ? _chatMen.last[p.u].lv : 1;
     _chatUi.lastSentAt = now;
     if (lemoOrder) lemoOrderThrow(lemoOrder);
-    else if (callsLemo) lemoAsk(lemoQ, lemoMen);
+    else if (callsLemo) lemoAsk(lemoQ, lemoMen, lemoOrd);
     closeChatBox(true);   // the message ends the typing bubble — see closeChatBox
     const me = gameState.players[gameState.userId];
     if (me) receiveChatMessage(me, null, parts.map(p => ({ ...p })));   // show it locally at once — no round trip
