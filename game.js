@@ -47111,11 +47111,41 @@ function _hallPaintSeat(p) {
     if (!el) return;
     const av = el.querySelector('.hall-av');
     av.style.setProperty('--ring', p.c || (p.uid === gameState.userId ? COLORS.blue : '#ffffff'));
-    if (p.av) { av.style.backgroundImage = `url("${p.av}")`; delete av.dataset.initial; }
-    else { av.style.backgroundImage = ''; av.dataset.initial = (p.n || '؟').trim().charAt(0).toUpperCase(); }
+    // The letter goes up first and is taken down only once a picture has really loaded:
+    // a relayed URL can be dead (an old Discord avatar hash is a 404), and a CSS
+    // background fails silently, leaving an empty disc.
+    av.style.backgroundImage = '';
+    av.dataset.initial = (p.n || '؟').trim().charAt(0).toUpperCase();
     el.querySelector('.hall-name').textContent = p.n || '';
     el.title = p.n || '';
+    let face = '';
+    try {
+        const rec = MDWNH_ROSTER && MDWNH_ROSTER.byDiscord && MDWNH_ROSTER.byDiscord[p.cu || p.uid];
+        if (rec && rec.slug) face = _libAvatar(rec.slug);
+    } catch (_) {}
+    const list = [p.av, face].filter((u, i, a) => u && a.indexOf(u) === i);
+    const key = list.join('|');
+    p._avKey = key;
+    const tryAt = (i) => {
+        if (i >= list.length) return;
+        const url = list[i];
+        const st = _hallAvOk.get(url);
+        const show = () => {
+            if (p._avKey !== key || p.el !== el) return;
+            av.style.backgroundImage = `url("${url}")`;
+            delete av.dataset.initial;
+        };
+        if (st === 1) { show(); return; }
+        if (st === 0) { tryAt(i + 1); return; }
+        const im = new Image();
+        im.onload = () => { _hallAvOk.set(url, 1); show(); };
+        im.onerror = () => { _hallAvOk.set(url, 0); if (p._avKey === key) tryAt(i + 1); };
+        im.src = url;
+    };
+    tryAt(0);
 }
+// url → 1 loaded / 0 failed, so a repaint doesn't probe the same picture again.
+const _hallAvOk = new Map();
 function _hallSeatEl(p) {
     if (p.el) return p.el;
     const el = document.createElement('div');
