@@ -46561,6 +46561,8 @@ let _hallQuietEnd = false;           // a session being ended by the summon: no 
 
 const _hall = {
     E: null,                 // cached elements
+    // zoom into the shared screen: scale, offset (px), the screen's box, live pointers
+    zm: { s: 1, x: 0, y: 0, l: 0, t: 0, w: 1, h: 1, pts: new Map(), pd: 0, pmx: 0, pmy: 0, travel: 0, movedAt: -1e9 },
     doc: null,               // the live meeting, parsed — or null
     unsubDoc: null, unsubAward: null, started: false,
     in: false, entering: false, want: false, rejoin: false,
@@ -47385,6 +47387,7 @@ function _hallOpen(d) {
     };
     _hall.people.set(mine.uid, mine);
     _hallSeatEl(mine);
+    _hallZoomReset();
     E.root.classList.remove('revealed', 'casting', 'zoomed', 'waiting');
     E.root.classList.toggle('lowfx', !_hall.fx);
     E.root.style.setProperty('--hall-glow', HALL_GLOW_IDLE);
@@ -47435,6 +47438,7 @@ function _hallExit(why, prev) {
     _hallConfirm(null);
     if (E && E.fxLayer) E.fxLayer.textContent = '';
     if (E) {
+        _hallZoomReset();
         E.root.classList.remove('active', 'revealed', 'casting', 'zoomed', 'waiting');
         E.root.setAttribute('aria-hidden', 'true');
         E.reqs.classList.remove('show');
@@ -48248,9 +48252,91 @@ function _hallComposeSend() {
 }
 
 /* ── the screen ────────────────────────────────────────────────────────────── */
+// Zooming INTO the shared picture: two fingers (pinch), the wheel, then a drag to
+// move around. One inline transform on the <video>, written only while a gesture
+// moves — no loop. Listeners live on the screen element alone (invariant 34).
+const HALL_ZM_MAX = 5;
+function _hallZoomApply() {
+    const E = _hall.E, z = _hall.zm;
+    if (!E) return;
+    if (z.s <= 1.01) { z.s = 1; z.x = 0; z.y = 0; }
+    // The picture may never leave its frame.
+    const mx = (z.s - 1) * z.w / 2, my = (z.s - 1) * z.h / 2;
+    z.x = Math.max(-mx, Math.min(mx, z.x));
+    z.y = Math.max(-my, Math.min(my, z.y));
+    E.video.style.transform = z.s === 1 ? '' : `translate(${z.x.toFixed(1)}px, ${z.y.toFixed(1)}px) scale(${z.s.toFixed(3)})`;
+    E.screen.classList.toggle('zm', z.s > 1);
+}
+function _hallZoomReset() {
+    const z = _hall.zm;
+    z.s = 1; z.x = 0; z.y = 0; z.pts.clear(); z.pd = 0;
+    _hallZoomApply();
+}
+// Zoom to `s2`, keeping the picture's point under (px, py) where it is.
+function _hallZoomAt(px, py, s2) {
+    const z = _hall.zm;
+    s2 = Math.max(1, Math.min(HALL_ZM_MAX, s2));
+    const cx = z.l + z.w / 2, cy = z.t + z.h / 2;
+    const qx = (px - cx - z.x) / z.s, qy = (py - cy - z.y) / z.s;
+    z.x = px - cx - s2 * qx; z.y = py - cy - s2 * qy; z.s = s2;
+    _hallZoomApply();
+}
+function _hallZoomMeasure() {
+    const z = _hall.zm, r = _hall.E.screen.getBoundingClientRect();
+    z.l = r.left; z.t = r.top; z.w = r.width; z.h = r.height;
+}
+function _hallZoomWire(E) {
+    const z = _hall.zm, el = E.screen;
+    const casting = () => E.root.classList.contains('casting');
+    const two = () => {
+        const a = [...z.pts.values()];
+        return { x: (a[0].x + a[1].x) / 2, y: (a[0].y + a[1].y) / 2, d: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1 };
+    };
+    el.addEventListener('pointerdown', (e) => {
+        if (!casting() || (e.pointerType === 'mouse' && e.button !== 0)) return;
+        if (z.pts.size >= 2) return;
+        if (!z.pts.size) { _hallZoomMeasure(); z.travel = 0; }
+        z.pts.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        try { el.setPointerCapture(e.pointerId); } catch (_) {}
+        if (z.pts.size === 2) { const m = two(); z.pd = m.d; z.pmx = m.x; z.pmy = m.y; z.movedAt = performance.now(); }
+    });
+    el.addEventListener('pointermove', (e) => {
+        const p = z.pts.get(e.pointerId);
+        if (!p) return;
+        const dx = e.clientX - p.x, dy = e.clientY - p.y;
+        p.x = e.clientX; p.y = e.clientY;
+        if (z.pts.size === 2) {
+            const m = two();
+            z.x += m.x - z.pmx; z.y += m.y - z.pmy;
+            _hallZoomAt(m.x, m.y, z.s * m.d / z.pd);
+            z.pd = m.d; z.pmx = m.x; z.pmy = m.y;
+            z.movedAt = performance.now();
+        } else {
+            z.travel += Math.abs(dx) + Math.abs(dy);
+            if (z.travel > 8) z.movedAt = performance.now();
+            if (z.s > 1) { z.x += dx; z.y += dy; _hallZoomApply(); }
+        }
+    });
+    const up = (e) => {
+        if (!z.pts.delete(e.pointerId)) return;
+        try { el.releasePointerCapture(e.pointerId); } catch (_) {}
+        z.pd = 0;
+    };
+    el.addEventListener('pointerup', up);
+    el.addEventListener('pointercancel', up);
+    el.addEventListener('wheel', (e) => {
+        if (!casting()) return;
+        e.preventDefault();
+        _hallZoomMeasure();
+        const dy = e.deltaMode === 1 ? e.deltaY * 40 : e.deltaY;
+        _hallZoomAt(e.clientX, e.clientY, z.s * Math.exp(-dy * (e.ctrlKey ? 0.012 : 0.0022)));
+    }, { passive: false });
+    window.addEventListener('resize', () => { if (z.s > 1) _hallZoomReset(); });
+}
 function _hallScreenIdle() {
     const E = _hall.E;
     if (!E) return;
+    _hallZoomReset();
     E.root.classList.remove('casting', 'waiting', 'zoomed');
     try { E.video.pause(); E.video.srcObject = null; } catch (_) {}
     clearInterval(_hall.glowTimer); _hall.glowTimer = 0;
@@ -48971,8 +49057,15 @@ function setupHallUI() {
         });
     });
     E.screen.addEventListener('click', () => {
-        if (E.root.classList.contains('casting')) E.root.classList.toggle('zoomed');
+        if (!E.root.classList.contains('casting')) return;
+        // The click a pinch or a drag ends in is not a press on the screen.
+        if (performance.now() - _hall.zm.movedAt < 400) return;
+        // Zoomed in: a press goes back to the whole picture first.
+        if (_hall.zm.s > 1.01) { _hallZoomReset(); return; }
+        _hallZoomReset();
+        E.root.classList.toggle('zoomed');
     });
+    _hallZoomWire(E);
     E.focusBtn.addEventListener('click', _hallToggleFocus);
     E.reqBtn.addEventListener('click', () => { _hallRenderReqs(); E.reqs.classList.toggle('show'); });
     E.reqList.addEventListener('click', (e) => {
@@ -49072,6 +49165,7 @@ function setupHallUI() {
         if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
         if (e.key === 'Escape') {
             if (E.confirm.classList.contains('show')) _hallConfirm(null);
+            else if (_hall.zm.s > 1) _hallZoomReset();
             else if (E.root.classList.contains('zoomed')) E.root.classList.remove('zoomed');
             else if (E.reqs.classList.contains('show')) E.reqs.classList.remove('show');
             return;

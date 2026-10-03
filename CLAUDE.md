@@ -2531,7 +2531,15 @@ hidden tab is pulled in when it is looked at again.
 
 ### The screen share (WebRTC)
 One sharer at a time, and ONLY someone on the stage (a moderator in the seats cannot — owner's rule; a sharer sent back down stops sharing). The earlier `at` wins a tie. Desktop browsers
-only — no phone has `getDisplayMedia`; phones watch. Press the screen to zoom it.
+only — no phone has `getDisplayMedia`; phones watch. Press the screen to make it full screen.
+- **Zoom INTO the picture** (`_hall.zm`, `_hallZoomWire`, `_hallZoomAt`, `_hallZoomApply`,
+  `_hallZoomReset`, `HALL_ZM_MAX`): pinch with two fingers or the wheel (zooms at the
+  finger / cursor), then drag to move; works in the normal and the full-screen size. One
+  inline `transform` on `#hall-video`, written only while a gesture moves (no loop),
+  clamped so the picture never leaves its frame. Pointer events on `#hall-screen` only
+  (`touch-action: none` while casting — invariant 34). A press while zoomed in resets to
+  the whole picture; the click a pinch / drag ends in is swallowed (`zm.movedAt`). Reset
+  on share end, hall exit, Escape, a resize and the full-screen toggle.
 - **SFU when the relay has its keys** (`/rtc/ok` → `{ok:true}`): `_hallSfuPublish` /
   `_hallViewStart` go through the relay's `/rtc/pub|sub|ans` (`rtcHandle` in
   `presence-server/src/index.js`), which holds the Cloudflare Realtime app secret. The
