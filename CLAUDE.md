@@ -2504,7 +2504,7 @@ When a meeting ends while `adminAllowed()` is in it — or on his next login, fr
 stickers), a press on a name excludes it. «إرسال» writes the ecosystem claim, unchanged:
 `mdwnhLibrary/claims/<NFC dbKey>/maqr-meeting-<id>` per member, and
 `lobbies/stage/awards/{uid}/{id}`; the member's client shows `_libShowClaim` (in the site,
-or on the next login) and removes its row. Guests, ghosts and the leader have no points
+or on the next login). **The row stays until the points are taken** (`_hallShowAward`): «لاحقًا» or a reload brings the card back next visit; it is removed on «استلم الآن», or when the claim is no longer in the Points DB (settled there already — one REST read per pending award). Guests, ghosts and the leader have no points
 row and are listed off. A failed claim stays in the panel to be re-sent; `done` + `att`
 are removed only when all went through (or on «بلا نقاط»).
 

@@ -48283,12 +48283,30 @@ function _hallOnAwards(v) {
         _hall.awardQ.push({ id, title: 'حضور اجتماع: ' + (_chatClean(a.t).slice(0, HALL_TITLE_MAX) || 'اجتماع'), points: p });
     }
 }
-function _hallShowAward() {
+// The row STAYS until the points are really taken: «لاحقًا» (or a reload before
+// pressing anything) must bring the card back on the next visit. It goes when
+// «استلم الآن» is pressed — or when the Points site no longer holds the claim, i.e.
+// the member already settled it there.
+async function _hallShowAward() {
     const a = _hall.awardQ.shift();
     if (!a) return;
-    remove(ref(database, `${HALL_PATH}/awards/${_hallMe()}/${a.id}`)).catch(() => {});
+    const rowRef = ref(database, `${HALL_PATH}/awards/${_hallMe()}/${a.id}`);
+    const drop = () => remove(rowRef).catch(() => {});
+    await _withTimeout(_mdwnhRosterReady.catch(() => {}), 6000, null);
+    const rec = MDWNH_ROSTER.byDiscord[_hallMe()];
+    if (!rec || !rec.dbKey) { _hall.awardSeen.delete(a.id); return; }   // roster not in yet — next visit
+    let claim;
+    try {
+        claim = await libPtsGet(`${LIB_PTS_ROOT}/claims/${encodeURIComponent(_libNfc(rec.dbKey))}/maqr-meeting-${a.id}`);
+    } catch (_) { _hall.awardSeen.delete(a.id); return; }               // unreachable — ask again next visit
+    if (!claim) { drop(); return; }                                      // already taken on the Points site
     _hallSfx('arrive');
     _libShowClaim({ title: a.title, points: a.points });
+    const now = document.getElementById('lib-claim-now');
+    if (now) {
+        const go = now.onclick;
+        now.onclick = (e) => { drop(); if (go) go.call(now, e); };
+    }
 }
 
 /* ── wiring ────────────────────────────────────────────────────────────────── */
