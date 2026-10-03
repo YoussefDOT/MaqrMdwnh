@@ -1629,6 +1629,11 @@ after `_lemoActStep`.
   line yanks them.
 - **Called off** before the lock if the member can no longer be thrown (a session started,
   an overlay or a modal is open, a different floor, the tab was away past frame 24).
+- **The grab shakes the screen** (`_lthGrabShake`, from `_lemoActStep` at `LTH_GRAB_F` =
+  the end of his rush, on every screen): `LTH_SHAKE_AMP` for the thrown member, falling
+  off with distance (squared) inside `LTH_HEAR_R` for anyone else, nothing for a member
+  working or behind an overlay — the sound's rule. It reuses the jump's `_jumpShake`
+  (`jumpShakeOffset` in `render()`); skipped by a screen that joined the clip late.
 - Sound: `Sound/lemo_throw.mp3` (`lemoThrow`, the owner's — 10 s, cut to the clip: the
   back-up, the rush, the slingshot, the release at 3.2 s, the air after it). It starts
   on frame 0 (`_lthPlaySound`, from `_lemoActStep`; never part-way in for a screen that

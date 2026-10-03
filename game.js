@@ -31751,6 +31751,8 @@ function _lemoActStep(t) {
     if (act.th) {
         _lthLemoPose(act.th, t, f);
         if (f >= 0 && !act.sndDone) { act.sndDone = true; if (t - act.t0 < 500) act.snd = _lthPlaySound(act.th); }
+        // The grab: the screen shakes as he reaches them (once, and not for a screen that joined late).
+        if (f >= LTH_GRAB_F && !act.shkDone) { act.shkDone = true; if (f <= LTH_GRAB_F + 3) _lthGrabShake(act.th); }
     }
     if (act.face) _lemo.faceT = act.face;
     // Not decoded yet (or not due yet): he stands in his own pose rather than vanish.
@@ -31791,6 +31793,8 @@ const LTH_LOCK_F   = 20;      // the member can't move from this frame on
 const LTH_RUSH_F1  = 23;      // …and he is beside them by this one (frames 20–22)
 const LTH_HOLD_F0  = 24;      // LTH_REL[0] is this frame — still standing on the floor
 const LTH_THROW_F  = 46;      // the release
+const LTH_GRAB_F   = LTH_LOCK_F + 2;   // his rush ends ON the member — the screen shakes here
+const LTH_SHAKE_AMP = 13;     // screen px for the thrown member; less for anyone near, by distance
 // The member's centre relative to his anchor, in source-cell px, frames 24…46.
 const LTH_REL = [
     [391, -692], [101, -997], [-49, -1155], [-117, -1227], [-153, -1264], [-170, -1283], [-175, -1287], [-176, -1287],
@@ -31919,6 +31923,19 @@ function _lthPlaySound(th) {
         if (!h && mine) { const el = gameState.sounds.lemoThrow; if (el) el.volume = LTH_SOUND_VOL; playSoundRobust(el); }
         return h;
     } catch (_) { return null; }
+}
+// The grab shakes the screen: hardest for the thrown member, weaker with distance for
+// anyone inside LTH_HEAR_R, and not at all for a member working or behind an overlay
+// (the same rule as the sound). It rides the jump's shake (jumpShakeOffset in render()).
+function _lthGrabShake(th) {
+    const mine = th.uid === gameState.userId;
+    const me = gameState.players[gameState.userId];
+    const gx = th.locked ? th.px : th.lx, gy = th.locked ? th.py : th.ly;
+    const dist = mine ? 0 : (me ? Math.hypot(me.x - gx, me.y - gy) : Infinity);
+    if (!mine && (dist >= LTH_HEAR_R || localInWorkPhase() || gameState.isLockedIn || _chatMustClose())) return;
+    const k = 1 - dist / LTH_HEAR_R;
+    _jumpShake = { t0: Date.now(), amp: LTH_SHAKE_AMP * (mine ? 1 : 0.6 * k * k + 0.08) };
+    perfWake(500);
 }
 // The throw was called off: his clip stops, and its sound with it.
 function _lthStopAct(uid) {
