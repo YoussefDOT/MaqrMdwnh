@@ -2449,7 +2449,9 @@ hidden tab is pulled in when it is looked at again.
   confetti. Two recorded cues (`_hallCue`): `meeting_start.mp3` at the start of the
   animation, `meeting_loaded.mp3` as the curtain starts to lift — in the `rest` list, and
   fetched early by `_hallEnsureSounds` the moment a meeting wants this member (96k
-  re-encodes; the `.full.mp3` originals are gitignored). The rest are synthesised
+  re-encodes with the silent tails cut; the `.full.mp3` originals are gitignored).
+  **Buffer only, never the `<audio>` copy** — a streamed element stalled mid-cue; not
+  decoded in time → a short wait, then silence. No warp whoosh, no arrive chime here. The rest are synthesised
   (`_hallSfx`, no files). All timers go through
   `_hallAfter` so `_hallExit` cancels the lot.
 - `_hall.canvasOff` stops the world pass (`_worldCanvasHidden`); `hallHoldsInput()` is in
