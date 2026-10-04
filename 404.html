@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>مقر المدونة — انتقلنا</title>
+<meta name="description" content="مقر المدونة انتقل إلى عنوان جديد." />
+<meta name="theme-color" content="#0b0b0c" />
+<meta name="color-scheme" content="dark" />
+<meta name="robots" content="noindex" />
+<link rel="canonical" href="https://mdwnstudio.github.io/MaqrMdwnh/" />
+<link rel="icon" type="image/png" href="/MaqrMdwnh/favicon-128.png" />
+<link rel="apple-touch-icon" href="/MaqrMdwnh/apple-touch-icon.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;600;800&display=swap" rel="stylesheet" />
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{min-height:100%}
+  body{
+    min-height:100dvh;display:grid;place-items:center;padding:24px;
+    background:#0b0b0c;color:#ededed;
+    font-family:"Rubik",system-ui,-apple-system,"Segoe UI",sans-serif;
+    /* the four brand colours, one soft wash per corner */
+    background-image:
+      radial-gradient(55% 45% at 100% 0%,rgba(240,77,57,.16),transparent 70%),
+      radial-gradient(55% 45% at 0% 0%,rgba(244,200,44,.11),transparent 70%),
+      radial-gradient(55% 45% at 100% 100%,rgba(59,185,171,.12),transparent 70%),
+      radial-gradient(55% 45% at 0% 100%,rgba(8,111,180,.16),transparent 70%);
+  }
+  .card{
+    width:min(100%,430px);text-align:center;
+    background:#141416;border:1px solid #232326;border-radius:25px;
+    padding:34px 24px 26px;
+    box-shadow:0 4px 24px rgba(0,0,0,.30);
+    /* the fade lives in the keyframes; a skipped animation leaves the card visible */
+    animation:in .5s cubic-bezier(.34,1.56,.64,1) backwards;
+  }
+  @keyframes in{from{opacity:0;transform:translateY(18px) scale(.97)}to{opacity:1;transform:none}}
+  .logo{display:block;width:150px;max-width:60%;height:auto;margin:0 auto 20px}
+  h1{font-size:1.35rem;font-weight:800;line-height:1.5;margin-bottom:10px}
+  p{font-size:.95rem;font-weight:400;line-height:1.85;color:#9b9b9e}
+  p b{color:#ededed;font-weight:600}
+  .go{
+    display:flex;align-items:center;justify-content:center;gap:9px;
+    margin-top:24px;padding:15px 20px;border-radius:50px;
+    background:#ededed;color:#0b0b0c;
+    font-size:1rem;font-weight:800;text-decoration:none;
+    transition:transform .25s cubic-bezier(.34,1.56,.64,1);
+  }
+  .go:hover{transform:translateY(-2px) scale(1.02)}
+  .go:active{transform:scale(.98)}
+  .go svg{width:17px;height:17px}
+  .url{
+    display:block;margin-top:14px;font-size:.75rem;font-weight:600;direction:ltr;
+    color:#6a6a6e;word-break:break-all;text-decoration:none;
+  }
+  .url:hover{color:#9b9b9e}
+  .stripe{display:flex;height:4px;border-radius:4px;overflow:hidden;margin:22px auto 0;width:120px}
+  .stripe i{flex:1}
+  .note{margin-top:16px;font-size:.78rem;color:#6a6a6e}
+  @media (prefers-reduced-motion:reduce){.card{animation:none}.go{transition:none}}
+</style>
+</head>
+<body>
+
+<main class="card">
+  <img class="logo" src="/MaqrMdwnh/logo.png" alt="مقر المدونة" />
+
+  <h1>المقر انتقل إلى عنوان جديد</h1>
+  <p>هذا العنوان لم يعد يعمل. <b>مقر المدونة</b> صار على رابط جديد، وكل ما يخصك محفوظ كما هو: جلساتك وساعاتك ورسائلك. إن كنت ثبّتّ المقر تطبيقًا على جهازك فاحذف القديم وثبّته من الرابط الجديد.</p>
+
+  <a class="go" id="goBtn" href="https://mdwnstudio.github.io/MaqrMdwnh/">
+    انتقل إلى المقر
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg>
+  </a>
+  <a class="url" href="https://mdwnstudio.github.io/MaqrMdwnh/">mdwnstudio.github.io/MaqrMdwnh</a>
+
+  <div class="stripe" aria-hidden="true"><i style="background:#F04D39"></i><i style="background:#F4C82C"></i><i style="background:#3BB9AB"></i><i style="background:#086FB4"></i></div>
+  <p class="note">ستسجّل دخولك بديسكورد مرة واحدة في العنوان الجديد.</p>
+</main>
+
+<script>
+/* The old address shipped a PWA with a service worker. Remove the مقر's worker and
+   its caches so nothing of the old app is left on the device. Only the مقر's own:
+   other sites live on this same origin (youssefdot.github.io) and keep theirs. */
+(function () {
+  try {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations()
+        .then(function (rs) {
+          rs.forEach(function (r) { if (String(r.scope).indexOf('/MaqrMdwnh') !== -1) r.unregister(); });
+        })
+        .catch(function () {});
+    }
+    if (window.caches && caches.keys) {
+      caches.keys().then(function (ks) {
+        ks.forEach(function (k) { if (/^(mdwnh-media-|maqr-dm-)/.test(k)) caches.delete(k); });
+      }).catch(function () {});
+    }
+  } catch (_) {}
+})();
+</script>
+
+</body>
+</html>
